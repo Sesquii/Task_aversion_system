@@ -1,0 +1,2 @@
+timestamp,task,aversion_level,relief_prediction,relief_actual,completion_percent,perceived_overextension,time_estimate_minutes,time_actual_minutes,comment,blocker_type
+Dummy Task,7,8,,,,,,,,2025-11-20 16:59:25
