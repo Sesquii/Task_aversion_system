@@ -5,7 +5,7 @@ import json
 
 im = InstanceManager()
 
-def complete_task_page():
+def complete_task_page(task_manager, emotion_manager):
     @ui.page('/complete_task')
     def page():
         ui.label("Complete Task").classes("text-xl font-bold")

@@ -1,3 +1,4 @@
-task,category,times_logged,avg_aversion,avg_relief,last_logged
-fix task button,General,1,0,3,2025-11-21 00:00
-f,General,1,0,0,2025-11-21 08:47
+task,category,times_logged,avg_aversion,avg_relief,last_logged,version,task_id,name,description,type,created_at,is_recurring,categories,default_estimate_minutes
+fix task button,General,1,0,3,2025-11-21 00:00,1,,,,,,,,
+f,General,1,0,0,2025-11-21 08:47,1,,,,,,,,
+,,,,,,1,t1763738425,Task aversion project,work on features and setup scaffold of AI recommendation,project,2025-11-21 09:20,True,[],180.0
