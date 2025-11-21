@@ -3,9 +3,12 @@ from datetime import datetime
 
 def build_add_log_page(task_manager):
 
-    ui.label("Add Task Log Entry").classes("text-2xl font-bold mb-4")
+    print("DEBUG: build_add_log_page() called")
 
     existing_tasks = task_manager.get_all_tasks()
+    print("DEBUG: existing_tasks =", existing_tasks)
+
+    ui.label("Add Task Log Entry").classes("text-2xl font-bold mb-4")
 
     with ui.column().classes("w-full max-w-xl gap-4"):
 
@@ -20,6 +23,11 @@ def build_add_log_page(task_manager):
             label="Select task",
             options=existing_tasks + [NEW_TASK_SENTINEL],
         )
+        print("DEBUG: task_input created. options =", task_input.options if hasattr(task_input, 'options') else 'no options attr')
+        try:
+            print("DEBUG: task_input initial value =", task_input.value)
+        except Exception as e:
+            print("DEBUG: task_input initial value read failed:", e)
 
         # Hidden text field, revealed only when adding a new task
         new_task_field = ui.input(
@@ -27,12 +35,47 @@ def build_add_log_page(task_manager):
             placeholder="Type the new task...",
         )
         new_task_field.set_visibility(False)
+        try:
+            vis = new_task_field.visible
+        except Exception:
+            try:
+                vis = new_task_field.get_visibility()
+            except Exception:
+                vis = 'unknown'
+        print("DEBUG: new_task_field created. visible =", vis)
 
         # Show/hide the text box based on dropdown selection
         def on_task_change(e):
-            new_task_field.set_visibility(e.value == NEW_TASK_SENTINEL)
+            print("DEBUG: on_task_change fired. event:", e)
+            args = getattr(e, 'args', None)
+            print("DEBUG: on_task_change e.args =", args)
 
+            val = None
+            if isinstance(args, dict) and 'label' in args:
+                val = args['label']  # <-- USE THE LABEL
+            elif isinstance(args, dict) and 'value' in args:
+                val = args['value']
+            else:
+                try:
+                    val = e.value
+                except Exception:
+                    val = None
+
+            print("DEBUG: on_task_change resolved value =", val)
+
+            new_task_field.set_visibility(val == NEW_TASK_SENTINEL)
+            try:
+                print("DEBUG: new_task_field.visible after toggle =", new_task_field.visible)
+            except Exception:
+                try:
+                    print("DEBUG: new_task_field.get_visibility() after toggle =", new_task_field.get_visibility())
+                except Exception as ex:
+                    print("DEBUG: cannot read visibility after toggle:", ex)
+
+
+        # Attach event handler
         task_input.on('update:model-value', on_task_change)
+        print("DEBUG: handler attached to task_input")
 
         # -------------------------
         # Button-based metrics
@@ -77,6 +120,15 @@ def build_add_log_page(task_manager):
         # Save Button
         # -------------------------
         def save():
+            print("DEBUG: Save pressed")
+            print("DEBUG: task_input.value =", getattr(task_input, 'value', None))
+            print("DEBUG: new_task_field.value =", getattr(new_task_field, 'value', None))
+            print("DEBUG: aversion_label.text =", getattr(aversion_label, 'text', None))
+            print("DEBUG: relief_pred_label.text =", getattr(relief_pred_label, 'text', None))
+            print("DEBUG: completion_label.text =", getattr(completion_label, 'text', None))
+            print("DEBUG: overextend_label.text =", getattr(overextend_label, 'text', None))
+            print("DEBUG: est_time.value =", est_time.value, "actual_time.value =", actual_time.value)
+            print("DEBUG: blocker.value =", blocker.value, "comment.value =", comment.value)
 
             # Determine correct task name
             if task_input.value == NEW_TASK_SENTINEL:
@@ -112,6 +164,13 @@ def build_add_log_page(task_manager):
             }
 
             task_manager.save_log_entry(entry)
+            print("DEBUG: entry passed to task_manager.save_log_entry:", entry)
+            try:
+                import os
+                size = os.path.getsize(task_manager.logs_path)
+                print("DEBUG: logs file size after save:", size)
+            except Exception as e:
+                print("DEBUG: failed to stat logs file:", e)
 
             task_manager.update_task_metadata(
                 task_name,
