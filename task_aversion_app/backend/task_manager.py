@@ -33,6 +33,10 @@ class TaskManager:
     def get_task_list(self):
         return sorted(self.tasks["task"].unique())
 
+    # NEW: for consistency with your UI
+    def get_all_tasks(self):
+        return self.get_task_list()
+
     # -----------------------------------------
     def add_task_if_missing(self, task_name):
         if task_name not in self.tasks["task"].values:
