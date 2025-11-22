@@ -15,13 +15,15 @@ class TaskManager:
         if not os.path.exists(self.tasks_file):
             pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes']).to_csv(self.tasks_file, index=False)
         self._reload()
-
+        self.tasks = {}  
+        self.initialization_entries = []
     def _reload(self):
         self.df = pd.read_csv(self.tasks_file, dtype=str).fillna('')
         # ensure proper dtypes for numeric fields where necessary
         if 'version' not in self.df.columns:
             self.df['version'] = 1
-
+    def get_task(self, task_id):
+        return self.tasks.get(task_id)
     def _save(self):
         self.df.to_csv(self.tasks_file, index=False)
         self._reload()
@@ -30,6 +32,10 @@ class TaskManager:
         self._reload()
         return list(self.df['name'].tolist())
 
+    def save_initialization_entry(self, entry):
+        """Save a task initialization entry."""
+        self.initialization_entries.append(entry)
+        print(f"Saved initialization entry: {entry}")
     def get_all(self):
         self._reload()
         return self.df.copy()

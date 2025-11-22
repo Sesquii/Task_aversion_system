@@ -1,5 +1,9 @@
 instance_id,task_id,task_name,task_version,created_at,initialized_at,started_at,completed_at,predicted,actual,procrastination_score,proactive_score,is_completed,is_deleted
-i1763738446,t1763738425,Task aversion project,1,2025-11-21 09:20,2025-11-21 09:20,2025-11-21 19:35,,"{""time_estimate_minutes"": ""180.0""}",{},,,False,False
+i1763738446,t1763738425,Task aversion project,1,2025-11-21 09:20,2025-11-21 09:20,2025-11-21 19:35,2025-11-22 08:34,"{""time_estimate_minutes"": ""180.0""}","{""actual_relief"": 6, ""actual_cognitive"": 5, ""actual_emotional"": 5, ""completion_percent"": 50, ""time_actual_minutes"": 90, ""notes"": ""Basic architecture working. needs refinement""}",3.417,0.0,True,False
 i1763775383,t1763775380,completion test,1,2025-11-21 19:36,2025-11-21 19:36,2025-11-21 19:40,2025-11-22 08:24,"{""time_estimate_minutes"": ""0""}","{""actual_relief"": 8, ""actual_cognitive"": 4, ""actual_emotional"": 7, ""completion_percent"": 100, ""time_actual_minutes"": 50, ""notes"": """"}",4.0,0.0,True,False
 i1763821183,t1763821179,f,1,2025-11-22 08:19,2025-11-22 08:19,,,"{""time_estimate_minutes"": ""0""}",{},,,False,False
 i1763821397,t1763821179,f,1,2025-11-22 08:23,2025-11-22 08:23,,,"{""time_estimate_minutes"": ""0""}",{},,,False,False
+i1763821685,t1763821681,fix initialization page,1,2025-11-22 08:28,2025-11-22 08:28,,2025-11-22 08:34,"{""time_estimate_minutes"": ""50""}","{""actual_relief"": 4, ""actual_cognitive"": 2, ""actual_emotional"": 2, ""completion_percent"": 100, ""time_actual_minutes"": 10, ""notes"": """"}",0.0,10.0,True,False
+i1763821793,t1763821681,fix initialization page,1,2025-11-22 08:29,2025-11-22 08:29,,,"{""time_estimate_minutes"": ""50""}",{},,,False,False
+i1763821881,t1763821681,fix initialization page,1,2025-11-22 08:31,2025-11-22 08:31,,,"{""time_estimate_minutes"": ""50""}",{},,,False,False
+i1763821996,t1763821681,fix initialization page,1,2025-11-22 08:33,2025-11-22 08:33,,,"{""time_estimate_minutes"": ""50""}",{},,,False,False
