@@ -10,12 +10,12 @@ im = InstanceManager()
 em = EmotionManager()
 an = Analytics()
 
-def build_dashboard():
+def build_dashboard(task_manager):
     ui.label("Task Aversion Dashboard").classes("text-2xl font-bold mb-4")
     with ui.row().classes('gap-6'):
         with ui.column().classes('w-1/2'):
             ui.button("➕ Create Task", on_click=lambda: ui.navigate.to('/create_task'))
-            ui.button("▶ Initialize Task", on_click=lambda: ui.navigate.to('/initialize_task'))
+            ui.button("▶ Initialize Task", on_click=lambda: ui.navigate.to('/initialize-task'))
             ui.button("✓ Complete Task", on_click=lambda: ui.navigate.to('/complete_task'))
             ui.markdown("### Active (Initialized & Not Completed)")
             active = im.list_active_instances()
@@ -57,7 +57,7 @@ def init_quick(task_name):
     from backend.instance_manager import InstanceManager
     im_local = InstanceManager()
     inst_id = im_local.create_instance(t['task_id'], t['name'], task_version=t.get('version') or 1, predicted={'time_estimate_minutes': t.get('default_estimate_minutes') or 0})
-    ui.navigate.to(f'/initialize_task?instance_id={inst_id}')
+    ui.navigate.to(f'/initialize-task?task_id={inst_id}')
 
 def start_instance(instance_id):
     im.start_instance(instance_id)
@@ -67,5 +67,11 @@ def go_complete(instance_id):
     ui.navigate.to(f'/complete_task?instance_id={instance_id}')
 
 def show_details(instance_id):
-    inst = im.get_instance(instance_id)
-    ui.dialog().add(ui.markdown(f"**Instance**: {inst}")).open()
+    inst = InstanceManager.get_instance(instance_id)
+
+    with ui.dialog() as dialog, ui.card():
+        ui.label(f"Instance ID: {instance_id}")
+        ui.markdown(f"```json\n{inst}\n```")
+        ui.button("Close", on_click=dialog.close)
+
+    dialog.open()
