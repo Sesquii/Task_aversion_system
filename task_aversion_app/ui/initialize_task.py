@@ -1,13 +1,14 @@
 from nicegui import ui
 from datetime import datetime
 
+from fastapi import Request
 
 def initialize_task_page(task_manager, emotion_manager):
 
     @ui.page('/initialize-task')
-    def page():
+    def page(request: Request):
+        params = request.query_params  # ✅
 
-        params = ui.get_query()
         task_id = params.get("task_id")
 
         if not task_id:
