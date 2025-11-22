@@ -1,22 +1,29 @@
 # ui/complete_task.py
-from nicegui import ui
+from nicegui import ui, app
 from backend.instance_manager import InstanceManager
-
+from fastapi import Request
 im = InstanceManager()
 
 def complete_task_page(task_manager, emotion_manager):
+
+
 
     @ui.page('/complete_task')
     def page():
 
         ui.label("Complete Task").classes("text-xl font-bold")
 
-        req = ui.context.client.request
-        params = req.query or {}
+        # Access Starlette request directly from NiceGUI
+        req = app.request
+        params = dict(req.query_params)
         instance_id = params.get("instance_id")
 
-        inst_input = ui.input(label='Instance ID (or leave blank to choose)', value=instance_id or '')
+        inst_input = ui.input(
+            label='Instance ID (or leave blank to choose)',
+            value=instance_id or ''
+        )
 
+        # If no instance_id provided, show selector UI
         if not instance_id:
             active = im.list_active_instances()
             inst_select = ui.select(
@@ -27,7 +34,7 @@ def complete_task_page(task_manager, emotion_manager):
             def on_choose(e):
                 val = e.args[0] if isinstance(e.args, list) and e.args else None
                 if val:
-                    iid = val.split('|',1)[0]
+                    iid = val.split('|', 1)[0]
                     inst_input.set_value(iid)
 
             inst_select.on('update:model-value', on_choose)
