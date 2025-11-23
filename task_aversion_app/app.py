@@ -26,3 +26,4 @@ def register_pages():
 if __name__ in {"__main__", "__mp_main__"}:
     register_pages()
     ui.run(title='Task Aversion System', port=8080, reload=False)
+

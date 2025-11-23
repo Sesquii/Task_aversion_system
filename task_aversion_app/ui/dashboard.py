@@ -10,61 +10,34 @@ im = InstanceManager()
 em = EmotionManager()
 an = Analytics()
 
-def build_dashboard(task_manager):
-    ui.label("Task Aversion Dashboard").classes("text-2xl font-bold mb-4")
-    with ui.row().classes('gap-6'):
-        with ui.column().classes('w-1/2'):
-            ui.button("➕ Create Task", on_click=lambda: ui.navigate.to('/create_task'))
-            ui.button("▶ Initialize Task", on_click=lambda: ui.navigate.to('/initialize-task'))
-            ui.button("✓ Complete Task", on_click=lambda: ui.navigate.to('/complete_task'))
-            ui.markdown("### Active (Initialized & Not Completed)")
-            active = im.list_active_instances()
-            if not active:
-                ui.markdown("_No active task instances._")
-            else:
-                for inst in active:
-                    with ui.card().classes('mb-3'):
-                        ui.markdown(f"**{inst.get('task_name')}** — created {inst.get('created_at')}")
-                        ui.markdown(f"Predicted: {inst.get('predicted')}")
-                        # show quick actions
-                        with ui.row():
-                            ui.button("Complete", on_click=lambda i=inst['instance_id']: go_complete(i))
-                            ui.button("Start", on_click=lambda i=inst['instance_id']: start_instance(i))
-                            ui.button("Details", on_click=lambda i=inst['instance_id']: show_details(i))
-        with ui.column().classes('w-1/2'):
-            ui.markdown("### Recommendations")
-            stats = an.active_summary()
-            ui.markdown(f"- Active tasks: {stats.get('active_count',0)}")
-            ui.markdown(f"- Oldest active: {stats.get('oldest_active')}")
-            ui.markdown("### Quick Task Templates")
-            tasks = tm.get_all()
-            if tasks is None or tasks.empty:
-                ui.markdown("_No task templates yet._")
-            else:
-                rows = tasks.to_dict(orient='records')
-                for r in rows[:10]:
-                    with ui.card().classes('mb-2'):
-                        ui.markdown(f"**{r.get('name')}** — v{r.get('version')}")
-                        ui.markdown(r.get('description') or '_no description_')
-                        ui.button("Init", on_click=lambda name=r.get('name'): init_quick(name))
+
+# ----------------------------------------------------------
+# Helper Button Handlers
+# ----------------------------------------------------------
 
 def init_quick(task_name):
     t = tm.find_by_name(task_name)
     if not t:
         ui.notify("Task not found", color='negative')
         return
-    # create instance passing default estimate
-    from backend.instance_manager import InstanceManager
-    im_local = InstanceManager()
-    inst_id = im_local.create_instance(t['task_id'], t['name'], task_version=t.get('version') or 1, predicted={'time_estimate_minutes': t.get('default_estimate_minutes') or 0})
+
+    inst_id = im.create_instance(
+        t['task_id'],
+        t['name'],
+        task_version=t.get('version') or 1,
+        predicted={'time_estimate_minutes': t.get('default_estimate_minutes') or 0},
+    )
     ui.navigate.to(f'/initialize-task?task_id={inst_id}')
+
 
 def start_instance(instance_id):
     im.start_instance(instance_id)
     ui.notify("Instance started", color='positive')
 
+
 def go_complete(instance_id):
     ui.navigate.to(f'/complete_task?instance_id={instance_id}')
+
 
 def show_details(instance_id):
     inst = InstanceManager.get_instance(instance_id)
@@ -75,3 +48,158 @@ def show_details(instance_id):
         ui.button("Close", on_click=dialog.close)
 
     dialog.open()
+
+
+def delete_instance(instance_id):
+    im.delete_instance(instance_id)
+    ui.notify("Deleted", color='negative')
+    ui.navigate.reload()
+
+
+def delete_template(task_id):
+    tm.delete_by_id(task_id)
+    ui.notify("Template deleted", color='negative')
+    ui.navigate.reload()
+
+
+# ----------------------------------------------------------
+# MAIN DASHBOARD
+# ----------------------------------------------------------
+
+def build_dashboard(task_manager):
+
+    ui.add_head_html("<style>.small * { font-size: 0.85rem !important; }</style>")
+
+    ui.label("Task Aversion Dashboard").classes("text-2xl font-bold mb-4 small")
+
+    # Outer layout: 3 columns
+    with ui.row().classes("w-full h-screen gap-4 small"):
+
+        # ====================================================================
+        # COLUMN 1 — Left Column
+        # ====================================================================
+        with ui.column().classes("w-1/4 h-full gap-3"):
+
+            # Create Task Button (Pinned)
+            with ui.row().classes("sticky top-0 bg-white z-50 py-2"):
+                ui.button("➕ Create Task",
+                          on_click=lambda: ui.navigate.to('/create_task'),
+                          color='primary').classes("w-full")
+
+            # Search bar
+            search = ui.input("Search Tasks...") \
+                       .props("dense clearable") \
+                       .classes("w-full")
+
+            # Quick Tasks Section
+            with ui.column().classes("w-full border rounded-lg p-2 overflow-y-auto flex-1"):
+                ui.markdown("### Quick Tasks (Last 5)")
+
+                recent = tm.get_recent(limit=5) if hasattr(tm, "get_recent") else []
+                quick_col = ui.column()
+
+                if not recent:
+                    ui.label("No recent tasks").classes("text-xs text-gray-500")
+                else:
+                    for r in recent:
+                        with ui.row().classes("justify-between items-center"):
+                            ui.label(r['name']).classes("text-sm")
+                            ui.button("Init", 
+                                      on_click=lambda n=r['name']: init_quick(n)
+                                      ).props("dense")
+
+            # Templates Section
+            with ui.column().classes("w-full border rounded-lg p-2 overflow-y-auto flex-1"):
+                ui.markdown("### Task Templates")
+
+                templates = tm.get_all()
+                if templates is None or templates.empty:
+                    ui.label("No templates yet").classes("text-xs text-gray-500")
+                else:
+                    rows = templates.to_dict(orient='records')
+                    for t in rows:
+                        if search.value and search.value.lower() not in t['name'].lower():
+                            continue
+
+                        with ui.card().classes("p-2 mb-2"):
+                            ui.label(f"{t['name']} (v{t['version']})").classes("font-bold text-sm")
+                            ui.label(t.get('description') or "No description").classes("text-xs text-gray-600")
+
+                            with ui.row().classes("justify-end gap-2"):
+                                ui.button("Init", on_click=lambda n=t['name']: init_quick(n)).props("dense")
+                                ui.button("Delete",
+                                          color="negative",
+                                          on_click=lambda tid=t['task_id']: delete_template(tid)
+                                          ).props("dense")
+
+        # ====================================================================
+        # COLUMN 2 — Middle Column (Active Tasks)
+        # ====================================================================
+        with ui.column().classes("w-1/3 h-full border rounded-lg p-3 overflow-y-auto gap-2"):
+
+            ui.label("Active Initialized Tasks").classes("text-lg font-bold")
+            ui.separator()
+
+            active = im.list_active_instances()
+
+            if not active:
+                ui.label("No active tasks").classes("text-xs text-gray-500")
+            else:
+                for inst in active:
+                    with ui.card().classes("w-full p-2"):
+                        ui.label(inst.get("task_name")).classes("text-md font-bold")
+                        ui.label(f"Created: {inst.get('created_at')}").classes("text-xs")
+                        ui.label(str(inst.get("predicted"))).classes("text-xs text-gray-600")
+
+                        with ui.row().classes("justify-end gap-2"):
+                            ui.button("Start",
+                                      on_click=lambda i=inst['instance_id']: start_instance(i)
+                                      ).props("dense")
+
+                            ui.button("Complete",
+                                      on_click=lambda i=inst['instance_id']: go_complete(i)
+                                      ).props("dense")
+
+                            ui.button("Delete",
+                                      color="negative",
+                                      on_click=lambda i=inst['instance_id']: delete_instance(i)
+                                      ).props("dense")
+
+        # ====================================================================
+        # COLUMN 3 — Right Column (Completed + Recommendations)
+        # ====================================================================
+        with ui.column().classes("w-1/3 h-full gap-4"):
+
+            # Recent completions
+            with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
+                ui.label("Recently Completed").classes("font-bold text-lg")
+                ui.separator()
+
+                completed = im.list_recent_completed(limit=20) \
+                    if hasattr(im, "list_recent_completed") else []
+
+                if not completed:
+                    ui.label("No completed tasks").classes("text-xs text-gray-500")
+                else:
+                    for c in completed:
+                        with ui.row().classes("justify-between items-center"):
+                            ui.label(c['task_name']).classes("text-sm")
+                            ui.label(str(c['completed_at'])).classes("text-xs text-gray-400")
+
+            # Recommendations
+            with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
+                ui.label("Recommendations").classes("font-bold text-lg")
+                ui.separator()
+
+                recs = an.recommendations() if hasattr(an, "recommendations") else []
+
+                if not recs:
+                    ui.label("No recommendations").classes("text-xs text-gray-500")
+                else:
+                    for r in recs:
+                        with ui.card().classes("p-2 mb-2"):
+                            ui.label(r['name']).classes("font-bold text-sm")
+                            ui.label(r.get('reason', '')).classes("text-xs text-gray-600")
+                            ui.button("Start",
+                                      on_click=lambda rid=r['task_id']: init_quick(rid)
+                                      ).props("dense")

@@ -5,3 +5,9 @@ f,General,1,0,0,2025-11-21 08:47,1,,,,,,,,
 ,,,,,,1,t1763775380,completion test,,one-time,2025-11-21 19:36,False,[],0
 ,,,,,,1,t1763821179,f,,one-time,2025-11-22 08:19,False,[],0
 ,,,,,,1,t1763821681,fix initialization page,,one-time,2025-11-22 08:28,False,[],50
+,,,,,,1,t1763822424,example,,one-time,2025-11-22 08:40,False,[],5
+,,,,,,1,t1763843570,Coursera,,recurring,2025-11-22 14:32,True,[],60
+,,,,,,1,t1763858825,Workout,,recurring,2025-11-22 18:47,True,[],15
+,,,,,,1,t1763901178,Shower,,routine,2025-11-23 06:32,True,[],10
+,,,,,,1,t1763901292,Cleaning,,one-time,2025-11-23 06:34,False,[],0
+,,,,,,1,t1763901339,Clean Kitchen,,routine,2025-11-23 06:35,True,"[""Dread""]",30
