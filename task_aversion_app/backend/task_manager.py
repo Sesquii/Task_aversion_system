@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
-
+TASKS_FILE = 'data/tasks.csv'
 class TaskManager:
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -85,3 +85,38 @@ class TaskManager:
         if t:
             return t['task_id']
         return self.create_task(name)
+
+
+
+    def delete_by_id(self, task_id):
+        print(f"[TaskManager] delete_by_id called with: {task_id}")
+
+        if not os.path.exists(TASKS_FILE):
+            print("[TaskManager] No task file found.")
+            return False
+
+        try:
+            df = pd.read_csv(TASKS_FILE)
+            before_count = len(df)
+
+            df = df[df['task_id'] != task_id]
+
+            df.to_csv(TASKS_FILE, index=False)
+            after_count = len(df)
+
+            print(f"[TaskManager] Deleted: {before_count - after_count} row(s)")
+            return True
+        except Exception as e:
+            print("[TaskManager] ERROR deleting:", e)
+            return False
+
+
+    def get_recent(self, limit=5):
+        print(f"[TaskManager] get_recent called (limit={limit})")
+
+        df = self.get_all()
+        if df is None or df.empty:
+            return []
+
+        df = df.sort_values("created_at", ascending=False)
+        return df.head(limit).to_dict(orient="records")

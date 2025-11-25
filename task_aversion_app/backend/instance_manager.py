@@ -7,6 +7,7 @@ import json
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
+INST_FILE = 'data/instances.csv'
 class InstanceManager:
     def __init__(self):
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -106,3 +107,43 @@ class InstanceManager:
     def ensure_instance_for_task(self, task_id, task_name, predicted: dict = None):
         # create an instance and return id
         return self.create_instance(task_id, task_name, task_version=1, predicted=predicted)
+
+
+
+    def delete_instance(self, instance_id):
+        print(f"[InstanceManager] delete_instance called with: {instance_id}")
+
+        if not os.path.exists(INST_FILE):
+            print("[InstanceManager] No instance file found.")
+            return False
+
+        try:
+            df = pd.read_csv(INST_FILE)
+            before_count = len(df)
+
+            df = df[df['instance_id'] != instance_id]
+
+            df.to_csv(INST_FILE, index=False)
+            after_count = len(df)
+
+            print(f"[InstanceManager] Deleted: {before_count - after_count} row(s)")
+            return True
+        except Exception as e:
+            print("[InstanceManager] ERROR deleting:", e)
+            return False
+
+
+    def list_recent_completed(self, limit=20):
+        print(f"[InstanceManager] list_recent_completed called (limit={limit})")
+
+        if not os.path.exists(INST_FILE):
+            return []
+
+        df = pd.read_csv(INST_FILE)
+        if df.empty:
+            return []
+
+        df = df[df['completed_at'].notna()]
+        df = df.sort_values("completed_at", ascending=False)
+
+        return df.head(limit).to_dict(orient="records")

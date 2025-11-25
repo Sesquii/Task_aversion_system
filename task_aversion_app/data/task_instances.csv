@@ -15,3 +15,5 @@ i1763901500,t1763738425,Task aversion project,1,2025-11-23 06:38,2025-11-23 06:3
 i1763901612,t1763843570,Coursera,1,2025-11-23 06:40,2025-11-23 06:40,,,"{""time_estimate_minutes"": ""60""}",{},,,False,False
 i1763901642,,,1,2025-11-23 06:40,2025-11-23 06:40,,2025-11-23 06:40,"{""time_estimate_minutes"": 0}","{""actual_relief"": 5, ""actual_cognitive"": 5, ""actual_emotional"": 5, ""completion_percent"": 100, ""time_actual_minutes"": 0, ""notes"": """"}",0.0,10.0,True,False
 i1763902894,t1763858825,Workout,1,2025-11-23 07:01,2025-11-23 07:01,,,"{""time_estimate_minutes"": ""15""}",{},,,False,False
+i1764031271,t1763738425,Task aversion project,1,2025-11-24 18:41,2025-11-24 18:41,,,"{""time_estimate_minutes"": ""180.0""}",{},,,False,False
+i1764032225,t1763901339,Clean Kitchen,1,2025-11-24 18:57,2025-11-24 18:57,,,"{""time_estimate_minutes"": ""30.0""}",{},,,False,False

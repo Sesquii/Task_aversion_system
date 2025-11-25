@@ -15,6 +15,7 @@ an = Analytics()
 # Helper Button Handlers
 # ----------------------------------------------------------
 
+
 def init_quick(task_name):
     t = tm.find_by_name(task_name)
     if not t:
@@ -48,6 +49,33 @@ def show_details(instance_id):
         ui.button("Close", on_click=dialog.close)
 
     dialog.open()
+def refresh_templates():
+    print("[Dashboard] refresh_templates() called")
+
+    query = (search.value or "").lower().strip()
+    print(f"[Dashboard] search query: {query}")
+
+    df = tm.get_all()
+    if df is None or df.empty:
+        print("[Dashboard] no templates found")
+        template_col.clear()
+        with template_col:
+            ui.markdown("_No templates available_")
+        return
+
+    rows = df.to_dict(orient='records')
+    filtered = [r for r in rows if query in r['name'].lower()]
+    print(f"[Dashboard] filtered: {len(filtered)} rows")
+
+    template_col.clear()
+
+    for t in filtered:
+        with template_col:
+            with ui.card().classes("mb-2 p-2"):
+                ui.markdown(f"**{t['name']}** — v{t['version']}")
+                with ui.row():
+                    ui.button("Init", on_click=lambda tid=t['task_id']: init_quick(tid))
+                    ui.button("Delete", on_click=lambda tid=t['task_id']: delete_template(tid))
 
 
 def delete_instance(instance_id):
@@ -55,11 +83,17 @@ def delete_instance(instance_id):
     ui.notify("Deleted", color='negative')
     ui.navigate.reload()
 
-
 def delete_template(task_id):
-    tm.delete_by_id(task_id)
-    ui.notify("Template deleted", color='negative')
-    ui.navigate.reload()
+    print(f"[Dashboard] delete_template called: {task_id}")
+
+    if tm.delete_by_id(task_id):
+        ui.notify("Task deleted", color="positive")
+    else:
+        ui.notify("Delete failed", color="negative")
+
+    refresh_templates()
+
+
 
 
 # ----------------------------------------------------------
@@ -87,9 +121,14 @@ def build_dashboard(task_manager):
                           color='primary').classes("w-full")
 
             # Search bar
-            search = ui.input("Search Tasks...") \
-                       .props("dense clearable") \
-                       .classes("w-full")
+            global search
+            search = ui.input(
+                label="Search task templates",
+                placeholder="Type to filter...",
+            ).classes("w-full mb-2")
+
+            search.on('input', lambda _: refresh_templates())   # live filtering!
+
 
             # Quick Tasks Section
             with ui.column().classes("w-full border rounded-lg p-2 overflow-y-auto flex-1"):
@@ -111,7 +150,8 @@ def build_dashboard(task_manager):
             # Templates Section
             with ui.column().classes("w-full border rounded-lg p-2 overflow-y-auto flex-1"):
                 ui.markdown("### Task Templates")
-
+                global template_col
+                template_col = ui.column().classes('w-full h-80 overflow-auto border rounded-lg p-2')
                 templates = tm.get_all()
                 if templates is None or templates.empty:
                     ui.label("No templates yet").classes("text-xs text-gray-500")
@@ -131,6 +171,7 @@ def build_dashboard(task_manager):
                                           color="negative",
                                           on_click=lambda tid=t['task_id']: delete_template(tid)
                                           ).props("dense")
+                                refresh_templates()
 
         # ====================================================================
         # COLUMN 2 — Middle Column (Active Tasks)
@@ -203,3 +244,8 @@ def build_dashboard(task_manager):
                             ui.button("Start",
                                       on_click=lambda rid=r['task_id']: init_quick(rid)
                                       ).props("dense")
+                            
+                            
+
+                         
+                        
