@@ -158,6 +158,8 @@ class Analytics:
 
         if active.empty:
             return []
+        # Avoid chained-assignment warnings when we add helper columns later
+        active = active.copy()
 
         focus_metric = filters.get('focus_metric')
         focus_metric = focus_metric if focus_metric in ['relief', 'duration', 'cognitive'] else 'relief'
@@ -174,7 +176,7 @@ class Analytics:
             ranked.append(self._row_to_recommendation(row, "Lowest Cognitive Load"))
 
         # Always include net relief pick for variety
-        active['net_relief_proxy'] = active['relief_score'] - active['cognitive_load']
+        active.loc[:, 'net_relief_proxy'] = active['relief_score'] - active['cognitive_load']
         row = active.sort_values('net_relief_proxy', ascending=False).head(1)
         ranked.append(self._row_to_recommendation(row, "Highest Net Relief"))
         return [r for r in ranked if r]

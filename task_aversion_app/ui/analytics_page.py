@@ -89,14 +89,19 @@ def _render_recommendation_lab():
         max_duration = ui.number("Max duration (min)", value=filters['max_duration']).classes("w-40")
         min_relief = ui.number("Min relief score", value=filters['min_relief']).classes("w-40")
         max_cog = ui.number("Max cognitive load", value=filters['max_cognitive_load']).classes("w-40")
+        focus_options = {
+            'relief': 'Highest relief',
+            'duration': 'Shortest task',
+            'cognitive': 'Lowest cognitive load',
+        }
+        focus_value = filters.get('focus_metric')
+        if focus_value not in focus_options:
+            focus_value = next(iter(focus_options))
+            filters['focus_metric'] = focus_value
         focus = ui.select(
             "Focus metric",
-            options=[
-                {'label': 'Highest relief', 'value': 'relief'},
-                {'label': 'Shortest task', 'value': 'duration'},
-                {'label': 'Lowest cognitive load', 'value': 'cognitive'},
-            ],
-            value=filters['focus_metric'],
+            options=focus_options,
+            value=focus_value,
         ).classes("w-48")
 
     result_area = ui.column().classes("mt-3 w-full")

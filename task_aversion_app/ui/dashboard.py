@@ -10,6 +10,7 @@ im = InstanceManager()
 em = EmotionManager()
 an = Analytics()
 dash_filters = an.default_filters()
+print(f"[Dashboard] Initial dash_filters: {dash_filters}")
 
 
 # ----------------------------------------------------------
@@ -241,15 +242,17 @@ def build_dashboard(task_manager):
                 else:
                     for r in recs:
                         with ui.card().classes("p-2 mb-2"):
-                            ui.label(r['name']).classes("font-bold text-sm")
+                            task_label = r.get('task_name') or r.get('title') or "Recommendation"
+                            ui.label(task_label).classes("font-bold text-sm")
                             ui.label(r.get('reason', '')).classes("text-xs text-gray-600")
                             ui.button("Start",
-                                      on_click=lambda rid=r['task_id']: init_quick(rid)
+                                      on_click=lambda rid=r.get('task_id'): init_quick(rid)
                                       ).props("dense")
 
 
 def build_compact_analytics_panel():
     metrics = an.get_dashboard_metrics()
+    print(f"[Dashboard] Metrics snapshot: {metrics}")
 
     def metric_card(title, value, subtitle=''):
         with summary_row:
@@ -280,6 +283,7 @@ def build_compact_analytics_panel():
 
 
 def build_recommendation_strip():
+    print(f"[Dashboard] Rendering recommendation strip with filters: {dash_filters}")
     ui.separator()
     ui.label("Manual Recommendations").classes("font-bold text-md")
 
@@ -297,15 +301,22 @@ def build_recommendation_strip():
         label="Max cognitive load",
         value=dash_filters.get('max_cognitive_load'),
     ).classes("w-40")
+    focus_options = {
+        'relief': 'Highest relief',
+        'duration': 'Shortest duration',
+        'cognitive': 'Lowest cognitive load',
+    }
+    focus_value = dash_filters.get('focus_metric')
+    if focus_value not in focus_options:
+        focus_value = next(iter(focus_options))
+        dash_filters['focus_metric'] = focus_value
     focus_metric = ui.select(
         label="Focus",
-        options=[
-            {'label': 'Relief', 'value': 'relief'},
-            {'label': 'Shortest', 'value': 'duration'},
-            {'label': 'Low Cognitive', 'value': 'cognitive'},
-        ],
-        value=dash_filters.get('focus_metric'),
+        options=focus_options,
+        value=focus_value,
     ).classes("w-44")
+    print("[Dashboard] Focus select options:", focus_options,
+          "default:", dash_filters.get('focus_metric'))
 
     rec_strip = ui.row().classes("gap-3 flex-wrap mt-2")
 
@@ -330,6 +341,7 @@ def build_recommendation_strip():
 def refresh_recommendations(target_row):
     target_row.clear()
     recs = an.recommendations(dash_filters)
+    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for filters {dash_filters}")
     if not recs:
         with target_row:
             ui.label("No candidates under current filters").classes("text-xs text-gray-500")
