@@ -40,6 +40,10 @@ def go_complete(instance_id):
     ui.navigate.to(f'/complete_task?instance_id={instance_id}')
 
 
+def go_cancel(instance_id):
+    ui.navigate.to(f'/cancel_task?instance_id={instance_id}')
+
+
 def show_details(instance_id):
     inst = InstanceManager.get_instance(instance_id)
 
@@ -152,26 +156,7 @@ def build_dashboard(task_manager):
                 ui.markdown("### Task Templates")
                 global template_col
                 template_col = ui.column().classes('w-full h-80 overflow-auto border rounded-lg p-2')
-                templates = tm.get_all()
-                if templates is None or templates.empty:
-                    ui.label("No templates yet").classes("text-xs text-gray-500")
-                else:
-                    rows = templates.to_dict(orient='records')
-                    for t in rows:
-                        if search.value and search.value.lower() not in t['name'].lower():
-                            continue
-
-                        with ui.card().classes("p-2 mb-2"):
-                            ui.label(f"{t['name']} (v{t['version']})").classes("font-bold text-sm")
-                            ui.label(t.get('description') or "No description").classes("text-xs text-gray-600")
-
-                            with ui.row().classes("justify-end gap-2"):
-                                ui.button("Init", on_click=lambda n=t['name']: init_quick(n)).props("dense")
-                                ui.button("Delete",
-                                          color="negative",
-                                          on_click=lambda tid=t['task_id']: delete_template(tid)
-                                          ).props("dense")
-                                refresh_templates()
+                refresh_templates()
 
         # ====================================================================
         # COLUMN 2 — Middle Column (Active Tasks)
@@ -199,6 +184,11 @@ def build_dashboard(task_manager):
 
                             ui.button("Complete",
                                       on_click=lambda i=inst['instance_id']: go_complete(i)
+                                      ).props("dense")
+
+                            ui.button("Cancel",
+                                      color="warning",
+                                      on_click=lambda i=inst['instance_id']: go_cancel(i)
                                       ).props("dense")
 
                             ui.button("Delete",

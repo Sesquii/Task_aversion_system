@@ -91,26 +91,17 @@ class TaskManager:
 
 
     def delete_by_id(self, task_id):
+        """Remove a task template by id."""
         print(f"[TaskManager] delete_by_id called with: {task_id}")
-
-        if not os.path.exists(TASKS_FILE):
-            print("[TaskManager] No task file found.")
+        self._reload()
+        before = len(self.df)
+        self.df = self.df[self.df['task_id'] != task_id]
+        if len(self.df) == before:
+            print("[TaskManager] No matching task to delete.")
             return False
-
-        try:
-            df = pd.read_csv(TASKS_FILE)
-            before_count = len(df)
-
-            df = df[df['task_id'] != task_id]
-
-            df.to_csv(TASKS_FILE, index=False)
-            after_count = len(df)
-
-            print(f"[TaskManager] Deleted: {before_count - after_count} row(s)")
-            return True
-        except Exception as e:
-            print("[TaskManager] ERROR deleting:", e)
-            return False
+        self._save()
+        print("[TaskManager] Task deleted successfully.")
+        return True
 
 
     def get_recent(self, limit=5):

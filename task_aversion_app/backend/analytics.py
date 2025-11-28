@@ -13,7 +13,10 @@ class Analytics:
         if not os.path.exists(self.instances_file):
             return {}
         df = pd.read_csv(self.instances_file).fillna('')
+        status = df['status'].astype(str).str.lower() if 'status' in df.columns else None
         active = df[(df['is_completed'] != 'True') & (df['is_deleted'] != 'True')]
+        if status is not None:
+            active = active[~status.loc[active.index].isin(['completed', 'cancelled'])]
         return {
             'active_count': len(active),
             'oldest_active': active['created_at'].min() if not active.empty else None
