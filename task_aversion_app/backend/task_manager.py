@@ -15,7 +15,6 @@ class TaskManager:
         if not os.path.exists(self.tasks_file):
             pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes']).to_csv(self.tasks_file, index=False)
         self._reload()
-        self.tasks = {}  
         self.initialization_entries = []
     def _reload(self):
         self.df = pd.read_csv(self.tasks_file, dtype=str).fillna('')
@@ -23,7 +22,10 @@ class TaskManager:
         if 'version' not in self.df.columns:
             self.df['version'] = 1
     def get_task(self, task_id):
-        return self.tasks.get(task_id)
+        """Return a task row by id as a dict."""
+        self._reload()
+        rows = self.df[self.df['task_id'] == task_id]
+        return rows.iloc[0].to_dict() if not rows.empty else None
     def _save(self):
         self.df.to_csv(self.tasks_file, index=False)
         self._reload()

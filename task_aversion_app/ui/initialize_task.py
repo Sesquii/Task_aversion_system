@@ -17,25 +17,46 @@ def initialize_task_page(task_manager, emotion_manager):
             return
 
         task = task_manager.get_task(task_id)
+        task_description = task.get('description', '') if task else ''
 
         with ui.column().classes("w-full max-w-xl gap-4"):
 
+            description_field = ui.textarea(
+                label="Task Description (optional)",
+                value=task_description,
+            )
+
             ui.label("Emotional Context")
 
+            default_emotions = ["Excitement", "Anxiety", "Confusion", "Overwhelm", "Dread", "Neutral"]
+            stored_emotions = emotion_manager.list_emotions()
+            emotion_options = default_emotions + [e for e in stored_emotions if e not in default_emotions]
+
             emotions = ui.select(
-                ["Excitement", "Anxiety", "Confusion", "Overwhelm", "Dread", "Neutral", "Custom..."],
+                emotion_options,
                 multiple=True
             )
 
-            custom_emotion_field = ui.input(placeholder="Custom Emotion")
-            custom_emotion_field.set_visibility(False)
+            new_em = ui.input(label="Add custom emotion")
 
-            def emotion_changed(e):
-                custom_emotion_field.set_visibility(
-                    "Custom..." in (e.args or [])
-                )
+            def add_emotion():
+                val = (new_em.value or '').strip()
+                if not val:
+                    ui.notify("Enter an emotion", color='negative')
+                    return
+                added = emotion_manager.add_emotion(val)
+                if added:
+                    ui.notify(f"Added emotion: {val}", color='positive')
+                else:
+                    ui.notify("Emotion already exists", color='warning')
+                latest = default_emotions + [e for e in emotion_manager.list_emotions() if e not in default_emotions]
+                emotions.options = latest
+                current = set(emotions.value or [])
+                current.add(val)
+                emotions.value = list(current)
+                new_em.set_value('')
 
-            emotions.on("update:model-value", emotion_changed)
+            ui.button("Add Emotion", on_click=add_emotion)
 
             # Cognitive load slider (NiceGUI 1.x → no label)
             ui.label("Expected Cognitive Load")
@@ -59,9 +80,6 @@ def initialize_task_page(task_manager, emotion_manager):
 
             def save():
                 emotion_list = emotions.value or []
-                if "Custom..." in emotion_list and custom_emotion_field.value:
-                    emotion_list.remove("Custom...")
-                    emotion_list.append(custom_emotion_field.value)
 
                 entry = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -72,6 +90,7 @@ def initialize_task_page(task_manager, emotion_manager):
                         custom_physical.value if physical_context.value == "Custom..." else physical_context.value
                     ),
                     "motivation": motivation.value,
+                    "description": description_field.value or '',
                     "initialized": True,
                     "completed": False,
                 }

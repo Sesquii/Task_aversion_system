@@ -15,8 +15,9 @@ def create_task_page(task_manager, emotion_manager):
             ttype = ui.select(['one-time','recurring','routine','project'], label='Type', value='one-time')
             est = ui.number(label='Default estimate minutes', value=0)
 
+            emotion_options = emotion_manager.list_emotions()
             emotions = ui.select(
-                options=emotion_manager.list_emotions(),
+                options=emotion_options,
                 label='Tracked Emotions (multi)',
                 multiple=True
             )
@@ -24,14 +25,21 @@ def create_task_page(task_manager, emotion_manager):
             new_em = ui.input(label="Add custom emotion")
 
             def add_emotion():
-                val = new_em.value.strip()
+                val = (new_em.value or '').strip()
                 if not val:
                     ui.notify("Enter an emotion", color='negative')
                     return
-                emotion_manager.add_emotion(val)
-                emotions.options = emotion_manager.list_emotions()
+                added = emotion_manager.add_emotion(val)
+                if added:
+                    ui.notify(f"Added emotion: {val}", color='positive')
+                else:
+                    ui.notify("Emotion already exists", color='warning')
+                updated = emotion_manager.list_emotions()
+                emotions.options = updated
+                current = set(emotions.value or [])
+                current.add(val)
+                emotions.value = list(current)
                 new_em.set_value('')
-                ui.notify("Added emotion", color='positive')
 
             ui.button("Add Emotion", on_click=add_emotion)
 
