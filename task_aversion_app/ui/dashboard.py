@@ -16,19 +16,28 @@ an = Analytics()
 # ----------------------------------------------------------
 
 
-def init_quick(task_name):
-    t = tm.find_by_name(task_name)
-    if not t:
+def init_quick(task_ref):
+    """Initialize a task template by name or id."""
+    task = tm.get_task(task_ref)
+    if not task:
+        task = tm.find_by_name(task_ref)
+    if not task:
         ui.notify("Task not found", color='negative')
         return
 
+    default_estimate = task.get('default_estimate_minutes') or 0
+    try:
+        default_estimate = int(default_estimate)
+    except (TypeError, ValueError):
+        default_estimate = 0
+
     inst_id = im.create_instance(
-        t['task_id'],
-        t['name'],
-        task_version=t.get('version') or 1,
-        predicted={'time_estimate_minutes': t.get('default_estimate_minutes') or 0},
+        task['task_id'],
+        task['name'],
+        task_version=task.get('version') or 1,
+        predicted={'time_estimate_minutes': default_estimate},
     )
-    ui.navigate.to(f'/initialize-task?task_id={inst_id}')
+    ui.navigate.to(f'/initialize-task?instance_id={inst_id}')
 
 
 def start_instance(instance_id):

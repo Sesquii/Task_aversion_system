@@ -1,7 +1,12 @@
 from nicegui import ui
 from datetime import datetime
+import json
 
 from fastapi import Request
+from backend.instance_manager import InstanceManager
+
+im = InstanceManager()
+
 
 def initialize_task_page(task_manager, emotion_manager):
 
@@ -9,15 +14,34 @@ def initialize_task_page(task_manager, emotion_manager):
     def page(request: Request):
         params = request.query_params  # ✅
 
-        task_id = params.get("task_id")
+        instance_id = params.get("instance_id")
 
-        if not task_id:
-            ui.notify("Error: no task_id provided", color='negative')
+        if not instance_id:
+            ui.notify("Error: no instance_id provided", color='negative')
             ui.navigate.to('/')
             return
 
-        task = task_manager.get_task(task_id)
+        instance = im.get_instance(instance_id)
+        if not instance:
+            ui.notify("Instance not found", color='negative')
+            ui.navigate.to('/')
+            return
+
+        task = task_manager.get_task(instance.get('task_id'))
         task_description = task.get('description', '') if task else ''
+        predicted_raw = instance.get('predicted') or '{}'
+        try:
+            predicted_data = json.loads(predicted_raw) if predicted_raw else {}
+        except json.JSONDecodeError:
+            predicted_data = {}
+        default_estimate = predicted_data.get('time_estimate_minutes') \
+            or predicted_data.get('estimate') \
+            or (task.get('default_estimate_minutes') if task else 0) \
+            or 0
+        try:
+            default_estimate = int(default_estimate)
+        except (TypeError, ValueError):
+            default_estimate = 0
 
         with ui.column().classes("w-full max-w-xl gap-4"):
 
@@ -78,24 +102,53 @@ def initialize_task_page(task_manager, emotion_manager):
             ui.label("Motivation Level")
             motivation = ui.slider(min=0, max=10, value=5)
 
+            estimate_input = ui.number(
+                label="Estimated Time to Complete (minutes)",
+                value=default_estimate,
+                min=0
+            )
+
             def save():
                 emotion_list = emotions.value or []
+                physical_value = (
+                    custom_physical.value if physical_context.value == "Custom..." else physical_context.value
+                ) or "None"
+                try:
+                    estimate_val = int(estimate_input.value or 0)
+                except (TypeError, ValueError):
+                    estimate_val = 0
 
                 entry = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "task": task_id,
+                    "instance_id": instance_id,
+                    "task": instance.get('task_id'),
                     "emotions": ",".join(emotion_list),
                     "expected_cognitive_load": cog_load.value,
-                    "physical_context": (
-                        custom_physical.value if physical_context.value == "Custom..." else physical_context.value
-                    ),
+                    "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or '',
+                    "estimate_minutes": estimate_val,
                     "initialized": True,
                     "completed": False,
                 }
 
+                predicted_payload = {
+                    "time_estimate_minutes": estimate_val,
+                    "emotions": emotion_list,
+                    "expected_cognitive_load": cog_load.value,
+                    "physical_context": physical_value,
+                    "motivation": motivation.value,
+                    "description": description_field.value or ''
+                }
+
+                try:
+                    im.add_prediction_to_instance(instance_id, predicted_payload)
+                except Exception as exc:
+                    ui.notify(f"Failed to save instance: {exc}", color='negative')
+                    return
+
                 task_manager.save_initialization_entry(entry)
                 ui.notify("Task initialized!", color='positive')
+                ui.navigate.to('/')
 
             ui.button("Save Initialization", on_click=save).classes("mt-4")
