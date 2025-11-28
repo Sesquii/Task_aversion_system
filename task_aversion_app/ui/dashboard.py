@@ -9,6 +9,7 @@ tm = TaskManager()
 im = InstanceManager()
 em = EmotionManager()
 an = Analytics()
+dash_filters = an.default_filters()
 
 
 # ----------------------------------------------------------
@@ -205,6 +206,8 @@ def build_dashboard(task_manager):
                                       on_click=lambda i=inst['instance_id']: delete_instance(i)
                                       ).props("dense")
 
+            build_compact_analytics_panel()
+            build_recommendation_strip()
         # ====================================================================
         # COLUMN 3 — Right Column (Completed + Recommendations)
         # ====================================================================
@@ -243,8 +246,104 @@ def build_dashboard(task_manager):
                             ui.button("Start",
                                       on_click=lambda rid=r['task_id']: init_quick(rid)
                                       ).props("dense")
-                            
-                            
 
-                         
-                        
+
+def build_compact_analytics_panel():
+    metrics = an.get_dashboard_metrics()
+
+    def metric_card(title, value, subtitle=''):
+        with summary_row:
+            with ui.card().classes("p-2 min-w-[140px]"):
+                ui.label(title).classes("text-xs text-gray-500")
+                ui.label(value).classes("text-lg font-bold")
+                if subtitle:
+                    ui.label(subtitle).classes("text-xs text-gray-400")
+
+    with ui.expansion("Analytics pulse", icon="bar_chart", value=False).classes("w-full"):
+        summary_row = ui.row().classes("gap-2 flex-wrap")
+        counts = metrics.get('counts', {})
+        quality = metrics.get('quality', {})
+        time_stats = metrics.get('time', {})
+
+        metric_card("Active", counts.get('active', 0))
+        metric_card("Done (7d)", counts.get('completed_7d', 0))
+        metric_card("Avg Relief", quality.get('avg_relief', 0), "/10")
+        metric_card("Cog Load", quality.get('avg_cognitive_load', 0), "/10")
+        metric_card("Median Duration", f"{time_stats.get('median_duration', 0)} min")
+        metric_card("Avg Delay", f"{time_stats.get('avg_delay', 0)} min")
+
+        ui.button(
+            "Open Analytics Studio",
+            icon="dashboard",
+            on_click=lambda: ui.navigate.to('/analytics'),
+        ).classes("mt-2")
+
+
+def build_recommendation_strip():
+    ui.separator()
+    ui.label("Manual Recommendations").classes("font-bold text-md")
+
+    filter_row = ui.row().classes("gap-2 flex-wrap")
+
+    max_duration = ui.number(
+        label="Max duration (min)",
+        value=dash_filters.get('max_duration'),
+    ).classes("w-32")
+    min_relief = ui.number(
+        label="Min relief",
+        value=dash_filters.get('min_relief'),
+    ).classes("w-28")
+    max_cog = ui.number(
+        label="Max cognitive load",
+        value=dash_filters.get('max_cognitive_load'),
+    ).classes("w-40")
+    focus_metric = ui.select(
+        label="Focus",
+        options=[
+            {'label': 'Relief', 'value': 'relief'},
+            {'label': 'Shortest', 'value': 'duration'},
+            {'label': 'Low Cognitive', 'value': 'cognitive'},
+        ],
+        value=dash_filters.get('focus_metric'),
+    ).classes("w-44")
+
+    rec_strip = ui.row().classes("gap-3 flex-wrap mt-2")
+
+    def _update_and_refresh(key, raw_value):
+        value = raw_value if raw_value not in (None, '', 'None') else None
+        if key in ('max_duration', 'min_relief', 'max_cognitive_load') and value is not None:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                value = None
+        dash_filters[key] = value
+        refresh_recommendations(rec_strip)
+
+    max_duration.on('change', lambda e: _update_and_refresh('max_duration', e.value))
+    min_relief.on('change', lambda e: _update_and_refresh('min_relief', e.value))
+    max_cog.on('change', lambda e: _update_and_refresh('max_cognitive_load', e.value))
+    focus_metric.on('change', lambda e: _update_and_refresh('focus_metric', e.value))
+
+    refresh_recommendations(rec_strip)
+
+
+def refresh_recommendations(target_row):
+    target_row.clear()
+    recs = an.recommendations(dash_filters)
+    if not recs:
+        with target_row:
+            ui.label("No candidates under current filters").classes("text-xs text-gray-500")
+        return
+
+    for rec in recs:
+        with target_row:
+            with ui.card().classes("p-2 min-w-[180px]"):
+                ui.label(rec['title']).classes("text-xs uppercase text-gray-500")
+                ui.label(rec['task_name']).classes("text-sm font-bold")
+                ui.label(rec['reason']).classes("text-xs text-gray-600")
+                ui.label(f"Duration: {rec.get('duration') or '—'}m").classes("text-xs")
+                ui.label(f"Relief {rec.get('relief')} | Cog {rec.get('cognitive_load')}").classes("text-xs")
+                ui.button(
+                    "Initialize",
+                    on_click=lambda rid=rec['task_id']: init_quick(rid),
+                ).props("dense")

@@ -25,7 +25,15 @@ class InstanceManager:
         defaults = {
             'predicted': '',
             'actual': '',
-            'cancelled_at': ''
+            'cancelled_at': '',
+            'duration_minutes': '',
+            'relief_score': '',
+            'cognitive_load': '',
+            'emotional_load': '',
+            'environmental_effect': '',
+            'skills_improved': '',
+            'behavioral_deviation': '',
+            'net_relief': '',
         }
         for col, default in defaults.items():
             if col not in self.df.columns:
@@ -68,7 +76,15 @@ class InstanceManager:
             'proactive_score': '',
             'is_completed': 'False',
             'is_deleted': 'False',
-            'status': 'active'
+            'status': 'active',
+            'duration_minutes': '',
+            'relief_score': '',
+            'cognitive_load': '',
+            'emotional_load': '',
+            'environmental_effect': '',
+            'skills_improved': '',
+            'behavioral_deviation': '',
+            'net_relief': '',
         }
         self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
         self._save()
@@ -122,6 +138,7 @@ class InstanceManager:
         except Exception:
             self.df.at[idx,'procrastination_score'] = ''
             self.df.at[idx,'proactive_score'] = ''
+        self._update_attributes_from_payload(idx, actual)
         self._save()
 
     def cancel_instance(self, instance_id, actual: dict):
@@ -138,6 +155,7 @@ class InstanceManager:
         self.df.at[idx, 'completed_at'] = ''
         self.df.at[idx, 'procrastination_score'] = ''
         self.df.at[idx, 'proactive_score'] = ''
+        self._update_attributes_from_payload(idx, actual or {})
         self._save()
 
     def add_prediction_to_instance(self, instance_id, predicted: dict):
@@ -165,6 +183,26 @@ class InstanceManager:
         self._save()
         print("[InstanceManager] Instance deleted.")
         return True
+
+    def _update_attributes_from_payload(self, idx, payload: dict):
+        """Persist wellbeing attributes if caller provided them."""
+        if not isinstance(payload, dict):
+            return
+        mappings = [
+            'duration_minutes',
+            'relief_score',
+            'cognitive_load',
+            'emotional_load',
+            'environmental_effect',
+            'skills_improved',
+            'behavioral_deviation',
+            'net_relief',
+        ]
+        for key in mappings:
+            value = payload.get(key)
+            if value is None or value == '':
+                continue
+            self.df.at[idx, key] = value
 
 
     def list_recent_completed(self, limit=20):

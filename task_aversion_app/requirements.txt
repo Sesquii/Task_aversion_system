@@ -1,3 +1,4 @@
 nicegui
 pandas
 matplotlib
+plotly

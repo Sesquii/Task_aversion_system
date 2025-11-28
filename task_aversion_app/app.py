@@ -8,6 +8,7 @@ from ui.create_task import create_task_page
 from ui.initialize_task import initialize_task_page
 from ui.complete_task import complete_task_page
 from ui.cancel_task import cancel_task_page
+from ui.analytics_page import register_analytics_page
 
 
 task_manager = TaskManager()
@@ -23,6 +24,7 @@ def register_pages():
     initialize_task_page(task_manager, emotion_manager)
     complete_task_page(task_manager, emotion_manager)
     cancel_task_page(task_manager, emotion_manager)
+    register_analytics_page()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
