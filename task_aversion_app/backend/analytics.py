@@ -64,7 +64,15 @@ class Analytics:
             # Similar for cognitive_load
             if column == 'cognitive_load':
                 df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_cognitive')))
-                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_cognitive')))
+                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+            # Similar for emotional_load
+            if column == 'emotional_load':
+                df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_emotional')))
+                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_emotional_load') or r.get('expected_emotional')))
+            # Similar for duration_minutes
+            if column == 'duration_minutes':
+                df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('time_actual_minutes')))
+                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('time_estimate_minutes')))
             df[column] = df[column].fillna(attr.default)
             if attr.dtype == 'numeric':
                 df[column] = pd.to_numeric(df[column], errors='coerce')
