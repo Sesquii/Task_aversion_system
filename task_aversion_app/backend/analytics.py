@@ -201,9 +201,19 @@ class Analytics:
             lambda row: min(0.0, row['default_relief_points']), axis=1
         )
         
-        # Calculate productivity time (sum of duration_minutes for completed tasks)
-        completed['duration_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce')
-        productivity_time = completed['duration_numeric'].fillna(0).sum()
+        # Calculate productivity time (sum of actual time from actual_dict)
+        def _get_actual_time(row):
+            try:
+                actual_dict = row['actual_dict']
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed['time_actual'] = completed.apply(_get_actual_time, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        productivity_time = completed['time_actual'].fillna(0).sum()
         
         # Calculate default relief points totals
         default_total = relief_data['default_relief_points'].sum()
@@ -221,6 +231,9 @@ class Analytics:
         negative_total = abs(negative_relief['default_relief_points'].sum()) if negative_count > 0 else 0.0
         negative_avg = abs(negative_relief['default_relief_points'].mean()) if negative_count > 0 else 0.0
         
+        # Get efficiency summary
+        efficiency_summary = self.get_efficiency_summary()
+        
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
             'default_relief_points': round(float(default_total), 2),
@@ -231,6 +244,161 @@ class Analytics:
             'negative_relief_count': int(negative_count),
             'negative_relief_total': round(float(negative_total), 2),
             'negative_relief_avg': round(float(negative_avg), 2),
+            'avg_efficiency': efficiency_summary.get('avg_efficiency', 0.0),
+            'high_efficiency_count': efficiency_summary.get('high_efficiency_count', 0),
+            'low_efficiency_count': efficiency_summary.get('low_efficiency_count', 0),
+        }
+
+    def calculate_efficiency_score(self, row: pd.Series) -> float:
+        """Calculate productivity efficiency score for a task instance.
+        
+        Formula considers:
+        - Time efficiency: completion % relative to time spent vs expected
+        - Relief bonus: higher relief increases efficiency
+        - Motivation factor: low motivation + high relief + good time ratio = bonus
+        
+        Returns efficiency score (0-100+ scale, higher is better).
+        """
+        try:
+            # Extract data
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            completion_pct = actual_dict.get('completion_percent', 0)
+            time_actual = actual_dict.get('time_actual_minutes', 0)
+            relief_score = pd.to_numeric(row.get('relief_score', 0), errors='coerce') or 0
+            
+            time_estimate = predicted_dict.get('time_estimate_minutes', 0)
+            motivation = predicted_dict.get('motivation', None)
+            
+            # Convert to numeric
+            completion_pct = float(completion_pct) if completion_pct else 0.0
+            time_actual = float(time_actual) if time_actual else 0.0
+            time_estimate = float(time_estimate) if time_estimate else 0.0
+            relief_score = float(relief_score) if relief_score else 0.0
+            motivation = float(motivation) if motivation is not None else None
+            
+            # Base efficiency: completion percentage
+            base_efficiency = completion_pct
+            
+            # Time efficiency factor
+            # If we have both actual and expected time, calculate time ratio
+            if time_estimate > 0 and time_actual > 0:
+                # Expected time for this completion %: (completion_pct / 100) * time_estimate
+                expected_time_for_completion = (completion_pct / 100.0) * time_estimate
+                
+                if expected_time_for_completion > 0:
+                    # Time efficiency: did we complete faster or slower than expected?
+                    # Ratio > 1 means we were faster, < 1 means slower
+                    time_ratio = expected_time_for_completion / max(time_actual, 0.1)
+                    
+                    # Time efficiency bonus/penalty: scales with completion %
+                    # If 100% done in less time = big bonus
+                    # If 25% done in <25% of time = good bonus
+                    time_efficiency_factor = time_ratio * (completion_pct / 100.0)
+                else:
+                    time_efficiency_factor = 1.0
+                
+                # For 100% completed tasks that took longer: factor in relief to mitigate penalty
+                if completion_pct >= 100 and time_actual > time_estimate:
+                    # Over time penalty is reduced by relief
+                    over_time_penalty = (time_actual / time_estimate) - 1.0
+                    # Relief mitigates: high relief (8+) can offset up to 50% of over-time penalty
+                    relief_mitigation = min(relief_score / 10.0, 0.5)
+                    # Adjust time efficiency factor to account for over-time, mitigated by relief
+                    time_efficiency_factor = max(0.5, 1.0 - (over_time_penalty * (1.0 - relief_mitigation)))
+            else:
+                # No time data, neutral factor
+                time_efficiency_factor = 1.0
+            
+            # Relief bonus: scales with relief score (0-10 -> 0-20 bonus points)
+            relief_bonus = relief_score * 2.0
+            
+            # Motivation factor: if low motivation but high relief and good time ratio
+            motivation_bonus = 0.0
+            if motivation is not None and motivation < 5 and relief_score >= 6:
+                # Low motivation (0-4) + high relief (6+) = bonus
+                # Bonus increases if time efficiency is also good
+                motivation_bonus = (5 - motivation) * (relief_score / 10.0) * time_efficiency_factor
+            
+            # Calculate final efficiency score
+            efficiency = (base_efficiency * time_efficiency_factor) + relief_bonus + motivation_bonus
+            
+            return round(float(efficiency), 2)
+        except Exception as e:
+            # Return 0 if calculation fails
+            return 0.0
+
+    def get_efficiency_summary(self) -> Dict[str, any]:
+        """Calculate efficiency statistics for completed tasks."""
+        df = self._load_instances()
+        
+        if df.empty:
+            return {
+                'avg_efficiency': 0.0,
+                'high_efficiency_count': 0,
+                'low_efficiency_count': 0,
+                'efficiency_by_completion': {},
+            }
+        
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'avg_efficiency': 0.0,
+                'high_efficiency_count': 0,
+                'low_efficiency_count': 0,
+                'efficiency_by_completion': {},
+            }
+        
+        # Calculate efficiency for each completed task
+        completed['efficiency_score'] = completed.apply(self.calculate_efficiency_score, axis=1)
+        
+        # Filter out zero efficiency (likely missing data)
+        valid_efficiency = completed[completed['efficiency_score'] > 0]
+        
+        if valid_efficiency.empty:
+            return {
+                'avg_efficiency': 0.0,
+                'high_efficiency_count': 0,
+                'low_efficiency_count': 0,
+                'efficiency_by_completion': {},
+            }
+        
+        avg_efficiency = valid_efficiency['efficiency_score'].mean()
+        high_efficiency = valid_efficiency[valid_efficiency['efficiency_score'] >= 80]
+        low_efficiency = valid_efficiency[valid_efficiency['efficiency_score'] < 50]
+        
+        # Group by completion percentage ranges
+        def _get_completion_range(row):
+            actual_dict = row.get('actual_dict', {})
+            completion = actual_dict.get('completion_percent', 0)
+            try:
+                completion = float(completion)
+                if completion >= 100:
+                    return '100%'
+                elif completion >= 75:
+                    return '75-99%'
+                elif completion >= 50:
+                    return '50-74%'
+                elif completion >= 25:
+                    return '25-49%'
+                else:
+                    return '0-24%'
+            except:
+                return 'unknown'
+        
+        completed['completion_range'] = completed.apply(_get_completion_range, axis=1)
+        efficiency_by_completion = completed.groupby('completion_range')['efficiency_score'].mean().to_dict()
+        
+        return {
+            'avg_efficiency': round(float(avg_efficiency), 2),
+            'high_efficiency_count': int(len(high_efficiency)),
+            'low_efficiency_count': int(len(low_efficiency)),
+            'efficiency_by_completion': {k: round(float(v), 2) for k, v in efficiency_by_completion.items()},
         }
 
     def get_task_relief_history(self, task_id: Optional[str] = None) -> Dict[str, float]:
@@ -286,6 +454,37 @@ class Analytics:
         
         return result
 
+    def get_task_efficiency_history(self) -> Dict[str, float]:
+        """Get average efficiency score per task based on completed instances.
+        
+        Returns {task_id: avg_efficiency_score}
+        Useful for recommending tasks that have historically been efficient.
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {}
+        
+        # Calculate efficiency for each completed task
+        completed['efficiency_score'] = completed.apply(self.calculate_efficiency_score, axis=1)
+        
+        # Filter to valid efficiency scores
+        valid = completed[completed['efficiency_score'] > 0]
+        
+        if valid.empty:
+            return {}
+        
+        # Group by task_id and calculate average efficiency
+        task_efficiency = valid.groupby('task_id')['efficiency_score'].agg(['mean', 'count']).to_dict('index')
+        
+        # Convert to simpler format: {task_id: avg_efficiency}
+        result = {}
+        for tid, stats in task_efficiency.items():
+            result[tid] = round(float(stats['mean']), 2)
+        
+        return result
+
     # ------------------------------------------------------------------
     # Recommendation helpers
     # ------------------------------------------------------------------
@@ -331,8 +530,11 @@ class Analytics:
         active = active.copy()
 
         focus_metric = filters.get('focus_metric')
-        focus_metric = focus_metric if focus_metric in ['relief', 'duration', 'cognitive'] else 'relief'
+        focus_metric = focus_metric if focus_metric in ['relief', 'duration', 'cognitive', 'efficiency'] else 'relief'
 
+        # Get task efficiency history for efficiency-based recommendations
+        task_efficiency = self.get_task_efficiency_history()
+        
         ranked = []
         if focus_metric == 'relief':
             row = active.sort_values('relief_score', ascending=False).head(1)
@@ -343,11 +545,40 @@ class Analytics:
         if focus_metric == 'cognitive':
             row = active.sort_values('cognitive_load', ascending=True).head(1)
             ranked.append(self._row_to_recommendation(row, "Lowest Cognitive Load"))
+        if focus_metric == 'efficiency':
+            # Add efficiency scores to active tasks based on historical data
+            active.loc[:, 'historical_efficiency'] = active['task_id'].map(task_efficiency).fillna(0)
+            row = active.sort_values('historical_efficiency', ascending=False).head(1)
+            ranked.append(self._row_to_recommendation(row, "Highest Historical Efficiency"))
 
         # Always include net relief pick for variety
         active.loc[:, 'net_relief_proxy'] = active['relief_score'] - active['cognitive_load']
         row = active.sort_values('net_relief_proxy', ascending=False).head(1)
         ranked.append(self._row_to_recommendation(row, "Highest Net Relief"))
+        
+        # Always include efficiency-based pick if we have efficiency data
+        if task_efficiency:
+            active.loc[:, 'historical_efficiency'] = active['task_id'].map(task_efficiency).fillna(0)
+            high_eff = active[active['historical_efficiency'] > 0]
+            if not high_eff.empty:
+                # Prioritize tasks with high efficiency, low motivation, high expected relief
+                def _efficiency_recommendation_score(row):
+                    eff = row.get('historical_efficiency', 0)
+                    pred_dict = row.get('predicted_dict', {})
+                    if isinstance(pred_dict, dict):
+                        motivation = pred_dict.get('motivation', None)
+                        expected_relief = pred_dict.get('expected_relief', 0)
+                        # Bonus for low motivation + high efficiency + high expected relief
+                        bonus = 0
+                        if motivation is not None and motivation < 5 and eff > 70:
+                            bonus = (5 - motivation) * (eff / 100.0) * (expected_relief / 10.0) * 20
+                        return eff + bonus
+                    return eff
+                
+                high_eff.loc[:, 'eff_score'] = high_eff.apply(_efficiency_recommendation_score, axis=1)
+                row = high_eff.sort_values('eff_score', ascending=False).head(1)
+                ranked.append(self._row_to_recommendation(row, "High Efficiency Candidate"))
+        
         return [r for r in ranked if r]
 
     def _row_to_recommendation(self, row_df: pd.DataFrame, label: str) -> Optional[Dict[str, str]]:

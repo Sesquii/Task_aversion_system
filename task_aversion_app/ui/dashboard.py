@@ -299,6 +299,16 @@ def build_summary_section():
                     ui.label(f"Total: -{relief_summary['negative_relief_total']:.2f}").classes("text-xs text-gray-400")
                 else:
                     ui.label("None").classes("text-xs text-gray-400")
+            
+            # Efficiency Stats
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Productivity Efficiency").classes("text-xs text-gray-500")
+                avg_eff = relief_summary.get('avg_efficiency', 0.0)
+                high_eff = relief_summary.get('high_efficiency_count', 0)
+                low_eff = relief_summary.get('low_efficiency_count', 0)
+                ui.label(f"{avg_eff:.1f}").classes("text-lg font-bold")
+                ui.label(f"High: {high_eff} | Low: {low_eff}").classes("text-xs text-gray-400")
+                ui.label("(time × completion × relief)").classes("text-xs text-gray-400")
 
 
 def build_recently_completed_panel():
@@ -424,6 +434,7 @@ def build_recommendation_strip():
                 'relief': 'Highest relief',
                 'duration': 'Shortest duration',
                 'cognitive': 'Lowest cognitive load',
+                'efficiency': 'Highest efficiency',
             }
             focus_value = dash_filters.get('focus_metric')
             if focus_value not in focus_options:
