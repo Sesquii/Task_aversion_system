@@ -133,6 +133,159 @@ class Analytics:
         }
         return metrics
 
+    def get_relief_summary(self) -> Dict[str, any]:
+        """Calculate relief points, productivity time, and relief statistics."""
+        df = self._load_instances()
+        
+        if df.empty:
+            return {
+                'productivity_time_minutes': 0.0,
+                'default_relief_points': 0.0,
+                'net_relief_points': 0.0,
+                'positive_relief_count': 0,
+                'positive_relief_total': 0.0,
+                'positive_relief_avg': 0.0,
+                'negative_relief_count': 0,
+                'negative_relief_total': 0.0,
+                'negative_relief_avg': 0.0,
+            }
+        
+        # Get completed tasks only
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'productivity_time_minutes': 0.0,
+                'default_relief_points': 0.0,
+                'net_relief_points': 0.0,
+                'positive_relief_count': 0,
+                'positive_relief_total': 0.0,
+                'positive_relief_avg': 0.0,
+                'negative_relief_count': 0,
+                'negative_relief_total': 0.0,
+                'negative_relief_avg': 0.0,
+            }
+        
+        # Extract expected relief from predicted_dict
+        # predicted_dict is a Series, so we need to access it properly
+        def _get_expected_relief(row):
+            try:
+                pred_dict = row['predicted_dict']
+                if isinstance(pred_dict, dict):
+                    return pred_dict.get('expected_relief', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed['expected_relief'] = completed.apply(_get_expected_relief, axis=1)
+        completed['expected_relief'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
+        
+        # Get actual relief from relief_score column (already populated from actual_dict)
+        completed['actual_relief'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+        
+        # Filter to rows where we have both expected and actual relief
+        has_both = completed['expected_relief'].notna() & completed['actual_relief'].notna()
+        relief_data = completed[has_both].copy()
+        
+        # Calculate default relief points (actual - expected, can be negative)
+        relief_data['default_relief_points'] = relief_data['actual_relief'] - relief_data['expected_relief']
+        
+        # Calculate net relief points (calibrated):
+        # - 0 for negative net relief (when actual < expected)
+        # - actual - expected for positive (when actual >= expected)
+        # - For negative cases, store the negative value separately
+        relief_data['net_relief_points'] = relief_data.apply(
+            lambda row: max(0.0, row['default_relief_points']), axis=1
+        )
+        relief_data['negative_relief_points'] = relief_data.apply(
+            lambda row: min(0.0, row['default_relief_points']), axis=1
+        )
+        
+        # Calculate productivity time (sum of duration_minutes for completed tasks)
+        completed['duration_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce')
+        productivity_time = completed['duration_numeric'].fillna(0).sum()
+        
+        # Calculate default relief points totals
+        default_total = relief_data['default_relief_points'].sum()
+        net_total = relief_data['net_relief_points'].sum()
+        
+        # Separate positive and negative relief
+        positive_relief = relief_data[relief_data['default_relief_points'] > 0]
+        negative_relief = relief_data[relief_data['default_relief_points'] < 0]
+        
+        positive_count = len(positive_relief)
+        positive_total = positive_relief['default_relief_points'].sum() if positive_count > 0 else 0.0
+        positive_avg = positive_total / positive_count if positive_count > 0 else 0.0
+        
+        negative_count = len(negative_relief)
+        negative_total = abs(negative_relief['default_relief_points'].sum()) if negative_count > 0 else 0.0
+        negative_avg = abs(negative_relief['default_relief_points'].mean()) if negative_count > 0 else 0.0
+        
+        return {
+            'productivity_time_minutes': round(float(productivity_time), 1),
+            'default_relief_points': round(float(default_total), 2),
+            'net_relief_points': round(float(net_total), 2),
+            'positive_relief_count': int(positive_count),
+            'positive_relief_total': round(float(positive_total), 2),
+            'positive_relief_avg': round(float(positive_avg), 2),
+            'negative_relief_count': int(negative_count),
+            'negative_relief_total': round(float(negative_total), 2),
+            'negative_relief_avg': round(float(negative_avg), 2),
+        }
+
+    def get_task_relief_history(self, task_id: Optional[str] = None) -> Dict[str, float]:
+        """Get relief history for a specific task or all tasks.
+        
+        Returns average relief points (actual - expected) per task.
+        Negative values indicate tasks that consistently underdeliver on expected relief.
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {}
+        
+        # Extract expected and actual relief
+        def _get_expected_relief(row):
+            try:
+                pred_dict = row['predicted_dict']
+                if isinstance(pred_dict, dict):
+                    return pred_dict.get('expected_relief', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed['expected_relief'] = completed.apply(_get_expected_relief, axis=1)
+        completed['expected_relief'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
+        completed['actual_relief'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+        
+        # Filter to rows with both expected and actual
+        has_both = completed['expected_relief'].notna() & completed['actual_relief'].notna()
+        relief_data = completed[has_both].copy()
+        
+        if relief_data.empty:
+            return {}
+        
+        # Calculate relief points per row
+        relief_data['relief_points'] = relief_data['actual_relief'] - relief_data['expected_relief']
+        
+        # Filter by task_id if provided
+        if task_id:
+            relief_data = relief_data[relief_data['task_id'] == task_id]
+        
+        if relief_data.empty:
+            return {}
+        
+        # Group by task_id and calculate average relief points
+        task_relief = relief_data.groupby('task_id')['relief_points'].agg(['mean', 'count']).to_dict('index')
+        
+        # Convert to simpler format: {task_id: avg_relief_points}
+        result = {}
+        for tid, stats in task_relief.items():
+            result[tid] = round(float(stats['mean']), 2)
+        
+        return result
+
     # ------------------------------------------------------------------
     # Recommendation helpers
     # ------------------------------------------------------------------

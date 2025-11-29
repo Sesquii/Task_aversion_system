@@ -121,6 +121,9 @@ def build_dashboard(task_manager):
 
     ui.label("Task Aversion Dashboard").classes("text-2xl font-bold mb-4 small")
 
+    # Summary section at the top
+    build_summary_section()
+
     # Outer layout: 3 columns
     with ui.row().classes("w-full h-screen gap-4 small"):
 
@@ -241,6 +244,61 @@ def build_dashboard(task_manager):
                             ui.button("Start",
                                       on_click=lambda rid=r.get('task_id'): init_quick(rid)
                                       ).props("dense")
+
+
+def build_summary_section():
+    """Build the summary section with productivity time and relief points."""
+    relief_summary = an.get_relief_summary()
+    
+    with ui.card().classes("w-full mb-4 p-4"):
+        ui.label("Summary").classes("text-xl font-bold mb-3")
+        
+        with ui.row().classes("w-full gap-4 flex-wrap"):
+            # Productivity Time
+            with ui.card().classes("p-3 min-w-[180px]"):
+                ui.label("Productivity Time").classes("text-xs text-gray-500")
+                hours = relief_summary['productivity_time_minutes'] / 60.0
+                if hours >= 1:
+                    ui.label(f"{hours:.1f} hours").classes("text-lg font-bold")
+                    ui.label(f"({relief_summary['productivity_time_minutes']:.0f} min)").classes("text-xs text-gray-400")
+                else:
+                    ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-lg font-bold")
+            
+            # Default Relief Points
+            with ui.card().classes("p-3 min-w-[180px]"):
+                ui.label("Default Relief Points").classes("text-xs text-gray-500")
+                points = relief_summary['default_relief_points']
+                color_class = "text-green-600" if points >= 0 else "text-red-600"
+                ui.label(f"{points:+.2f}").classes(f"text-lg font-bold {color_class}")
+                ui.label("(actual - expected)").classes("text-xs text-gray-400")
+            
+            # Net Relief Points
+            with ui.card().classes("p-3 min-w-[180px]"):
+                ui.label("Net Relief Points").classes("text-xs text-gray-500")
+                net_points = relief_summary['net_relief_points']
+                ui.label(f"{net_points:.2f}").classes("text-lg font-bold text-green-600")
+                ui.label("(calibrated, ≥0)").classes("text-xs text-gray-400")
+            
+            # Positive Relief Stats
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Positive Relief").classes("text-xs text-gray-500")
+                pos_count = relief_summary['positive_relief_count']
+                pos_avg = relief_summary['positive_relief_avg']
+                ui.label(f"{pos_count} tasks").classes("text-sm font-bold")
+                ui.label(f"Avg: +{pos_avg:.2f}").classes("text-xs text-green-600")
+                ui.label(f"Total: +{relief_summary['positive_relief_total']:.2f}").classes("text-xs text-gray-400")
+            
+            # Negative Relief Stats
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Negative Relief").classes("text-xs text-gray-500")
+                neg_count = relief_summary['negative_relief_count']
+                neg_avg = relief_summary['negative_relief_avg']
+                ui.label(f"{neg_count} tasks").classes("text-sm font-bold")
+                if neg_count > 0:
+                    ui.label(f"Avg: -{neg_avg:.2f}").classes("text-xs text-red-600")
+                    ui.label(f"Total: -{relief_summary['negative_relief_total']:.2f}").classes("text-xs text-gray-400")
+                else:
+                    ui.label("None").classes("text-xs text-gray-400")
 
 
 def build_recently_completed_panel():
