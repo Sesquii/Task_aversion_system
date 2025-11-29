@@ -86,6 +86,12 @@ def initialize_task_page(task_manager, emotion_manager):
             ui.label("Expected Cognitive Load")
             cog_load = ui.slider(min=0, max=10, step=1, value=5)
 
+            ui.label("Expected Physical Load")
+            physical_load = ui.slider(min=0, max=10, step=1, value=5)
+
+            ui.label("Expected Emotional Load")
+            emotional_load = ui.slider(min=0, max=10, step=1, value=5)
+
             ui.label("Physical Context")
             physical_context = ui.select(
                 ["None", "Home", "Work", "Gym", "Outdoors", "Errands", "Custom..."]
@@ -124,6 +130,8 @@ def initialize_task_page(task_manager, emotion_manager):
                     "task": instance.get('task_id'),
                     "emotions": ",".join(emotion_list),
                     "expected_cognitive_load": cog_load.value,
+                    "expected_physical_load": physical_load.value,
+                    "expected_emotional_load": emotional_load.value,
                     "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or '',
@@ -136,6 +144,8 @@ def initialize_task_page(task_manager, emotion_manager):
                     "time_estimate_minutes": estimate_val,
                     "emotions": emotion_list,
                     "expected_cognitive_load": cog_load.value,
+                    "expected_physical_load": physical_load.value,
+                    "expected_emotional_load": emotional_load.value,
                     "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or ''

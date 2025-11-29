@@ -170,65 +170,58 @@ def build_dashboard(task_manager):
                 refresh_templates()
 
         # ====================================================================
-        # COLUMN 2 — Middle Column (Active Tasks)
+        # COLUMN 2 — Middle Column (Active Tasks + Recently Completed)
         # ====================================================================
-        with ui.column().classes("w-1/3 h-full border rounded-lg p-3 overflow-y-auto gap-2"):
+        with ui.column().classes("w-1/3 h-full gap-2"):
 
-            ui.label("Active Initialized Tasks").classes("text-lg font-bold")
-            ui.separator()
+            # Active Tasks Section (takes up most of the space)
+            with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
+                ui.label("Active Initialized Tasks").classes("text-lg font-bold")
+                ui.separator()
 
-            active = im.list_active_instances()
+                active = im.list_active_instances()
 
-            if not active:
-                ui.label("No active tasks").classes("text-xs text-gray-500")
-            else:
-                for inst in active:
-                    with ui.card().classes("w-full p-2"):
-                        ui.label(inst.get("task_name")).classes("text-md font-bold")
-                        ui.label(f"Created: {inst.get('created_at')}").classes("text-xs")
-                        ui.label(str(inst.get("predicted"))).classes("text-xs text-gray-600")
+                if not active:
+                    ui.label("No active tasks").classes("text-xs text-gray-500")
+                else:
+                    for inst in active:
+                        with ui.card().classes("w-full p-2"):
+                            ui.label(inst.get("task_name")).classes("text-md font-bold")
+                            ui.label(f"Created: {inst.get('created_at')}").classes("text-xs")
+                            ui.label(str(inst.get("predicted"))).classes("text-xs text-gray-600")
 
-                        with ui.row().classes("justify-end gap-2"):
-                            ui.button("Start",
-                                      on_click=lambda i=inst['instance_id']: start_instance(i)
-                                      ).props("dense")
+                            with ui.row().classes("justify-end gap-2"):
+                                ui.button("Start",
+                                          on_click=lambda i=inst['instance_id']: start_instance(i)
+                                          ).props("dense")
 
-                            ui.button("Complete",
-                                      on_click=lambda i=inst['instance_id']: go_complete(i)
-                                      ).props("dense")
+                                ui.button("Complete",
+                                          on_click=lambda i=inst['instance_id']: go_complete(i)
+                                          ).props("dense")
 
-                            ui.button("Cancel",
-                                      color="warning",
-                                      on_click=lambda i=inst['instance_id']: go_cancel(i)
-                                      ).props("dense")
+                                ui.button("Cancel",
+                                          color="warning",
+                                          on_click=lambda i=inst['instance_id']: go_cancel(i)
+                                          ).props("dense")
 
-                            ui.button("Delete",
-                                      color="negative",
-                                      on_click=lambda i=inst['instance_id']: delete_instance(i)
-                                      ).props("dense")
+                                ui.button("Delete",
+                                          color="negative",
+                                          on_click=lambda i=inst['instance_id']: delete_instance(i)
+                                          ).props("dense")
 
-            build_compact_analytics_panel()
-            build_recommendation_strip()
+            # Recently Completed Section (bottom quarter)
+            build_recently_completed_panel()
+
         # ====================================================================
-        # COLUMN 3 — Right Column (Completed + Recommendations)
+        # COLUMN 3 — Right Column (Analytics + Recommendations)
         # ====================================================================
         with ui.column().classes("w-1/3 h-full gap-4"):
 
-            # Recent completions
-            with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
-                ui.label("Recently Completed").classes("font-bold text-lg")
-                ui.separator()
+            # Analytics Panel
+            build_compact_analytics_panel()
 
-                completed = im.list_recent_completed(limit=20) \
-                    if hasattr(im, "list_recent_completed") else []
-
-                if not completed:
-                    ui.label("No completed tasks").classes("text-xs text-gray-500")
-                else:
-                    for c in completed:
-                        with ui.row().classes("justify-between items-center"):
-                            ui.label(c['task_name']).classes("text-sm")
-                            ui.label(str(c['completed_at'])).classes("text-xs text-gray-400")
+            # Manual Recommendations (moved from middle column)
+            build_recommendation_strip()
 
             # Recommendations
             with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
@@ -248,6 +241,71 @@ def build_dashboard(task_manager):
                             ui.button("Start",
                                       on_click=lambda rid=r.get('task_id'): init_quick(rid)
                                       ).props("dense")
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel with optional date grouping."""
+    from collections import defaultdict
+    
+    with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto h-1/4"):
+        ui.label("Recently Completed").classes("font-bold text-lg")
+        ui.separator()
+        
+        # Toggle for date grouping
+        group_by_date = ui.checkbox("Group by date", value=False).classes("mb-2")
+        
+        # Container for completed tasks
+        completed_container = ui.column().classes("w-full")
+        
+        def refresh_completed():
+            completed_container.clear()
+            
+            completed = im.list_recent_completed(limit=20) \
+                if hasattr(im, "list_recent_completed") else []
+            
+            if not completed:
+                with completed_container:
+                    ui.label("No completed tasks").classes("text-xs text-gray-500")
+                return
+            
+            if group_by_date.value:
+                # Group by date
+                grouped = defaultdict(list)
+                for c in completed:
+                    # Extract date from completed_at (format: "YYYY-MM-DD HH:MM")
+                    completed_at = str(c.get('completed_at', ''))
+                    if completed_at:
+                        date_part = completed_at.split()[0] if ' ' in completed_at else completed_at[:10]
+                        grouped[date_part].append(c)
+                
+                # Sort dates descending
+                sorted_dates = sorted(grouped.keys(), reverse=True)
+                
+                with completed_container:
+                    for date in sorted_dates:
+                        with ui.card().classes("w-full p-2 mb-2"):
+                            ui.label(date).classes("font-bold text-sm text-gray-600 mb-1")
+                            for c in grouped[date]:
+                                with ui.row().classes("justify-between items-center mb-1"):
+                                    ui.label(c['task_name']).classes("text-sm")
+                                    # Show time if available
+                                    completed_at = str(c.get('completed_at', ''))
+                                    time_part = completed_at.split()[1] if ' ' in completed_at else ''
+                                    if time_part:
+                                        ui.label(time_part).classes("text-xs text-gray-400")
+            else:
+                # No grouping - show flat list
+                with completed_container:
+                    for c in completed:
+                        with ui.row().classes("justify-between items-center"):
+                            ui.label(c['task_name']).classes("text-sm")
+                            ui.label(str(c['completed_at'])).classes("text-xs text-gray-400")
+        
+        # Update when toggle changes
+        group_by_date.on('update:model-value', lambda _: refresh_completed())
+        
+        # Initial render
+        refresh_completed()
 
 
 def build_compact_analytics_panel():
@@ -284,58 +342,61 @@ def build_compact_analytics_panel():
 
 def build_recommendation_strip():
     print(f"[Dashboard] Rendering recommendation strip with filters: {dash_filters}")
-    ui.separator()
-    ui.label("Manual Recommendations").classes("font-bold text-md")
+    with ui.column().classes("w-full border rounded-lg p-3"):
+        ui.label("Manual Recommendations").classes("font-bold text-md")
+        ui.markdown("_⚠️ Placeholder: These features are not yet functional._").classes("text-xs text-gray-500 mb-2")
+        ui.separator()
 
-    filter_row = ui.row().classes("gap-2 flex-wrap")
+        filter_row = ui.row().classes("gap-2 flex-wrap")
 
-    max_duration = ui.number(
-        label="Max duration (min)",
-        value=dash_filters.get('max_duration'),
-    ).classes("w-32")
-    min_relief = ui.number(
-        label="Min relief",
-        value=dash_filters.get('min_relief'),
-    ).classes("w-28")
-    max_cog = ui.number(
-        label="Max cognitive load",
-        value=dash_filters.get('max_cognitive_load'),
-    ).classes("w-40")
-    focus_options = {
-        'relief': 'Highest relief',
-        'duration': 'Shortest duration',
-        'cognitive': 'Lowest cognitive load',
-    }
-    focus_value = dash_filters.get('focus_metric')
-    if focus_value not in focus_options:
-        focus_value = next(iter(focus_options))
-        dash_filters['focus_metric'] = focus_value
-    focus_metric = ui.select(
-        label="Focus",
-        options=focus_options,
-        value=focus_value,
-    ).classes("w-44")
-    print("[Dashboard] Focus select options:", focus_options,
-          "default:", dash_filters.get('focus_metric'))
+        with filter_row:
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            min_relief = ui.number(
+                label="Min relief",
+                value=dash_filters.get('min_relief'),
+            ).classes("w-28")
+            max_cog = ui.number(
+                label="Max cognitive load",
+                value=dash_filters.get('max_cognitive_load'),
+            ).classes("w-40")
+            focus_options = {
+                'relief': 'Highest relief',
+                'duration': 'Shortest duration',
+                'cognitive': 'Lowest cognitive load',
+            }
+            focus_value = dash_filters.get('focus_metric')
+            if focus_value not in focus_options:
+                focus_value = next(iter(focus_options))
+                dash_filters['focus_metric'] = focus_value
+            focus_metric = ui.select(
+                label="Focus",
+                options=focus_options,
+                value=focus_value,
+            ).classes("w-44")
+        print("[Dashboard] Focus select options:", focus_options,
+              "default:", dash_filters.get('focus_metric'))
 
-    rec_strip = ui.row().classes("gap-3 flex-wrap mt-2")
+        rec_strip = ui.row().classes("gap-3 flex-wrap mt-2")
 
-    def _update_and_refresh(key, raw_value):
-        value = raw_value if raw_value not in (None, '', 'None') else None
-        if key in ('max_duration', 'min_relief', 'max_cognitive_load') and value is not None:
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                value = None
-        dash_filters[key] = value
+        def _update_and_refresh(key, raw_value):
+            value = raw_value if raw_value not in (None, '', 'None') else None
+            if key in ('max_duration', 'min_relief', 'max_cognitive_load') and value is not None:
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    value = None
+            dash_filters[key] = value
+            refresh_recommendations(rec_strip)
+
+        max_duration.on('change', lambda e: _update_and_refresh('max_duration', e.value))
+        min_relief.on('change', lambda e: _update_and_refresh('min_relief', e.value))
+        max_cog.on('change', lambda e: _update_and_refresh('max_cognitive_load', e.value))
+        focus_metric.on('change', lambda e: _update_and_refresh('focus_metric', e.value))
+
         refresh_recommendations(rec_strip)
-
-    max_duration.on('change', lambda e: _update_and_refresh('max_duration', e.value))
-    min_relief.on('change', lambda e: _update_and_refresh('min_relief', e.value))
-    max_cog.on('change', lambda e: _update_and_refresh('max_cognitive_load', e.value))
-    focus_metric.on('change', lambda e: _update_and_refresh('focus_metric', e.value))
-
-    refresh_recommendations(rec_strip)
 
 
 def refresh_recommendations(target_row):

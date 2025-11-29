@@ -57,9 +57,19 @@ class Analytics:
             df[column] = df[column].replace('', pd.NA)
             df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get(column)))
             df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get(column)))
+            # Special handling for relief_score: check for actual_relief in JSON if relief_score is missing
+            if column == 'relief_score':
+                df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_relief')))
+                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_relief')))
+            # Similar for cognitive_load
+            if column == 'cognitive_load':
+                df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_cognitive')))
+                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_cognitive')))
             df[column] = df[column].fillna(attr.default)
             if attr.dtype == 'numeric':
                 df[column] = pd.to_numeric(df[column], errors='coerce')
+                # Replace NaN with default after numeric conversion
+                df[column] = df[column].fillna(attr.default)
 
         df['status'] = df['status'].replace('', 'active').str.lower()
         return df
@@ -150,11 +160,17 @@ class Analytics:
 
         active = df[df['status'].isin(['active', 'in_progress'])]
         if filters.get('max_duration'):
-            active = active[active['duration_minutes'] <= float(filters['max_duration'])]
+            # Handle NaN/NA values - exclude them from filter or use a default
+            duration_filter = active['duration_minutes'].notna() & (active['duration_minutes'] <= float(filters['max_duration']))
+            active = active[duration_filter]
         if filters.get('min_relief'):
-            active = active[active['relief_score'] >= float(filters['min_relief'])]
+            # Handle NaN/NA/0 values - only filter if relief_score is not null and >= min_relief
+            relief_filter = active['relief_score'].notna() & (active['relief_score'] > 0) & (active['relief_score'] >= float(filters['min_relief']))
+            active = active[relief_filter]
         if filters.get('max_cognitive_load'):
-            active = active[active['cognitive_load'] <= float(filters['max_cognitive_load'])]
+            # Handle NaN/NA values
+            cog_filter = active['cognitive_load'].notna() & (active['cognitive_load'] <= float(filters['max_cognitive_load']))
+            active = active[cog_filter]
 
         if active.empty:
             return []
