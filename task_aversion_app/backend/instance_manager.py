@@ -226,15 +226,21 @@ class InstanceManager:
             for key in possible_keys:
                 if key in payload:
                     val = payload[key]
-                    if val is not None and val != '':
-                        value = val
-                        break
+                    # Allow 0 as a valid numeric value - check if it's a number (including 0) or non-empty
+                    if val is not None:
+                        # For numbers, 0 is valid; for strings, must be non-empty
+                        if isinstance(val, (int, float)) or (val != ''):
+                            value = val
+                            break
             
             # Only update if we found a value and the column is currently empty
-            if value is not None and value != '':
-                current_value = self.df.at[idx, csv_column]
-                if current_value == '' or pd.isna(current_value):
-                    self.df.at[idx, csv_column] = value
+            # Explicitly allow 0 as a valid numeric value
+            if value is not None:
+                # For numbers, 0 is valid; for strings, must be non-empty
+                if isinstance(value, (int, float)) or (value != ''):
+                    current_value = self.df.at[idx, csv_column]
+                    if current_value == '' or pd.isna(current_value):
+                        self.df.at[idx, csv_column] = value
 
 
     def list_recent_completed(self, limit=20):

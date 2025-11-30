@@ -65,9 +65,6 @@ def show_details(instance_id):
 def refresh_templates():
     print("[Dashboard] refresh_templates() called")
 
-    query = (search.value or "").lower().strip()
-    print(f"[Dashboard] search query: {query}")
-
     df = tm.get_all()
     if df is None or df.empty:
         print("[Dashboard] no templates found")
@@ -77,12 +74,11 @@ def refresh_templates():
         return
 
     rows = df.to_dict(orient='records')
-    filtered = [r for r in rows if query in r['name'].lower()]
-    print(f"[Dashboard] filtered: {len(filtered)} rows")
+    print(f"[Dashboard] showing {len(rows)} templates")
 
     template_col.clear()
 
-    for t in filtered:
+    for t in rows:
         with template_col:
             with ui.card().classes("mb-2 p-2"):
                 ui.markdown(f"**{t['name']}** — v{t['version']}")
@@ -135,16 +131,6 @@ def build_dashboard(task_manager):
                 ui.button("➕ Create Task",
                           on_click=lambda: ui.navigate.to('/create_task'),
                           color='primary').classes("w-full")
-
-            # Search bar
-            global search
-            search = ui.input(
-                label="Search task templates",
-                placeholder="Type to filter...",
-            ).classes("w-full mb-2")
-
-            search.on('input', lambda _: refresh_templates())   # live filtering!
-
 
             # Quick Tasks Section
             with ui.column().classes("w-full border rounded-lg p-2 overflow-y-auto flex-1"):
