@@ -1,10 +1,13 @@
 # Python
 __pycache__/
+backend/__pycache__/
+task_aversion_app/ui/__pycache__/
+task_aversion_app/backend/__pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-
+data/
 # Virtual environments
 venv/
 env/
