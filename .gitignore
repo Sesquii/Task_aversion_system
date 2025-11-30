@@ -46,3 +46,4 @@ build/
 *.egg-info/
 
 task_aversion_app/data/task_instances.csv
+
