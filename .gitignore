@@ -35,7 +35,7 @@ run.log
 .env.local
 
 # Data files - keep local, don't track in git
-task_aversion_app/data/*.csv
+task_aversion_app/data/
 
 # Jupyter Notebooks (if you use them)
 .ipynb_checkpoints
@@ -45,3 +45,4 @@ dist/
 build/
 *.egg-info/
 
+task_aversion_app/data/task_instances.csv
