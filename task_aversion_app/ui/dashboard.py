@@ -9,8 +9,6 @@ tm = TaskManager()
 im = InstanceManager()
 em = EmotionManager()
 an = Analytics()
-dash_filters = an.default_filters()
-print(f"[Dashboard] Initial dash_filters: {dash_filters}")
 
 
 # ----------------------------------------------------------
@@ -212,23 +210,18 @@ def build_dashboard(task_manager):
                                           on_click=lambda i=inst['instance_id']: delete_instance(i)
                                           ).props("dense")
 
-            # Recently Completed Section (bottom quarter)
+            # Recently Completed Section
             build_recently_completed_panel()
 
         # ====================================================================
-        # COLUMN 3 — Right Column (Analytics + Recommendations)
+        # COLUMN 3 — Right Column (Recommendations)
         # ====================================================================
         with ui.column().classes("w-1/3 h-full gap-4"):
-
-            # Analytics Panel
-            build_compact_analytics_panel()
-
-            # Manual Recommendations (moved from middle column)
-            build_recommendation_strip()
 
             # Recommendations
             with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
                 ui.label("Recommendations").classes("font-bold text-lg")
+                ui.markdown("_⚠️ Note: These recommendations are not fully calibrated._").classes("text-xs text-gray-500 mb-2")
                 ui.separator()
 
                 recs = an.recommendations() if hasattr(an, "recommendations") else []
@@ -247,7 +240,7 @@ def build_dashboard(task_manager):
 
 
 def build_summary_section():
-    """Build the summary section with productivity time and relief points."""
+    """Build the summary section with productivity time and productivity efficiency."""
     relief_summary = an.get_relief_summary()
     
     with ui.card().classes("w-full mb-4 p-4"):
@@ -264,42 +257,6 @@ def build_summary_section():
                 else:
                     ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-lg font-bold")
             
-            # Default Relief Points
-            with ui.card().classes("p-3 min-w-[180px]"):
-                ui.label("Default Relief Points").classes("text-xs text-gray-500")
-                points = relief_summary['default_relief_points']
-                color_class = "text-green-600" if points >= 0 else "text-red-600"
-                ui.label(f"{points:+.2f}").classes(f"text-lg font-bold {color_class}")
-                ui.label("(actual - expected)").classes("text-xs text-gray-400")
-            
-            # Net Relief Points
-            with ui.card().classes("p-3 min-w-[180px]"):
-                ui.label("Net Relief Points").classes("text-xs text-gray-500")
-                net_points = relief_summary['net_relief_points']
-                ui.label(f"{net_points:.2f}").classes("text-lg font-bold text-green-600")
-                ui.label("(calibrated, ≥0)").classes("text-xs text-gray-400")
-            
-            # Positive Relief Stats
-            with ui.card().classes("p-3 min-w-[200px]"):
-                ui.label("Positive Relief").classes("text-xs text-gray-500")
-                pos_count = relief_summary['positive_relief_count']
-                pos_avg = relief_summary['positive_relief_avg']
-                ui.label(f"{pos_count} tasks").classes("text-sm font-bold")
-                ui.label(f"Avg: +{pos_avg:.2f}").classes("text-xs text-green-600")
-                ui.label(f"Total: +{relief_summary['positive_relief_total']:.2f}").classes("text-xs text-gray-400")
-            
-            # Negative Relief Stats
-            with ui.card().classes("p-3 min-w-[200px]"):
-                ui.label("Negative Relief").classes("text-xs text-gray-500")
-                neg_count = relief_summary['negative_relief_count']
-                neg_avg = relief_summary['negative_relief_avg']
-                ui.label(f"{neg_count} tasks").classes("text-sm font-bold")
-                if neg_count > 0:
-                    ui.label(f"Avg: -{neg_avg:.2f}").classes("text-xs text-red-600")
-                    ui.label(f"Total: -{relief_summary['negative_relief_total']:.2f}").classes("text-xs text-gray-400")
-                else:
-                    ui.label("None").classes("text-xs text-gray-400")
-            
             # Efficiency Stats
             with ui.card().classes("p-3 min-w-[200px]"):
                 ui.label("Productivity Efficiency").classes("text-xs text-gray-500")
@@ -308,14 +265,14 @@ def build_summary_section():
                 low_eff = relief_summary.get('low_efficiency_count', 0)
                 ui.label(f"{avg_eff:.1f}").classes("text-lg font-bold")
                 ui.label(f"High: {high_eff} | Low: {low_eff}").classes("text-xs text-gray-400")
-                ui.label("(time × completion × relief)").classes("text-xs text-gray-400")
+                ui.label("(experimental calculation)").classes("text-xs text-gray-400 italic")
 
 
 def build_recently_completed_panel():
     """Build the recently completed tasks panel with optional date grouping."""
     from collections import defaultdict
     
-    with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto h-1/4"):
+    with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
         ui.label("Recently Completed").classes("font-bold text-lg")
         ui.separator()
         
@@ -374,118 +331,3 @@ def build_recently_completed_panel():
         
         # Initial render
         refresh_completed()
-
-
-def build_compact_analytics_panel():
-    metrics = an.get_dashboard_metrics()
-    print(f"[Dashboard] Metrics snapshot: {metrics}")
-
-    def metric_card(title, value, subtitle=''):
-        with summary_row:
-            with ui.card().classes("p-2 min-w-[140px]"):
-                ui.label(title).classes("text-xs text-gray-500")
-                ui.label(value).classes("text-lg font-bold")
-                if subtitle:
-                    ui.label(subtitle).classes("text-xs text-gray-400")
-
-    with ui.expansion("Analytics pulse", icon="bar_chart", value=False).classes("w-full"):
-        summary_row = ui.row().classes("gap-2 flex-wrap")
-        counts = metrics.get('counts', {})
-        quality = metrics.get('quality', {})
-        time_stats = metrics.get('time', {})
-
-        metric_card("Active", counts.get('active', 0))
-        metric_card("Done (7d)", counts.get('completed_7d', 0))
-        metric_card("Avg Relief", quality.get('avg_relief', 0), "/10")
-        metric_card("Cog Load", quality.get('avg_cognitive_load', 0), "/10")
-        metric_card("Median Duration", f"{time_stats.get('median_duration', 0)} min")
-        metric_card("Avg Delay", f"{time_stats.get('avg_delay', 0)} min")
-
-        ui.button(
-            "Open Analytics Studio",
-            icon="dashboard",
-            on_click=lambda: ui.navigate.to('/analytics'),
-        ).classes("mt-2")
-
-
-def build_recommendation_strip():
-    print(f"[Dashboard] Rendering recommendation strip with filters: {dash_filters}")
-    with ui.column().classes("w-full border rounded-lg p-3"):
-        ui.label("Manual Recommendations").classes("font-bold text-md")
-        ui.markdown("_⚠️ Placeholder: These features are not yet functional._").classes("text-xs text-gray-500 mb-2")
-        ui.separator()
-
-        filter_row = ui.row().classes("gap-2 flex-wrap")
-
-        with filter_row:
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            min_relief = ui.number(
-                label="Min relief",
-                value=dash_filters.get('min_relief'),
-            ).classes("w-28")
-            max_cog = ui.number(
-                label="Max cognitive load",
-                value=dash_filters.get('max_cognitive_load'),
-            ).classes("w-40")
-            focus_options = {
-                'relief': 'Highest relief',
-                'duration': 'Shortest duration',
-                'cognitive': 'Lowest cognitive load',
-                'efficiency': 'Highest efficiency',
-            }
-            focus_value = dash_filters.get('focus_metric')
-            if focus_value not in focus_options:
-                focus_value = next(iter(focus_options))
-                dash_filters['focus_metric'] = focus_value
-            focus_metric = ui.select(
-                label="Focus",
-                options=focus_options,
-                value=focus_value,
-            ).classes("w-44")
-        print("[Dashboard] Focus select options:", focus_options,
-              "default:", dash_filters.get('focus_metric'))
-
-        rec_strip = ui.row().classes("gap-3 flex-wrap mt-2")
-
-        def _update_and_refresh(key, raw_value):
-            value = raw_value if raw_value not in (None, '', 'None') else None
-            if key in ('max_duration', 'min_relief', 'max_cognitive_load') and value is not None:
-                try:
-                    value = float(value)
-                except (TypeError, ValueError):
-                    value = None
-            dash_filters[key] = value
-            refresh_recommendations(rec_strip)
-
-        max_duration.on('change', lambda e: _update_and_refresh('max_duration', e.value))
-        min_relief.on('change', lambda e: _update_and_refresh('min_relief', e.value))
-        max_cog.on('change', lambda e: _update_and_refresh('max_cognitive_load', e.value))
-        focus_metric.on('change', lambda e: _update_and_refresh('focus_metric', e.value))
-
-        refresh_recommendations(rec_strip)
-
-
-def refresh_recommendations(target_row):
-    target_row.clear()
-    recs = an.recommendations(dash_filters)
-    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for filters {dash_filters}")
-    if not recs:
-        with target_row:
-            ui.label("No candidates under current filters").classes("text-xs text-gray-500")
-        return
-
-    for rec in recs:
-        with target_row:
-            with ui.card().classes("p-2 min-w-[180px]"):
-                ui.label(rec['title']).classes("text-xs uppercase text-gray-500")
-                ui.label(rec['task_name']).classes("text-sm font-bold")
-                ui.label(rec['reason']).classes("text-xs text-gray-600")
-                ui.label(f"Duration: {rec.get('duration') or '—'}m").classes("text-xs")
-                ui.label(f"Relief {rec.get('relief')} | Cog {rec.get('cognitive_load')}").classes("text-xs")
-                ui.button(
-                    "Initialize",
-                    on_click=lambda rid=rec['task_id']: init_quick(rid),
-                ).props("dense")
