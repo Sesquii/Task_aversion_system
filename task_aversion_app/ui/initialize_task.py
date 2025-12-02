@@ -213,6 +213,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 }
 
                 try:
+                    # This will set initialized_at if not already set
                     im.add_prediction_to_instance(instance_id, predicted_payload)
                 except Exception as exc:
                     ui.notify(f"Failed to save instance: {exc}", color='negative')

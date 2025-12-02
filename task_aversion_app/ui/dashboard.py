@@ -44,9 +44,17 @@ def init_quick(task_ref):
     ui.navigate.to(f'/initialize-task?instance_id={inst_id}')
 
 
-def start_instance(instance_id):
+def start_instance(instance_id, container=None):
+    """Start an instance and update the container to show ongoing time."""
     im.start_instance(instance_id)
     ui.notify("Instance started", color='positive')
+    
+    # If container provided, replace button with ongoing timer
+    if container:
+        container.clear()
+        with container:
+            timer_label = ui.label("").classes("text-sm font-semibold text-blue-600")
+            update_ongoing_timer(instance_id, timer_label)
 
 
 def go_complete(instance_id):
@@ -55,6 +63,46 @@ def go_complete(instance_id):
 
 def go_cancel(instance_id):
     ui.navigate.to(f'/cancel_task?instance_id={instance_id}')
+
+
+def format_elapsed_time(minutes):
+    """Format elapsed time in minutes as HH:MM or M min."""
+    if minutes < 60:
+        return f"{int(minutes)} min"
+    else:
+        hours = int(minutes // 60)
+        mins = int(minutes % 60)
+        return f"{hours}:{mins:02d}"
+
+
+def update_ongoing_timer(instance_id, timer_element):
+    """Update the ongoing timer display for a started instance."""
+    instance = im.get_instance(instance_id)
+    if not instance or not instance.get('started_at'):
+        # Instance no longer active or not started, stop timer
+        if timer_element:
+            timer_element.text = ""
+        return
+    
+    try:
+        from datetime import datetime
+        import pandas as pd
+        started_at = pd.to_datetime(instance['started_at'])
+        now = datetime.now()
+        elapsed_minutes = (now - started_at).total_seconds() / 60.0
+        elapsed_str = format_elapsed_time(elapsed_minutes)
+        
+        # Update the element text
+        if timer_element:
+            timer_element.text = f"Ongoing for {elapsed_str}"
+        
+        # Schedule next update in 1 second (only if instance is still active)
+        active_instances = im.list_active_instances()
+        is_still_active = any(inst.get('instance_id') == instance_id for inst in active_instances)
+        if is_still_active:
+            ui.timer(1.0, lambda: update_ongoing_timer(instance_id, timer_element), once=True)
+    except Exception as e:
+        print(f"[Dashboard] Error updating timer: {e}")
 
 
 def show_details(instance_id):
@@ -509,6 +557,21 @@ def build_dashboard(task_manager):
                             
                             # Buttons row
                             with ui.row().classes("justify-end gap-2 mt-2"):
+                                # Start button or ongoing timer container
+                                start_container = ui.column().classes("items-center")
+                                started_at = inst.get('started_at', '')
+                                if started_at:
+                                    # Show ongoing timer
+                                    with start_container:
+                                        timer_label = ui.label("").classes("text-sm font-semibold text-blue-600")
+                                        update_ongoing_timer(instance_id, timer_label)
+                                else:
+                                    # Show start button
+                                    with start_container:
+                                        ui.button("Start",
+                                                  on_click=lambda i=inst['instance_id'], c=start_container: start_instance(i, c)
+                                                  ).props("dense").classes("bg-green-500")
+                                
                                 ui.button("Complete",
                                           on_click=lambda i=inst['instance_id']: go_complete(i)
                                           ).props("dense")

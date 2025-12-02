@@ -130,8 +130,31 @@ def complete_task_page(task_manager, emotion_manager):
         ui.label("Completion %")
         completion_pct = ui.slider(min=0, max=100, step=5, value=100)
 
+        # Calculate default duration based on whether task was started
+        default_duration = 0
+        if instance:
+            started_at = instance.get('started_at', '')
+            if started_at:
+                # Calculate duration from start time to now
+                from datetime import datetime
+                import pandas as pd
+                try:
+                    started = pd.to_datetime(started_at)
+                    now = datetime.now()
+                    default_duration = (now - started).total_seconds() / 60.0
+                except Exception:
+                    pass
+            else:
+                # Default to expected duration from predicted data
+                predicted_raw = instance.get('predicted') or '{}'
+                try:
+                    predicted_data = json.loads(predicted_raw) if predicted_raw else {}
+                    default_duration = float(predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    pass
+
         ui.label("Actual Time (minutes)")
-        actual_time = ui.number(value=0)
+        actual_time = ui.number(value=int(default_duration) if default_duration > 0 else 0)
 
         notes = ui.textarea(label='Notes (optional)')
 

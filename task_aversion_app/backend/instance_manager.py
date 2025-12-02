@@ -11,12 +11,12 @@ class InstanceManager:
         os.makedirs(DATA_DIR, exist_ok=True)
         self.file = os.path.join(DATA_DIR, 'task_instances.csv')
         # fields: instance_id, task_id, task_name, task_version, created_at, initialized_at, started_at, completed_at,
-        # predicted (json), actual (json), procrastination_score, proactive_score, is_completed, is_deleted
+        # predicted (json), actual (json), procrastination_score, proactive_score, is_completed, is_deleted, delay_minutes
         if not os.path.exists(self.file):
             pd.DataFrame(columns=[
                 'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
                 'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
-                'is_completed','is_deleted','status'
+                'is_completed','is_deleted','status','delay_minutes'
             ]).to_csv(self.file, index=False)
         self._reload()
 
@@ -27,6 +27,7 @@ class InstanceManager:
             'actual': '',
             'cancelled_at': '',
             'duration_minutes': '',
+            'delay_minutes': '',
             'relief_score': '',
             'cognitive_load': '',
             'emotional_load': '',
@@ -66,7 +67,7 @@ class InstanceManager:
             'task_name': task_name,
             'task_version': task_version,
             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M"),
-            'initialized_at': datetime.now().strftime("%Y-%m-%d %H:%M") if predicted else '',
+            'initialized_at': '',  # Will be set when user saves initialization form
             'started_at': '',
             'completed_at': '',
             'cancelled_at': '',
@@ -78,6 +79,7 @@ class InstanceManager:
             'is_deleted': 'False',
             'status': 'active',
             'duration_minutes': '',
+            'delay_minutes': '',
             'relief_score': '',
             'cognitive_load': '',
             'emotional_load': '',
@@ -120,10 +122,53 @@ class InstanceManager:
         idx = self.df.index[self.df['instance_id']==instance_id][0]
         # set actual JSON
         self.df.at[idx,'actual'] = json.dumps(actual)
-        self.df.at[idx,'completed_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        completed_at = datetime.now()
+        self.df.at[idx,'completed_at'] = completed_at.strftime("%Y-%m-%d %H:%M")
         self.df.at[idx,'is_completed'] = 'True'
         self.df.at[idx,'status'] = 'completed'
         self.df.at[idx,'cancelled_at'] = ''
+        
+        # Calculate duration and delay
+        try:
+            initialized_at_str = self.df.at[idx,'initialized_at']
+            started_at_str = self.df.at[idx,'started_at']
+            initialized_at = pd.to_datetime(initialized_at_str) if initialized_at_str else None
+            started_at = pd.to_datetime(started_at_str) if started_at_str else None
+            
+            # Get duration from actual dict, or calculate from start time
+            duration_minutes = actual.get('time_actual_minutes')
+            if duration_minutes is None or duration_minutes == '':
+                # If start button was used, calculate duration from start to completion
+                if started_at:
+                    duration_minutes = (completed_at - started_at).total_seconds() / 60.0
+                else:
+                    # Default to expected duration
+                    predicted = json.loads(self.df.at[idx,'predicted'] or "{}")
+                    duration_minutes = float(predicted.get('time_estimate_minutes') or predicted.get('estimate') or 0)
+            
+            # Store duration
+            if duration_minutes is not None and duration_minutes != '':
+                self.df.at[idx, 'duration_minutes'] = str(duration_minutes)
+                # Also update in actual dict if not already set
+                if 'time_actual_minutes' not in actual or actual.get('time_actual_minutes') == '':
+                    actual['time_actual_minutes'] = duration_minutes
+                    self.df.at[idx,'actual'] = json.dumps(actual)
+            
+            # Calculate delay: time from initialization to start (if started) or to completion minus duration (if not started)
+            if initialized_at:
+                if started_at:
+                    # Delay = start time - initialization time
+                    delay_minutes = (started_at - initialized_at).total_seconds() / 60.0
+                else:
+                    # Delay = completion time - duration - initialization time
+                    if duration_minutes:
+                        delay_minutes = (completed_at - initialized_at).total_seconds() / 60.0 - float(duration_minutes)
+                    else:
+                        delay_minutes = (completed_at - initialized_at).total_seconds() / 60.0
+                self.df.at[idx, 'delay_minutes'] = str(round(delay_minutes, 2))
+        except Exception as e:
+            print(f"[InstanceManager] Error calculating duration/delay: {e}")
+        
         # compute simple procrastination/proactive metrics
         try:
             created = pd.to_datetime(self.df.at[idx,'created_at'])
@@ -138,13 +183,6 @@ class InstanceManager:
         except Exception:
             self.df.at[idx,'procrastination_score'] = ''
             self.df.at[idx,'proactive_score'] = ''
-        # Extract duration from time_actual_minutes if present
-        if 'time_actual_minutes' in actual:
-            duration = actual.get('time_actual_minutes')
-            if duration is not None and duration != '':
-                current_duration = self.df.at[idx, 'duration_minutes']
-                if current_duration == '' or pd.isna(current_duration):
-                    self.df.at[idx, 'duration_minutes'] = duration
         
         self._update_attributes_from_payload(idx, actual)
         self._save()
@@ -171,7 +209,9 @@ class InstanceManager:
         self._reload()
         idx = self.df.index[self.df['instance_id'] == instance_id][0]
         self.df.at[idx,'predicted'] = json.dumps(predicted)
-        self.df.at[idx,'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Always set initialized_at when prediction is added (initialization happens)
+        if not self.df.at[idx,'initialized_at'] or self.df.at[idx,'initialized_at'] == '':
+            self.df.at[idx,'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
         # Extract predicted values to columns (only if columns are empty)
         self._update_attributes_from_payload(idx, predicted)
         self._save()
