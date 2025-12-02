@@ -555,6 +555,11 @@ def build_dashboard(task_manager):
                                 ui.label(inst.get("task_name")).classes("text-md font-bold")
                                 ui.label(f"{time_estimate} min").classes("text-sm text-gray-600")
                             
+                            # Initialization time
+                            initialized_at = inst.get('initialized_at', '')
+                            if initialized_at:
+                                ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mt-1")
+                            
                             # Buttons row
                             with ui.row().classes("justify-end gap-2 mt-2"):
                                 # Start button or ongoing timer container
