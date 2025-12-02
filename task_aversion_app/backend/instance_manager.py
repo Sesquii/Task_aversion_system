@@ -333,3 +333,223 @@ class InstanceManager:
             print(f"[InstanceManager] No instances needed backfilling (all attributes already populated or no JSON data found)")
         
         return updated_count
+
+    def get_previous_task_averages(self, task_id: str) -> dict:
+        """Get average values from previous initialized instances of the same task.
+        Returns a dict with keys: expected_relief, expected_cognitive_load, 
+        expected_physical_load, expected_emotional_load, motivation.
+        Values are scaled to 0-100 range."""
+        import json
+        self._reload()
+        
+        # Get all initialized instances for this task (completed or not)
+        initialized = self.df[
+            (self.df['task_id'] == task_id) & 
+            (self.df['initialized_at'].astype(str).str.strip() != '')
+        ].copy()
+        
+        if initialized.empty:
+            return {}
+        
+        # Extract values from predicted JSON
+        relief_values = []
+        cognitive_values = []
+        physical_values = []
+        emotional_values = []
+        motivation_values = []
+        
+        for idx in initialized.index:
+            predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
+            if predicted_str and predicted_str != '{}':
+                try:
+                    pred_dict = json.loads(predicted_str)
+                    if isinstance(pred_dict, dict):
+                        # Extract values, handling both 0-10 and 0-100 scales
+                        for key, value_list in [
+                            ('expected_relief', relief_values),
+                            ('expected_cognitive_load', cognitive_values),
+                            ('expected_physical_load', physical_values),
+                            ('expected_emotional_load', emotional_values),
+                            ('motivation', motivation_values)
+                        ]:
+                            val = pred_dict.get(key)
+                            if val is not None:
+                                try:
+                                    num_val = float(val)
+                                    # Scale from 0-10 to 0-100 if value is <= 10
+                                    if num_val <= 10 and num_val >= 0:
+                                        num_val = num_val * 10
+                                    value_list.append(num_val)
+                                except (ValueError, TypeError):
+                                    pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+        
+        result = {}
+        if relief_values:
+            result['expected_relief'] = round(sum(relief_values) / len(relief_values))
+        if cognitive_values:
+            result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))
+        if physical_values:
+            result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
+        if emotional_values:
+            result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
+        if motivation_values:
+            result['motivation'] = round(sum(motivation_values) / len(motivation_values))
+        
+        return result
+
+    def get_previous_actual_averages(self, task_id: str) -> dict:
+        """Get average values from previous completed instances of the same task.
+        Returns a dict with keys: actual_relief, actual_cognitive, 
+        actual_emotional, actual_physical.
+        Values are scaled to 0-100 range."""
+        import json
+        self._reload()
+        
+        # Get all completed instances for this task
+        completed = self.df[
+            (self.df['task_id'] == task_id) & 
+            (self.df['completed_at'].astype(str).str.strip() != '')
+        ].copy()
+        
+        if completed.empty:
+            return {}
+        
+        # Extract values from actual JSON
+        relief_values = []
+        cognitive_values = []
+        physical_values = []
+        emotional_values = []
+        
+        for idx in completed.index:
+            actual_str = str(completed.at[idx, 'actual'] or '{}').strip()
+            if actual_str and actual_str != '{}':
+                try:
+                    actual_dict = json.loads(actual_str)
+                    if isinstance(actual_dict, dict):
+                        # Extract values, handling both 0-10 and 0-100 scales
+                        for key, value_list in [
+                            ('actual_relief', relief_values),
+                            ('actual_cognitive', cognitive_values),
+                            ('actual_physical', physical_values),
+                            ('actual_emotional', emotional_values)
+                        ]:
+                            val = actual_dict.get(key)
+                            if val is not None:
+                                try:
+                                    num_val = float(val)
+                                    # Scale from 0-10 to 0-100 if value is <= 10
+                                    if num_val <= 10 and num_val >= 0:
+                                        num_val = num_val * 10
+                                    value_list.append(num_val)
+                                except (ValueError, TypeError):
+                                    pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+        
+        result = {}
+        if relief_values:
+            result['actual_relief'] = round(sum(relief_values) / len(relief_values))
+        if cognitive_values:
+            result['actual_cognitive'] = round(sum(cognitive_values) / len(cognitive_values))
+        if physical_values:
+            result['actual_physical'] = round(sum(physical_values) / len(physical_values))
+        if emotional_values:
+            result['actual_emotional'] = round(sum(emotional_values) / len(emotional_values))
+        
+        return result
+
+    def scale_values_10_to_100(self):
+        """Scale existing values from 0-10 range to 0-100 range.
+        This migration updates both JSON payloads and CSV columns.
+        Only scales values that are <= 10 (to avoid double-scaling)."""
+        import json
+        self._reload()
+        updated_count = 0
+        
+        # Fields to scale in predicted JSON
+        predicted_fields = [
+            'expected_relief', 'expected_cognitive_load', 'expected_physical_load',
+            'expected_emotional_load', 'motivation'
+        ]
+        # Fields to scale in actual JSON
+        actual_fields = [
+            'actual_relief', 'actual_cognitive', 'actual_emotional', 'actual_physical'
+        ]
+        # CSV columns to scale
+        csv_columns = [
+            'relief_score', 'cognitive_load', 'emotional_load'
+        ]
+        
+        for idx in self.df.index:
+            row_updated = False
+            
+            # Scale predicted JSON
+            predicted_str = str(self.df.at[idx, 'predicted'] or '{}').strip()
+            if predicted_str and predicted_str != '{}':
+                try:
+                    pred_dict = json.loads(predicted_str)
+                    if isinstance(pred_dict, dict):
+                        for field in predicted_fields:
+                            if field in pred_dict:
+                                val = pred_dict[field]
+                                try:
+                                    num_val = float(val)
+                                    # Only scale if value is in 0-10 range
+                                    if 0 <= num_val <= 10:
+                                        pred_dict[field] = num_val * 10
+                                        row_updated = True
+                                except (ValueError, TypeError):
+                                    pass
+                        if row_updated:
+                            self.df.at[idx, 'predicted'] = json.dumps(pred_dict)
+                except (json.JSONDecodeError, Exception):
+                    pass
+            
+            # Scale actual JSON
+            actual_str = str(self.df.at[idx, 'actual'] or '{}').strip()
+            if actual_str and actual_str != '{}':
+                try:
+                    actual_dict = json.loads(actual_str)
+                    if isinstance(actual_dict, dict):
+                        for field in actual_fields:
+                            if field in actual_dict:
+                                val = actual_dict[field]
+                                try:
+                                    num_val = float(val)
+                                    # Only scale if value is in 0-10 range
+                                    if 0 <= num_val <= 10:
+                                        actual_dict[field] = num_val * 10
+                                        row_updated = True
+                                except (ValueError, TypeError):
+                                    pass
+                        if row_updated:
+                            self.df.at[idx, 'actual'] = json.dumps(actual_dict)
+                except (json.JSONDecodeError, Exception):
+                    pass
+            
+            # Scale CSV columns
+            for col in csv_columns:
+                if col in self.df.columns:
+                    val = self.df.at[idx, col]
+                    if val and str(val).strip() != '':
+                        try:
+                            num_val = float(val)
+                            # Only scale if value is in 0-10 range
+                            if 0 <= num_val <= 10:
+                                self.df.at[idx, col] = str(num_val * 10)
+                                row_updated = True
+                        except (ValueError, TypeError):
+                            pass
+            
+            if row_updated:
+                updated_count += 1
+        
+        if updated_count > 0:
+            self._save()
+            print(f"[InstanceManager] Scaled {updated_count} instances from 0-10 to 0-100 range")
+        else:
+            print(f"[InstanceManager] No instances needed scaling (all values already in 0-100 range or empty)")
+        
+        return updated_count
