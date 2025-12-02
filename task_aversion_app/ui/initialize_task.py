@@ -83,14 +83,17 @@ def initialize_task_page(task_manager, emotion_manager):
             ui.button("Add Emotion", on_click=add_emotion)
 
             # Cognitive load slider (NiceGUI 1.x → no label)
-            ui.label("Expected Cognitive Load")
-            cog_load = ui.slider(min=0, max=10, step=1, value=5)
+            ui.label("Predicted relief")
+            predicted_relief = ui.slider(min=0, max=10, step=1, value=5)
 
             ui.label("Expected Physical Load")
             physical_load = ui.slider(min=0, max=10, step=1, value=5)
 
             ui.label("Expected Emotional Load")
             emotional_load = ui.slider(min=0, max=10, step=1, value=5)
+
+            ui.label("Expected Cognitive Load")
+            cog_load = ui.slider(min=0, max=10, step=1, value=5)
 
             ui.label("Physical Context")
             physical_context = ui.select(
