@@ -223,27 +223,8 @@ def build_dashboard(task_manager):
             # Analytics Panel
             build_compact_analytics_panel()
 
-            # Manual Recommendations (moved from middle column)
-            build_recommendation_strip()
-
-            # Recommendations
-            with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
-                ui.label("Recommendations").classes("font-bold text-lg")
-                ui.separator()
-
-                recs = an.recommendations() if hasattr(an, "recommendations") else []
-
-                if not recs:
-                    ui.label("No recommendations").classes("text-xs text-gray-500")
-                else:
-                    for r in recs:
-                        with ui.card().classes("p-2 mb-2"):
-                            task_label = r.get('task_name') or r.get('title') or "Recommendation"
-                            ui.label(task_label).classes("font-bold text-sm")
-                            ui.label(r.get('reason', '')).classes("text-xs text-gray-600")
-                            ui.button("Start",
-                                      on_click=lambda rid=r.get('task_id'): init_quick(rid)
-                                      ).props("dense")
+            # Recommendations (merged with focus options)
+            build_recommendations_section()
 
 
 def build_summary_section():
@@ -408,84 +389,65 @@ def build_compact_analytics_panel():
         ).classes("mt-2")
 
 
-def build_recommendation_strip():
-    print(f"[Dashboard] Rendering recommendation strip with filters: {dash_filters}")
-    with ui.column().classes("w-full border rounded-lg p-3"):
-        ui.label("Manual Recommendations").classes("font-bold text-md")
-        ui.markdown("_⚠️ Placeholder: These features are not yet functional._").classes("text-xs text-gray-500 mb-2")
+def build_recommendations_section():
+    """Build the recommendations section with filters."""
+    print(f"[Dashboard] Rendering recommendations section with filters: {dash_filters}")
+    
+    with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
+        ui.label("Recommendations").classes("font-bold text-lg")
         ui.separator()
-
-        filter_row = ui.row().classes("gap-2 flex-wrap")
-
+        
+        # Filters
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
         with filter_row:
             max_duration = ui.number(
                 label="Max duration (min)",
                 value=dash_filters.get('max_duration'),
             ).classes("w-32")
-            min_relief = ui.number(
-                label="Min relief",
-                value=dash_filters.get('min_relief'),
-            ).classes("w-28")
-            max_cog = ui.number(
-                label="Max cognitive load",
-                value=dash_filters.get('max_cognitive_load'),
-            ).classes("w-40")
-            focus_options = {
-                'relief': 'Highest relief',
-                'duration': 'Shortest duration',
-                'cognitive': 'Lowest cognitive load',
-                'efficiency': 'Highest efficiency',
-            }
-            focus_value = dash_filters.get('focus_metric')
-            if focus_value not in focus_options:
-                focus_value = next(iter(focus_options))
-                dash_filters['focus_metric'] = focus_value
-            focus_metric = ui.select(
-                label="Focus",
-                options=focus_options,
-                value=focus_value,
-            ).classes("w-44")
-        print("[Dashboard] Focus select options:", focus_options,
-              "default:", dash_filters.get('focus_metric'))
-
-        rec_strip = ui.row().classes("gap-3 flex-wrap mt-2")
-
-        def _update_and_refresh(key, raw_value):
-            value = raw_value if raw_value not in (None, '', 'None') else None
-            if key in ('max_duration', 'min_relief', 'max_cognitive_load') and value is not None:
-                try:
-                    value = float(value)
-                except (TypeError, ValueError):
-                    value = None
-            dash_filters[key] = value
-            refresh_recommendations(rec_strip)
-
-        max_duration.on('change', lambda e: _update_and_refresh('max_duration', e.value))
-        min_relief.on('change', lambda e: _update_and_refresh('min_relief', e.value))
-        max_cog.on('change', lambda e: _update_and_refresh('max_cognitive_load', e.value))
-        focus_metric.on('change', lambda e: _update_and_refresh('focus_metric', e.value))
-
-        refresh_recommendations(rec_strip)
+            
+            def apply_filter():
+                value = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if value is not None:
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        value = None
+                dash_filters['max_duration'] = value
+                print(f"[Dashboard] Filter applied: max_duration = {value}, filters = {dash_filters}")
+                refresh_recommendations(rec_container)
+            
+            ui.button("Apply", on_click=apply_filter).props("dense")
+        
+        # Note about future filtering options
+        ui.label("More filtering options will be added later").classes("text-xs text-gray-500 mb-2")
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container)
 
 
-def refresh_recommendations(target_row):
-    target_row.clear()
+def refresh_recommendations(target_container):
+    """Refresh the recommendations display."""
+    target_container.clear()
     recs = an.recommendations(dash_filters)
     print(f"[Dashboard] Recommendations result ({len(recs)} entries) for filters {dash_filters}")
+    
     if not recs:
-        with target_row:
-            ui.label("No candidates under current filters").classes("text-xs text-gray-500")
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
         return
-
-    for rec in recs:
-        with target_row:
-            with ui.card().classes("p-2 min-w-[180px]"):
-                ui.label(rec['title']).classes("text-xs uppercase text-gray-500")
-                ui.label(rec['task_name']).classes("text-sm font-bold")
-                ui.label(rec['reason']).classes("text-xs text-gray-600")
-                ui.label(f"Duration: {rec.get('duration') or '—'}m").classes("text-xs")
-                ui.label(f"Relief {rec.get('relief')} | Cog {rec.get('cognitive_load')}").classes("text-xs")
-                ui.button(
-                    "Initialize",
-                    on_click=lambda rid=rec['task_id']: init_quick(rid),
-                ).props("dense")
+    
+    with target_container:
+        for rec in recs:
+            with ui.card().classes("p-2 mb-2"):
+                task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+                ui.label(task_label).classes("font-bold text-sm")
+                ui.label(rec.get('reason', '')).classes("text-xs text-gray-600")
+                ui.label(f"Duration: {rec.get('duration') or '—'}m").classes("text-xs text-gray-500")
+                ui.label(f"Relief {rec.get('relief')} | Cog {rec.get('cognitive_load')}").classes("text-xs text-gray-500")
+                ui.button("Initialize",
+                          on_click=lambda rid=rec.get('task_id'): init_quick(rid)
+                          ).props("dense").classes("mt-2")

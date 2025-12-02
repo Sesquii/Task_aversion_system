@@ -499,97 +499,152 @@ class Analytics:
     def default_filters(self) -> Dict[str, Optional[float]]:
         return {
             'max_duration': None,
-            'min_relief': None,
-            'max_cognitive_load': None,
-            'focus_metric': 'relief',
         }
 
     def available_filters(self) -> List[Dict[str, str]]:
         return [
             {'key': 'max_duration', 'label': 'Max Duration (minutes)'},
-            {'key': 'min_relief', 'label': 'Min Relief Score'},
-            {'key': 'max_cognitive_load', 'label': 'Max Cognitive Load'},
-            {'key': 'focus_metric', 'label': 'Focus Metric'},
         ]
 
     def recommendations(self, filters: Optional[Dict[str, float]] = None) -> List[Dict[str, str]]:
+        """Generate recommendations based on all task templates, using historical data from completed instances."""
+        from .task_manager import TaskManager
+        
         filters = {**self.default_filters(), **(filters or {})}
-        df = self._load_instances()
-        if df.empty:
+        print(f"[Analytics] recommendations called with filters: {filters}")
+        
+        # Load all task templates
+        task_manager = TaskManager()
+        all_tasks_df = task_manager.get_all()
+        if all_tasks_df.empty:
             return []
-
-        active = df[df['status'].isin(['active', 'in_progress'])]
-        if filters.get('max_duration'):
-            # Handle NaN/NA values - exclude them from filter or use a default
-            duration_filter = active['duration_minutes'].notna() & (active['duration_minutes'] <= float(filters['max_duration']))
-            active = active[duration_filter]
-        if filters.get('min_relief'):
-            # Handle NaN/NA/0 values - only filter if relief_score is not null and >= min_relief
-            relief_filter = active['relief_score'].notna() & (active['relief_score'] > 0) & (active['relief_score'] >= float(filters['min_relief']))
-            active = active[relief_filter]
-        if filters.get('max_cognitive_load'):
-            # Handle NaN/NA values
-            cog_filter = active['cognitive_load'].notna() & (active['cognitive_load'] <= float(filters['max_cognitive_load']))
-            active = active[cog_filter]
-
-        if active.empty:
-            return []
-        # Avoid chained-assignment warnings when we add helper columns later
-        active = active.copy()
-
-        focus_metric = filters.get('focus_metric')
-        focus_metric = focus_metric if focus_metric in ['relief', 'duration', 'cognitive', 'efficiency'] else 'relief'
-
-        # Get task efficiency history for efficiency-based recommendations
+        
+        # Load historical instance data to inform recommendations
+        instances_df = self._load_instances()
+        
+        # Get historical averages per task from completed instances
+        completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy() if not instances_df.empty else pd.DataFrame()
+        
+        # Calculate historical averages per task_id
+        task_stats = {}
+        if not completed.empty:
+            # Group by task_id and calculate averages
+            for task_id in completed['task_id'].unique():
+                task_completed = completed[completed['task_id'] == task_id]
+                if not task_completed.empty:
+                    task_stats[task_id] = {
+                        'avg_relief': task_completed['relief_score'].mean() if task_completed['relief_score'].notna().any() else None,
+                        'avg_cognitive_load': task_completed['cognitive_load'].mean() if task_completed['cognitive_load'].notna().any() else None,
+                        'avg_emotional_load': task_completed['emotional_load'].mean() if task_completed['emotional_load'].notna().any() else None,
+                        'avg_duration': task_completed['duration_minutes'].mean() if task_completed['duration_minutes'].notna().any() else None,
+                        'count': len(task_completed),
+                    }
+        
+        # Get task efficiency history
         task_efficiency = self.get_task_efficiency_history()
         
+        # Build recommendation candidates from all task templates
+        candidates = []
+        max_duration_filter = None
+        if filters.get('max_duration'):
+            try:
+                max_duration_filter = float(filters['max_duration'])
+            except (ValueError, TypeError):
+                max_duration_filter = None
+        
+        for _, task_row in all_tasks_df.iterrows():
+            task_id = task_row['task_id']
+            task_name = task_row['name']
+            default_estimate = task_row.get('default_estimate_minutes', 0)
+            
+            try:
+                default_estimate = float(default_estimate) if default_estimate else 0
+            except (ValueError, TypeError):
+                default_estimate = 0
+            
+            # Get historical stats for this task
+            stats = task_stats.get(task_id, {})
+            avg_relief = stats.get('avg_relief') if stats.get('avg_relief') is not None else None
+            avg_cognitive = stats.get('avg_cognitive_load') if stats.get('avg_cognitive_load') is not None else None
+            avg_emotional = stats.get('avg_emotional_load') if stats.get('avg_emotional_load') is not None else None
+            avg_duration = stats.get('avg_duration') if stats.get('avg_duration') is not None else default_estimate
+            historical_efficiency = task_efficiency.get(task_id, 0)
+            
+            # Use historical data if available, otherwise use defaults
+            relief_score = avg_relief if avg_relief is not None else 5.0  # Default neutral
+            cognitive_load = avg_cognitive if avg_cognitive is not None else 5.0  # Default neutral
+            emotional_load = avg_emotional if avg_emotional is not None else 5.0  # Default neutral
+            duration_minutes = avg_duration if avg_duration else default_estimate
+            
+            # Apply max_duration filter after calculating duration_minutes
+            # Use the duration_minutes (which includes historical average if available)
+            if max_duration_filter is not None:
+                # Filter out tasks that exceed the max duration
+                # Note: tasks with 0 duration (unknown) will pass the filter
+                if duration_minutes > max_duration_filter:
+                    continue
+            
+            candidates.append({
+                'task_id': task_id,
+                'task_name': task_name,
+                'relief_score': relief_score,
+                'cognitive_load': cognitive_load,
+                'emotional_load': emotional_load,
+                'duration_minutes': duration_minutes,
+                'historical_efficiency': historical_efficiency,
+                'default_estimate': default_estimate,
+            })
+        
+        if not candidates:
+            return []
+        
+        candidates_df = pd.DataFrame(candidates)
+        
         ranked = []
-        if focus_metric == 'relief':
-            row = active.sort_values('relief_score', ascending=False).head(1)
-            ranked.append(self._row_to_recommendation(row, "Highest Relief"))
-        if focus_metric == 'duration':
-            row = active.sort_values('duration_minutes', ascending=True).head(1)
-            ranked.append(self._row_to_recommendation(row, "Shortest Task"))
-        if focus_metric == 'cognitive':
-            row = active.sort_values('cognitive_load', ascending=True).head(1)
-            ranked.append(self._row_to_recommendation(row, "Lowest Cognitive Load"))
-        if focus_metric == 'efficiency':
-            # Add efficiency scores to active tasks based on historical data
-            active.loc[:, 'historical_efficiency'] = active['task_id'].map(task_efficiency).fillna(0)
-            row = active.sort_values('historical_efficiency', ascending=False).head(1)
-            ranked.append(self._row_to_recommendation(row, "Highest Historical Efficiency"))
-
+        
+        # Always include highest relief pick
+        row = candidates_df.sort_values('relief_score', ascending=False).head(1)
+        if not row.empty:
+            ranked.append(self._task_to_recommendation(row.iloc[0], "Highest Relief"))
+        
+        # Always include shortest task pick
+        row = candidates_df.sort_values('duration_minutes', ascending=True).head(1)
+        if not row.empty:
+            ranked.append(self._task_to_recommendation(row.iloc[0], "Shortest Task"))
+        
+        # Always include lowest cognitive load pick
+        row = candidates_df.sort_values('cognitive_load', ascending=True).head(1)
+        if not row.empty:
+            ranked.append(self._task_to_recommendation(row.iloc[0], "Lowest Cognitive Load"))
+        
+        # Always include lowest emotional load pick
+        row = candidates_df.sort_values('emotional_load', ascending=True).head(1)
+        if not row.empty:
+            ranked.append(self._task_to_recommendation(row.iloc[0], "Lowest Emotional Load"))
+        
+        # Always include lowest net load pick (cognitive + emotional)
+        candidates_df['net_load'] = candidates_df['cognitive_load'] + candidates_df['emotional_load']
+        row = candidates_df.sort_values('net_load', ascending=True).head(1)
+        if not row.empty:
+            ranked.append(self._task_to_recommendation(row.iloc[0], "Lowest Net Load"))
+        
         # Always include net relief pick for variety
-        active.loc[:, 'net_relief_proxy'] = active['relief_score'] - active['cognitive_load']
-        row = active.sort_values('net_relief_proxy', ascending=False).head(1)
-        ranked.append(self._row_to_recommendation(row, "Highest Net Relief"))
+        candidates_df['net_relief_proxy'] = candidates_df['relief_score'] - candidates_df['cognitive_load']
+        row = candidates_df.sort_values('net_relief_proxy', ascending=False).head(1)
+        if not row.empty:
+            ranked.append(self._task_to_recommendation(row.iloc[0], "Highest Net Relief"))
         
         # Always include efficiency-based pick if we have efficiency data
-        if task_efficiency:
-            active.loc[:, 'historical_efficiency'] = active['task_id'].map(task_efficiency).fillna(0)
-            high_eff = active[active['historical_efficiency'] > 0]
-            if not high_eff.empty:
-                # Prioritize tasks with high efficiency, low motivation, high expected relief
-                def _efficiency_recommendation_score(row):
-                    eff = row.get('historical_efficiency', 0)
-                    pred_dict = row.get('predicted_dict', {})
-                    if isinstance(pred_dict, dict):
-                        motivation = pred_dict.get('motivation', None)
-                        expected_relief = pred_dict.get('expected_relief', 0)
-                        # Bonus for low motivation + high efficiency + high expected relief
-                        bonus = 0
-                        if motivation is not None and motivation < 5 and eff > 70:
-                            bonus = (5 - motivation) * (eff / 100.0) * (expected_relief / 10.0) * 20
-                        return eff + bonus
-                    return eff
-                
-                high_eff.loc[:, 'eff_score'] = high_eff.apply(_efficiency_recommendation_score, axis=1)
-                row = high_eff.sort_values('eff_score', ascending=False).head(1)
-                ranked.append(self._row_to_recommendation(row, "High Efficiency Candidate"))
+        high_eff = candidates_df[candidates_df['historical_efficiency'] > 0]
+        if not high_eff.empty:
+            row = high_eff.sort_values('historical_efficiency', ascending=False).head(1)
+            if not row.empty:
+                ranked.append(self._task_to_recommendation(row.iloc[0], "High Efficiency Candidate"))
         
         return [r for r in ranked if r]
 
     def _row_to_recommendation(self, row_df: pd.DataFrame, label: str) -> Optional[Dict[str, str]]:
+        """Legacy method for instance-based recommendations."""
         if row_df is None or row_df.empty:
             return None
         row = row_df.iloc[0]
@@ -603,6 +658,54 @@ class Analytics:
             'duration': row.get('duration_minutes'),
             'relief': row.get('relief_score'),
             'cognitive_load': row.get('cognitive_load'),
+        }
+    
+    def _task_to_recommendation(self, task_row: pd.Series, label: str) -> Dict[str, str]:
+        """Convert a task template row to a recommendation dict."""
+        relief = task_row.get('relief_score', 0)
+        cognitive = task_row.get('cognitive_load', 0)
+        emotional = task_row.get('emotional_load', 0)
+        duration = task_row.get('duration_minutes', task_row.get('default_estimate', 0))
+        
+        # Format relief and cognitive to 1 decimal place
+        try:
+            relief_val = float(relief) if relief is not None else 0
+            relief_str = f"{relief_val:.1f}" if relief_val > 0 else "—"
+        except (ValueError, TypeError):
+            relief_str = "—"
+        
+        try:
+            cognitive_val = float(cognitive) if cognitive is not None else 0
+            cognitive_str = f"{cognitive_val:.1f}" if cognitive_val > 0 else "—"
+        except (ValueError, TypeError):
+            cognitive_str = "—"
+        
+        try:
+            emotional_val = float(emotional) if emotional is not None else 0
+            emotional_str = f"{emotional_val:.1f}" if emotional_val > 0 else "—"
+        except (ValueError, TypeError):
+            emotional_str = "—"
+        
+        try:
+            duration_val = float(duration) if duration is not None else 0
+            duration_str = f"{duration_val:.0f}" if duration_val > 0 else "—"
+        except (ValueError, TypeError):
+            duration_str = "—"
+        
+        # Build reason string - include emotional load if relevant
+        if emotional_str != "—" and emotional_val > 0:
+            reason = f"{label}: relief {relief_str} / cognitive {cognitive_str} / emotional {emotional_str}."
+        else:
+            reason = f"{label}: relief {relief_str} / cognitive {cognitive_str}."
+        
+        return {
+            'title': label,
+            'task_id': task_row.get('task_id'),
+            'task_name': task_row.get('task_name'),
+            'reason': reason,
+            'duration': duration_str,
+            'relief': relief_str,
+            'cognitive_load': cognitive_str,
         }
 
     # ------------------------------------------------------------------

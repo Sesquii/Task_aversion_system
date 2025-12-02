@@ -87,28 +87,12 @@ def _render_recommendation_lab():
 
     with ui.row().classes("gap-3 flex-wrap mt-2"):
         max_duration = ui.number("Max duration (min)", value=filters['max_duration']).classes("w-40")
-        min_relief = ui.number("Min relief score", value=filters['min_relief']).classes("w-40")
-        max_cog = ui.number("Max cognitive load", value=filters['max_cognitive_load']).classes("w-40")
-        focus_options = {
-            'relief': 'Highest relief',
-            'duration': 'Shortest task',
-            'cognitive': 'Lowest cognitive load',
-        }
-        focus_value = filters.get('focus_metric')
-        if focus_value not in focus_options:
-            focus_value = next(iter(focus_options))
-            filters['focus_metric'] = focus_value
-        focus = ui.select(
-            "Focus metric",
-            options=focus_options,
-            value=focus_value,
-        ).classes("w-48")
 
     result_area = ui.column().classes("mt-3 w-full")
 
     def update_filters(key, raw):
         value = raw if raw not in (None, '', 'None') else None
-        if key != 'focus_metric' and value is not None:
+        if value is not None:
             try:
                 value = float(value)
             except (TypeError, ValueError):
@@ -117,9 +101,6 @@ def _render_recommendation_lab():
         _render_recommendations(result_area, filters)
 
     max_duration.on('change', lambda e: update_filters('max_duration', e.value))
-    min_relief.on('change', lambda e: update_filters('min_relief', e.value))
-    max_cog.on('change', lambda e: update_filters('max_cognitive_load', e.value))
-    focus.on('change', lambda e: update_filters('focus_metric', e.value))
 
     _render_recommendations(result_area, filters)
 
