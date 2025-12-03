@@ -940,12 +940,18 @@ def build_recommendations_section():
             ("High Efficiency", "high_efficiency"),
         ]
         
+        # Extract options and default value to ensure they match
+        options_list = [(label, value) for label, value in category_options]
+        default_value = category_options[0][1]  # Use first option's value as default
+        
         global selected_category
+        # Create select without default value first, then set it
         selected_category = ui.select(
-            options=[(label, value) for label, value in category_options],
-            label="Category",
-            value="highest_relief"
+            options=options_list,
+            label="Category"
         ).classes("w-full mb-2")
+        # Set the default value after creation
+        selected_category.value = default_value
         
         # Max duration filter
         filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
@@ -974,19 +980,30 @@ def build_recommendations_section():
         
         # Update when category changes
         def on_category_change():
-            refresh_recommendations(rec_container)
+            refresh_recommendations(rec_container, selected_category)
         
         selected_category.on('update:model-value', lambda _: on_category_change())
         
         # Initial render
-        refresh_recommendations(rec_container)
+        refresh_recommendations(rec_container, selected_category)
 
 
-def refresh_recommendations(target_container):
-    """Refresh the recommendations display."""
+def refresh_recommendations(target_container, category_select=None):
+    """Refresh the recommendations display based on selected category."""
     target_container.clear()
-    recs = an.recommendations(dash_filters)
-    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for filters {dash_filters}")
+    
+    # Get selected category
+    if category_select is None:
+        category_select = globals().get('selected_category', None)
+    
+    if category_select is None:
+        category_value = "highest_relief"
+    else:
+        category_value = category_select.value if hasattr(category_select, 'value') else "highest_relief"
+    
+    # Get recommendations for the selected category (top 3)
+    recs = an.recommendations_by_category(category_value, dash_filters, limit=3)
+    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for category {category_value}, filters {dash_filters}")
     
     if not recs:
         with target_container:
@@ -1002,13 +1019,8 @@ def refresh_recommendations(target_container):
             cognitive = rec.get('cognitive_load') or '—'
             emotional = rec.get('emotional_load') or '—'
             
-            # Format the recommendation card to match image
+            # Format the recommendation card
             with ui.card().classes("recommendation-card"):
-                # Title (e.g., "Highest Relief:", "Shortest Task:")
-                title = rec.get('title', '')
-                if title:
-                    ui.label(f"{title}").classes("text-xs font-semibold text-gray-600 mb-1")
-                
                 # Task name
                 ui.label(task_label).classes("font-bold text-sm mb-1")
                 
