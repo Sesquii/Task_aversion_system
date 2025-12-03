@@ -929,29 +929,31 @@ def build_recommendations_section():
         ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
         ui.separator()
         
-        # Category selection
-        category_options = [
-            ("Highest Actual Relief", "highest_relief"),
-            ("Shortest Task", "shortest"),
-            ("Lowest Cognitive Load", "lowest_cognitive"),
-            ("Lowest Emotional Load", "lowest_emotional"),
-            ("Lowest Net Load", "lowest_net_load"),
-            ("Highest Net Relief", "highest_net_relief"),
-            ("High Efficiency", "high_efficiency"),
-        ]
+        # Category selection - using a mapping approach similar to analytics page
+        category_map = {
+            "Highest Actual Relief": "highest_relief",
+            "Shortest Task": "shortest",
+            "Lowest Cognitive Load": "lowest_cognitive",
+            "Lowest Emotional Load": "lowest_emotional",
+            "Lowest Net Load": "lowest_net_load",
+            "Highest Net Relief": "highest_net_relief",
+            "High Efficiency": "high_efficiency",
+        }
         
-        # Extract options and default value to ensure they match
-        options_list = [(label, value) for label, value in category_options]
-        default_value = category_options[0][1]  # Use first option's value as default
+        category_labels = list(category_map.keys())
+        default_label = category_labels[0]
+        default_value = category_map[default_label]
+        
+        # Store current category value in a way that's accessible
+        current_category = {"value": default_value}
         
         global selected_category
-        # Create select without default value first, then set it
+        # Create select with string labels as options
         selected_category = ui.select(
-            options=options_list,
-            label="Category"
+            options=category_labels,
+            label="Category",
+            value=default_label
         ).classes("w-full mb-2")
-        # Set the default value after creation
-        selected_category.value = default_value
         
         # Max duration filter
         filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
@@ -971,39 +973,69 @@ def build_recommendations_section():
                         value = None
                 dash_filters['max_duration'] = value
                 print(f"[Dashboard] Filter applied: max_duration = {value}, filters = {dash_filters}")
-                refresh_recommendations(rec_container)
+                refresh_recommendations(rec_container, current_category["value"])
             
             ui.button("APPLY", on_click=apply_filter).props("dense")
         
         # Recommendations container
         rec_container = ui.column().classes("w-full")
         
-        # Update when category changes
-        def on_category_change():
-            refresh_recommendations(rec_container, selected_category)
+        # Update when category changes - refresh immediately on selection
+        def on_category_change(e=None):
+            # Get the selected label from the event or select value
+            selected_label = None
+            if e and hasattr(e, 'args') and e.args:
+                if isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    selected_label = e.args[0]
+                elif isinstance(e.args, dict):
+                    selected_label = e.args.get('value') or e.args.get('label')
+            
+            # Fallback to select.value
+            if selected_label is None:
+                selected_label = selected_category.value if hasattr(selected_category, 'value') else default_label
+            
+            # Map label to value
+            category_value = category_map.get(selected_label, default_value)
+            current_category["value"] = category_value
+            
+            print(f"[Dashboard] Category changed: label='{selected_label}', value='{category_value}'")
+            refresh_recommendations(rec_container, category_value)
         
-        selected_category.on('update:model-value', lambda _: on_category_change())
+        # Bind the change event to refresh recommendations immediately when category is clicked
+        selected_category.on('update:model-value', on_category_change)
         
         # Initial render
-        refresh_recommendations(rec_container, selected_category)
+        refresh_recommendations(rec_container, current_category["value"])
 
 
-def refresh_recommendations(target_container, category_select=None):
+def refresh_recommendations(target_container, category_value=None):
     """Refresh the recommendations display based on selected category."""
     target_container.clear()
     
-    # Get selected category
-    if category_select is None:
+    # Get selected category value - accept string directly or extract from select
+    if category_value is None:
+        # Try to get from global selected_category if available
         category_select = globals().get('selected_category', None)
+        if category_select and hasattr(category_select, 'value'):
+            selected_label = category_select.value
+            # Map label to value if we have the mapping
+            category_map = globals().get('category_map', {})
+            if category_map and selected_label in category_map:
+                category_value = category_map[selected_label]
+            else:
+                category_value = selected_label  # Fallback to label itself
+        else:
+            category_value = "highest_relief"
     
-    if category_select is None:
-        category_value = "highest_relief"
-    else:
-        category_value = category_select.value if hasattr(category_select, 'value') else "highest_relief"
+    # Ensure category_value is a string, not a tuple
+    if isinstance(category_value, tuple) and len(category_value) == 2:
+        category_value = category_value[1]
+    elif not isinstance(category_value, str):
+        category_value = str(category_value) if category_value else "highest_relief"
     
     # Get recommendations for the selected category (top 3)
     recs = an.recommendations_by_category(category_value, dash_filters, limit=3)
-    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for category {category_value}, filters {dash_filters}")
+    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for category '{category_value}', filters {dash_filters}")
     
     if not recs:
         with target_container:
