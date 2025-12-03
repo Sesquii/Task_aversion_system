@@ -209,7 +209,10 @@ class Analytics:
             lambda row: min(0.0, row['default_relief_points']), axis=1
         )
         
-        # Calculate productivity time (sum of actual time from actual_dict)
+        # Calculate productivity time (sum of actual time from actual_dict) - LAST 7 DAYS ONLY
+        from datetime import timedelta
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        
         def _get_actual_time(row):
             try:
                 actual_dict = row['actual_dict']
@@ -221,7 +224,11 @@ class Analytics:
         
         completed['time_actual'] = completed.apply(_get_actual_time, axis=1)
         completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
-        productivity_time = completed['time_actual'].fillna(0).sum()
+        
+        # Filter to last 7 days
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed_last_7d = completed[completed['completed_at_dt'] >= seven_days_ago]
+        productivity_time = completed_last_7d['time_actual'].fillna(0).sum()
         
         # Calculate default relief points totals
         default_total = relief_data['default_relief_points'].sum()
