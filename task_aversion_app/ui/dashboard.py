@@ -134,13 +134,14 @@ def refresh_templates():
 
     template_col.clear()
 
-    for t in filtered:
-        with template_col:
-            with ui.card().classes("mb-2 p-2"):
+    # Use grid layout for templates
+    with template_col:
+        for t in filtered:
+            with ui.card().classes("p-2 mb-2"):
                 ui.markdown(f"**{t['name']}** — v{t['version']}")
-                with ui.row():
-                    ui.button("Init", on_click=lambda tid=t['task_id']: init_quick(tid))
-                    ui.button("Delete", on_click=lambda tid=t['task_id']: delete_template(tid))
+                with ui.row().classes("gap-1"):
+                    ui.button("INIT", on_click=lambda tid=t['task_id']: init_quick(tid)).props("dense size=sm")
+                    ui.button("DELETE", on_click=lambda tid=t['task_id']: delete_template(tid)).props("dense size=sm color=red")
 
 
 def delete_instance(instance_id):
@@ -359,8 +360,78 @@ def build_dashboard(task_manager):
 
     ui.add_head_html("""
     <style>
-        .small * { font-size: 0.85rem !important; }
+        /* Zoom-responsive scaling - maintains bottom position */
+        html {
+            zoom: 1;
+        }
         
+        body {
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+        }
+        
+        /* Dashboard container with viewport-based sizing */
+        .dashboard-container {
+            width: 100%;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            transform-origin: top center;
+        }
+        
+        /* Three-column layout */
+        .dashboard-layout {
+            display: flex;
+            width: 100%;
+            height: calc(100vh - 120px);
+            gap: 1rem;
+            padding: 0.5rem;
+            box-sizing: border-box;
+        }
+        
+        .dashboard-column {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .column-left {
+            width: 25%;
+            min-width: 250px;
+        }
+        
+        .column-middle {
+            width: 40%;
+            min-width: 300px;
+        }
+        
+        .column-right {
+            width: 35%;
+            min-width: 300px;
+        }
+        
+        /* Scrollable sections */
+        .scrollable-section {
+            overflow-y: auto;
+            overflow-x: hidden;
+            flex: 1;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .scrollable-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        /* Small text for compact display */
+        .small * { 
+            font-size: 0.85rem !important; 
+        }
+        
+        /* Task tooltip styling */
         .task-tooltip {
             position: absolute;
             background: #1f2937;
@@ -391,7 +462,67 @@ def build_dashboard(task_manager):
         .task-card-hover {
             position: relative;
         }
+        
+        /* Current task indicator */
+        .current-task-indicator {
+            color: #ef4444;
+            font-weight: bold;
+            font-size: 1rem;
+            margin: 0.5rem 0;
+        }
+        
+        .current-task-line {
+            width: 2px;
+            background-color: #ef4444;
+            min-height: 100px;
+            margin: 0.5rem 0;
+        }
+        
+        /* Template grid */
+        .template-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 0.5rem;
+        }
+        
+        /* Recommendation cards */
+        .recommendation-card {
+            margin-bottom: 0.75rem;
+            padding: 0.75rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.375rem;
+            background: white;
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 1400px) {
+            .dashboard-layout {
+                gap: 0.75rem;
+                padding: 0.25rem;
+            }
+        }
+        
+        /* Ensure proper scaling on zoom */
+        @media screen {
+            .dashboard-container {
+                transform-origin: top left;
+            }
+        }
     </style>
+    <script>
+        // Handle zoom-responsive behavior
+        function updateZoomScale() {
+            const container = document.querySelector('.dashboard-container');
+            if (container) {
+                // Browser zoom is handled automatically, but we can adjust if needed
+                const zoomLevel = window.devicePixelRatio || 1;
+                // The browser handles zoom, so we just ensure proper layout
+            }
+        }
+        
+        window.addEventListener('resize', updateZoomScale);
+        updateZoomScale();
+    </script>
     <script>
         function initTaskTooltips() {
             document.querySelectorAll('.task-card-hover').forEach(function(card) {
@@ -460,229 +591,213 @@ def build_dashboard(task_manager):
     </script>
     """)
 
-    ui.label("Task Aversion Dashboard").classes("text-2xl font-bold mb-4 small")
-
-    # Summary section at the top
-    build_summary_section()
-
-    # Outer layout: 3 columns
-    with ui.row().classes("w-full h-screen gap-4 small"):
-
+    # Main dashboard container
+    with ui.column().classes("dashboard-container w-full"):
         # ====================================================================
-        # COLUMN 1 — Left Column
+        # COLUMN 1 — Left Column (Header, Create Task, Quick Tasks, Templates)
         # ====================================================================
-        with ui.column().classes("w-1/4 h-full gap-3"):
-
-            # Create Task Button (Pinned)
-            with ui.row().classes("sticky top-0 bg-white z-50 py-2"):
-                ui.button("➕ Create Task",
+        with ui.row().classes("dashboard-layout w-full"):
+            with ui.column().classes("dashboard-column column-left gap-2"):
+                # Header
+                ui.label("Task Aversion Dashboard").classes("text-2xl font-bold mb-2")
+                
+                # Create Task Button
+                ui.button("+ CREATE TASK",
                           on_click=lambda: ui.navigate.to('/create_task'),
-                          color='primary').classes("w-full")
-
-            # Search bar
-            global search
-            search = ui.input(
-                label="Search task templates",
-                placeholder="Type to filter...",
-            ).classes("w-full mb-2")
-
-            search.on('input', lambda _: refresh_templates())   # live filtering!
-
-
-            # Quick Tasks Section
-            with ui.column().classes("w-full border rounded-lg p-2 overflow-y-auto flex-1"):
-                ui.markdown("### Quick Tasks (Last 5)")
-
-                recent = tm.get_recent(limit=5) if hasattr(tm, "get_recent") else []
-                quick_col = ui.column()
-
-                if not recent:
-                    ui.label("No recent tasks").classes("text-xs text-gray-500")
-                else:
-                    for r in recent:
-                        with ui.row().classes("justify-between items-center"):
-                            ui.label(r['name']).classes("text-sm")
-                            ui.button("Init", 
-                                      on_click=lambda n=r['name']: init_quick(n)
-                                      ).props("dense")
-
-            # Templates Section
-            with ui.column().classes("w-full border rounded-lg p-2 overflow-y-auto flex-1"):
-                ui.markdown("### Task Templates")
-                global template_col
-                template_col = ui.column().classes('w-full h-80 overflow-auto border rounded-lg p-2')
-                refresh_templates()
-
-        # ====================================================================
-        # COLUMN 2 — Middle Column (Active Tasks + Recently Completed)
-        # ====================================================================
-        with ui.column().classes("w-1/3 h-full gap-2"):
-
-            # Active Tasks Section (takes up most of the space)
-            with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
-                ui.label("Active Initialized Tasks").classes("text-lg font-bold")
-                ui.separator()
-
-                active = im.list_active_instances()
-
-                if not active:
-                    ui.label("No active tasks").classes("text-xs text-gray-500")
-                else:
-                    for idx, inst in enumerate(active):
-                        # Parse predicted data to extract time estimate
-                        predicted_str = inst.get("predicted") or "{}"
-                        try:
-                            predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
-                        except (json.JSONDecodeError, TypeError):
-                            predicted_data = {}
-                        
-                        time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
-                        try:
-                            time_estimate = int(time_estimate)
-                        except (TypeError, ValueError):
-                            time_estimate = 0
-                        
-                        # Format predicted data for tooltip with color coding
-                        task_id = inst.get('task_id')
-                        formatted_tooltip = format_colored_tooltip(predicted_data, task_id)
-                        
-                        tooltip_id = f"tooltip-{inst['instance_id']}"
-                        instance_id = inst['instance_id']
-                        
-                        with ui.card().classes("w-full p-2 task-card-hover").props(f'data-instance-id="{instance_id}"').style("position: relative;"):
-                            # Task name and time estimate
-                            with ui.row().classes("justify-between items-center w-full"):
-                                ui.label(inst.get("task_name")).classes("text-md font-bold")
-                                ui.label(f"{time_estimate} min").classes("text-sm text-gray-600")
-                            
-                            # Initialization time
-                            initialized_at = inst.get('initialized_at', '')
-                            if initialized_at:
-                                ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mt-1")
-                            
-                            # Buttons row
-                            with ui.row().classes("justify-end gap-2 mt-2"):
-                                # Start button or ongoing timer container
-                                start_container = ui.column().classes("items-center")
-                                started_at = inst.get('started_at', '')
-                                if started_at:
-                                    # Show ongoing timer
-                                    with start_container:
-                                        timer_label = ui.label("").classes("text-sm font-semibold text-blue-600")
-                                        update_ongoing_timer(instance_id, timer_label)
-                                else:
-                                    # Show start button
-                                    with start_container:
-                                        ui.button("Start",
-                                                  on_click=lambda i=inst['instance_id'], c=start_container: start_instance(i, c)
-                                                  ).props("dense").classes("bg-green-500")
-                                
-                                ui.button("Complete",
-                                          on_click=lambda i=inst['instance_id']: go_complete(i)
-                                          ).props("dense")
-
-                                ui.button("Cancel",
-                                          color="warning",
-                                          on_click=lambda i=inst['instance_id']: go_cancel(i)
-                                          ).props("dense")
-                            
-                            # Add tooltip element to body with formatted HTML
-                            tooltip_html = f'<div id="{tooltip_id}" class="task-tooltip">{formatted_tooltip}</div>'
-                            ui.add_body_html(tooltip_html)
+                          color='primary').classes("w-full text-lg py-3 mb-2")
+                
+                # Quick Tasks Section
+                with ui.column().classes("scrollable-section"):
+                    ui.markdown("### Quick Tasks (Last 5)")
                     
-                    # Initialize tooltips after all cards are created
-                    ui.run_javascript('setTimeout(initTaskTooltips, 200);')
+                    recent = tm.get_recent(limit=5) if hasattr(tm, "get_recent") else []
+                    
+                    if not recent:
+                        ui.label("No recent tasks").classes("text-xs text-gray-500")
+                    else:
+                        for r in recent:
+                            with ui.row().classes("justify-between items-center mb-1"):
+                                ui.label(r['name']).classes("text-sm")
+                                ui.button("INIT", 
+                                          on_click=lambda n=r['name']: init_quick(n)
+                                          ).props("dense size=sm")
+                
+                # Templates Section
+                with ui.column().classes("scrollable-section"):
+                    ui.markdown("### Task Templates")
+                    
+                    # Search bar
+                    global search
+                    search = ui.input(
+                        label="Search task templates",
+                        placeholder="Type to filter...",
+                    ).classes("w-full mb-2")
+                    
+                    search.on('input', lambda _: refresh_templates())
+                    
+                    global template_col
+                    template_col = ui.column().classes('w-full')
+                    refresh_templates()
 
-            # Recently Completed Section (bottom quarter)
-            build_recently_completed_panel()
+            # ====================================================================
+            # COLUMN 2 — Middle Column (Summary, Active Tasks, Current Task, Recently Completed)
+            # ====================================================================
+            with ui.column().classes("dashboard-column column-middle gap-2"):
+                # Summary Section
+                build_summary_section()
+                
+                # Active Tasks Section
+                with ui.column().classes("scrollable-section"):
+                    ui.label("Active Initialized Tasks").classes("text-lg font-bold mb-2")
+                    ui.separator()
+                    
+                    active = im.list_active_instances()
+                    
+                    if not active:
+                        ui.label("No active tasks").classes("text-xs text-gray-500")
+                    else:
+                        for idx, inst in enumerate(active):
+                            # Parse predicted data to extract time estimate
+                            predicted_str = inst.get("predicted") or "{}"
+                            try:
+                                predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
+                            except (json.JSONDecodeError, TypeError):
+                                predicted_data = {}
+                            
+                            time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
+                            try:
+                                time_estimate = int(time_estimate)
+                            except (TypeError, ValueError):
+                                time_estimate = 0
+                            
+                            # Format predicted data for tooltip with color coding
+                            task_id = inst.get('task_id')
+                            formatted_tooltip = format_colored_tooltip(predicted_data, task_id)
+                            
+                            tooltip_id = f"tooltip-{inst['instance_id']}"
+                            instance_id = inst['instance_id']
+                            
+                            with ui.card().classes("w-full p-2 task-card-hover mb-2").props(f'data-instance-id="{instance_id}"').style("position: relative;"):
+                                # Task name and time estimate
+                                with ui.row().classes("justify-between items-center w-full"):
+                                    ui.label(inst.get("task_name")).classes("text-md font-bold")
+                                    ui.label(f"{time_estimate} min").classes("text-sm text-gray-600")
+                                
+                                # Initialization time
+                                initialized_at = inst.get('initialized_at', '')
+                                if initialized_at:
+                                    ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mt-1")
+                                
+                                # Buttons row
+                                with ui.row().classes("justify-end gap-2 mt-2"):
+                                    # Start button or ongoing timer container
+                                    start_container = ui.column().classes("items-center")
+                                    started_at = inst.get('started_at', '')
+                                    if started_at:
+                                        # Show ongoing timer
+                                        with start_container:
+                                            timer_label = ui.label("").classes("text-sm font-semibold text-blue-600")
+                                            update_ongoing_timer(instance_id, timer_label)
+                                    else:
+                                        # Show start button
+                                        with start_container:
+                                            ui.button("Start",
+                                                      on_click=lambda i=inst['instance_id'], c=start_container: start_instance(i, c)
+                                                      ).props("dense").classes("bg-green-500")
+                                    
+                                    ui.button("Complete",
+                                              on_click=lambda i=inst['instance_id']: go_complete(i)
+                                              ).props("dense")
 
-        # ====================================================================
-        # COLUMN 3 — Right Column (Analytics + Recommendations)
-        # ====================================================================
-        with ui.column().classes("w-1/3 h-full gap-4"):
+                                    ui.button("Cancel",
+                                              color="warning",
+                                              on_click=lambda i=inst['instance_id']: go_cancel(i)
+                                              ).props("dense")
+                                
+                                # Add tooltip element to body with formatted HTML
+                                tooltip_html = f'<div id="{tooltip_id}" class="task-tooltip">{formatted_tooltip}</div>'
+                                ui.add_body_html(tooltip_html)
+                        
+                        # Initialize tooltips after all cards are created
+                        ui.run_javascript('setTimeout(initTaskTooltips, 200);')
+                
+                # Current Task Indicator
+                ui.label("CURRENT TASK").classes("current-task-indicator")
+                ui.html('<div class="current-task-line"></div>', sanitize=False)
+                
+                # Recently Completed Section
+                build_recently_completed_panel()
 
-            # Analytics Panel
-            build_compact_analytics_panel()
-
-            # Recommendations (merged with focus options)
-            build_recommendations_section()
+            # ====================================================================
+            # COLUMN 3 — Right Column (Analytics Pulse, Recommendations)
+            # ====================================================================
+            with ui.column().classes("dashboard-column column-right gap-2"):
+                # Analytics Pulse Header
+                ui.label("Analytics pulse").classes("text-xl font-bold mb-2")
+                
+                # Recommendations Section
+                build_recommendations_section()
 
 
 def build_summary_section():
     """Build the summary section with productivity time and relief points."""
     relief_summary = an.get_relief_summary()
     
-    with ui.card().classes("w-full mb-4 p-4"):
-        ui.label("Summary").classes("text-xl font-bold mb-3")
+    with ui.card().classes("w-full mb-2 p-3"):
+        ui.label("Summary").classes("text-lg font-bold mb-2")
         
-        with ui.row().classes("w-full gap-4 flex-wrap"):
+        with ui.row().classes("w-full gap-2 flex-wrap"):
             # Productivity Time
-            with ui.card().classes("p-3 min-w-[180px]"):
+            with ui.card().classes("p-2 min-w-[140px]"):
                 ui.label("Productivity Time").classes("text-xs text-gray-500")
                 hours = relief_summary['productivity_time_minutes'] / 60.0
                 if hours >= 1:
-                    ui.label(f"{hours:.1f} hours").classes("text-lg font-bold")
-                    ui.label(f"({relief_summary['productivity_time_minutes']:.0f} min)").classes("text-xs text-gray-400")
+                    ui.label(f"{hours:.1f} hours ({relief_summary['productivity_time_minutes']:.0f} min)").classes("text-sm font-bold")
                 else:
-                    ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-lg font-bold")
+                    ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-sm font-bold")
             
             # Default Relief Points
-            with ui.card().classes("p-3 min-w-[180px]"):
+            with ui.card().classes("p-2 min-w-[140px]"):
                 ui.label("Default Relief Points").classes("text-xs text-gray-500")
                 points = relief_summary['default_relief_points']
                 color_class = "text-green-600" if points >= 0 else "text-red-600"
-                ui.label(f"{points:+.2f}").classes(f"text-lg font-bold {color_class}")
-                ui.label("(actual - expected)").classes("text-xs text-gray-400")
+                ui.label(f"{points:+.2f} (actual-expected)").classes(f"text-sm font-bold {color_class}")
             
             # Net Relief Points
-            with ui.card().classes("p-3 min-w-[180px]"):
+            with ui.card().classes("p-2 min-w-[140px]"):
                 ui.label("Net Relief Points").classes("text-xs text-gray-500")
                 net_points = relief_summary['net_relief_points']
-                ui.label(f"{net_points:.2f}").classes("text-lg font-bold text-green-600")
-                ui.label("(calibrated, ≥0)").classes("text-xs text-gray-400")
+                ui.label(f"{net_points:.2f} (calibrated, a)").classes("text-sm font-bold text-green-600")
             
             # Positive Relief Stats
-            with ui.card().classes("p-3 min-w-[200px]"):
+            with ui.card().classes("p-2 min-w-[140px]"):
                 ui.label("Positive Relief").classes("text-xs text-gray-500")
                 pos_count = relief_summary['positive_relief_count']
                 pos_avg = relief_summary['positive_relief_avg']
-                ui.label(f"{pos_count} tasks").classes("text-sm font-bold")
-                ui.label(f"Avg: +{pos_avg:.2f}").classes("text-xs text-green-600")
-                ui.label(f"Total: +{relief_summary['positive_relief_total']:.2f}").classes("text-xs text-gray-400")
+                ui.label(f"{pos_count} tasks Aug: +{pos_avg:.2f}").classes("text-sm font-bold")
             
             # Negative Relief Stats
-            with ui.card().classes("p-3 min-w-[200px]"):
+            with ui.card().classes("p-2 min-w-[140px]"):
                 ui.label("Negative Relief").classes("text-xs text-gray-500")
                 neg_count = relief_summary['negative_relief_count']
-                neg_avg = relief_summary['negative_relief_avg']
                 ui.label(f"{neg_count} tasks").classes("text-sm font-bold")
-                if neg_count > 0:
-                    ui.label(f"Avg: -{neg_avg:.2f}").classes("text-xs text-red-600")
-                    ui.label(f"Total: -{relief_summary['negative_relief_total']:.2f}").classes("text-xs text-gray-400")
-                else:
-                    ui.label("None").classes("text-xs text-gray-400")
             
             # Efficiency Stats
-            with ui.card().classes("p-3 min-w-[200px]"):
+            with ui.card().classes("p-2 min-w-[140px]"):
                 ui.label("Productivity Efficiency").classes("text-xs text-gray-500")
                 avg_eff = relief_summary.get('avg_efficiency', 0.0)
                 high_eff = relief_summary.get('high_efficiency_count', 0)
                 low_eff = relief_summary.get('low_efficiency_count', 0)
-                ui.label(f"{avg_eff:.1f}").classes("text-lg font-bold")
-                ui.label(f"High: {high_eff} | Low: {low_eff}").classes("text-xs text-gray-400")
-                ui.label("(time × completion × relief)").classes("text-xs text-gray-400")
+                ui.label(f"{avg_eff:.1f} High: {high_eff} (low)").classes("text-sm font-bold")
 
 
 def build_recently_completed_panel():
-    """Build the recently completed tasks panel with optional date grouping."""
+    """Build the recently completed tasks panel."""
     from collections import defaultdict
     
-    with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto h-1/4"):
-        ui.label("Recently Completed").classes("font-bold text-lg")
+    with ui.column().classes("scrollable-section"):
+        ui.label("Recently Completed").classes("font-bold text-lg mb-2")
         ui.separator()
-        
-        # Toggle for date grouping
-        group_by_date = ui.checkbox("Group by date", value=False).classes("mb-2")
         
         # Container for completed tasks
         completed_container = ui.column().classes("w-full")
@@ -698,84 +813,36 @@ def build_recently_completed_panel():
                     ui.label("No completed tasks").classes("text-xs text-gray-500")
                 return
             
-            if group_by_date.value:
-                # Group by date
-                grouped = defaultdict(list)
+            # Show flat list with date and time
+            with completed_container:
                 for c in completed:
-                    # Extract date from completed_at (format: "YYYY-MM-DD HH:MM")
                     completed_at = str(c.get('completed_at', ''))
-                    if completed_at:
-                        date_part = completed_at.split()[0] if ' ' in completed_at else completed_at[:10]
-                        grouped[date_part].append(c)
-                
-                # Sort dates descending
-                sorted_dates = sorted(grouped.keys(), reverse=True)
-                
-                with completed_container:
-                    for date in sorted_dates:
-                        with ui.card().classes("w-full p-2 mb-2"):
-                            ui.label(date).classes("font-bold text-sm text-gray-600 mb-1")
-                            for c in grouped[date]:
-                                with ui.row().classes("justify-between items-center mb-1"):
-                                    ui.label(c['task_name']).classes("text-sm")
-                                    # Show time if available
-                                    completed_at = str(c.get('completed_at', ''))
-                                    time_part = completed_at.split()[1] if ' ' in completed_at else ''
-                                    if time_part:
-                                        ui.label(time_part).classes("text-xs text-gray-400")
-            else:
-                # No grouping - show flat list
-                with completed_container:
-                    for c in completed:
-                        with ui.row().classes("justify-between items-center"):
-                            ui.label(c['task_name']).classes("text-sm")
-                            ui.label(str(c['completed_at'])).classes("text-xs text-gray-400")
-        
-        # Update when toggle changes
-        group_by_date.on('update:model-value', lambda _: refresh_completed())
+                    # Format: "Task Name YYYY-MM-DD HH:MM"
+                    with ui.row().classes("justify-between items-center mb-1"):
+                        ui.label(c['task_name']).classes("text-sm")
+                        if completed_at:
+                            # Extract date and time parts
+                            parts = completed_at.split()
+                            if len(parts) >= 2:
+                                date_part = parts[0]
+                                time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                                ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                            else:
+                                ui.label(completed_at).classes("text-xs text-gray-400")
         
         # Initial render
         refresh_completed()
 
 
-def build_compact_analytics_panel():
-    metrics = an.get_dashboard_metrics()
-    print(f"[Dashboard] Metrics snapshot: {metrics}")
-
-    def metric_card(title, value, subtitle=''):
-        with summary_row:
-            with ui.card().classes("p-2 min-w-[140px]"):
-                ui.label(title).classes("text-xs text-gray-500")
-                ui.label(value).classes("text-lg font-bold")
-                if subtitle:
-                    ui.label(subtitle).classes("text-xs text-gray-400")
-
-    with ui.expansion("Analytics pulse", icon="bar_chart", value=False).classes("w-full"):
-        summary_row = ui.row().classes("gap-2 flex-wrap")
-        counts = metrics.get('counts', {})
-        quality = metrics.get('quality', {})
-        time_stats = metrics.get('time', {})
-
-        metric_card("Active", counts.get('active', 0))
-        metric_card("Done (7d)", counts.get('completed_7d', 0))
-        metric_card("Avg Relief", quality.get('avg_relief', 0), "/10")
-        metric_card("Cog Load", quality.get('avg_cognitive_load', 0), "/10")
-        metric_card("Median Duration", f"{time_stats.get('median_duration', 0)} min")
-        metric_card("Avg Delay", f"{time_stats.get('avg_delay', 0)} min")
-
-        ui.button(
-            "Open Analytics Studio",
-            icon="dashboard",
-            on_click=lambda: ui.navigate.to('/analytics'),
-        ).classes("mt-2")
+# Analytics panel is now just a header - removed compact panel
 
 
 def build_recommendations_section():
     """Build the recommendations section with filters."""
     print(f"[Dashboard] Rendering recommendations section with filters: {dash_filters}")
     
-    with ui.column().classes("w-full border rounded-lg p-3 overflow-y-auto flex-1"):
-        ui.label("Recommendations").classes("font-bold text-lg")
+    with ui.column().classes("scrollable-section"):
+        ui.label("Recommendations").classes("font-bold text-lg mb-2")
         ui.separator()
         
         # Filters
@@ -798,7 +865,7 @@ def build_recommendations_section():
                 print(f"[Dashboard] Filter applied: max_duration = {value}, filters = {dash_filters}")
                 refresh_recommendations(rec_container)
             
-            ui.button("Apply", on_click=apply_filter).props("dense")
+            ui.button("APPLY", on_click=apply_filter).props("dense")
         
         # Note about future filtering options
         ui.label("More filtering options will be added later").classes("text-xs text-gray-500 mb-2")
@@ -823,12 +890,40 @@ def refresh_recommendations(target_container):
     
     with target_container:
         for rec in recs:
-            with ui.card().classes("p-2 mb-2"):
-                task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-                ui.label(task_label).classes("font-bold text-sm")
-                ui.label(rec.get('reason', '')).classes("text-xs text-gray-600")
-                ui.label(f"Duration: {rec.get('duration') or '—'}m").classes("text-xs text-gray-500")
-                ui.label(f"Relief {rec.get('relief')} | Cog {rec.get('cognitive_load')}").classes("text-xs text-gray-500")
-                ui.button("Initialize",
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            reason = rec.get('reason', '')
+            duration = rec.get('duration') or '—'
+            relief = rec.get('relief') or '—'
+            cognitive = rec.get('cognitive_load') or '—'
+            emotional = rec.get('emotional_load') or '—'
+            
+            # Format the recommendation card to match image
+            with ui.card().classes("recommendation-card"):
+                # Title (e.g., "Highest Relief:", "Shortest Task:")
+                title = rec.get('title', '')
+                if title:
+                    ui.label(f"{title}").classes("text-xs font-semibold text-gray-600 mb-1")
+                
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Reason line with all metrics
+                reason_parts = []
+                if relief != '—':
+                    reason_parts.append(f"relief {relief}")
+                if cognitive != '—':
+                    reason_parts.append(f"cognitive {cognitive}")
+                if emotional != '—':
+                    reason_parts.append(f"emotional {emotional}")
+                
+                reason_text = " / ".join(reason_parts) if reason_parts else reason
+                ui.label(f"{reason_text}.").classes("text-xs text-gray-600 mb-1")
+                
+                # Duration and summary
+                ui.label(f"Duration: {duration}m.").classes("text-xs text-gray-500 mb-1")
+                ui.label(f"Relief {relief} | Cog {cognitive}").classes("text-xs text-gray-500 mb-2")
+                
+                # Initialize button
+                ui.button("INITIALIZE",
                           on_click=lambda rid=rec.get('task_id'): init_quick(rid)
-                          ).props("dense").classes("mt-2")
+                          ).props("dense size=sm").classes("w-full")

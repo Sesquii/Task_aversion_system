@@ -628,11 +628,16 @@ class Analytics:
         if not row.empty:
             ranked.append(self._task_to_recommendation(row.iloc[0], "Lowest Net Load"))
         
-        # Always include net relief pick for variety
+        # Always include net relief picks for variety
         candidates_df['net_relief_proxy'] = candidates_df['relief_score'] - candidates_df['cognitive_load']
+        # Highest Net Relief
         row = candidates_df.sort_values('net_relief_proxy', ascending=False).head(1)
         if not row.empty:
             ranked.append(self._task_to_recommendation(row.iloc[0], "Highest Net Relief"))
+        # Lowest Net Relief (for comparison)
+        row = candidates_df.sort_values('net_relief_proxy', ascending=True).head(1)
+        if not row.empty:
+            ranked.append(self._task_to_recommendation(row.iloc[0], "Lowest Net Relief"))
         
         # Always include efficiency-based pick if we have efficiency data
         high_eff = candidates_df[candidates_df['historical_efficiency'] > 0]
@@ -706,6 +711,7 @@ class Analytics:
             'duration': duration_str,
             'relief': relief_str,
             'cognitive_load': cognitive_str,
+            'emotional_load': emotional_str,
         }
 
     # ------------------------------------------------------------------
