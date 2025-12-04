@@ -540,6 +540,28 @@ def build_dashboard(task_manager):
                 transform-origin: top left;
             }
         }
+        
+        /* Half-width columns for metrics layout */
+        .half-width-left {
+            flex: 0 0 50% !important;
+            width: 50% !important;
+            max-width: 50% !important;
+            box-sizing: border-box;
+        }
+        
+        .half-width-right {
+            flex: 0 0 50% !important;
+            width: 50% !important;
+            max-width: 50% !important;
+            box-sizing: border-box;
+        }
+        
+        .metrics-row {
+            display: flex !important;
+            flex-direction: row !important;
+            width: 100% !important;
+            gap: 0.5rem;
+        }
     </style>
     <script>
         // Handle zoom-responsive behavior
@@ -649,10 +671,10 @@ def build_dashboard(task_manager):
                           color='primary').classes("w-full text-lg py-3 mb-2")
                 
                 # Row with left half (metrics + quick tasks) and right half (recently completed)
-                main_row = ui.row().classes("w-full gap-2 mb-2").style("align-items: flex-start;")
-                with main_row:
+                # Create a proper flex row container
+                with ui.element('div').classes("metrics-row").style("display: flex !important; flex-direction: row !important; width: 100% !important; gap: 0.5rem; margin-bottom: 0.5rem; align-items: flex-start;"):
                     # Left half: Productivity Time, Weekly Relief Score, Quick Tasks
-                    left_half = ui.column().classes("w-1/2 gap-2")
+                    left_half = ui.column().classes("half-width-left gap-2")
                     with left_half:
                         # Productivity metrics
                         relief_summary = an.get_relief_summary()
@@ -687,9 +709,9 @@ def build_dashboard(task_manager):
                                                   ).props("dense size=sm")
                     
                     # Right half: Recently Completed (scrollable, aligned to end after quick tasks)
-                    right_half = ui.column().classes("w-1/2")
+                    right_half = ui.column().classes("half-width-right")
                     with right_half:
-                        with ui.card().classes("w-full p-2").style("display: flex; flex-direction: column; align-self: flex-start;"):
+                        with ui.card().classes("w-full p-2").style("display: flex; flex-direction: column; align-self: flex-start; height: 100%;"):
                             ui.label("Recently Completed").classes("font-bold text-sm mb-2")
                             ui.separator()
                             # Scrollable content area - matches height of left half content
