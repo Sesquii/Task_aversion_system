@@ -25,12 +25,16 @@ def build_analytics_page():
     )
 
     metrics = analytics_service.get_dashboard_metrics()
+    relief_summary = analytics_service.get_relief_summary()
     with ui.row().classes("gap-3 flex-wrap mb-4"):
         for title, value in [
             ("Active", metrics['counts']['active']),
             ("Completed 7d", metrics['counts']['completed_7d']),
             ("Avg Relief", metrics['quality']['avg_relief']),
             ("Avg Cognitive", metrics['quality']['avg_cognitive_load']),
+            ("Avg Relief × Duration", relief_summary.get('avg_relief_duration_score', 0.0)),
+            ("Total Relief × Duration", relief_summary.get('total_relief_duration_score', 0.0)),
+            ("Total Relief Score", relief_summary.get('total_relief_score', 0.0)),
         ]:
             with ui.card().classes("p-3 min-w-[150px]"):
                 ui.label(title).classes("text-xs text-gray-500")

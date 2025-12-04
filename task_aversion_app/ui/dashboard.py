@@ -648,40 +648,73 @@ def build_dashboard(task_manager):
                           on_click=lambda: ui.navigate.to('/create_task'),
                           color='primary').classes("w-full text-lg py-3 mb-2")
                 
-                # Top half: Two nested columns (Quick Tasks and Recently Completed)
-                with ui.row().classes("w-full gap-2 mb-2"):
-                    # Left: Quick Tasks
-                    with ui.column().classes("w-1/2 scrollable-section"):
-                        ui.markdown("### Quick Tasks (Last 5)")
+                # Row with left half (metrics + quick tasks) and right half (recently completed)
+                main_row = ui.row().classes("w-full gap-2 mb-2").style("align-items: flex-start;")
+                with main_row:
+                    # Left half: Productivity Time, Weekly Relief Score, Quick Tasks
+                    left_half = ui.column().classes("w-1/2 gap-2")
+                    with left_half:
+                        # Productivity metrics
+                        relief_summary = an.get_relief_summary()
+                        with ui.card().classes("w-full p-3"):
+                            ui.label("Productivity Time (Last 7 Days)").classes("text-xs text-gray-500 mb-1")
+                            hours = relief_summary['productivity_time_minutes'] / 60.0
+                            if hours >= 1:
+                                ui.label(f"{hours:.1f} hours").classes("text-2xl font-bold")
+                                ui.label(f"({relief_summary['productivity_time_minutes']:.0f} min)").classes("text-sm text-gray-400")
+                            else:
+                                ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-2xl font-bold")
                         
-                        recent = tm.get_recent(limit=5) if hasattr(tm, "get_recent") else []
+                        with ui.card().classes("w-full p-3"):
+                            ui.label("Weekly Relief Score").classes("text-xs text-gray-500 mb-1")
+                            weekly_relief = relief_summary.get('weekly_relief_score', 0.0)
+                            ui.label(f"{weekly_relief:.2f}").classes("text-2xl font-bold text-blue-600")
                         
-                        if not recent:
-                            ui.label("No recent tasks").classes("text-xs text-gray-500")
-                        else:
-                            for r in recent:
-                                with ui.row().classes("justify-between items-center mb-1"):
-                                    ui.label(r['name']).classes("text-sm")
-                                    ui.button("INIT", 
-                                              on_click=lambda n=r['name']: init_quick(n)
-                                              ).props("dense size=sm")
+                        # Quick Tasks
+                        with ui.card().classes("w-full p-2"):
+                            ui.markdown("### Quick Tasks (Last 5)")
+                            
+                            recent = tm.get_recent(limit=5) if hasattr(tm, "get_recent") else []
+                            
+                            if not recent:
+                                ui.label("No recent tasks").classes("text-xs text-gray-500")
+                            else:
+                                for r in recent:
+                                    with ui.row().classes("justify-between items-center mb-1"):
+                                        ui.label(r['name']).classes("text-sm")
+                                        ui.button("INIT", 
+                                                  on_click=lambda n=r['name']: init_quick(n)
+                                                  ).props("dense size=sm")
                     
-                    # Right: Recently Completed
-                    with ui.column().classes("w-1/2 scrollable-section"):
-                        build_recently_completed_panel()
+                    # Right half: Recently Completed (scrollable, aligned to end after quick tasks)
+                    right_half = ui.column().classes("w-1/2")
+                    with right_half:
+                        with ui.card().classes("w-full p-2").style("display: flex; flex-direction: column; align-self: flex-start;"):
+                            ui.label("Recently Completed").classes("font-bold text-sm mb-2")
+                            ui.separator()
+                            # Scrollable content area - matches height of left half content
+                            completed_scroll = ui.column().classes("w-full mt-2").style("overflow-y: auto; overflow-x: hidden; max-height: 400px;")
+                            with completed_scroll:
+                                # Get completed tasks and display them
+                                completed = im.list_recent_completed(limit=20) if hasattr(im, "list_recent_completed") else []
+                                
+                                if not completed:
+                                    ui.label("No completed tasks").classes("text-xs text-gray-500")
+                                else:
+                                    for c in completed:
+                                        completed_at = str(c.get('completed_at', ''))
+                                        with ui.row().classes("justify-between items-center mb-1"):
+                                            ui.label(c['task_name']).classes("text-xs")
+                                            if completed_at:
+                                                parts = completed_at.split()
+                                                if len(parts) >= 2:
+                                                    date_part = parts[0]
+                                                    time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                                                    ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                                                else:
+                                                    ui.label(completed_at).classes("text-xs text-gray-400")
                 
-                # Productivity Hours (Last 7 Days) - below recent tasks
-                relief_summary = an.get_relief_summary()
-                with ui.card().classes("w-full p-3 mb-2"):
-                    ui.label("Productivity Time (Last 7 Days)").classes("text-xs text-gray-500 mb-1")
-                    hours = relief_summary['productivity_time_minutes'] / 60.0
-                    if hours >= 1:
-                        ui.label(f"{hours:.1f} hours").classes("text-2xl font-bold")
-                        ui.label(f"({relief_summary['productivity_time_minutes']:.0f} min)").classes("text-sm text-gray-400")
-                    else:
-                        ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-2xl font-bold")
-                
-                # Bottom half: Task Templates (3 columns)
+                # Task Templates section - directly below the row
                 with ui.column().classes("scrollable-section flex-1"):
                     ui.markdown("### Task Templates")
                     
@@ -876,6 +909,24 @@ def build_summary_section():
                 high_eff = relief_summary.get('high_efficiency_count', 0)
                 low_eff = relief_summary.get('low_efficiency_count', 0)
                 ui.label(f"{avg_eff:.1f} High: {high_eff} (low)").classes("text-sm font-bold")
+            
+            # Relief × Duration Score (per task average)
+            with ui.card().classes("p-2 w-full"):
+                ui.label("Avg Relief × Duration").classes("text-xs text-gray-500")
+                avg_rd = relief_summary.get('avg_relief_duration_score', 0.0)
+                ui.label(f"{avg_rd:.2f}").classes("text-sm font-bold text-blue-600")
+            
+            # Total Relief × Duration Score
+            with ui.card().classes("p-2 w-full"):
+                ui.label("Total Relief × Duration").classes("text-xs text-gray-500")
+                total_rd = relief_summary.get('total_relief_duration_score', 0.0)
+                ui.label(f"{total_rd:.2f}").classes("text-sm font-bold text-blue-600")
+            
+            # Total Relief Score (same as total_relief_duration_score, but shown separately for clarity)
+            with ui.card().classes("p-2 w-full"):
+                ui.label("Total Relief Score").classes("text-xs text-gray-500")
+                total_relief = relief_summary.get('total_relief_score', 0.0)
+                ui.label(f"{total_relief:.2f}").classes("text-sm font-bold text-green-600")
 
 
 def build_recently_completed_panel():

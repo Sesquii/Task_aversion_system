@@ -156,6 +156,10 @@ class Analytics:
                 'negative_relief_count': 0,
                 'negative_relief_total': 0.0,
                 'negative_relief_avg': 0.0,
+                'total_relief_duration_score': 0.0,
+                'avg_relief_duration_score': 0.0,
+                'total_relief_score': 0.0,
+                'weekly_relief_score': 0.0,
             }
         
         # Get completed tasks only
@@ -172,6 +176,10 @@ class Analytics:
                 'negative_relief_count': 0,
                 'negative_relief_total': 0.0,
                 'negative_relief_avg': 0.0,
+                'total_relief_duration_score': 0.0,
+                'avg_relief_duration_score': 0.0,
+                'total_relief_score': 0.0,
+                'weekly_relief_score': 0.0,
             }
         
         # Extract expected relief from predicted_dict
@@ -249,6 +257,37 @@ class Analytics:
         # Get efficiency summary
         efficiency_summary = self.get_efficiency_summary()
         
+        # Calculate relief × duration metrics
+        # Use actual relief_score and duration_minutes from completed tasks
+        completed['relief_score_numeric'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+        completed['duration_minutes_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce')
+        
+        # Calculate relief_duration_score per task instance (relief_score × duration_minutes)
+        completed['relief_duration_score'] = (
+            completed['relief_score_numeric'] * completed['duration_minutes_numeric']
+        )
+        
+        # Filter to rows with valid relief_duration_score (both relief and duration must be present)
+        valid_relief_duration = completed[
+            completed['relief_duration_score'].notna() & 
+            (completed['relief_duration_score'] != 0)
+        ]
+        
+        # Calculate totals and averages
+        total_relief_duration_score = valid_relief_duration['relief_duration_score'].sum() if not valid_relief_duration.empty else 0.0
+        avg_relief_duration_score = valid_relief_duration['relief_duration_score'].mean() if not valid_relief_duration.empty else 0.0
+        
+        # Total relief score is the same as total_relief_duration_score (sum of relief × duration)
+        total_relief_score = total_relief_duration_score
+        
+        # Calculate weekly relief score (sum of relief × duration for last 7 days)
+        completed_last_7d['relief_score_numeric'] = pd.to_numeric(completed_last_7d['relief_score'], errors='coerce')
+        completed_last_7d['duration_minutes_numeric'] = pd.to_numeric(completed_last_7d['duration_minutes'], errors='coerce')
+        completed_last_7d['relief_duration_score'] = (
+            completed_last_7d['relief_score_numeric'] * completed_last_7d['duration_minutes_numeric']
+        )
+        weekly_relief_score = completed_last_7d['relief_duration_score'].fillna(0).sum()
+        
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
             'default_relief_points': round(float(default_total), 2),
@@ -262,6 +301,10 @@ class Analytics:
             'avg_efficiency': efficiency_summary.get('avg_efficiency', 0.0),
             'high_efficiency_count': efficiency_summary.get('high_efficiency_count', 0),
             'low_efficiency_count': efficiency_summary.get('low_efficiency_count', 0),
+            'total_relief_duration_score': round(float(total_relief_duration_score), 2),
+            'avg_relief_duration_score': round(float(avg_relief_duration_score), 2),
+            'total_relief_score': round(float(total_relief_score), 2),
+            'weekly_relief_score': round(float(weekly_relief_score), 2),
         }
 
     def calculate_efficiency_score(self, row: pd.Series) -> float:
