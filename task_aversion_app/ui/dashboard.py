@@ -12,6 +12,9 @@ im = InstanceManager()
 em = EmotionManager()
 an = Analytics()
 
+# Module-level variables for dashboard state
+dash_filters = {}
+
 
 # ----------------------------------------------------------
 # Helper Button Handlers
@@ -153,7 +156,7 @@ def refresh_templates():
         col3 = ui.column().classes("w-1/3")
         columns = [col1, col2, col3]
         
-        for idx, t in enumerate(filtered):
+        for idx, t in enumerate(rows):
             col = columns[idx % 3]
             with col:
                 with ui.card().classes("p-2 mb-2 w-full"):
@@ -991,7 +994,9 @@ def build_recently_completed_panel():
 def build_recommendations_section():
     """Build the recommendations section with category filtering."""
     print(f"[Dashboard] Rendering recommendations section")
-    
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
     with ui.column().classes("scrollable-section"):
         ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
         ui.separator()
@@ -1101,8 +1106,10 @@ def refresh_recommendations(target_container, category_value=None):
         category_value = str(category_value) if category_value else "highest_relief"
     
     # Get recommendations for the selected category (top 3)
-    recs = an.recommendations_by_category(category_value, dash_filters, limit=3)
-    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for category '{category_value}', filters {dash_filters}")
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    recs = an.recommendations_by_category(category_value, filters, limit=3)
+    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for category '{category_value}', filters {filters}")
     
     if not recs:
         with target_container:
