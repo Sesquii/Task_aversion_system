@@ -88,25 +88,93 @@ class Analytics:
         df['physical_load'] = pd.to_numeric(df['physical_load'], errors='coerce')
         df['physical_load'] = df['physical_load'].fillna(0.0)  # Default to 0 if missing
 
-        # Calculate stress_level: relief - (cognitive + emotional + physical)
+        # Calculate stress_level: average of all loads (0-100 scale to match relief)
         df['relief_score_numeric'] = pd.to_numeric(df['relief_score'], errors='coerce').fillna(0.0)
         df['cognitive_load_numeric'] = pd.to_numeric(df['cognitive_load'], errors='coerce').fillna(0.0)
         df['emotional_load_numeric'] = pd.to_numeric(df['emotional_load'], errors='coerce').fillna(0.0)
         df['physical_load_numeric'] = pd.to_numeric(df['physical_load'], errors='coerce').fillna(0.0)
         
         df['stress_level'] = (
-            df['relief_score_numeric'] - 
-            (df['cognitive_load_numeric'] + df['emotional_load_numeric'] + df['physical_load_numeric'])
+            (df['cognitive_load_numeric'] + 
+             df['emotional_load_numeric'] + 
+             df['physical_load_numeric']) / 3.0
         )
         
-        # Calculate stress_efficiency: relief / stress_level (with division by zero handling)
+        # Calculate net_wellbeing: relief minus stress (can be positive or negative)
+        # Range: -100 to +100, where 0 = neutral (relief = stress)
+        df['net_wellbeing'] = df['relief_score_numeric'] - df['stress_level']
+        
+        # Calculate net_wellbeing_normalized: normalized to 0-100 scale with 50 as neutral
+        # Range: 0-100, where 50 = neutral (relief = stress), >50 = beneficial, <50 = costly
+        df['net_wellbeing_normalized'] = 50.0 + (df['net_wellbeing'] / 2.0)
+        
+        # Calculate stress_efficiency: relief per unit of stress (with division by zero handling)
         df['stress_efficiency'] = df.apply(
             lambda row: (
                 row['relief_score_numeric'] / row['stress_level'] 
-                if row['stress_level'] != 0 else None
+                if row['stress_level'] > 0 else None
             ),
             axis=1
         )
+        
+        # Auto-calculate behavioral_deviation: difference from planned behaviour
+        # Negative = procrastination, Positive = proactive/overachievement
+        # Range: -10 to +10 (matching schema)
+        def _calculate_behavioral_deviation(row):
+            try:
+                # Get completion percentage
+                actual_dict = row.get('actual_dict', {})
+                predicted_dict = row.get('predicted_dict', {})
+                
+                completion_pct = actual_dict.get('completion_percent', 100)
+                completion_pct = float(completion_pct) if completion_pct else 100.0
+                
+                # Get time data
+                time_actual = actual_dict.get('time_actual_minutes', 0)
+                time_estimate = predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0)
+                time_actual = float(time_actual) if time_actual else 0.0
+                time_estimate = float(time_estimate) if time_estimate else 0.0
+                
+                # Get procrastination score (0-10 scale)
+                procrast_score = pd.to_numeric(row.get('procrastination_score', 0), errors='coerce') or 0.0
+                
+                # Calculate components (each contributes to -10 to +10 range)
+                # 1. Completion component: -5 to +5 based on completion percentage
+                #    100% = 0, <100% = negative, >100% = positive (if possible)
+                completion_component = ((completion_pct - 100.0) / 100.0) * 5.0
+                completion_component = max(-5.0, min(5.0, completion_component))
+                
+                # 2. Time efficiency component: -5 to +5 based on actual vs expected time
+                #    Faster than expected = positive, slower = negative
+                time_component = 0.0
+                if time_estimate > 0 and time_actual > 0:
+                    time_ratio = time_estimate / max(time_actual, 0.1)  # >1 if faster, <1 if slower
+                    # Convert to -5 to +5 scale
+                    # If took exactly expected time: 0
+                    # If took 2x expected: -2.5
+                    # If took 0.5x expected: +2.5
+                    time_component = ((time_ratio - 1.0) * 5.0)
+                    time_component = max(-5.0, min(5.0, time_component))
+                
+                # 3. Procrastination component: -5 to 0 based on delay
+                #    No delay = 0, high delay = -5
+                procrast_component = -(procrast_score / 10.0) * 5.0
+                procrast_component = max(-5.0, min(0.0, procrast_component))
+                
+                # Combine components (weighted average)
+                # Completion and time efficiency are equally important
+                # Procrastination adds negative bias
+                behavioral_deviation = (completion_component * 0.4) + (time_component * 0.4) + (procrast_component * 0.2)
+                
+                # Clamp to -10 to +10 range
+                behavioral_deviation = max(-10.0, min(10.0, behavioral_deviation))
+                
+                return round(behavioral_deviation, 2)
+            except Exception as e:
+                # Return 0 (neutral) if calculation fails
+                return 0.0
+        
+        df['behavioral_deviation'] = df.apply(_calculate_behavioral_deviation, axis=1)
 
         df['status'] = df['status'].replace('', 'active').str.lower()
         return df
@@ -132,7 +200,7 @@ class Analytics:
         if df.empty:
             return {
                 'counts': {'active': 0, 'completed_7d': 0},
-                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_stress_efficiency': None},
+                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None},
                 'time': {'median_duration': 0.0, 'avg_delay': 0.0},
             }
         active = df[df['status'].isin(['active', 'in_progress'])]
@@ -163,6 +231,8 @@ class Analytics:
                 'avg_relief': _avg(df['relief_score']),
                 'avg_cognitive_load': _avg(df['cognitive_load']),
                 'avg_stress_level': _avg(df['stress_level']),
+                'avg_net_wellbeing': _avg(df['net_wellbeing']),
+                'avg_net_wellbeing_normalized': _avg(df['net_wellbeing_normalized']),
                 'avg_stress_efficiency': _avg(df['stress_efficiency']),
             },
             'time': {
@@ -937,25 +1007,41 @@ class Analytics:
             return pd.DataFrame(columns=['completed_at', 'relief_score', 'duration_minutes', 'stress_level', 'stress_efficiency'])
         completed['completed_at'] = pd.to_datetime(completed['completed_at'])
         completed = completed.sort_values('completed_at')
-        return completed[['completed_at', 'relief_score', 'duration_minutes', 'cognitive_load', 'stress_level', 'stress_efficiency']]
+        return completed[['completed_at', 'relief_score', 'duration_minutes', 'cognitive_load', 'stress_level', 'net_wellbeing', 'net_wellbeing_normalized', 'stress_efficiency']]
 
     def attribute_distribution(self) -> pd.DataFrame:
         df = self._load_instances()
         if df.empty:
             return pd.DataFrame(columns=['attribute', 'value'])
         melted_frames = []
+        
+        # Attributes to exclude from distribution chart (not actively tracked)
+        excluded_attributes = {'environmental_effect'}  # Not collected in UI
+        
         for attr in TASK_ATTRIBUTES:
             if attr.dtype != 'numeric':
                 continue
+            if attr.key in excluded_attributes:
+                continue  # Skip excluded attributes
             sub = df[[attr.key]].rename(columns={attr.key: 'value'}).dropna()
             sub['attribute'] = attr.label
             melted_frames.append(sub)
         
-        # Add calculated metrics: stress_level and stress_efficiency
+        # Add calculated metrics: stress_level, net_wellbeing, net_wellbeing_normalized, and stress_efficiency
         if 'stress_level' in df.columns:
             stress_sub = df[['stress_level']].rename(columns={'stress_level': 'value'}).dropna()
             stress_sub['attribute'] = 'Stress Level'
             melted_frames.append(stress_sub)
+        
+        if 'net_wellbeing' in df.columns:
+            wellbeing_sub = df[['net_wellbeing']].rename(columns={'net_wellbeing': 'value'}).dropna()
+            wellbeing_sub['attribute'] = 'Net Wellbeing'
+            melted_frames.append(wellbeing_sub)
+        
+        if 'net_wellbeing_normalized' in df.columns:
+            wellbeing_norm_sub = df[['net_wellbeing_normalized']].rename(columns={'net_wellbeing_normalized': 'value'}).dropna()
+            wellbeing_norm_sub['attribute'] = 'Net Wellbeing (Normalized)'
+            melted_frames.append(wellbeing_norm_sub)
         
         if 'stress_efficiency' in df.columns:
             efficiency_sub = df[['stress_efficiency']].rename(columns={'stress_efficiency': 'value'}).dropna()
