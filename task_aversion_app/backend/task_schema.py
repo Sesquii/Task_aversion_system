@@ -62,12 +62,12 @@ TASK_ATTRIBUTES: List[TaskAttribute] = [
         default="",
     ),
     TaskAttribute(
-        key="behavioral_deviation",
-        label="Behavioral Deviation",
-        description="Difference from planned behaviour (negative = procrastination).",
+        key="behavioral_score",
+        label="Behavioral Score",
+        description="How well you adhered to planned behaviour (0-100, 50 = neutral/perfect adherence).",
         dtype="numeric",
-        range_hint="-10 to +10",
-        default=0,
+        range_hint="0-100",
+        default=50,
     ),
 ]
 

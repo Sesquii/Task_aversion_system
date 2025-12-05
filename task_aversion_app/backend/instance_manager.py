@@ -33,7 +33,7 @@ class InstanceManager:
             'emotional_load': '',
             'environmental_effect': '',
             'skills_improved': '',
-            'behavioral_deviation': '',
+            'behavioral_score': '',
             'net_relief': '',
         }
         for col, default in defaults.items():
@@ -85,7 +85,7 @@ class InstanceManager:
             'emotional_load': '',
             'environmental_effect': '',
             'skills_improved': '',
-            'behavioral_deviation': '',
+            'behavioral_score': '',
             'net_relief': '',
         }
         self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
@@ -250,7 +250,7 @@ class InstanceManager:
             'emotional_load': ['emotional_load', 'actual_emotional', 'expected_emotional_load', 'expected_emotional'],
             'environmental_effect': ['environmental_effect', 'environmental_fit'],
             'skills_improved': ['skills_improved'],
-            'behavioral_deviation': ['behavioral_deviation'],
+            'behavioral_score': ['behavioral_score'],
             'net_relief': ['net_relief'],
         }
         

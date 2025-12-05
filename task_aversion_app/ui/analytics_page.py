@@ -143,7 +143,7 @@ def _render_future_notes():
     ui.markdown(
         """
 **Assumptions & path forward:**
-- Task attributes defined in the schema (duration, relief, cognitive load, emotional load, environmental effect, skills improved, behavioral deviation) are recorded per instance.
+- Task attributes defined in the schema (duration, relief, cognitive load, emotional load, environmental effect, skills improved, behavioral score) are recorded per instance.
 - Until organic data exists we can bootstrap synthetic rows by sampling from historical distributions or heuristics tied to task categories.
 - Manual filters can be replaced by a ranking score learned via scikit-learn or LightFM as soon as per-user preference vectors are available.
 """

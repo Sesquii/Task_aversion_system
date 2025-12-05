@@ -117,10 +117,10 @@ class Analytics:
             axis=1
         )
         
-        # Auto-calculate behavioral_deviation: difference from planned behaviour
-        # Negative = procrastination, Positive = proactive/overachievement
-        # Range: -10 to +10 (matching schema)
-        def _calculate_behavioral_deviation(row):
+        # Auto-calculate behavioral_score: how well you adhered to planned behaviour
+        # 0 = maximum procrastination, 50 = neutral (perfect adherence), 100 = maximum overachievement
+        # Range: 0-100 (50 = neutral)
+        def _calculate_behavioral_score(row):
             try:
                 # Get completion percentage
                 actual_dict = row.get('actual_dict', {})
@@ -138,7 +138,7 @@ class Analytics:
                 # Get procrastination score (0-10 scale)
                 procrast_score = pd.to_numeric(row.get('procrastination_score', 0), errors='coerce') or 0.0
                 
-                # Calculate components (each contributes to -10 to +10 range)
+                # Calculate components (each contributes to -10 to +10 range internally)
                 # 1. Completion component: -5 to +5 based on completion percentage
                 #    100% = 0, <100% = negative, >100% = positive (if possible)
                 completion_component = ((completion_pct - 100.0) / 100.0) * 5.0
@@ -161,7 +161,7 @@ class Analytics:
                 procrast_component = -(procrast_score / 10.0) * 5.0
                 procrast_component = max(-5.0, min(0.0, procrast_component))
                 
-                # Combine components (weighted average)
+                # Combine components (weighted average) - still in -10 to +10 range
                 # Completion and time efficiency are equally important
                 # Procrastination adds negative bias
                 behavioral_deviation = (completion_component * 0.4) + (time_component * 0.4) + (procrast_component * 0.2)
@@ -169,12 +169,20 @@ class Analytics:
                 # Clamp to -10 to +10 range
                 behavioral_deviation = max(-10.0, min(10.0, behavioral_deviation))
                 
-                return round(behavioral_deviation, 2)
+                # Convert to 0-100 scale where 50 = neutral (0 deviation)
+                # Formula: 50 + (deviation * 5)
+                # -10 → 0, 0 → 50, +10 → 100
+                behavioral_score = 50.0 + (behavioral_deviation * 5.0)
+                
+                # Clamp to 0-100 range
+                behavioral_score = max(0.0, min(100.0, behavioral_score))
+                
+                return round(behavioral_score, 2)
             except Exception as e:
-                # Return 0 (neutral) if calculation fails
-                return 0.0
+                # Return 50 (neutral) if calculation fails
+                return 50.0
         
-        df['behavioral_deviation'] = df.apply(_calculate_behavioral_deviation, axis=1)
+        df['behavioral_score'] = df.apply(_calculate_behavioral_score, axis=1)
 
         df['status'] = df['status'].replace('', 'active').str.lower()
         return df
