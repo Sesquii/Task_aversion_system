@@ -32,6 +32,8 @@ def build_analytics_page():
             ("Completed 7d", metrics['counts']['completed_7d']),
             ("Avg Relief", metrics['quality']['avg_relief']),
             ("Avg Cognitive", metrics['quality']['avg_cognitive_load']),
+            ("Avg Stress Level", metrics['quality']['avg_stress_level']),
+            ("Avg Stress Efficiency", metrics['quality']['avg_stress_efficiency'] if metrics['quality']['avg_stress_efficiency'] is not None else "N/A"),
             ("Avg Relief × Duration", relief_summary.get('avg_relief_duration_score', 0.0)),
             ("Total Relief × Duration", relief_summary.get('total_relief_duration_score', 0.0)),
             ("Total Relief Score", relief_summary.get('total_relief_score', 0.0)),

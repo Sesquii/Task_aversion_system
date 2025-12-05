@@ -79,6 +79,35 @@ class Analytics:
                 # Replace NaN with default after numeric conversion
                 df[column] = df[column].fillna(attr.default)
 
+        # Extract physical_load from JSON if not in CSV columns
+        if 'physical_load' not in df.columns:
+            df['physical_load'] = pd.NA
+        df['physical_load'] = df['physical_load'].replace('', pd.NA)
+        df['physical_load'] = df['physical_load'].fillna(df['actual_dict'].apply(lambda r: r.get('actual_physical')))
+        df['physical_load'] = df['physical_load'].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_physical_load')))
+        df['physical_load'] = pd.to_numeric(df['physical_load'], errors='coerce')
+        df['physical_load'] = df['physical_load'].fillna(0.0)  # Default to 0 if missing
+
+        # Calculate stress_level: relief - (cognitive + emotional + physical)
+        df['relief_score_numeric'] = pd.to_numeric(df['relief_score'], errors='coerce').fillna(0.0)
+        df['cognitive_load_numeric'] = pd.to_numeric(df['cognitive_load'], errors='coerce').fillna(0.0)
+        df['emotional_load_numeric'] = pd.to_numeric(df['emotional_load'], errors='coerce').fillna(0.0)
+        df['physical_load_numeric'] = pd.to_numeric(df['physical_load'], errors='coerce').fillna(0.0)
+        
+        df['stress_level'] = (
+            df['relief_score_numeric'] - 
+            (df['cognitive_load_numeric'] + df['emotional_load_numeric'] + df['physical_load_numeric'])
+        )
+        
+        # Calculate stress_efficiency: relief / stress_level (with division by zero handling)
+        df['stress_efficiency'] = df.apply(
+            lambda row: (
+                row['relief_score_numeric'] / row['stress_level'] 
+                if row['stress_level'] != 0 else None
+            ),
+            axis=1
+        )
+
         df['status'] = df['status'].replace('', 'active').str.lower()
         return df
 
@@ -103,7 +132,7 @@ class Analytics:
         if df.empty:
             return {
                 'counts': {'active': 0, 'completed_7d': 0},
-                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0},
+                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_stress_efficiency': None},
                 'time': {'median_duration': 0.0, 'avg_delay': 0.0},
             }
         active = df[df['status'].isin(['active', 'in_progress'])]
@@ -133,6 +162,8 @@ class Analytics:
             'quality': {
                 'avg_relief': _avg(df['relief_score']),
                 'avg_cognitive_load': _avg(df['cognitive_load']),
+                'avg_stress_level': _avg(df['stress_level']),
+                'avg_stress_efficiency': _avg(df['stress_efficiency']),
             },
             'time': {
                 'median_duration': _median(df['duration_minutes']),
@@ -900,13 +931,13 @@ class Analytics:
     def trend_series(self) -> pd.DataFrame:
         df = self._load_instances()
         if df.empty:
-            return pd.DataFrame(columns=['completed_at', 'relief_score', 'duration_minutes'])
+            return pd.DataFrame(columns=['completed_at', 'relief_score', 'duration_minutes', 'stress_level', 'stress_efficiency'])
         completed = df[df['completed_at'].astype(str).str.len() > 0]
         if completed.empty:
-            return pd.DataFrame(columns=['completed_at', 'relief_score', 'duration_minutes'])
+            return pd.DataFrame(columns=['completed_at', 'relief_score', 'duration_minutes', 'stress_level', 'stress_efficiency'])
         completed['completed_at'] = pd.to_datetime(completed['completed_at'])
         completed = completed.sort_values('completed_at')
-        return completed[['completed_at', 'relief_score', 'duration_minutes', 'cognitive_load']]
+        return completed[['completed_at', 'relief_score', 'duration_minutes', 'cognitive_load', 'stress_level', 'stress_efficiency']]
 
     def attribute_distribution(self) -> pd.DataFrame:
         df = self._load_instances()
@@ -919,6 +950,18 @@ class Analytics:
             sub = df[[attr.key]].rename(columns={attr.key: 'value'}).dropna()
             sub['attribute'] = attr.label
             melted_frames.append(sub)
+        
+        # Add calculated metrics: stress_level and stress_efficiency
+        if 'stress_level' in df.columns:
+            stress_sub = df[['stress_level']].rename(columns={'stress_level': 'value'}).dropna()
+            stress_sub['attribute'] = 'Stress Level'
+            melted_frames.append(stress_sub)
+        
+        if 'stress_efficiency' in df.columns:
+            efficiency_sub = df[['stress_efficiency']].rename(columns={'stress_efficiency': 'value'}).dropna()
+            efficiency_sub['attribute'] = 'Stress Efficiency'
+            melted_frames.append(efficiency_sub)
+        
         if not melted_frames:
             return pd.DataFrame(columns=['attribute', 'value'])
         return pd.concat(melted_frames, ignore_index=True)
