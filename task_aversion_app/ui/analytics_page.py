@@ -30,6 +30,8 @@ def build_analytics_page():
         for title, value in [
             ("Active", metrics['counts']['active']),
             ("Completed 7d", metrics['counts']['completed_7d']),
+            ("Completion Rate", f"{metrics['counts']['completion_rate']}%"),
+            ("Time Est. Accuracy", f"{metrics['time']['estimation_accuracy']:.2f}x" if metrics['time']['estimation_accuracy'] > 0 else "N/A"),
             ("Avg Relief", metrics['quality']['avg_relief']),
             ("Avg Cognitive", metrics['quality']['avg_cognitive_load']),
             ("Avg Stress Level", metrics['quality']['avg_stress_level']),
@@ -48,6 +50,8 @@ def build_analytics_page():
         _render_time_chart()
         _render_attribute_box()
 
+    _render_task_rankings()
+    _render_stress_efficiency_leaderboard()
     _render_recommendation_lab()
     _render_future_notes()
 
@@ -86,6 +90,85 @@ def _render_attribute_box():
         )
         fig.update_layout(showlegend=False, margin=dict(l=20, r=20, t=40, b=20))
         ui.plotly(fig)
+
+
+def _render_task_rankings():
+    ui.separator()
+    ui.label("Task Performance Rankings").classes("text-xl font-semibold mt-4")
+    
+    with ui.row().classes("gap-4 flex-wrap mt-2"):
+        # Top tasks by relief
+        top_relief = analytics_service.get_task_performance_ranking('relief', top_n=5)
+        with ui.card().classes("p-3 min-w-[250px]"):
+            ui.label("Top 5 Tasks by Relief").classes("font-bold text-md mb-2")
+            if not top_relief:
+                ui.label("No data yet").classes("text-xs text-gray-500")
+            else:
+                for task in top_relief:
+                    ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
+        
+        # Top tasks by stress efficiency
+        top_efficiency = analytics_service.get_task_performance_ranking('stress_efficiency', top_n=5)
+        with ui.card().classes("p-3 min-w-[250px]"):
+            ui.label("Top 5 Tasks by Stress Efficiency").classes("font-bold text-md mb-2")
+            if not top_efficiency:
+                ui.label("No data yet").classes("text-xs text-gray-500")
+            else:
+                for task in top_efficiency:
+                    ui.label(f"{task['task_name']}: {task['metric_value']:.2f} (n={task['count']})").classes("text-sm")
+        
+        # Top tasks by behavioral score
+        top_behavioral = analytics_service.get_task_performance_ranking('behavioral_score', top_n=5)
+        with ui.card().classes("p-3 min-w-[250px]"):
+            ui.label("Top 5 Tasks by Behavioral Score").classes("font-bold text-md mb-2")
+            if not top_behavioral:
+                ui.label("No data yet").classes("text-xs text-gray-500")
+            else:
+                for task in top_behavioral:
+                    ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
+        
+        # Lowest stress tasks
+        low_stress = analytics_service.get_task_performance_ranking('stress_level', top_n=5)
+        with ui.card().classes("p-3 min-w-[250px]"):
+            ui.label("Top 5 Lowest Stress Tasks").classes("font-bold text-md mb-2")
+            if not low_stress:
+                ui.label("No data yet").classes("text-xs text-gray-500")
+            else:
+                for task in low_stress:
+                    ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
+
+
+def _render_stress_efficiency_leaderboard():
+    ui.separator()
+    ui.label("Stress Efficiency Leaderboard").classes("text-xl font-semibold mt-4")
+    ui.label("Tasks that give you the most relief per unit of stress").classes("text-sm text-gray-500 mb-2")
+    
+    leaderboard = analytics_service.get_stress_efficiency_leaderboard(top_n=10)
+    
+    if not leaderboard:
+        ui.label("No data yet. Complete some tasks to see your stress efficiency leaders.").classes("text-xs text-gray-500")
+        return
+    
+    with ui.card().classes("p-3 w-full"):
+        # Simple table using cards for better compatibility
+        with ui.column().classes("w-full gap-1"):
+            # Header
+            with ui.row().classes("w-full font-bold text-sm border-b pb-1"):
+                ui.label("#").classes("w-8")
+                ui.label("Task").classes("flex-1")
+                ui.label("Efficiency").classes("w-24 text-right")
+                ui.label("Relief").classes("w-20 text-right")
+                ui.label("Stress").classes("w-20 text-right")
+                ui.label("Count").classes("w-16 text-right")
+            # Rows
+            for i, task in enumerate(leaderboard):
+                with ui.row().classes("w-full text-sm py-1 border-b border-gray-100"):
+                    ui.label(str(i+1)).classes("w-8")
+                    ui.label(task['task_name']).classes("flex-1")
+                    ui.label(f"{task['stress_efficiency']:.2f}").classes("w-24 text-right")
+                    ui.label(f"{task['avg_relief']:.1f}").classes("w-20 text-right")
+                    ui.label(f"{task['avg_stress']:.1f}").classes("w-20 text-right")
+                    ui.label(str(task['count'])).classes("w-16 text-right")
 
 
 def _render_recommendation_lab():

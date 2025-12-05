@@ -230,10 +230,36 @@ class Analytics:
             - pd.to_datetime(df['created_at'].replace('', pd.NA))
         ).dt.total_seconds() / 60
 
+        # Calculate completion rate
+        total_created = len(df[df['created_at'].astype(str).str.len() > 0])
+        total_completed = len(completed)
+        completion_rate = (total_completed / total_created * 100.0) if total_created > 0 else 0.0
+        
+        # Calculate time estimation accuracy
+        completed_with_time = completed.copy()
+        completed_with_time['time_actual_num'] = pd.to_numeric(
+            completed_with_time['duration_minutes'], errors='coerce'
+        )
+        completed_with_time['time_estimate_num'] = completed_with_time['predicted_dict'].apply(
+            lambda d: float(d.get('time_estimate_minutes') or d.get('estimate') or 0) if isinstance(d, dict) else 0
+        )
+        # Filter to rows with both actual and estimate > 0
+        valid_time_comparisons = completed_with_time[
+            (completed_with_time['time_actual_num'] > 0) & 
+            (completed_with_time['time_estimate_num'] > 0)
+        ]
+        time_accuracy = 0.0
+        if not valid_time_comparisons.empty:
+            # Calculate ratio: actual / estimate (1.0 = perfect, >1 = took longer, <1 = took less)
+            time_accuracy = _avg(valid_time_comparisons['time_actual_num'] / valid_time_comparisons['time_estimate_num'])
+        
         metrics = {
             'counts': {
                 'active': int(len(active)),
                 'completed_7d': int(len(completed_7d)),
+                'total_created': int(total_created),
+                'total_completed': int(total_completed),
+                'completion_rate': round(completion_rate, 1),
             },
             'quality': {
                 'avg_relief': _avg(df['relief_score']),
@@ -246,6 +272,7 @@ class Analytics:
             'time': {
                 'median_duration': _median(df['duration_minutes']),
                 'avg_delay': _avg(df['delay_minutes']),
+                'estimation_accuracy': round(time_accuracy, 2),
             },
         }
         return metrics
@@ -649,6 +676,122 @@ class Analytics:
         result = {}
         for tid, stats in task_efficiency.items():
             result[tid] = round(float(stats['mean']), 2)
+        
+        return result
+
+    def get_task_performance_ranking(self, metric: str = 'relief', top_n: int = 5) -> List[Dict[str, any]]:
+        """Get top/bottom performing tasks by various metrics.
+        
+        Args:
+            metric: 'relief', 'stress_efficiency', 'behavioral_score', 'stress_level'
+            top_n: Number of top tasks to return
+        
+        Returns:
+            List of dicts with task_id, task_name, metric_value, and count
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return []
+        
+        # Map metric names to columns
+        metric_map = {
+            'relief': 'relief_score',
+            'stress_efficiency': 'stress_efficiency',
+            'behavioral_score': 'behavioral_score',
+            'stress_level': 'stress_level',
+        }
+        
+        if metric not in metric_map:
+            metric = 'relief'
+        
+        column = metric_map[metric]
+        
+        # Group by task_id and calculate averages
+        task_stats = completed.groupby('task_id').agg({
+            column: ['mean', 'count'],
+            'task_name': 'first'
+        }).reset_index()
+        
+        task_stats.columns = ['task_id', 'metric_value', 'count', 'task_name']
+        
+        # Filter out tasks with no valid data
+        task_stats = task_stats[task_stats['metric_value'].notna()]
+        
+        if task_stats.empty:
+            return []
+        
+        # Sort appropriately (higher is better for relief, stress_efficiency, behavioral_score; lower is better for stress_level)
+        ascending = (metric == 'stress_level')
+        task_stats = task_stats.sort_values('metric_value', ascending=ascending)
+        
+        # Get top N
+        top_tasks = task_stats.head(top_n)
+        
+        result = []
+        for _, row in top_tasks.iterrows():
+            result.append({
+                'task_id': row['task_id'],
+                'task_name': row['task_name'],
+                'metric_value': round(float(row['metric_value']), 2),
+                'count': int(row['count']),
+                'metric': metric,
+            })
+        
+        return result
+
+    def get_stress_efficiency_leaderboard(self, top_n: int = 10) -> List[Dict[str, any]]:
+        """Get tasks with highest stress efficiency (relief per unit of stress).
+        
+        Args:
+            top_n: Number of top tasks to return
+        
+        Returns:
+            List of dicts with task_id, task_name, stress_efficiency, avg_relief, avg_stress, and count
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return []
+        
+        # Filter to tasks with valid stress efficiency
+        valid = completed[completed['stress_efficiency'].notna() & (completed['stress_efficiency'] > 0)].copy()
+        
+        if valid.empty:
+            return []
+        
+        # Group by task_id and calculate averages
+        task_stats = valid.groupby('task_id').agg({
+            'stress_efficiency': 'mean',
+            'relief_score': 'mean',
+            'stress_level': 'mean',
+            'task_name': 'first'
+        }).reset_index()
+        
+        task_stats.columns = ['task_id', 'avg_stress_efficiency', 'avg_relief', 'avg_stress', 'task_name']
+        
+        # Add count
+        task_counts = valid.groupby('task_id').size().reset_index(name='count')
+        task_stats = task_stats.merge(task_counts, on='task_id')
+        
+        # Sort by stress efficiency (descending)
+        task_stats = task_stats.sort_values('avg_stress_efficiency', ascending=False)
+        
+        # Get top N
+        top_tasks = task_stats.head(top_n)
+        
+        result = []
+        for _, row in top_tasks.iterrows():
+            result.append({
+                'task_id': row['task_id'],
+                'task_name': row['task_name'],
+                'stress_efficiency': round(float(row['avg_stress_efficiency']), 2),
+                'avg_relief': round(float(row['avg_relief']), 2),
+                'avg_stress': round(float(row['avg_stress']), 2),
+                'count': int(row['count']),
+            })
         
         return result
 
