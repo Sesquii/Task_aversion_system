@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import math
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+from scipy import stats
 
 from .task_schema import TASK_ATTRIBUTES, attribute_defaults
 
@@ -1396,6 +1397,199 @@ class Analytics:
         if not melted_frames:
             return pd.DataFrame(columns=['attribute', 'value'])
         return pd.concat(melted_frames, ignore_index=True)
+
+    # ------------------------------------------------------------------
+    # Trends and correlation helpers
+    # ------------------------------------------------------------------
+    def get_attribute_trends(self, attribute_key: str, aggregation: str = 'mean', days: int = 90) -> Dict[str, any]:
+        """Return daily aggregated values for a single attribute."""
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty or attribute_key not in completed.columns:
+            return {'dates': [], 'values': [], 'aggregation': aggregation}
+
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()]
+        if days:
+            cutoff = datetime.now() - timedelta(days=days)
+            completed = completed[completed['completed_at_dt'] >= cutoff]
+        if completed.empty:
+            return {'dates': [], 'values': [], 'aggregation': aggregation}
+
+        # Convert to numeric where possible
+        completed['value_numeric'] = pd.to_numeric(completed[attribute_key], errors='coerce')
+        # Group by date
+        completed['date'] = completed['completed_at_dt'].dt.date
+
+        agg_map = {
+            'mean': 'mean',
+            'sum': 'sum',
+            'median': 'median',
+            'min': 'min',
+            'max': 'max',
+            'count': 'count',
+            'std': 'std',
+            'var': 'var',
+        }
+        agg = agg_map.get(str(aggregation).lower(), 'mean')
+
+        if agg == 'count':
+            daily = completed.groupby('date')['value_numeric'].count().reset_index(name='value')
+        else:
+            daily = completed.groupby('date')['value_numeric'].agg(agg).reset_index(name='value')
+
+        if daily.empty:
+            return {'dates': [], 'values': [], 'aggregation': aggregation}
+
+        daily = daily.sort_values('date')
+        return {
+            'dates': daily['date'].astype(str).tolist(),
+            'values': daily['value'].fillna(0).astype(float).tolist(),
+            'aggregation': agg,
+        }
+
+    def get_multi_attribute_trends(
+        self,
+        attribute_keys: List[str],
+        aggregation: str = 'mean',
+        days: int = 90,
+        normalize: bool = False,
+    ) -> Dict[str, Dict[str, any]]:
+        """Return trends for multiple attributes; optionally normalize each series (min-max)."""
+        trends = {}
+        attribute_keys = attribute_keys or []
+        for key in attribute_keys:
+            data = self.get_attribute_trends(key, aggregation, days)
+            values = data.get('values') or []
+            if normalize and values:
+                v_min = min(values)
+                v_max = max(values)
+                if v_max != v_min:
+                    normalized = [(v - v_min) / (v_max - v_min) for v in values]
+                else:
+                    normalized = [0.0 for _ in values]
+                data['values'] = normalized
+                data['original_min'] = v_min
+                data['original_max'] = v_max
+            trends[key] = data
+        return trends
+
+    def calculate_correlation(self, attribute_x: str, attribute_y: str, method: str = 'pearson') -> Dict[str, any]:
+        """Calculate correlation between two attributes with metadata for tooltips."""
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty or attribute_x not in completed.columns or attribute_y not in completed.columns:
+            return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': 0}
+
+        completed['x_val'] = pd.to_numeric(completed[attribute_x], errors='coerce')
+        completed['y_val'] = pd.to_numeric(completed[attribute_y], errors='coerce')
+        clean = completed[['x_val', 'y_val']].dropna()
+        if clean.empty or len(clean) < 2:
+            return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': len(clean)}
+
+        method = (method or 'pearson').lower()
+        meta = {
+            'pearson': {
+                'name': 'Pearson Correlation',
+                'description': 'Measures linear relationship strength between two variables. Range -1..1.',
+                'statistician': 'Karl Pearson',
+                'search_term': 'Pearson correlation coefficient',
+            },
+            'spearman': {
+                'name': 'Spearman Rank Correlation',
+                'description': 'Non-parametric measure of monotonic relationship using ranked data. Range -1..1.',
+                'statistician': 'Charles Spearman',
+                'search_term': 'Spearman rank correlation',
+            },
+        }
+
+        correlation = None
+        p_value = None
+        try:
+            if method == 'spearman':
+                correlation, p_value = stats.spearmanr(clean['x_val'], clean['y_val'])
+            else:
+                correlation, p_value = stats.pearsonr(clean['x_val'], clean['y_val'])
+        except Exception:
+            correlation, p_value = None, None
+
+        r_squared = correlation ** 2 if correlation is not None else None
+        return {
+            'correlation': correlation,
+            'p_value': p_value,
+            'r_squared': r_squared,
+            'n': len(clean),
+            'method': method,
+            'meta': meta.get(method, {}),
+        }
+
+    def find_threshold_relationships(self, dependent_var: str, independent_var: str, bins: int = 10) -> Dict[str, any]:
+        """Bin independent variable and summarize dependent averages to surface threshold ranges."""
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty or dependent_var not in completed.columns or independent_var not in completed.columns:
+            return {'bins': [], 'best_max': None, 'best_min': None}
+
+        completed['x_val'] = pd.to_numeric(completed[independent_var], errors='coerce')
+        completed['y_val'] = pd.to_numeric(completed[dependent_var], errors='coerce')
+        clean = completed[['x_val', 'y_val']].dropna()
+        if clean.empty or len(clean) < 2:
+            return {'bins': [], 'best_max': None, 'best_min': None}
+
+        unique_x = clean['x_val'].nunique()
+        bin_count = max(1, min(bins, unique_x))
+
+        try:
+            clean['bin'] = pd.cut(clean['x_val'], bins=bin_count, duplicates='drop')
+        except Exception:
+            return {'bins': [], 'best_max': None, 'best_min': None}
+
+        grouped = clean.groupby('bin')['y_val'].agg(['mean', 'count']).reset_index()
+        if grouped.empty:
+            return {'bins': [], 'best_max': None, 'best_min': None}
+
+        bins_list = []
+        for _, row in grouped.iterrows():
+            interval = row['bin']
+            bins_list.append({
+                'range': str(interval),
+                'dependent_avg': round(float(row['mean']), 4) if pd.notna(row['mean']) else None,
+                'count': int(row['count']),
+            })
+
+        best_max = grouped.loc[grouped['mean'].idxmax()] if grouped['mean'].notna().any() else None
+        best_min = grouped.loc[grouped['mean'].idxmin()] if grouped['mean'].notna().any() else None
+
+        def _format_best(row):
+            if row is None or pd.isna(row['mean']):
+                return None
+            return {
+                'range': str(row['bin']),
+                'dependent_avg': round(float(row['mean']), 4),
+                'count': int(row['count']),
+            }
+
+        return {
+            'bins': bins_list,
+            'best_max': _format_best(best_max),
+            'best_min': _format_best(best_min),
+        }
+
+    def get_scatter_data(self, attribute_x: str, attribute_y: str) -> Dict[str, any]:
+        """Return paired scatter values for two attributes."""
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty or attribute_x not in completed.columns or attribute_y not in completed.columns:
+            return {'x': [], 'y': [], 'n': 0}
+
+        completed['x_val'] = pd.to_numeric(completed[attribute_x], errors='coerce')
+        completed['y_val'] = pd.to_numeric(completed[attribute_y], errors='coerce')
+        clean = completed[['x_val', 'y_val']].dropna()
+        return {
+            'x': clean['x_val'].astype(float).tolist(),
+            'y': clean['y_val'].astype(float).tolist(),
+            'n': len(clean),
+        }
 
     # ------------------------------------------------------------------
     # Priority heuristics (used for legacy views)

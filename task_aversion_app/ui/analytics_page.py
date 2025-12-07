@@ -1,4 +1,5 @@
 from nicegui import ui
+import pandas as pd
 import plotly.express as px
 
 from backend.analytics import (
@@ -9,6 +10,24 @@ from backend.analytics import (
 from backend.task_schema import TASK_ATTRIBUTES
 
 analytics_service = Analytics()
+
+# Attribute options for trends / correlations
+NUMERIC_ATTRIBUTE_OPTIONS = [
+    {'label': attr.label, 'value': attr.key}
+    for attr in TASK_ATTRIBUTES
+    if attr.dtype == 'numeric'
+]
+
+CALCULATED_METRICS = [
+    {'label': 'Stress Level', 'value': 'stress_level'},
+    {'label': 'Net Wellbeing', 'value': 'net_wellbeing'},
+    {'label': 'Net Wellbeing (Normalized)', 'value': 'net_wellbeing_normalized'},
+    {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
+]
+
+ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
+ATTRIBUTE_LABELS = {opt['value']: opt['label'] for opt in ATTRIBUTE_OPTIONS}
+ATTRIBUTE_OPTIONS_DICT = {opt['value']: opt['label'] for opt in ATTRIBUTE_OPTIONS}
 
 
 def register_analytics_page():
@@ -50,6 +69,8 @@ def build_analytics_page():
         _render_time_chart()
         _render_attribute_box()
 
+    _render_trends_section()
+    _render_correlation_explorer()
     _render_task_rankings()
     _render_stress_efficiency_leaderboard()
     _render_recommendation_lab()
@@ -90,6 +111,212 @@ def _render_attribute_box():
         )
         fig.update_layout(showlegend=False, margin=dict(l=20, r=20, t=40, b=20))
         ui.plotly(fig)
+
+
+def _render_trends_section():
+    with ui.card().classes("p-3 w-full"):
+        ui.label("Trends").classes("font-bold text-lg mb-2")
+        ui.label("View daily trends for any attribute or calculated metric.").classes("text-xs text-gray-500 mb-2")
+
+        with ui.row().classes("gap-3 flex-wrap"):
+            attr_select = ui.select(
+                options=ATTRIBUTE_OPTIONS_DICT,
+                value=[next(iter(ATTRIBUTE_OPTIONS_DICT))] if ATTRIBUTE_OPTIONS_DICT else [],
+                label="Attributes",
+                multiple=True,
+            ).props("dense outlined use-chips clearable")
+
+            agg_select = ui.select(
+                options={
+                    'mean': 'Mean',
+                    'sum': 'Sum',
+                    'median': 'Median',
+                    'min': 'Min',
+                    'max': 'Max',
+                    'count': 'Count',
+                },
+                value='mean',
+                label="Aggregation",
+            ).props("dense outlined")
+
+            days_select = ui.select(
+                options={
+                    30: '30 days',
+                    60: '60 days',
+                    90: '90 days',
+                },
+                value=90,
+                label="Range",
+            ).props("dense outlined")
+
+            normalize_switch = ui.switch("Normalize series (0-1)").props("dense")
+
+        chart_area = ui.column().classes("mt-3 w-full")
+
+        def update_chart():
+            chart_area.clear()
+            attrs = attr_select.value or []
+            aggregation = agg_select.value or 'mean'
+            days = int(days_select.value) if days_select.value else 90
+            normalize = bool(normalize_switch.value)
+
+            if not attrs:
+                with chart_area:
+                    ui.label("Select at least one attribute to plot.").classes("text-xs text-gray-500")
+                return
+
+            trends = analytics_service.get_multi_attribute_trends(
+                attribute_keys=attrs,
+                aggregation=aggregation,
+                days=days,
+                normalize=normalize,
+            )
+
+            rows = []
+            for key, data in trends.items():
+                dates = data.get('dates') or []
+                values = data.get('values') or []
+                if not dates or not values:
+                    continue
+                label = ATTRIBUTE_LABELS.get(key, key)
+                for d, v in zip(dates, values):
+                    rows.append({'date': d, 'value': v, 'attribute': label})
+
+            if not rows:
+                with chart_area:
+                    ui.label("No trend data yet for the selected attributes.").classes("text-xs text-gray-500")
+                return
+
+            df = pd.DataFrame(rows)
+            fig = px.line(df, x='date', y='value', color='attribute', markers=True, title="Daily trends")
+            fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), legend_title_text="Attribute")
+            with chart_area:
+                ui.plotly(fig)
+
+        attr_select.on('update:model-value', lambda e: update_chart())
+        agg_select.on('update:model-value', lambda e: update_chart())
+        days_select.on('update:model-value', lambda e: update_chart())
+        normalize_switch.on('update:model-value', lambda e: update_chart())
+
+        update_chart()
+
+
+def _render_correlation_explorer():
+    ui.separator().classes("my-4")
+    with ui.expansion("Developer Tools: Correlation Explorer", icon="science", value=False):
+        with ui.card().classes("p-3 w-full"):
+            ui.label("Explore relationships between attributes.").classes("text-xs text-gray-500 mb-2")
+            with ui.row().classes("gap-3 flex-wrap"):
+                x_select = ui.select(
+                    options=ATTRIBUTE_OPTIONS_DICT,
+                    value=next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None,
+                    label="Independent (X)",
+                ).props("dense outlined clearable")
+                y_select = ui.select(
+                    options=ATTRIBUTE_OPTIONS_DICT,
+                    value=next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None,
+                    label="Dependent (Y)",
+                ).props("dense outlined clearable")
+                method_select = ui.select(
+                    options={
+                        'pearson': 'Pearson',
+                        'spearman': 'Spearman',
+                    },
+                    value='pearson',
+                    label="Method",
+                ).props("dense outlined")
+                ui.label("Bins for threshold analysis").classes("text-xs text-gray-500 mt-1")
+                bin_slider = ui.slider(
+                    min=3,
+                    max=15,
+                    value=8,
+                    step=1,
+                ).props("dense")
+
+            chart_area = ui.column().classes("mt-3 w-full gap-3")
+
+            def render_correlation():
+                chart_area.clear()
+                x_attr = x_select.value
+                y_attr = y_select.value
+                method = method_select.value or 'pearson'
+                bins = int(bin_slider.value) if bin_slider.value else 8
+
+                if not x_attr or not y_attr:
+                    with chart_area:
+                        ui.label("Select both X and Y attributes.").classes("text-xs text-gray-500")
+                    return
+                if x_attr == y_attr:
+                    with chart_area:
+                        ui.label("Choose two different attributes to compare.").classes("text-xs text-gray-500")
+                    return
+
+                scatter = analytics_service.get_scatter_data(x_attr, y_attr)
+                stats = analytics_service.calculate_correlation(x_attr, y_attr, method=method)
+                thresholds = analytics_service.find_threshold_relationships(
+                    dependent_var=y_attr,
+                    independent_var=x_attr,
+                    bins=bins,
+                )
+
+                label_x = ATTRIBUTE_LABELS.get(x_attr, x_attr)
+                label_y = ATTRIBUTE_LABELS.get(y_attr, y_attr)
+
+                # Scatter plot
+                with chart_area:
+                    if scatter.get('n', 0) == 0:
+                        ui.label("Not enough data to plot a scatter yet.").classes("text-xs text-gray-500")
+                    else:
+                        scatter_df = pd.DataFrame({'x': scatter['x'], 'y': scatter['y']})
+                        fig = px.scatter(
+                            scatter_df,
+                            x='x',
+                            y='y',
+                            labels={'x': label_x, 'y': label_y},
+                            title=f"{label_x} vs {label_y}",
+                        )
+                        fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+                        ui.plotly(fig)
+
+                # Correlation summary
+                with chart_area:
+                    corr = stats.get('correlation')
+                    p_val = stats.get('p_value')
+                    r_sq = stats.get('r_squared')
+                    n = stats.get('n')
+                    meta = stats.get('meta') or {}
+                    summary_lines = [
+                        f"Method: {meta.get('name', method.title())}",
+                        f"r: {corr:.3f}" if corr is not None else "r: N/A",
+                        f"p-value: {p_val:.4f}" if p_val is not None else "p-value: N/A",
+                        f"r²: {r_sq:.3f}" if r_sq is not None else "r²: N/A",
+                        f"Samples: {n}",
+                    ]
+                    ui.label("Correlation summary").classes("font-semibold text-sm mt-2")
+                    ui.markdown("\n".join([f"- {line}" for line in summary_lines])).classes("text-xs")
+
+                # Threshold analysis
+                with chart_area:
+                    bins_data = thresholds.get('bins') or []
+                    if not bins_data:
+                        ui.label("No threshold insights yet.").classes("text-xs text-gray-500")
+                    else:
+                        ui.label("Threshold analysis (Y avg per X bin)").classes("font-semibold text-sm mt-2")
+                        for item in bins_data:
+                            ui.label(f"{item['range']}: {item['dependent_avg']} (n={item['count']})").classes("text-xs")
+                        best_max = thresholds.get('best_max')
+                        best_min = thresholds.get('best_min')
+                        if best_max:
+                            ui.label(f"Highest average: {best_max['range']} → {best_max['dependent_avg']} (n={best_max['count']})").classes("text-xs text-green-600")
+                        if best_min:
+                            ui.label(f"Lowest average: {best_min['range']} → {best_min['dependent_avg']} (n={best_min['count']})").classes("text-xs text-red-600")
+
+            x_select.on('update:model-value', lambda e: render_correlation())
+            y_select.on('update:model-value', lambda e: render_correlation())
+            method_select.on('update:model-value', lambda e: render_correlation())
+            bin_slider.on('update:model-value', lambda e: render_correlation())
+
+            render_correlation()
 
 
 def _render_task_rankings():
