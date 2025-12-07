@@ -562,6 +562,7 @@ def build_dashboard(task_manager):
         /* Three-column layout */
         .dashboard-layout {
             display: flex;
+            flex-wrap: nowrap;
             width: 100%;
             height: calc(100vh - 180px);
             gap: 1rem;
@@ -573,6 +574,7 @@ def build_dashboard(task_manager):
         .dashboard-column {
             display: flex;
             flex-direction: column;
+            min-width: 0;
             overflow: hidden;
             box-sizing: border-box;
         }
