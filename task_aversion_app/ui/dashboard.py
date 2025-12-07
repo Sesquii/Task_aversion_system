@@ -2,6 +2,8 @@
 from nicegui import ui
 import json
 import html
+import plotly.express as px
+import plotly.graph_objects as go
 from backend.task_manager import TaskManager
 from backend.instance_manager import InstanceManager
 from backend.emotion_manager import EmotionManager
@@ -375,6 +377,161 @@ def format_colored_tooltip(predicted_data, task_id):
 
 
 # ----------------------------------------------------------
+# HELPER FUNCTIONS FOR METRIC TOOLTIPS
+# ----------------------------------------------------------
+
+def create_metric_tooltip_chart(dates, values, current_daily_avg, weekly_avg, three_month_avg, metric_name, current_line_color='#22c55e'):
+    """Create a Plotly line chart for metric tooltip with reference lines.
+    
+    Args:
+        dates: List of date strings
+        values: List of daily values (already averaged per day)
+        current_daily_avg: Daily average for current week (7d total / 7)
+        weekly_avg: Weekly average (average of daily values over last 7 days)
+        three_month_avg: 3-month average (average of all daily values)
+        metric_name: Name of the metric
+        current_line_color: Color for the current value line (green/yellow/red based on performance)
+    """
+    if not dates or not values or len(dates) == 0:
+        return None
+    
+    # Create a line chart
+    fig = go.Figure()
+    
+    # Add historical data line (daily values)
+    fig.add_trace(go.Scatter(
+        x=dates,
+        y=values,
+        mode='lines',
+        name='Daily',
+        line=dict(color='#3b82f6', width=2),
+        hovertemplate='%{x}<br>%{y:.2f}<extra></extra>'
+    ))
+    
+    # Check for overlapping lines (within 0.1% difference to account for floating point precision)
+    def values_overlap(val1, val2, tolerance=0.001):
+        """Check if two values are effectively the same (overlapping)."""
+        if val1 == 0 and val2 == 0:
+            return True
+        if val1 == 0 or val2 == 0:
+            return False
+        try:
+            max_val = max(abs(val1), abs(val2))
+            if max_val == 0:
+                return True
+            return abs(val1 - val2) / max_val < tolerance
+        except (ZeroDivisionError, TypeError):
+            return False
+    
+    # Determine which lines to show (hide overlapping ones, prioritize current value line)
+    show_current = current_daily_avg > 0
+    show_weekly = weekly_avg > 0 and not values_overlap(weekly_avg, current_daily_avg)
+    show_three_month = three_month_avg > 0 and not values_overlap(three_month_avg, current_daily_avg)
+    
+    # Also check if weekly and 3-month overlap (but not with current)
+    if show_weekly and show_three_month and values_overlap(weekly_avg, three_month_avg):
+        # If they overlap, show the one closer to current, or just show weekly
+        show_three_month = False
+    
+    # Add current daily average line (dashed, color based on performance)
+    # This line always takes priority if it overlaps with others
+    if show_current:
+        fig.add_trace(go.Scatter(
+            x=[dates[0], dates[-1]] if len(dates) > 1 else dates,
+            y=[current_daily_avg, current_daily_avg],
+            mode='lines',
+            name='Current Daily Avg',
+            line=dict(color=current_line_color, width=2, dash='dash'),
+            hovertemplate=f'Current Daily Avg: {current_daily_avg:.2f}<extra></extra>'
+        ))
+    
+    # Add weekly average line (dashed black) - only if not overlapping with current
+    if show_weekly:
+        fig.add_trace(go.Scatter(
+            x=[dates[0], dates[-1]] if len(dates) > 1 else dates,
+            y=[weekly_avg, weekly_avg],
+            mode='lines',
+            name='Weekly Avg',
+            line=dict(color='#000000', width=2, dash='dash'),
+            hovertemplate=f'Weekly Avg: {weekly_avg:.2f}<extra></extra>'
+        ))
+    
+    # Add 3-month average line (dashed grey) - only if not overlapping with current or weekly
+    if show_three_month:
+        fig.add_trace(go.Scatter(
+            x=[dates[0], dates[-1]] if len(dates) > 1 else dates,
+            y=[three_month_avg, three_month_avg],
+            mode='lines',
+            name='3-Month Avg',
+            line=dict(color='#6b7280', width=2, dash='dash'),
+            hovertemplate=f'3-Month Avg: {three_month_avg:.2f}<extra></extra>'
+        ))
+    
+    # Calculate min and max for y-axis (include all values and reference lines)
+    all_y_values = values.copy()
+    if current_daily_avg > 0:
+        all_y_values.append(current_daily_avg)
+    if weekly_avg > 0:
+        all_y_values.append(weekly_avg)
+    if three_month_avg > 0:
+        all_y_values.append(three_month_avg)
+    
+    y_min = min(all_y_values) if all_y_values else 0
+    y_max = max(all_y_values) if all_y_values else 1
+    
+    # Add small padding (5% of range)
+    y_range = y_max - y_min
+    if y_range > 0:
+        y_padding = y_range * 0.05
+        y_min = max(0, y_min - y_padding)  # Don't go below 0
+        y_max = y_max + y_padding
+    else:
+        # If all values are the same, add some padding
+        y_min = max(0, y_min - y_min * 0.1)
+        y_max = y_max + y_max * 0.1
+    
+    fig.update_layout(
+        title=f'{metric_name} Over Time (Last 90 Days)',
+        xaxis_title='Date',
+        yaxis_title=metric_name,
+        height=300,
+        margin=dict(l=50, r=20, t=50, b=50),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode='x unified',
+        yaxis=dict(range=[y_min, y_max]),
+    )
+    
+    return fig
+
+
+def get_metric_bg_class(current_value, average_value):
+    """Get background color class based on comparison to average.
+    
+    Returns:
+        Tuple of (class_name, color_hex) where color_hex is for the chart line
+    """
+    if average_value == 0:
+        return ("", "#6b7280")  # No data, default grey
+    
+    # Calculate percentage difference
+    if average_value > 0:
+        percent_diff = ((current_value - average_value) / average_value) * 100
+    else:
+        percent_diff = 0
+    
+    # Green if 10% or more above average
+    if percent_diff >= 10:
+        return ("metric-bg-green", "#22c55e")  # Green
+    # Red if 10% or more below average
+    elif percent_diff <= -10:
+        return ("metric-bg-red", "#ef4444")  # Red
+    # Yellow for average (within 10%)
+    else:
+        return ("metric-bg-yellow", "#eab308")  # Yellow
+
+
+# ----------------------------------------------------------
 # MAIN DASHBOARD
 # ----------------------------------------------------------
 
@@ -559,6 +716,51 @@ def build_dashboard(task_manager):
             width: 100% !important;
             gap: 0.5rem;
         }
+        
+        /* Metric tooltip styling */
+        .metric-tooltip {
+            position: fixed;
+            background: white;
+            color: #1f2937;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            z-index: 10000;
+            min-width: 300px;
+            max-width: 500px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            border: 1px solid #e5e7eb;
+        }
+        
+        .metric-tooltip.visible {
+            opacity: 1;
+        }
+        
+        .metric-card-hover {
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+        
+        .metric-card-hover:hover {
+            transform: scale(1.02);
+        }
+        
+        /* Color coding for metrics */
+        .metric-bg-green {
+            background-color: #d1fae5 !important;
+        }
+        
+        .metric-bg-yellow {
+            background-color: #fef3c7 !important;
+        }
+        
+        .metric-bg-red {
+            background-color: #fee2e2 !important;
+        }
     </style>
     <script>
         // Handle zoom-responsive behavior
@@ -640,6 +842,80 @@ def build_dashboard(task_manager):
         // Re-initialize after a short delay to catch dynamically added elements
         setTimeout(initTaskTooltips, 100);
     </script>
+    <script>
+        function initMetricTooltips() {
+            document.querySelectorAll('.metric-card-hover').forEach(function(card) {
+                const tooltipId = card.getAttribute('data-tooltip-id');
+                if (!tooltipId) return;
+                
+                const tooltip = document.getElementById('tooltip-' + tooltipId);
+                if (!tooltip) return;
+                
+                let hoverTimeout;
+                
+                card.addEventListener('mouseenter', function() {
+                    hoverTimeout = setTimeout(function() {
+                        tooltip.classList.add('visible');
+                        positionMetricTooltip(card, tooltip);
+                    }, 300);
+                });
+                
+                card.addEventListener('mouseleave', function() {
+                    clearTimeout(hoverTimeout);
+                    tooltip.classList.remove('visible');
+                });
+                
+                card.addEventListener('mousemove', function(e) {
+                    if (tooltip.classList.contains('visible')) {
+                        positionMetricTooltip(card, tooltip, e);
+                    }
+                });
+            });
+        }
+        
+        function positionMetricTooltip(card, tooltip, event) {
+            const rect = card.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+            
+            let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+            // Always position below the cursor/card
+            let top = event ? event.clientY + 10 : rect.bottom + 10;
+            
+            if (event) {
+                left = event.clientX - tooltipRect.width / 2;
+            }
+            
+            // Keep tooltip within viewport horizontally
+            if (left < 10) left = 10;
+            if (left + tooltipRect.width > window.innerWidth - 10) {
+                left = window.innerWidth - tooltipRect.width - 10;
+            }
+            
+            // Always keep tooltip below cursor, but adjust if it would go off bottom
+            if (top + tooltipRect.height > window.innerHeight - 10) {
+                // If it would go off bottom, position above cursor instead
+                top = (event ? event.clientY : rect.top) - tooltipRect.height - 10;
+                // But if that would go off top, just position at bottom of viewport
+                if (top < 10) {
+                    top = window.innerHeight - tooltipRect.height - 10;
+                }
+            }
+            
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+            tooltip.style.pointerEvents = 'none'; // Prevent tooltip from interfering with mouse
+        }
+        
+        // Initialize on page load and after DOM updates
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initMetricTooltips);
+        } else {
+            initMetricTooltips();
+        }
+        
+        // Re-initialize after a short delay to catch dynamically added elements
+        setTimeout(initMetricTooltips, 100);
+    </script>
     """)
 
     # Main dashboard container
@@ -675,19 +951,149 @@ def build_dashboard(task_manager):
                     with left_half:
                         # Productivity metrics
                         relief_summary = an.get_relief_summary()
-                        with ui.card().classes("w-full p-3"):
-                            ui.label("Productivity Time (Last 7 Days)").classes("text-xs text-gray-500 mb-1")
-                            hours = relief_summary['productivity_time_minutes'] / 60.0
+                        
+                        # Get historical data for weekly hours
+                        hours_history = an.get_weekly_hours_history()
+                        hours = relief_summary['productivity_time_minutes'] / 60.0
+                        # Use weekly average * 7 for color coding (compare weekly total to average weekly total)
+                        avg_weekly_total = hours_history.get('weekly_average', 0.0) * 7.0
+                        hours_bg_class, hours_line_color = get_metric_bg_class(hours, avg_weekly_total)
+                        
+                        # Weekly Hours Card with hover tooltip
+                        hours_card = ui.card().classes(f"w-full p-3 metric-card-hover {hours_bg_class}").props('data-tooltip-id="weekly-hours"')
+                        with hours_card:
+                            ui.label("Weekly Productivity Time").classes("text-xs text-gray-500 mb-1")
                             if hours >= 1:
                                 ui.label(f"{hours:.1f} hours").classes("text-2xl font-bold")
                                 ui.label(f"({relief_summary['productivity_time_minutes']:.0f} min)").classes("text-sm text-gray-400")
                             else:
                                 ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-2xl font-bold")
                         
-                        with ui.card().classes("w-full p-3"):
+                        # Get historical data for weekly relief
+                        relief_history = an.get_weekly_relief_history()
+                        weekly_relief = relief_summary.get('weekly_relief_score', 0.0)
+                        # Use weekly average * 7 for color coding (compare weekly total to average weekly total)
+                        avg_weekly_total = relief_history.get('weekly_average', 0.0) * 7.0
+                        relief_bg_class, relief_line_color = get_metric_bg_class(weekly_relief, avg_weekly_total)
+                        
+                        # Weekly Relief Card with hover tooltip
+                        relief_card = ui.card().classes(f"w-full p-3 metric-card-hover {relief_bg_class}").props('data-tooltip-id="weekly-relief"')
+                        with relief_card:
                             ui.label("Weekly Relief Score").classes("text-xs text-gray-500 mb-1")
-                            weekly_relief = relief_summary.get('weekly_relief_score', 0.0)
                             ui.label(f"{weekly_relief:.2f}").classes("text-2xl font-bold text-blue-600")
+                        
+                        # Create tooltip containers and render Plotly charts
+                        hours_tooltip_id = 'tooltip-weekly-hours'
+                        relief_tooltip_id = 'tooltip-weekly-relief'
+                        
+                        # Create tooltip HTML containers first
+                        ui.add_body_html(f'<div id="{hours_tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"></div>')
+                        ui.add_body_html(f'<div id="{relief_tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"></div>')
+                        
+                        # Render charts using NiceGUI plotly in temporary containers, then move to tooltips
+                        if hours_history.get('dates') and hours_history.get('hours') and hours_history.get('has_sufficient_data', False):
+                            # Calculate current daily average (weekly total / 7)
+                            current_daily_avg = hours_history.get('current_value', 0.0) / 7.0 if hours_history.get('current_value', 0.0) > 0 else 0.0
+                            hours_fig = create_metric_tooltip_chart(
+                                hours_history['dates'],
+                                hours_history['hours'],  # Already daily values
+                                current_daily_avg,
+                                hours_history.get('weekly_average', 0.0),
+                                hours_history.get('three_month_average', 0.0),
+                                'Daily Hours',
+                                hours_line_color  # Pass the color based on performance
+                            )
+                            if hours_fig:
+                                # Create temporary container for chart
+                                with ui.element('div').props(f'id="{hours_tooltip_id}-temp"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
+                                    ui.plotly(hours_fig)
+                                # Move chart to tooltip
+                                ui.run_javascript(f'''
+                                    function moveHoursChart() {{
+                                        const temp = document.getElementById('{hours_tooltip_id}-temp');
+                                        const tooltip = document.getElementById('{hours_tooltip_id}');
+                                        if (temp && tooltip) {{
+                                            const plotlyDiv = temp.querySelector('.plotly');
+                                            if (plotlyDiv && plotlyDiv.offsetHeight > 0) {{
+                                                tooltip.innerHTML = '';
+                                                tooltip.appendChild(plotlyDiv);
+                                                temp.remove();
+                                                return true;
+                                            }}
+                                        }}
+                                        return false;
+                                    }}
+                                    
+                                    // Try multiple times with increasing delays
+                                    setTimeout(function() {{
+                                        if (!moveHoursChart()) {{
+                                            setTimeout(function() {{
+                                                if (!moveHoursChart()) {{
+                                                    setTimeout(moveHoursChart, 300);
+                                                }}
+                                            }}, 200);
+                                        }}
+                                    }}, 300);
+                                ''')
+                        elif hours_history.get('dates') and hours_history.get('hours'):
+                            # Not enough data
+                            ui.run_javascript(f'''
+                                const tooltip = document.getElementById('{hours_tooltip_id}');
+                                if (tooltip) {{
+                                    tooltip.innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">Needs more data<br>(At least 2 weeks required)</div>';
+                                }}
+                            ''')
+                        
+                        if relief_history.get('dates') and relief_history.get('relief_points') and relief_history.get('has_sufficient_data', False):
+                            # Calculate current daily average (weekly total / 7)
+                            current_daily_avg = relief_history.get('current_value', 0.0) / 7.0 if relief_history.get('current_value', 0.0) > 0 else 0.0
+                            relief_fig = create_metric_tooltip_chart(
+                                relief_history['dates'],
+                                relief_history['relief_points'],  # Already daily values
+                                current_daily_avg,
+                                relief_history.get('weekly_average', 0.0),
+                                relief_history.get('three_month_average', 0.0),
+                                'Daily Relief Points',
+                                relief_line_color  # Pass the color based on performance
+                            )
+                            if relief_fig:
+                                with ui.element('div').props(f'id="{relief_tooltip_id}-temp"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
+                                    ui.plotly(relief_fig)
+                                ui.run_javascript(f'''
+                                    function moveReliefChart() {{
+                                        const temp = document.getElementById('{relief_tooltip_id}-temp');
+                                        const tooltip = document.getElementById('{relief_tooltip_id}');
+                                        if (temp && tooltip) {{
+                                            const plotlyDiv = temp.querySelector('.plotly');
+                                            if (plotlyDiv && plotlyDiv.offsetHeight > 0) {{
+                                                tooltip.innerHTML = '';
+                                                tooltip.appendChild(plotlyDiv);
+                                                temp.remove();
+                                                return true;
+                                            }}
+                                        }}
+                                        return false;
+                                    }}
+                                    
+                                    // Try multiple times with increasing delays
+                                    setTimeout(function() {{
+                                        if (!moveReliefChart()) {{
+                                            setTimeout(function() {{
+                                                if (!moveReliefChart()) {{
+                                                    setTimeout(moveReliefChart, 300);
+                                                }}
+                                            }}, 200);
+                                        }}
+                                    }}, 300);
+                                ''')
+                        elif relief_history.get('dates') and relief_history.get('relief_points'):
+                            # Not enough data
+                            ui.run_javascript(f'''
+                                const tooltip = document.getElementById('{relief_tooltip_id}');
+                                if (tooltip) {{
+                                    tooltip.innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">Needs more data<br>(At least 2 weeks required)</div>';
+                                }}
+                            ''')
                         
                         # Quick Tasks
                         with ui.card().classes("w-full p-2"):

@@ -443,6 +443,200 @@ class Analytics:
             'weekly_relief_score': round(float(weekly_relief_score), 2),
         }
 
+    def get_weekly_hours_history(self) -> Dict[str, any]:
+        """Get historical daily productivity hours data for trend analysis (last 90 days).
+        
+        Returns:
+            Dict with 'dates' (list of date strings), 'hours' (list of hours per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'hours': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Get actual time from completed tasks
+        def _get_actual_time(row):
+            try:
+                actual_dict = row['actual_dict']
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed['time_actual'] = completed.apply(_get_actual_time, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows with time and date
+        valid = completed[completed['time_actual'].notna() & completed['completed_at_dt'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'hours': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last 90 days
+        from datetime import timedelta
+        ninety_days_ago = datetime.now() - timedelta(days=90)
+        valid = valid[valid['completed_at_dt'] >= ninety_days_ago].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'hours': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by day - only include days with data
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_data = valid.groupby('date')['time_actual'].sum().reset_index()
+        daily_data['hours'] = daily_data['time_actual'] / 60.0
+        daily_data = daily_data.sort_values('date')
+        
+        # Filter to last 90 days (but keep only days with data)
+        daily_data = daily_data[daily_data['date'] >= ninety_days_ago.date()].copy()
+        
+        # Format dates as strings
+        daily_data['date_str'] = daily_data['date'].astype(str)
+        
+        # Get current value (last 7 days total) - this stays as weekly total for the main card
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        current_week_data = valid[valid['completed_at_dt'] >= seven_days_ago]
+        current_value = current_week_data['time_actual'].sum() / 60.0 if not current_week_data.empty else 0.0
+        
+        # Calculate weekly average (average of daily hours over last 7 days with data)
+        # This is the average daily value, used for chart comparison
+        last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
+        weekly_average = last_7_days['hours'].mean() if not last_7_days.empty else 0.0
+        
+        # Calculate 3-month average (average of daily hours over all days with data)
+        three_month_average = daily_data['hours'].mean() if not daily_data.empty else 0.0
+        
+        # Check if we have at least 2 weeks of data
+        days_with_data = len(daily_data)
+        has_sufficient_data = days_with_data >= 14
+        
+        return {
+            'dates': daily_data['date_str'].tolist(),
+            'hours': daily_data['hours'].tolist(),
+            'current_value': round(float(current_value), 2),
+            'weekly_average': round(float(weekly_average), 2),
+            'three_month_average': round(float(three_month_average), 2),
+            'has_sufficient_data': has_sufficient_data,
+            'days_with_data': days_with_data,
+        }
+
+    def get_weekly_relief_history(self) -> Dict[str, any]:
+        """Get historical daily relief points data for trend analysis (last 90 days).
+        
+        Returns:
+            Dict with 'dates' (list of date strings), 'relief_points' (list of relief points per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'relief_points': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate relief × duration score for each task
+        completed['relief_score_numeric'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+        completed['duration_minutes_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce')
+        completed['relief_duration_score'] = (
+            completed['relief_score_numeric'] * completed['duration_minutes_numeric']
+        )
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows with relief score and date
+        valid = completed[
+            completed['relief_duration_score'].notna() & 
+            (completed['relief_duration_score'] != 0) &
+            completed['completed_at_dt'].notna()
+        ].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'relief_points': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last 90 days
+        from datetime import timedelta
+        ninety_days_ago = datetime.now() - timedelta(days=90)
+        valid = valid[valid['completed_at_dt'] >= ninety_days_ago].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'relief_points': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by day - only include days with data
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_data = valid.groupby('date')['relief_duration_score'].sum().reset_index()
+        daily_data['relief_points'] = daily_data['relief_duration_score']
+        daily_data = daily_data.sort_values('date')
+        
+        # Filter to last 90 days (but keep only days with data)
+        daily_data = daily_data[daily_data['date'] >= ninety_days_ago.date()].copy()
+        
+        # Format dates as strings
+        daily_data['date_str'] = daily_data['date'].astype(str)
+        
+        # Get current value (last 7 days total) - this stays as weekly total for the main card
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        current_week_data = valid[valid['completed_at_dt'] >= seven_days_ago]
+        current_value = current_week_data['relief_duration_score'].sum() if not current_week_data.empty else 0.0
+        
+        # Calculate weekly average (average of daily relief points over last 7 days with data)
+        # This is the average daily value, used for chart comparison
+        last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
+        weekly_average = last_7_days['relief_points'].mean() if not last_7_days.empty else 0.0
+        
+        # Calculate 3-month average (average of daily relief points over all days with data)
+        three_month_average = daily_data['relief_points'].mean() if not daily_data.empty else 0.0
+        
+        # Check if we have at least 2 weeks of data
+        days_with_data = len(daily_data)
+        has_sufficient_data = days_with_data >= 14
+        
+        return {
+            'dates': daily_data['date_str'].tolist(),
+            'relief_points': daily_data['relief_points'].tolist(),
+            'current_value': round(float(current_value), 2),
+            'weekly_average': round(float(weekly_average), 2),
+            'three_month_average': round(float(three_month_average), 2),
+            'has_sufficient_data': has_sufficient_data,
+            'days_with_data': days_with_data,
+        }
+
     def calculate_efficiency_score(self, row: pd.Series) -> float:
         """Calculate productivity efficiency score for a task instance.
         
