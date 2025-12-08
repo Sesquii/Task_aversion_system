@@ -1148,15 +1148,6 @@ def build_dashboard(task_manager):
                 with ui.column().classes("scrollable-section flex-1"):
                     ui.markdown("### Task Templates")
                     
-                    # Search bar
-                    global search
-                    search = ui.input(
-                        label="Search task templates",
-                        placeholder="Type to filter...",
-                    ).classes("w-full mb-2")
-                    
-                    search.on('input', lambda _: refresh_templates())
-                    
                     global template_col
                     template_col = ui.row().classes('w-full gap-2')
                     refresh_templates()
