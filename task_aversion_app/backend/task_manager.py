@@ -105,11 +105,60 @@ class TaskManager:
 
 
     def get_recent(self, limit=5):
+        """Return tasks sorted by most recently completed instance.
+
+        Falls back to task creation time if no completed instances exist.
+        """
         print(f"[TaskManager] get_recent called (limit={limit})")
 
+        # Try to rank tasks by most recent completion
+        try:
+            from backend.instance_manager import InstanceManager
+
+            im = InstanceManager()
+            im._reload()  # ensure fresh data
+            inst_df = im.df.copy()
+
+            # Keep only rows with a completion timestamp
+            inst_df = inst_df[inst_df["completed_at"].astype(str).str.strip() != ""]
+            if not inst_df.empty:
+                inst_df["completed_at_ts"] = pd.to_datetime(
+                    inst_df["completed_at"], errors="coerce"
+                )
+                inst_df = inst_df.dropna(subset=["completed_at_ts"])
+
+                # Latest completion per task_id
+                inst_df = (
+                    inst_df.sort_values("completed_at_ts", ascending=False)
+                    .drop_duplicates(subset=["task_id"], keep="first")
+                )
+
+                # Join with task metadata for stable names/descriptions.
+                # Use an inner merge so we only return tasks that still exist.
+                tasks_df = self.get_all()
+                merged = inst_df.merge(
+                    tasks_df,
+                    how="inner",
+                    on="task_id",
+                    suffixes=("", "_task"),
+                )
+
+                if not merged.empty:
+                    # Prefer the canonical task name from tasks.csv, fallback to instance name
+                    merged["name"] = merged["name"].fillna(merged["task_name"])
+
+                    # Limit and return dicts
+                    return (
+                        merged.sort_values("completed_at_ts", ascending=False)
+                        .head(limit)
+                        .to_dict(orient="records")
+                    )
+        except Exception as e:
+            print(f"[TaskManager] get_recent fell back to created_at due to: {e}")
+
+        # Fallback: use creation time if no completions available
         df = self.get_all()
         if df is None or df.empty:
             return []
-
         df = df.sort_values("created_at", ascending=False)
         return df.head(limit).to_dict(orient="records")

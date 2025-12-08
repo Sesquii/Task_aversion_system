@@ -48,6 +48,11 @@ def cancel_task_page(task_manager, emotion_manager):
         ui.label("Time Spent (minutes)")
         actual_time = ui.number(value=0)
 
+        reason_for_canceling = ui.textarea(
+            label='Reason for Canceling',
+            placeholder='Why are you canceling this task?'
+        )
+
         notes = ui.textarea(label='Notes (optional)')
 
         def submit_cancellation():
@@ -62,6 +67,7 @@ def cancel_task_page(task_manager, emotion_manager):
                 'actual_emotional': int(actual_emotional.value),
                 'completion_percent': int(completion_pct.value),
                 'time_actual_minutes': int(actual_time.value or 0),
+                'reason_for_canceling': reason_for_canceling.value or "",
                 'notes': notes.value or "",
                 'cancelled': True
             }

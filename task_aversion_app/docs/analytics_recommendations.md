@@ -2,7 +2,7 @@
 
 ## Data & Schema
 
-- Each task instance now records the following attributes (see `backend/task_schema.py`): duration_minutes, relief_score, cognitive_load, emotional_load, environmental_effect, skills_improved, behavioral_deviation, net_relief.
+- Each task instance now records the following attributes (see `backend/task_schema.py`): duration_minutes, relief_score, cognitive_load, emotional_load, environmental_effect, skills_improved, behavioral_score, net_relief.
 - Attributes are stored as dedicated CSV columns plus mirrored inside the `actual` JSON payload so legacy entries remain valid.
 - When historical rows miss a value, we backfill from JSON payloads or schema defaults to keep analytics resilient.
 

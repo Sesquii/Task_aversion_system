@@ -9,6 +9,9 @@ from ui.initialize_task import initialize_task_page
 from ui.complete_task import complete_task_page
 from ui.cancel_task import cancel_task_page
 from ui.analytics_page import register_analytics_page
+# import submodules without rebinding the nicegui `ui` object
+from ui import survey_page  # registers /survey
+from ui import settings_page  # registers /settings
 
 
 task_manager = TaskManager()
