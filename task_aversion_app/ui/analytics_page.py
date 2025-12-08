@@ -2,11 +2,7 @@ from nicegui import ui
 import pandas as pd
 import plotly.express as px
 
-from backend.analytics import (
-    Analytics,
-    SUGGESTED_ANALYTICS_LIBRARIES,
-    SUGGESTED_ML_LIBRARIES,
-)
+from backend.analytics import Analytics
 from backend.task_schema import TASK_ATTRIBUTES
 
 analytics_service = Analytics()
@@ -57,8 +53,7 @@ def build_analytics_page():
             ("Avg Net Wellbeing", metrics['quality']['avg_net_wellbeing']),
             ("Avg Net Wellbeing (Norm)", metrics['quality']['avg_net_wellbeing_normalized']),
             ("Avg Stress Efficiency", metrics['quality']['avg_stress_efficiency'] if metrics['quality']['avg_stress_efficiency'] is not None else "N/A"),
-            ("Avg Relief × Duration", relief_summary.get('avg_relief_duration_score', 0.0)),
-            ("Total Relief × Duration", relief_summary.get('total_relief_duration_score', 0.0)),
+            ("Average Relief Score", relief_summary.get('avg_relief_duration_score', 0.0)),
             ("Total Relief Score", relief_summary.get('total_relief_score', 0.0)),
         ]:
             with ui.card().classes("p-3 min-w-[150px]"):
@@ -70,26 +65,24 @@ def build_analytics_page():
         _render_attribute_box()
 
     _render_trends_section()
-    _render_correlation_explorer()
     _render_task_rankings()
     _render_stress_efficiency_leaderboard()
-    _render_recommendation_lab()
-    _render_future_notes()
+    _render_correlation_explorer()
 
 
 def _render_time_chart():
     df = analytics_service.trend_series()
     with ui.card().classes("p-3 grow"):
-        ui.label("Relief trend").classes("font-bold text-md mb-2")
+        ui.label("Total relief trend").classes("font-bold text-md mb-2")
         if df.empty:
             ui.label("No completed instances yet.").classes("text-xs text-gray-500")
             return
         fig = px.line(
             df,
             x='completed_at',
-            y='relief_score',
+            y='cumulative_relief_score',
             markers=True,
-            title="Relief over time",
+            title="Total relief score over time (cumulative)",
         )
         fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
         ui.plotly(fig)
@@ -119,9 +112,16 @@ def _render_trends_section():
         ui.label("View daily trends for any attribute or calculated metric.").classes("text-xs text-gray-500 mb-2")
 
         with ui.row().classes("gap-3 flex-wrap"):
+            default_attrs = []
+            for key in ['net_wellbeing', 'stress_level']:
+                if key in ATTRIBUTE_OPTIONS_DICT:
+                    default_attrs.append(key)
+            if not default_attrs and ATTRIBUTE_OPTIONS_DICT:
+                default_attrs = [next(iter(ATTRIBUTE_OPTIONS_DICT))]
+
             attr_select = ui.select(
                 options=ATTRIBUTE_OPTIONS_DICT,
-                value=[next(iter(ATTRIBUTE_OPTIONS_DICT))] if ATTRIBUTE_OPTIONS_DICT else [],
+                value=default_attrs,
                 label="Attributes",
                 multiple=True,
             ).props("dense outlined use-chips clearable")
@@ -135,7 +135,7 @@ def _render_trends_section():
                     'max': 'Max',
                     'count': 'Count',
                 },
-                value='mean',
+                value='sum',
                 label="Aggregation",
             ).props("dense outlined")
 
@@ -396,72 +396,4 @@ def _render_stress_efficiency_leaderboard():
                     ui.label(f"{task['avg_relief']:.1f}").classes("w-20 text-right")
                     ui.label(f"{task['avg_stress']:.1f}").classes("w-20 text-right")
                     ui.label(str(task['count'])).classes("w-16 text-right")
-
-
-def _render_recommendation_lab():
-    ui.separator()
-    ui.label("Recommendation lab").classes("text-xl font-semibold mt-4")
-    filters = analytics_service.default_filters()
-
-    with ui.row().classes("gap-3 flex-wrap mt-2"):
-        max_duration = ui.number("Max duration (min)", value=filters['max_duration']).classes("w-40")
-
-    result_area = ui.column().classes("mt-3 w-full")
-
-    def update_filters(key, raw):
-        value = raw if raw not in (None, '', 'None') else None
-        if value is not None:
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                value = None
-        filters[key] = value
-        _render_recommendations(result_area, filters)
-
-    max_duration.on('change', lambda e: update_filters('max_duration', e.value))
-
-    _render_recommendations(result_area, filters)
-
-
-def _render_recommendations(target, filters):
-    target.clear()
-    recs = analytics_service.recommendations(filters)
-    if not recs:
-        ui.label("No recommendations yet. Try relaxing the filters.").classes("text-xs text-gray-500")
-        return
-    with target:
-        for rec in recs:
-            with ui.card().classes("p-3 mb-2 w-full"):
-                ui.label(rec['title']).classes("text-xs uppercase text-gray-500")
-                ui.label(rec['task_name']).classes("text-lg font-semibold")
-                ui.label(rec['reason']).classes("text-sm text-gray-600")
-                ui.label(
-                    f"Duration {rec.get('duration', '—')} min · Relief {rec.get('relief', '—')} · Cog {rec.get('cognitive_load', '—')}"
-                ).classes("text-xs text-gray-500")
-
-
-def _render_future_notes():
-    ui.separator().classes("my-4")
-    ui.label("Future ML roadmap").classes("text-xl font-semibold")
-
-    ui.markdown("**Candidate analytics libraries:**")
-    ui.markdown("\n".join([f"- {lib}" for lib in SUGGESTED_ANALYTICS_LIBRARIES]))
-
-    ui.markdown("**ML toolchain starters:**")
-    ui.markdown("\n".join([f"- {lib}" for lib in SUGGESTED_ML_LIBRARIES]))
-
-    ui.markdown(
-        """
-**Assumptions & path forward:**
-- Task attributes defined in the schema (duration, relief, cognitive load, emotional load, environmental effect, skills improved, behavioral score) are recorded per instance.
-- Until organic data exists we can bootstrap synthetic rows by sampling from historical distributions or heuristics tied to task categories.
-- Manual filters can be replaced by a ranking score learned via scikit-learn or LightFM as soon as per-user preference vectors are available.
-"""
-    )
-
-    ui.markdown("**Attribute schema (extensible):**")
-    schema_lines = "\n".join(
-        [f"- `{attr.key}` / {attr.label}: {attr.description}" for attr in TASK_ATTRIBUTES]
-    )
-    ui.markdown(schema_lines)
 

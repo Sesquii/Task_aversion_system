@@ -1347,13 +1347,34 @@ class Analytics:
     def trend_series(self) -> pd.DataFrame:
         df = self._load_instances()
         if df.empty:
-            return pd.DataFrame(columns=['completed_at', 'relief_score', 'duration_minutes', 'stress_level', 'stress_efficiency'])
+            return pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
         completed = df[df['completed_at'].astype(str).str.len() > 0]
         if completed.empty:
-            return pd.DataFrame(columns=['completed_at', 'relief_score', 'duration_minutes', 'stress_level', 'stress_efficiency'])
-        completed['completed_at'] = pd.to_datetime(completed['completed_at'])
-        completed = completed.sort_values('completed_at')
-        return completed[['completed_at', 'relief_score', 'duration_minutes', 'cognitive_load', 'stress_level', 'net_wellbeing', 'net_wellbeing_normalized', 'stress_efficiency']]
+            return pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+
+        # Ensure datetime and numeric relief
+        completed = completed.copy()
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()]
+        completed['relief_score_numeric'] = pd.to_numeric(completed['relief_score'], errors='coerce').fillna(0.0)
+
+        if completed.empty:
+            return pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+
+        # Aggregate relief per day, then compute cumulative total over time
+        daily = (
+            completed
+            .groupby(completed['completed_at_dt'].dt.date)['relief_score_numeric']
+            .sum()
+            .reset_index()
+            .rename(columns={'completed_at_dt': 'completed_at', 'relief_score_numeric': 'daily_relief_score'})
+        )
+
+        daily = daily.sort_values('completed_at')
+        daily['completed_at'] = pd.to_datetime(daily['completed_at'])
+        daily['cumulative_relief_score'] = daily['daily_relief_score'].cumsum()
+
+        return daily[['completed_at', 'daily_relief_score', 'cumulative_relief_score']]
 
     def attribute_distribution(self) -> pd.DataFrame:
         df = self._load_instances()
