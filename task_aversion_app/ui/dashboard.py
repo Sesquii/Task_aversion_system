@@ -925,12 +925,15 @@ def build_dashboard(task_manager):
         # ====================================================================
         # TOP HEADER SECTION - Title and Analytics Button
         # ====================================================================
-        with ui.row().classes("w-full justify-center items-center mb-4"):
-            with ui.column().classes("items-center"):
-                ui.label("Task Aversion Dashboard").classes("text-4xl font-bold mb-3")
+        with ui.row().classes("w-full justify-between items-center mb-4").props('id="tas-dashboard-header" data-tooltip-id="dashboard_header"'):
+            ui.label("Task Aversion Dashboard").classes("text-4xl font-bold mb-3")
+            with ui.row().classes("gap-2"):
+                ui.button("Survey",
+                          on_click=lambda: ui.navigate.to('/survey')
+                          ).props('data-tooltip-id="survey_link"')
                 ui.button("Analytics",
                           on_click=lambda: ui.navigate.to('/analytics'),
-                          icon="bar_chart").classes("text-xl py-3 px-6")
+                          icon="bar_chart").classes("text-xl py-3 px-6").props('id="tas-analytics-link" data-tooltip-id="analytics_link"')
         
         # ====================================================================
         # MAIN THREE-COLUMN LAYOUT
@@ -939,7 +942,7 @@ def build_dashboard(task_manager):
             # ====================================================================
             # COLUMN 1 — Left Column
             # ====================================================================
-            with ui.column().classes("dashboard-column column-left gap-2"):
+            with ui.column().classes("dashboard-column column-left gap-2").props('id="tas-quick-actions" data-tooltip-id="quick_actions"'):
                 # Create Task Button
                 ui.button("+ CREATE TASK",
                           on_click=lambda: ui.navigate.to('/create_task'),
@@ -1163,7 +1166,7 @@ def build_dashboard(task_manager):
             # ====================================================================
             with ui.column().classes("dashboard-column column-middle gap-2"):
                 # Top half: Active Tasks in 2 nested columns
-                with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;"):
+                with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;").props('id="tas-active-tasks" data-tooltip-id="active_tasks"'):
                     ui.label("Active Initialized Tasks").classes("text-lg font-bold mb-2")
                     ui.separator()
                     
