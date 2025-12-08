@@ -231,9 +231,9 @@ class Analytics:
         df = self._load_instances()
         if df.empty:
             return {
-                'counts': {'active': 0, 'completed_7d': 0},
+                'counts': {'active': 0, 'completed_7d': 0, 'total_created': 0, 'total_completed': 0, 'completion_rate': 0.0},
                 'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None},
-                'time': {'median_duration': 0.0, 'avg_delay': 0.0},
+                'time': {'median_duration': 0.0, 'avg_delay': 0.0, 'estimation_accuracy': 0.0},
             }
         active = df[df['status'].isin(['active', 'in_progress'])]
         completed = df[df['completed_at'].astype(str).str.len() > 0]
