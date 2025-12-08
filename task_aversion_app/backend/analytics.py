@@ -5,7 +5,7 @@ import json
 import math
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 from scipy import stats
@@ -1145,12 +1145,34 @@ class Analytics:
         
         return [r for r in ranked if r]
 
-    def recommendations_by_category(self, category: str, filters: Optional[Dict[str, float]] = None, limit: int = 3) -> List[Dict[str, str]]:
-        """Generate recommendations for a specific category, returning top N results."""
+    def recommendations_by_category(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3) -> List[Dict[str, str]]:
+        """Generate recommendations ranked by a set of metrics.
+
+        metrics can be a single metric name or a list. Each metric contributes to
+        the score; high-is-good metrics add their value, and low-is-good metrics
+        add (100 - value) to prioritize lower numbers.
+        """
         from .task_manager import TaskManager
         
         filters = {**self.default_filters(), **(filters or {})}
-        print(f"[Analytics] recommendations_by_category called with category: {category}, limit: {limit}, filters: {filters}")
+        print(f"[Analytics] recommendations_by_category called with metrics: {metrics}, limit: {limit}, filters: {filters}")
+        
+        # Normalize metrics input
+        if metrics is None:
+            metrics = []
+        if isinstance(metrics, str):
+            metrics = [metrics]
+        metrics = [m for m in metrics if m] or ["relief_score"]
+        
+        # Which metrics are better when low
+        low_is_good = {
+            "cognitive_load",
+            "emotional_load",
+            "net_load",
+            "duration_minutes",
+            "stress_level",
+            "physical_load",
+        }
         
         # Load all task templates
         task_manager = TaskManager()
@@ -1176,6 +1198,10 @@ class Analytics:
                         'avg_cognitive_load': task_completed['cognitive_load'].mean() if task_completed['cognitive_load'].notna().any() else None,
                         'avg_emotional_load': task_completed['emotional_load'].mean() if task_completed['emotional_load'].notna().any() else None,
                         'avg_duration': task_completed['duration_minutes'].mean() if task_completed['duration_minutes'].notna().any() else None,
+                        'avg_stress_level': task_completed['stress_level'].mean() if 'stress_level' in task_completed and task_completed['stress_level'].notna().any() else None,
+                        'avg_behavioral_score': task_completed['behavioral_score'].mean() if 'behavioral_score' in task_completed and task_completed['behavioral_score'].notna().any() else None,
+                        'avg_net_wellbeing': task_completed['net_wellbeing_normalized'].mean() if 'net_wellbeing_normalized' in task_completed and task_completed['net_wellbeing_normalized'].notna().any() else None,
+                        'avg_physical_load': task_completed['physical_load'].mean() if 'physical_load' in task_completed and task_completed['physical_load'].notna().any() else None,
                         'count': len(task_completed),
                     }
         
@@ -1208,11 +1234,19 @@ class Analytics:
             avg_emotional = stats.get('avg_emotional_load') if stats.get('avg_emotional_load') is not None else None
             avg_duration = stats.get('avg_duration') if stats.get('avg_duration') is not None else default_estimate
             historical_efficiency = task_efficiency.get(task_id, 0)
+            avg_stress = stats.get('avg_stress_level') if stats.get('avg_stress_level') is not None else None
+            avg_behavioral = stats.get('avg_behavioral_score') if stats.get('avg_behavioral_score') is not None else None
+            avg_net_wellbeing = stats.get('avg_net_wellbeing') if stats.get('avg_net_wellbeing') is not None else None
+            avg_physical = stats.get('avg_physical_load') if stats.get('avg_physical_load') is not None else None
             
             # Use historical data if available, otherwise use defaults
             relief_score = avg_relief if avg_relief is not None else 5.0  # Default neutral
             cognitive_load = avg_cognitive if avg_cognitive is not None else 5.0  # Default neutral
             emotional_load = avg_emotional if avg_emotional is not None else 5.0  # Default neutral
+            stress_level = avg_stress if avg_stress is not None else 50.0  # Neutral midpoint
+            behavioral_score = avg_behavioral if avg_behavioral is not None else 50.0  # Neutral adherence
+            net_wellbeing = avg_net_wellbeing if avg_net_wellbeing is not None else 50.0  # Neutral wellbeing (normalized)
+            physical_load = avg_physical if avg_physical is not None else 0.0  # Default minimal physical load
             duration_minutes = avg_duration if avg_duration else default_estimate
             
             # Apply max_duration filter
@@ -1229,6 +1263,10 @@ class Analytics:
                 'duration_minutes': duration_minutes,
                 'historical_efficiency': historical_efficiency,
                 'default_estimate': default_estimate,
+                'stress_level': stress_level,
+                'behavioral_score': behavioral_score,
+                'net_wellbeing_normalized': net_wellbeing,
+                'physical_load': physical_load,
             })
         
         if not candidates:
@@ -1240,38 +1278,49 @@ class Analytics:
         candidates_df['net_load'] = candidates_df['cognitive_load'] + candidates_df['emotional_load']
         candidates_df['net_relief_proxy'] = candidates_df['relief_score'] - candidates_df['cognitive_load']
         
-        # Sort by category and get top N
-        if category == "highest_relief":
-            sorted_df = candidates_df.sort_values('relief_score', ascending=False)
-        elif category == "shortest":
-            sorted_df = candidates_df.sort_values('duration_minutes', ascending=True)
-        elif category == "lowest_cognitive":
-            sorted_df = candidates_df.sort_values('cognitive_load', ascending=True)
-        elif category == "lowest_emotional":
-            sorted_df = candidates_df.sort_values('emotional_load', ascending=True)
-        elif category == "lowest_net_load":
-            sorted_df = candidates_df.sort_values('net_load', ascending=True)
-        elif category == "highest_net_relief":
-            sorted_df = candidates_df.sort_values('net_relief_proxy', ascending=False)
-        elif category == "high_efficiency":
-            # Filter to tasks with efficiency data, then sort
-            high_eff = candidates_df[candidates_df['historical_efficiency'] > 0]
-            if high_eff.empty:
-                # Fallback to highest relief if no efficiency data
-                sorted_df = candidates_df.sort_values('relief_score', ascending=False)
-            else:
-                sorted_df = high_eff.sort_values('historical_efficiency', ascending=False)
-        else:
-            # Default to highest relief
-            sorted_df = candidates_df.sort_values('relief_score', ascending=False)
+        # Scoring helper: high-good adds value; low-good adds (100 - value)
+        def metric_score(metric_name: str, value: float) -> float:
+            try:
+                v = float(value) if value is not None else 0.0
+            except (ValueError, TypeError):
+                v = 0.0
+            if metric_name in low_is_good:
+                return max(0.0, 100.0 - v)
+            return v
         
-        # Get top N
-        top_n = sorted_df.head(limit)
+        # Compute score per task
+        scores = []
+        for _, row in candidates_df.iterrows():
+            score_total = 0.0
+            for metric in metrics:
+                score_total += metric_score(metric, row.get(metric))
+            scores.append(score_total)
+        candidates_df['score'] = scores
         
-        # Convert to recommendations
+        # Sort by score descending and take top N
+        top_n = candidates_df.sort_values('score', ascending=False).head(limit)
+        
         ranked = []
         for _, row in top_n.iterrows():
-            ranked.append(self._task_to_recommendation(row, ""))
+            # Collect only the metrics the user selected
+            metric_values = {}
+            for metric in metrics:
+                try:
+                    metric_values[metric] = float(row.get(metric)) if row.get(metric) is not None else None
+                except (ValueError, TypeError):
+                    metric_values[metric] = None
+            
+            ranked.append({
+                'title': "Recommendation",
+                'task_id': row.get('task_id'),
+                'task_name': row.get('task_name'),
+                'score': round(float(row.get('score', 0.0)), 1),
+                'metric_values': metric_values,
+                'duration': row.get('duration_minutes'),
+                'relief': row.get('relief_score'),
+                'cognitive_load': row.get('cognitive_load'),
+                'emotional_load': row.get('emotional_load'),
+            })
         
         return ranked
 

@@ -16,6 +16,18 @@ an = Analytics()
 
 # Module-level variables for dashboard state
 dash_filters = {}
+RECOMMENDATION_METRICS = [
+    {"label": "Relief score (high)", "key": "relief_score"},
+    {"label": "Net relief (high)", "key": "net_relief_proxy"},
+    {"label": "Cognitive load (low)", "key": "cognitive_load"},
+    {"label": "Emotional load (low)", "key": "emotional_load"},
+    {"label": "Net load (low)", "key": "net_load"},
+    {"label": "Efficiency (high)", "key": "historical_efficiency"},
+    {"label": "Stress level (low)", "key": "stress_level"},
+    {"label": "Behavioral score (high)", "key": "behavioral_score"},
+    {"label": "Net wellbeing (high)", "key": "net_wellbeing_normalized"},
+    {"label": "Physical load (low)", "key": "physical_load"},
+]
 
 
 # ----------------------------------------------------------
@@ -1394,7 +1406,7 @@ def build_recently_completed_panel():
 
 
 def build_recommendations_section():
-    """Build the recommendations section with category filtering."""
+    """Build the recommendations section with multi-metric filtering."""
     print(f"[Dashboard] Rendering recommendations section")
     global dash_filters
     if not dash_filters:
@@ -1403,30 +1415,16 @@ def build_recommendations_section():
         ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
         ui.separator()
         
-        # Category selection - using a mapping approach similar to analytics page
-        category_map = {
-            "Highest Actual Relief": "highest_relief",
-            "Shortest Task": "shortest",
-            "Lowest Cognitive Load": "lowest_cognitive",
-            "Lowest Emotional Load": "lowest_emotional",
-            "Lowest Net Load": "lowest_net_load",
-            "Highest Net Relief": "highest_net_relief",
-            "High Efficiency": "high_efficiency",
-        }
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
         
-        category_labels = list(category_map.keys())
-        default_label = category_labels[0]
-        default_value = category_map[default_label]
-        
-        # Store current category value in a way that's accessible
-        current_category = {"value": default_value}
-        
-        global selected_category
-        # Create select with string labels as options
-        selected_category = ui.select(
-            options=category_labels,
-            label="Category",
-            value=default_label
+        # Metric multi-select
+        metrics_select = ui.select(
+            options=metric_labels,
+            label="Filter by metrics (multi-select)",
+            value=default_metrics,
+            multiple=True,
         ).classes("w-full mb-2")
         
         # Max duration filter
@@ -1447,71 +1445,52 @@ def build_recommendations_section():
                         value = None
                 dash_filters['max_duration'] = value
                 print(f"[Dashboard] Filter applied: max_duration = {value}, filters = {dash_filters}")
-                refresh_recommendations(rec_container, current_category["value"])
+                refresh_recommendations(rec_container, metrics_select.value, metric_key_map)
             
             ui.button("APPLY", on_click=apply_filter).props("dense")
         
         # Recommendations container
         rec_container = ui.column().classes("w-full")
         
-        # Update when category changes - refresh immediately on selection
-        def on_category_change(e=None):
-            # Get the selected label from the event or select value
-            selected_label = None
+        # Refresh on metric changes
+        def on_metrics_change(e=None):
+            selected_values = None
             if e and hasattr(e, 'args') and e.args:
                 if isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    selected_label = e.args[0]
+                    selected_values = e.args[0]
                 elif isinstance(e.args, dict):
-                    selected_label = e.args.get('value') or e.args.get('label')
-            
-            # Fallback to select.value
-            if selected_label is None:
-                selected_label = selected_category.value if hasattr(selected_category, 'value') else default_label
-            
-            # Map label to value
-            category_value = category_map.get(selected_label, default_value)
-            current_category["value"] = category_value
-            
-            print(f"[Dashboard] Category changed: label='{selected_label}', value='{category_value}'")
-            refresh_recommendations(rec_container, category_value)
+                    selected_values = e.args.get('value') or e.args.get('label')
+            if selected_values is None:
+                selected_values = metrics_select.value if hasattr(metrics_select, 'value') else default_metrics
+            refresh_recommendations(rec_container, selected_values, metric_key_map)
         
-        # Bind the change event to refresh recommendations immediately when category is clicked
-        selected_category.on('update:model-value', on_category_change)
+        metrics_select.on('update:model-value', on_metrics_change)
         
         # Initial render
-        refresh_recommendations(rec_container, current_category["value"])
+        refresh_recommendations(rec_container, metrics_select.value, metric_key_map)
 
 
-def refresh_recommendations(target_container, category_value=None):
-    """Refresh the recommendations display based on selected category."""
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None):
+    """Refresh the recommendations display based on selected metrics."""
     target_container.clear()
     
-    # Get selected category value - accept string directly or extract from select
-    if category_value is None:
-        # Try to get from global selected_category if available
-        category_select = globals().get('selected_category', None)
-        if category_select and hasattr(category_select, 'value'):
-            selected_label = category_select.value
-            # Map label to value if we have the mapping
-            category_map = globals().get('category_map', {})
-            if category_map and selected_label in category_map:
-                category_value = category_map[selected_label]
-            else:
-                category_value = selected_label  # Fallback to label itself
-        else:
-            category_value = "highest_relief"
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
     
-    # Ensure category_value is a string, not a tuple
-    if isinstance(category_value, tuple) and len(category_value) == 2:
-        category_value = category_value[1]
-    elif not isinstance(category_value, str):
-        category_value = str(category_value) if category_value else "highest_relief"
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
     
-    # Get recommendations for the selected category (top 3)
+    # Get recommendations for the selected metrics (top 3)
     # Use module-level dash_filters if available, otherwise empty dict
     filters = globals().get('dash_filters', {})
-    recs = an.recommendations_by_category(category_value, filters, limit=3)
-    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for category '{category_value}', filters {filters}")
+    recs = an.recommendations_by_category(metric_keys, filters, limit=3)
+    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for metrics '{metric_keys}', filters {filters}")
     
     if not recs:
         with target_container:
@@ -1521,34 +1500,30 @@ def refresh_recommendations(target_container, category_value=None):
     with target_container:
         for rec in recs:
             task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            reason = rec.get('reason', '')
-            duration = rec.get('duration') or '—'
-            relief = rec.get('relief') or '—'
-            cognitive = rec.get('cognitive_load') or '—'
-            emotional = rec.get('emotional_load') or '—'
+            metric_values = rec.get('metric_values', {}) or {}
             
             # Format the recommendation card
             with ui.card().classes("recommendation-card"):
-                # Task name
                 ui.label(task_label).classes("font-bold text-sm mb-1")
                 
-                # Reason line with all metrics
-                reason_parts = []
-                if relief != '—':
-                    reason_parts.append(f"relief {relief}")
-                if cognitive != '—':
-                    reason_parts.append(f"cognitive {cognitive}")
-                if emotional != '—':
-                    reason_parts.append(f"emotional {emotional}")
+                # Show score
+                score_val = rec.get('score')
+                score_text = f"Score: {score_val}" if score_val is not None else "Score: —"
+                ui.label(score_text).classes("text-xs text-gray-600 mb-1")
                 
-                reason_text = " / ".join(reason_parts) if reason_parts else reason
-                ui.label(f"{reason_text}.").classes("text-xs text-gray-600 mb-1")
+                # Show only the selected metrics
+                for label in selected_metrics:
+                    key = metric_key_map.get(label, label)
+                    val = metric_values.get(key, "—")
+                    try:
+                        if isinstance(val, (int, float)):
+                            display_val = f"{val:.1f}"
+                        else:
+                            display_val = str(val)
+                    except Exception:
+                        display_val = "—"
+                    ui.label(f"{label}: {display_val}").classes("text-xs text-gray-500")
                 
-                # Duration and summary
-                ui.label(f"Duration: {duration}m.").classes("text-xs text-gray-500 mb-1")
-                ui.label(f"Relief {relief} | Cog {cognitive}").classes("text-xs text-gray-500 mb-2")
-                
-                # Initialize button
                 ui.button("INITIALIZE",
                           on_click=lambda rid=rec.get('task_id'): init_quick(rid)
                           ).props("dense size=sm").classes("w-full")
