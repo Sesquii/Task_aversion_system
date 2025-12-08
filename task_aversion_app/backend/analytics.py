@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -109,14 +110,26 @@ class Analytics:
         # Range: 0-100, where 50 = neutral (relief = stress), >50 = beneficial, <50 = costly
         df['net_wellbeing_normalized'] = 50.0 + (df['net_wellbeing'] / 2.0)
         
-        # Calculate stress_efficiency: relief per unit of stress (with division by zero handling)
-        df['stress_efficiency'] = df.apply(
-            lambda row: (
-                row['relief_score_numeric'] / row['stress_level'] 
-                if row['stress_level'] > 0 else None
-            ),
-            axis=1
-        )
+        # Calculate stress_efficiency: relief per unit of stress (ratio). If stress_level
+        # is zero or missing, leave the metric empty to avoid infinities. Ensure numeric dtype.
+        stress_safe = pd.to_numeric(df['stress_level'], errors='coerce')
+        stress_safe = stress_safe.mask(stress_safe <= 0, np.nan)  # keep float dtype
+        relief_safe = pd.to_numeric(df['relief_score_numeric'], errors='coerce')
+        df['stress_efficiency'] = (relief_safe / stress_safe).round(4)
+
+        # Keep raw ratio and provide a 0-100 normalized version (min-max across observed rows)
+        df['stress_efficiency_raw'] = df['stress_efficiency']
+        se_valid = df['stress_efficiency'].dropna()
+        if not se_valid.empty:
+            se_min = se_valid.min()
+            se_max = se_valid.max()
+            if pd.notna(se_min) and pd.notna(se_max):
+                if se_max > se_min:
+                    df['stress_efficiency'] = ((df['stress_efficiency'] - se_min) / (se_max - se_min)) * 100.0
+                else:
+                    # All values identical; treat them as 100 for visibility
+                    df['stress_efficiency'] = 100.0
+            df['stress_efficiency'] = df['stress_efficiency'].round(2)
         
         # Auto-calculate behavioral_score: how well you adhered to planned behaviour
         # 0 = maximum procrastination, 50 = neutral (perfect adherence), 100 = maximum overachievement
@@ -184,6 +197,16 @@ class Analytics:
                 return 50.0
         
         df['behavioral_score'] = df.apply(_calculate_behavioral_score, axis=1)
+        # Normalize behavioral_score relative to observed best/worst so the most
+        # proactive instance maps to 100 and the worst procrastination maps to 0.
+        # Keep the raw value for inspection if needed.
+        df['behavioral_score_raw'] = df['behavioral_score']
+        min_bs = df['behavioral_score'].min()
+        max_bs = df['behavioral_score'].max()
+        if pd.notna(min_bs) and pd.notna(max_bs) and max_bs > min_bs:
+            df['behavioral_score'] = ((df['behavioral_score'] - min_bs) / (max_bs - min_bs)) * 100.0
+        # If all values are identical, leave the original (already 0-100) scale.
+        df['behavioral_score'] = df['behavioral_score'].round(2)
 
         df['status'] = df['status'].replace('', 'active').str.lower()
         return df
@@ -1442,6 +1465,18 @@ class Analytics:
             sub = df[[attr.key]].rename(columns={attr.key: 'value'}).dropna()
             sub['attribute'] = attr.label
             melted_frames.append(sub)
+        
+        # Include physical load, which is derived from predicted/actual payloads
+        if 'physical_load' in df.columns:
+            physical_sub = (
+                df[['physical_load']]
+                .rename(columns={'physical_load': 'value'})
+                .dropna()
+            )
+            physical_sub = physical_sub[physical_sub['value'] > 0]  # omit zeros/missing
+            if not physical_sub.empty:
+                physical_sub['attribute'] = 'Physical Load'
+                melted_frames.append(physical_sub)
         
         # Add calculated metrics: stress_level, net_wellbeing, net_wellbeing_normalized, and stress_efficiency
         if 'stress_level' in df.columns:
