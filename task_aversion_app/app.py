@@ -12,6 +12,7 @@ from ui.analytics_page import register_analytics_page
 # import submodules without rebinding the nicegui `ui` object
 from ui import survey_page  # registers /survey
 from ui import settings_page  # registers /settings
+from ui import data_guide_page  # registers /data-guide
 
 
 task_manager = TaskManager()

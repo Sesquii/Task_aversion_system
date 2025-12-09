@@ -940,12 +940,12 @@ def build_dashboard(task_manager):
         with ui.row().classes("w-full justify-between items-center mb-4").props('id="tas-dashboard-header" data-tooltip-id="dashboard_header"'):
             ui.label("Task Aversion Dashboard").classes("text-4xl font-bold mb-3")
             with ui.row().classes("gap-2"):
-                ui.button("Survey",
-                          on_click=lambda: ui.navigate.to('/survey')
-                          ).props('data-tooltip-id="survey_link"')
                 ui.button("Analytics",
                           on_click=lambda: ui.navigate.to('/analytics'),
                           icon="bar_chart").classes("text-xl py-3 px-6").props('id="tas-analytics-link" data-tooltip-id="analytics_link"')
+                ui.button("Settings",
+                          on_click=lambda: ui.navigate.to('/settings'),
+                          icon="settings").classes("text-xl py-3 px-6").props('data-tooltip-id="settings_link"')
         
         # ====================================================================
         # MAIN THREE-COLUMN LAYOUT
