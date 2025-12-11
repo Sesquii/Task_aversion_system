@@ -21,9 +21,9 @@ def complete_task_page(task_manager, emotion_manager):
         instance_id = params.get("instance_id")
         print("[complete_task] instance_id from URL:", instance_id)
 
-        # Get instance and previous values if instance_id is available
+        # Get instance and predicted values if instance_id is available
         instance = None
-        previous_averages = {}
+        predicted_data = {}
         current_actual_data = {}
         task_id = None
         
@@ -31,9 +31,13 @@ def complete_task_page(task_manager, emotion_manager):
             instance = im.get_instance(instance_id)
             if instance:
                 task_id = instance.get('task_id')
-                # Get previous actual averages for this task
-                if task_id:
-                    previous_averages = im.get_previous_actual_averages(task_id)
+                
+                # Get predicted values from initialization (these are the baseline)
+                predicted_raw = instance.get('predicted') or '{}'
+                try:
+                    predicted_data = json.loads(predicted_raw) if predicted_raw else {}
+                except json.JSONDecodeError:
+                    predicted_data = {}
                 
                 # Check if current instance already has actual values
                 actual_raw = instance.get('actual') or '{}'
@@ -66,10 +70,10 @@ def complete_task_page(task_manager, emotion_manager):
 
             inst_select.on('update:model-value', on_choose)
 
-        # Helper to get default value, scaling from 0-10 to 0-100 if needed
-        def get_default_value(key, default=50):
-            # First check if current instance has a value
-            val = current_actual_data.get(key)
+        # Helper to get default value from predicted (initialization) values, scaling from 0-10 to 0-100 if needed
+        def get_default_value(actual_key, predicted_key, default=50):
+            # First check if current instance already has actual values (for editing)
+            val = current_actual_data.get(actual_key)
             if val is not None:
                 try:
                     num_val = float(val)
@@ -79,53 +83,94 @@ def complete_task_page(task_manager, emotion_manager):
                     return int(round(num_val))
                 except (ValueError, TypeError):
                     pass
-            # Then check previous averages
-            if key in previous_averages:
-                return previous_averages[key]
+            # Then use predicted values from initialization as baseline
+            val = predicted_data.get(predicted_key)
+            if val is not None:
+                try:
+                    num_val = float(val)
+                    # Scale from 0-10 to 0-100 if value is <= 10
+                    if num_val <= 10 and num_val >= 0:
+                        num_val = num_val * 10
+                    return int(round(num_val))
+                except (ValueError, TypeError):
+                    pass
             return default
         
-        default_relief = get_default_value('actual_relief', 50)
-        default_cognitive = get_default_value('actual_cognitive', 50)
-        default_physical = get_default_value('actual_physical', 50)
-        default_emotional = get_default_value('actual_emotional', 50)
+        # Map predicted keys to actual keys for baseline
+        default_relief = get_default_value('actual_relief', 'expected_relief', 50)
+        default_cognitive = get_default_value('actual_cognitive', 'expected_cognitive_load', 50)
+        default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 50)
+        default_physical = get_default_value('actual_physical', 'expected_physical_load', 50)
 
         # ----- Actual values -----
 
         ui.label("Actual Relief")
         actual_relief = ui.slider(min=0, max=100, step=1, value=default_relief)
-        if 'actual_relief' in previous_averages:
-            prev_val = previous_averages['actual_relief']
-            if prev_val != default_relief:
-                ui.label(f"Previous average: {prev_val} (current: {default_relief})").classes("text-xs text-gray-500")
-            else:
-                ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
+        # Show predicted value from initialization if available
+        if 'expected_relief' in predicted_data:
+            pred_val = predicted_data.get('expected_relief')
+            try:
+                pred_num = float(pred_val)
+                if pred_num <= 10 and pred_num >= 0:
+                    pred_num = pred_num * 10
+                pred_val = int(round(pred_num))
+                if pred_val != default_relief:
+                    ui.label(f"Initialized: {pred_val} (current: {default_relief})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
 
         ui.label("Actual Cognitive Demand")
         actual_cognitive = ui.slider(min=0, max=100, step=1, value=default_cognitive)
-        if 'actual_cognitive' in previous_averages:
-            prev_val = previous_averages['actual_cognitive']
-            if prev_val != default_cognitive:
-                ui.label(f"Previous average: {prev_val} (current: {default_cognitive})").classes("text-xs text-gray-500")
-            else:
-                ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
+        # Show predicted value from initialization if available
+        if 'expected_cognitive_load' in predicted_data:
+            pred_val = predicted_data.get('expected_cognitive_load')
+            try:
+                pred_num = float(pred_val)
+                if pred_num <= 10 and pred_num >= 0:
+                    pred_num = pred_num * 10
+                pred_val = int(round(pred_num))
+                if pred_val != default_cognitive:
+                    ui.label(f"Initialized: {pred_val} (current: {default_cognitive})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
 
         ui.label("Actual Emotional Demand")
         actual_emotional = ui.slider(min=0, max=100, step=1, value=default_emotional)
-        if 'actual_emotional' in previous_averages:
-            prev_val = previous_averages['actual_emotional']
-            if prev_val != default_emotional:
-                ui.label(f"Previous average: {prev_val} (current: {default_emotional})").classes("text-xs text-gray-500")
-            else:
-                ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
+        # Show predicted value from initialization if available
+        if 'expected_emotional_load' in predicted_data:
+            pred_val = predicted_data.get('expected_emotional_load')
+            try:
+                pred_num = float(pred_val)
+                if pred_num <= 10 and pred_num >= 0:
+                    pred_num = pred_num * 10
+                pred_val = int(round(pred_num))
+                if pred_val != default_emotional:
+                    ui.label(f"Initialized: {pred_val} (current: {default_emotional})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
 
         ui.label("Actual Physical Demand")
         actual_physical = ui.slider(min=0, max=100, step=1, value=default_physical)
-        if 'actual_physical' in previous_averages:
-            prev_val = previous_averages['actual_physical']
-            if prev_val != default_physical:
-                ui.label(f"Previous average: {prev_val} (current: {default_physical})").classes("text-xs text-gray-500")
-            else:
-                ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
+        # Show predicted value from initialization if available
+        if 'expected_physical_load' in predicted_data:
+            pred_val = predicted_data.get('expected_physical_load')
+            try:
+                pred_num = float(pred_val)
+                if pred_num <= 10 and pred_num >= 0:
+                    pred_num = pred_num * 10
+                pred_val = int(round(pred_num))
+                if pred_val != default_physical:
+                    ui.label(f"Initialized: {pred_val} (current: {default_physical})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
 
         ui.label("Completion %")
         completion_pct = ui.slider(min=0, max=100, step=5, value=100)

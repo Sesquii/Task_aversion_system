@@ -121,12 +121,12 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
-            ui.label("Expected Physical Load")
-            physical_load = ui.slider(min=0, max=100, step=1, value=default_physical)
-            if 'expected_physical_load' in previous_averages:
-                prev_val = previous_averages['expected_physical_load']
-                if prev_val != default_physical:
-                    ui.label(f"Previous average: {prev_val} (current: {default_physical})").classes("text-xs text-gray-500")
+            ui.label("Expected Cognitive Load")
+            cog_load = ui.slider(min=0, max=100, step=1, value=default_cognitive)
+            if 'expected_cognitive_load' in previous_averages:
+                prev_val = previous_averages['expected_cognitive_load']
+                if prev_val != default_cognitive:
+                    ui.label(f"Previous average: {prev_val} (current: {default_cognitive})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
             ui.label("Expected Emotional Load")
@@ -137,12 +137,12 @@ def initialize_task_page(task_manager, emotion_manager):
                     ui.label(f"Previous average: {prev_val} (current: {default_emotional})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
-            ui.label("Expected Cognitive Load")
-            cog_load = ui.slider(min=0, max=100, step=1, value=default_cognitive)
-            if 'expected_cognitive_load' in previous_averages:
-                prev_val = previous_averages['expected_cognitive_load']
-                if prev_val != default_cognitive:
-                    ui.label(f"Previous average: {prev_val} (current: {default_cognitive})").classes("text-xs text-gray-500")
+            ui.label("Expected Physical Load")
+            physical_load = ui.slider(min=0, max=100, step=1, value=default_physical)
+            if 'expected_physical_load' in previous_averages:
+                prev_val = previous_averages['expected_physical_load']
+                if prev_val != default_physical:
+                    ui.label(f"Previous average: {prev_val} (current: {default_physical})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
