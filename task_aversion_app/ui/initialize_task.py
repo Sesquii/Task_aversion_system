@@ -28,7 +28,6 @@ def initialize_task_page(task_manager, emotion_manager):
             return
 
         task = task_manager.get_task(instance.get('task_id'))
-        task_description = task.get('description', '') if task else ''
         predicted_raw = instance.get('predicted') or '{}'
         try:
             predicted_data = json.loads(predicted_raw) if predicted_raw else {}
@@ -74,8 +73,8 @@ def initialize_task_page(task_manager, emotion_manager):
         with ui.column().classes("w-full max-w-xl gap-4"):
 
             description_field = ui.textarea(
-                label="Task Description (optional)",
-                value=task_description,
+                label="Task Specifics (optional)",
+                value='',
             )
 
             ui.label("Emotional Context")
