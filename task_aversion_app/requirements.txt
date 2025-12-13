@@ -2,3 +2,4 @@ nicegui
 pandas
 matplotlib
 plotly
+scipy

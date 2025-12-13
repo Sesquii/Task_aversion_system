@@ -1,4 +1,12 @@
-<!-- abd2ba96-8431-41ff-8db9-436683c7947c 0b0ae264-cddf-4652-aa1f-04cd03fc98c7 -->
+---
+name: Analytics Dashboard Overhaul Plan
+overview: ""
+todos:
+  - id: 4a212e9b-0f7a-4f6d-b5ca-a3fedc958fb8
+    content: Integrate new sections into build_analytics_page() with proper layout and developer toggle
+    status: pending
+---
+
 # Analytics Dashboard Overhaul Plan
 
 ## Overview
@@ -122,11 +130,3 @@ Add collapsible/hidden section (toggle with button or keyboard shortcut):
 - Correlation section: Hidden by default, accessible via "Developer Tools" button
 - Clear labeling of experimental features
 - Responsive charts that work on different screen sizes
-
-### To-dos
-
-- [ ] Add get_attribute_trends() and get_multi_attribute_trends() methods to Analytics class for daily time-series aggregation
-- [ ] Add calculate_correlation(), find_threshold_relationships(), and get_scatter_data() methods to Analytics class
-- [ ] Create _render_trends_section() with attribute selector, aggregation dropdown, and multi-line Plotly chart
-- [ ] Create _render_correlation_explorer() with scatter plots, correlation display, and threshold analysis
-- [ ] Integrate new sections into build_analytics_page() with proper layout and developer toggle

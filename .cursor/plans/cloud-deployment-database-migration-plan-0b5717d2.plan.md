@@ -1,4 +1,63 @@
-<!-- 0b5717d2-8b57-443c-ae21-578f54810a9f f10e8111-ec0e-43d5-8025-e16f938c9d00 -->
+---
+name: Cloud Deployment & Database Migration Plan
+overview: ""
+todos:
+  - id: 5ada1854-739b-461e-8fcc-adeee2117d4a
+    content: Create database.py with SQLAlchemy models (User, Task, TaskInstance, Emotion, Survey) using PostgreSQL-compatible types
+    status: pending
+  - id: f142c54f-6d92-4768-b788-f953ca1c4292
+    content: Create migrate_to_sqlite.py to migrate CSV data to database with verification
+    status: pending
+  - id: 2b920116-31b6-461f-9e8d-3a6e7d65ea91
+    content: Update task_manager.py to use database instead of CSV (replace _reload/_save methods)
+    status: pending
+  - id: 4d75c17e-be18-4dbb-b09f-5e153bf739d2
+    content: Update instance_manager.py to use database instead of CSV (replace _reload/_save methods)
+    status: pending
+  - id: a42f2c14-f604-437f-b707-cf1405fca4ec
+    content: Update emotion_manager.py to use database instead of CSV (replace _reload/_save methods)
+    status: pending
+  - id: 42f4bd23-4ada-46f3-85a3-9b8ad2b0b771
+    content: Update analytics.py to use database queries instead of CSV file reads
+    status: pending
+  - id: 647885f4-4ee2-4a9f-a6bb-13a0ca8da7ee
+    content: Create .env.example and update requirements.txt with SQLAlchemy, python-dotenv, psycopg2-binary
+    status: pending
+  - id: f2fa345a-c244-4bc6-9424-316ede481fda
+    content: Create Procfile, runtime.txt, railway.json/render.yaml, and update app.py for production deployment
+    status: pending
+  - id: 81fc2e18-946b-4527-9d0b-c233c7dc8706
+    content: Test database migration, verify all CRUD operations, test analytics queries, deploy to cloud and verify
+    status: pending
+  - id: 2a2920c7-da6e-495e-9696-5dcd8ea5d221
+    content: Add aversion-related attributes to TaskInstance model (recommendation_used, excitement_change, capacity_before/after, etc.)
+    status: pending
+  - id: 2851325c-5c7a-40c0-ba8c-4e37c7534e84
+    content: Implement calculate_aversion_score(), get_capacity_patterns(), get_completion_frequency_patterns() in analytics.py
+    status: pending
+  - id: 7d3813dc-47cd-4472-909c-78fe269a150b
+    content: Update dashboard.py to track recommendation usage and update analytics_page.py with new visualizations
+    status: pending
+  - id: 0d4a5e75-ab4c-4fed-971f-f971e012270a
+    content: Create auth.py with registration, login, password hashing, session management, and guest user support
+    status: pending
+  - id: 3f299bd0-de02-42b5-a213-7df75ca384ec
+    content: Add user_id foreign keys to TaskInstance and Task models, create migration for existing data to anonymous user
+    status: pending
+  - id: b27c13a2-bc32-41ff-9815-0b3c880df3f9
+    content: Update task_manager.py, instance_manager.py, analytics.py to filter all queries by user_id
+    status: pending
+  - id: 74a2d063-cf40-45d6-973e-960bb10acbc8
+    content: Create login.py UI and update app.py with authentication middleware
+    status: pending
+  - id: febee5f8-5d0a-40b4-b9e2-99d732beb89d
+    content: Create data_collection.py for anonymous data export and survey.py for survey system
+    status: pending
+  - id: 2fc5b3d6-072d-408f-b2d8-102499e96ee8
+    content: Create ml_recommender.py for ML model integration and update analytics.py/dashboard.py to use ML recommendations
+    status: pending
+---
+
 # Cloud Deployment & Database Migration Plan
 
 ## Overview
@@ -370,24 +429,3 @@ This plan migrates the Task Aversion System from CSV-based storage to a cloud-de
 6. Merge to main
 7. Proceed with Phase 2 (Enhanced Analytics)
 8. Continue with Phase 3 and 4 as planned
-
-### To-dos
-
-- [ ] Create database.py with SQLAlchemy models (User, Task, TaskInstance, Emotion, Survey) using PostgreSQL-compatible types
-- [ ] Create migrate_to_sqlite.py to migrate CSV data to database with verification
-- [ ] Update task_manager.py to use database instead of CSV (replace _reload/_save methods)
-- [ ] Update instance_manager.py to use database instead of CSV (replace _reload/_save methods)
-- [ ] Update emotion_manager.py to use database instead of CSV (replace _reload/_save methods)
-- [ ] Update analytics.py to use database queries instead of CSV file reads
-- [ ] Create .env.example and update requirements.txt with SQLAlchemy, python-dotenv, psycopg2-binary
-- [ ] Create Procfile, runtime.txt, railway.json/render.yaml, and update app.py for production deployment
-- [ ] Test database migration, verify all CRUD operations, test analytics queries, deploy to cloud and verify
-- [ ] Add aversion-related attributes to TaskInstance model (recommendation_used, excitement_change, capacity_before/after, etc.)
-- [ ] Implement calculate_aversion_score(), get_capacity_patterns(), get_completion_frequency_patterns() in analytics.py
-- [ ] Update dashboard.py to track recommendation usage and update analytics_page.py with new visualizations
-- [ ] Create auth.py with registration, login, password hashing, session management, and guest user support
-- [ ] Add user_id foreign keys to TaskInstance and Task models, create migration for existing data to anonymous user
-- [ ] Update task_manager.py, instance_manager.py, analytics.py to filter all queries by user_id
-- [ ] Create login.py UI and update app.py with authentication middleware
-- [ ] Create data_collection.py for anonymous data export and survey.py for survey system
-- [ ] Create ml_recommender.py for ML model integration and update analytics.py/dashboard.py to use ML recommendations

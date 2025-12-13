@@ -1,4 +1,9 @@
-<!-- 2d421cbd-d6de-4ffa-95f8-af33a8d6415d 31aec94a-8f74-4a13-baad-358199d61135 -->
+---
+name: ""
+overview: ""
+todos: []
+---
+
 # Deployment & Data Plan
 
 **Decisions**
@@ -34,13 +39,3 @@ flowchart TD
   App --> PG[Postgres]
   App --> Logs[Backups/Logs]
 ```
-
-### To-dos
-
-- [ ] Set up Postgres DB/user/env vars
-- [ ] Migrate CSV data to Postgres and switch reads/writes
-- [ ] Enforce unique usernames and add UI notice
-- [ ] Configure nginx reverse proxy with TLS
-- [ ] Create systemd unit/env files and enable service
-- [ ] Smoke test via domain and run light load test
-- [ ] Set release/tag process with weekly migrations

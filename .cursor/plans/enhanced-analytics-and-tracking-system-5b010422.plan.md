@@ -1,4 +1,12 @@
-<!-- 5b010422-a57c-4dcb-b06b-07da2e4096cd 62570b8f-87b4-4345-abe2-5b9ebc84528b -->
+---
+name: Enhanced Analytics and Tracking System
+overview: ""
+todos:
+  - id: 8ae4e96c-14bf-47f1-9d74-a4b973b9a5a7
+    content: "Improve input forms in initialize_task.py and complete_task.py: group related inputs, add collapsible sections, tooltips, and prominent previous averages"
+    status: pending
+---
+
 # Enhanced Analytics and Tracking System
 
 ## Overview
@@ -298,21 +306,3 @@ Improve the analytics and tracking system to better measure task aversion indire
 - Multi-user support with personalization
 - Learning social standard frequencies from external data
 - Automatic mode recommendation (derived vs manual) based on user patterns
-
-### To-dos
-
-- [ ] Update emotion_manager.py to support emotion scales (intensity 0-100 or bipolar -100 to +100) and store emotion definitions with scale types
-- [ ] Modify create_task.py to allow task templates to define which emotions to track, storing in task template data
-- [ ] Update initialize_task.py to show emotion + intensity sliders instead of simple list, supporting both intensity and bipolar scales
-- [ ] Add new aversion-related attributes to task_schema.py: recommendation_used, excitement_change, capacity_boost, recommendation_viewed (binary and numeric types)
-- [ ] Add tracking in dashboard.py and recommendation components to record when user views/starts recommended tasks
-- [ ] Implement capacity building pattern detection in analytics.py: sequence analysis, time windows, relief change tracking
-- [ ] Add excitement/relief change tracking in initialize_task.py: track initial vs updated expected relief
-- [ ] Add binary attributes to task_schema.py: was_recommended, felt_excited, increased_capacity, was_procrastinated with appropriate defaults
-- [ ] Add toggle switches for binary options in initialize_task.py and complete_task.py, grouped together for quick input
-- [ ] Implement calculate_aversion_score() method in analytics.py using delay, expected relief, emotional load, motivation, recommendation usage, excitement
-- [ ] Add get_capacity_building_patterns() method in analytics.py to identify sequences and measure success rates
-- [ ] Add recommendation effectiveness tracking in analytics.py: completion rates, average relief, user satisfaction metrics
-- [ ] Update analytics_page.py to display aversion scores, capacity building patterns, recommendation effectiveness, and emotion intensity trends
-- [ ] Ensure backward compatibility in task_schema.py with sensible defaults, and add data backfill logic in analytics.py to derive binary values from existing data
-- [ ] Improve input forms in initialize_task.py and complete_task.py: group related inputs, add collapsible sections, tooltips, and prominent previous averages
