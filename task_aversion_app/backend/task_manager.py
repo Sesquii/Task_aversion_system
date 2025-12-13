@@ -78,6 +78,9 @@ class TaskManager:
         if task_id not in self.df['task_id'].values:
             return False
         idx = self.df.index[self.df['task_id'] == task_id][0]
+        # Ensure task_type column exists
+        if 'task_type' not in self.df.columns:
+            self.df['task_type'] = 'Work'
         for k,v in kwargs.items():
             if k in self.df.columns:
                 self.df.at[idx,k] = v

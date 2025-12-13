@@ -174,9 +174,10 @@ def refresh_templates():
             col = columns[idx % 3]
             with col:
                 with ui.card().classes("p-2 mb-2 w-full"):
-                    ui.markdown(f"**{t['name']}** — v{t['version']}").classes("text-xs")
+                    ui.markdown(f"**{t['name']}**").classes("text-xs")
                     with ui.row().classes("gap-1"):
                         ui.button("INIT", on_click=lambda tid=t['task_id']: init_quick(tid)).props("dense size=sm")
+                        ui.button("EDIT", on_click=lambda task=t: edit_template(task)).props("dense size=sm color=blue")
                         ui.button("DELETE", on_click=lambda tid=t['task_id']: delete_template(tid)).props("dense size=sm color=red")
 
 
@@ -184,6 +185,60 @@ def delete_instance(instance_id):
     im.delete_instance(instance_id)
     ui.notify("Deleted", color='negative')
     ui.navigate.reload()
+
+def edit_template(task):
+    """Open a dialog to edit a task template."""
+    print(f"[Dashboard] edit_template called: {task.get('task_id')}")
+    
+    task_id = task.get('task_id')
+    current_name = task.get('name', '')
+    current_desc = task.get('description', '')
+    current_task_type = task.get('task_type', 'Work')
+    current_est = task.get('default_estimate_minutes', 0)
+    
+    try:
+        current_est = int(current_est) if current_est else 0
+    except (TypeError, ValueError):
+        current_est = 0
+    
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-4'):
+        ui.label("Edit Task Template").classes("text-xl font-bold mb-4")
+        
+        name_input = ui.input(label="Task Name", value=current_name).classes("w-full")
+        desc_input = ui.textarea(label="Description (optional)", value=current_desc).classes("w-full")
+        task_type_select = ui.select(
+            ['Work', 'Play', 'Self care'], 
+            label='Task Type', 
+            value=current_task_type
+        ).classes("w-full")
+        est_input = ui.number(label='Default estimate minutes', value=current_est).classes("w-full")
+        
+        def save_edit():
+            if not name_input.value.strip():
+                ui.notify("Task name required", color='negative')
+                return
+            
+            success = tm.update_task(
+                task_id,
+                name=name_input.value.strip(),
+                description=desc_input.value or '',
+                task_type=task_type_select.value,
+                default_estimate_minutes=int(est_input.value or 0)
+            )
+            
+            if success:
+                ui.notify("Task updated", color='positive')
+                dialog.close()
+                refresh_templates()
+            else:
+                ui.notify("Update failed", color='negative')
+        
+        with ui.row().classes("gap-2 mt-4"):
+            ui.button("Save", on_click=save_edit).props("color=primary")
+            ui.button("Cancel", on_click=dialog.close)
+    
+    dialog.open()
+
 
 def delete_template(task_id):
     print(f"[Dashboard] delete_template called: {task_id}")
