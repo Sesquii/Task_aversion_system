@@ -33,27 +33,10 @@ def cancel_task_page(task_manager, emotion_manager):
 
             inst_select.on('update:model-value', on_choose)
 
-        ui.label("Emotional State at Cancellation")
-        actual_emotional = ui.slider(min=0, max=10, value=5)
-
-        ui.label("Mental Load at Cancellation")
-        actual_cognitive = ui.slider(min=0, max=10, value=5)
-
-        ui.label("Relief Expectation")
-        actual_relief = ui.slider(min=0, max=10, value=5)
-
-        ui.label("Progress %")
-        completion_pct = ui.slider(min=0, max=100, step=5, value=50)
-
-        ui.label("Time Spent (minutes)")
-        actual_time = ui.number(value=0)
-
         reason_for_canceling = ui.textarea(
             label='Reason for Canceling',
             placeholder='Why are you canceling this task?'
-        )
-
-        notes = ui.textarea(label='Notes (optional)')
+        ).classes("w-full")
 
         def submit_cancellation():
             iid = (inst_input.value or "").strip()
@@ -61,14 +44,12 @@ def cancel_task_page(task_manager, emotion_manager):
                 ui.notify("Instance ID required", color='negative')
                 return
 
+            if not reason_for_canceling.value or not reason_for_canceling.value.strip():
+                ui.notify("Please provide a reason for canceling", color='negative')
+                return
+
             actual = {
-                'actual_relief': int(actual_relief.value),
-                'actual_cognitive': int(actual_cognitive.value),
-                'actual_emotional': int(actual_emotional.value),
-                'completion_percent': int(completion_pct.value),
-                'time_actual_minutes': int(actual_time.value or 0),
-                'reason_for_canceling': reason_for_canceling.value or "",
-                'notes': notes.value or "",
+                'reason_for_canceling': reason_for_canceling.value.strip(),
                 'cancelled': True
             }
 
