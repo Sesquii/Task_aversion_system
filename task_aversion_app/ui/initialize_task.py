@@ -83,12 +83,67 @@ def initialize_task_page(task_manager, emotion_manager):
             stored_emotions = emotion_manager.list_emotions()
             emotion_options = default_emotions + [e for e in stored_emotions if e not in default_emotions]
 
+            # Load existing emotion values from predicted data
+            emotion_values_dict = predicted_data.get('emotion_values', {})
+            if isinstance(emotion_values_dict, str):
+                try:
+                    emotion_values_dict = json.loads(emotion_values_dict)
+                except json.JSONDecodeError:
+                    emotion_values_dict = {}
+            if not isinstance(emotion_values_dict, dict):
+                # Handle backward compatibility: if emotions is a list, create dict with default 50
+                if isinstance(emotion_values_dict, list):
+                    emotion_values_dict = {emotion: 50 for emotion in emotion_values_dict}
+                else:
+                    # Also check if there's an old 'emotions' list field
+                    old_emotions = predicted_data.get('emotions', [])
+                    if isinstance(old_emotions, list):
+                        emotion_values_dict = {emotion: 50 for emotion in old_emotions}
+                    else:
+                        emotion_values_dict = {}
+
             emotions = ui.select(
                 emotion_options,
-                multiple=True
+                multiple=True,
+                value=list(emotion_values_dict.keys()) if emotion_values_dict else []
             )
 
             new_em = ui.input(label="Add custom emotion")
+
+            # Container for emotion sliders
+            emotion_sliders_container = ui.column().classes("w-full gap-2")
+
+            # Dictionary to store emotion sliders
+            emotion_sliders = {}
+
+            def update_emotion_sliders():
+                """Update the emotion sliders based on selected emotions"""
+                # Clear existing sliders
+                emotion_sliders_container.clear()
+                emotion_sliders.clear()
+
+                selected_emotions = emotions.value or []
+                
+                if not selected_emotions:
+                    return
+
+                ui.label("Emotion Intensity (0-100)").classes("text-sm font-semibold mt-2")
+                
+                for emotion in selected_emotions:
+                    # Get default value from existing data or default to 50
+                    default_value = emotion_values_dict.get(emotion, 50)
+                    try:
+                        default_value = int(float(default_value))
+                        if default_value < 0 or default_value > 100:
+                            default_value = 50
+                    except (ValueError, TypeError):
+                        default_value = 50
+                    
+                    with emotion_sliders_container:
+                        ui.label(emotion).classes("text-sm")
+                        slider = ui.slider(min=0, max=100, step=1, value=default_value)
+                        emotion_sliders[emotion] = slider
+                        ui.label(f"Value: {default_value}").bind_text_from(slider, 'value', lambda v: f"Value: {v}").classes("text-xs text-gray-500")
 
             def add_emotion():
                 val = (new_em.value or '').strip()
@@ -106,8 +161,19 @@ def initialize_task_page(task_manager, emotion_manager):
                 current.add(val)
                 emotions.value = list(current)
                 new_em.set_value('')
+                update_emotion_sliders()
+
+            def on_emotion_selection_change(e):
+                """Handle emotion selection changes"""
+                update_emotion_sliders()
+
+            emotions.on('update:model-value', on_emotion_selection_change)
 
             ui.button("Add Emotion", on_click=add_emotion)
+
+            # Initialize sliders if emotions are already selected
+            if emotion_values_dict:
+                update_emotion_sliders()
 
             # Cognitive load slider (NiceGUI 1.x → no label)
             ui.label("Predicted relief")
@@ -183,6 +249,15 @@ def initialize_task_page(task_manager, emotion_manager):
                 except (TypeError, ValueError):
                     estimate_val = 0
 
+                # Collect emotion values from sliders
+                emotion_values = {}
+                for emotion in emotion_list:
+                    if emotion in emotion_sliders:
+                        emotion_values[emotion] = int(emotion_sliders[emotion].value)
+                    else:
+                        # If slider doesn't exist, use default 50
+                        emotion_values[emotion] = 50
+
                 entry = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "instance_id": instance_id,
@@ -201,7 +276,8 @@ def initialize_task_page(task_manager, emotion_manager):
 
                 predicted_payload = {
                     "time_estimate_minutes": estimate_val,
-                    "emotions": emotion_list,
+                    "emotions": emotion_list,  # Keep for backward compatibility
+                    "emotion_values": emotion_values,  # New: dictionary of emotion -> value
                     "expected_relief": predicted_relief.value,
                     "expected_cognitive_load": cog_load.value,
                     "expected_physical_load": physical_load.value,

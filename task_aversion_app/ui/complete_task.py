@@ -172,6 +172,130 @@ def complete_task_page(task_manager, emotion_manager):
             except (ValueError, TypeError):
                 pass
 
+        # ----- Emotion Tracking -----
+        ui.label("Emotional State After Completion").classes("text-lg font-semibold mt-4")
+        
+        # Load initial emotion values from predicted data (from initialization)
+        initial_emotion_values = predicted_data.get('emotion_values', {})
+        if isinstance(initial_emotion_values, str):
+            try:
+                initial_emotion_values = json.loads(initial_emotion_values)
+            except json.JSONDecodeError:
+                initial_emotion_values = {}
+        if not isinstance(initial_emotion_values, dict):
+            # Handle backward compatibility: if emotions is a list, create dict with default 50
+            if isinstance(initial_emotion_values, list):
+                initial_emotion_values = {emotion: 50 for emotion in initial_emotion_values}
+            else:
+                # Also check if there's an old 'emotions' list field
+                old_emotions = predicted_data.get('emotions', [])
+                if isinstance(old_emotions, list):
+                    initial_emotion_values = {emotion: 50 for emotion in old_emotions}
+                else:
+                    initial_emotion_values = {}
+        
+        # Load actual emotion values if they exist (for editing)
+        actual_emotion_values = current_actual_data.get('emotion_values', {})
+        if isinstance(actual_emotion_values, str):
+            try:
+                actual_emotion_values = json.loads(actual_emotion_values)
+            except json.JSONDecodeError:
+                actual_emotion_values = {}
+        if not isinstance(actual_emotion_values, dict):
+            actual_emotion_values = {}
+        
+        # Get all emotions that were tracked initially, plus any new ones added
+        initial_emotions = list(initial_emotion_values.keys())
+        actual_emotions = list(actual_emotion_values.keys())
+        all_emotions = list(set(initial_emotions + actual_emotions))
+        
+        # Container for emotion sliders
+        emotion_sliders_container = ui.column().classes("w-full gap-2")
+        emotion_sliders = {}
+        
+        def get_emotion_default_value(emotion):
+            """Get default value for an emotion: actual value if exists, else initial value, else 50"""
+            if emotion in actual_emotion_values:
+                val = actual_emotion_values[emotion]
+                try:
+                    return int(float(val))
+                except (ValueError, TypeError):
+                    pass
+            if emotion in initial_emotion_values:
+                val = initial_emotion_values[emotion]
+                try:
+                    return int(float(val))
+                except (ValueError, TypeError):
+                    pass
+            return 50
+        
+        def update_emotion_sliders():
+            """Update the emotion sliders"""
+            emotion_sliders_container.clear()
+            emotion_sliders.clear()
+            
+            if not all_emotions:
+                ui.label("No emotions were tracked during initialization. Add emotions below to track how completing this task affects your feelings.").classes("text-sm text-gray-600")
+                return
+            
+            ui.label("Emotion Intensity (0-100)").classes("text-sm font-semibold")
+            ui.label("Compare with initial values to see how completing the task affected your emotions.").classes("text-xs text-gray-500 mb-2")
+            
+            for emotion in all_emotions:
+                default_value = get_emotion_default_value(emotion)
+                initial_value = initial_emotion_values.get(emotion, 50)
+                
+                with emotion_sliders_container:
+                    with ui.row().classes("items-center gap-2 w-full"):
+                        ui.label(emotion).classes("text-sm font-medium min-w-[120px]")
+                        slider = ui.slider(min=0, max=100, step=1, value=default_value)
+                        emotion_sliders[emotion] = slider
+                        value_label = ui.label(f"{default_value}").classes("text-sm min-w-[40px]")
+                        value_label.bind_text_from(slider, 'value', lambda v: str(v))
+                    
+                    # Show initial value for comparison
+                    if emotion in initial_emotion_values:
+                        try:
+                            init_val = int(float(initial_value))
+                            change = default_value - init_val
+                            change_text = f"Initial: {init_val}"
+                            if change != 0:
+                                change_text += f" (change: {change:+d})"
+                            ui.label(change_text).classes("text-xs text-gray-500 ml-[120px]")
+                        except (ValueError, TypeError):
+                            pass
+        
+        # Initialize emotion sliders
+        update_emotion_sliders()
+        
+        # Add new emotion section
+        ui.label("Add New Emotion").classes("text-sm font-semibold mt-4")
+        default_emotions = ["Excitement", "Anxiety", "Confusion", "Overwhelm", "Dread", "Neutral"]
+        stored_emotions = emotion_manager.list_emotions()
+        emotion_options = default_emotions + [e for e in stored_emotions if e not in default_emotions]
+        
+        new_emotion_input = ui.input(label="Add custom emotion")
+        
+        def add_new_emotion():
+            val = (new_emotion_input.value or '').strip()
+            if not val:
+                ui.notify("Enter an emotion", color='negative')
+                return
+            if val in all_emotions:
+                ui.notify("Emotion already tracked", color='warning')
+                return
+            
+            # Add emotion to emotion manager if it's new
+            emotion_manager.add_emotion(val)
+            
+            # Add to all_emotions and update sliders
+            all_emotions.append(val)
+            update_emotion_sliders()
+            new_emotion_input.set_value('')
+            ui.notify(f"Added emotion: {val}", color='positive')
+        
+        ui.button("Add New Emotion", on_click=add_new_emotion).classes("mb-4")
+
         ui.label("Completion %")
         completion_pct = ui.slider(min=0, max=100, step=5, value=100)
 
@@ -212,6 +336,15 @@ def complete_task_page(task_manager, emotion_manager):
                 ui.notify("Instance ID required", color='negative')
                 return
 
+            # Collect emotion values from sliders
+            emotion_values = {}
+            for emotion in all_emotions:
+                if emotion in emotion_sliders:
+                    emotion_values[emotion] = int(emotion_sliders[emotion].value)
+                else:
+                    # Fallback to default if slider doesn't exist
+                    emotion_values[emotion] = get_emotion_default_value(emotion)
+
             actual = {
                 'actual_relief': int(actual_relief.value),
                 'actual_cognitive': int(actual_cognitive.value),
@@ -219,7 +352,8 @@ def complete_task_page(task_manager, emotion_manager):
                 'actual_physical': int(actual_physical.value),
                 'completion_percent': int(completion_pct.value),
                 'time_actual_minutes': int(actual_time.value or 0),
-                'notes': notes.value or ""
+                'notes': notes.value or "",
+                'emotion_values': emotion_values  # Store actual emotion values
             }
 
             print("[complete_task] actual payload:", actual)
