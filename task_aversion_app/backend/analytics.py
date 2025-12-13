@@ -490,8 +490,36 @@ class Analytics:
         )
         
         # Calculate productivity time (sum of actual time from actual_dict) - LAST 7 DAYS ONLY
+        # Productivity includes only Work and Self care tasks, not Play tasks
         from datetime import timedelta
         seven_days_ago = datetime.now() - timedelta(days=7)
+        
+        # Prepare completed tasks with date for later use (includes ALL tasks for relief score)
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join instances with tasks to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            # Fill missing task_type with 'Work' as default
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            # Normalize task_type to lowercase for comparison
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Work and Self care tasks (exclude Play)
+            productivity_tasks = completed_with_type[
+                completed_with_type['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
+            ]
+        else:
+            # Fallback: if no task_type available, use all tasks
+            productivity_tasks = completed
         
         def _get_actual_time(row):
             try:
@@ -502,12 +530,12 @@ class Analytics:
                 pass
             return None
         
-        completed['time_actual'] = completed.apply(_get_actual_time, axis=1)
-        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        productivity_tasks['time_actual'] = productivity_tasks.apply(_get_actual_time, axis=1)
+        productivity_tasks['time_actual'] = pd.to_numeric(productivity_tasks['time_actual'], errors='coerce')
         
-        # Filter to last 7 days
-        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
-        completed_last_7d = completed[completed['completed_at_dt'] >= seven_days_ago]
+        # Filter productivity tasks to last 7 days
+        # Note: completed_at_dt is already set on completed, and merge copies it to productivity_tasks
+        completed_last_7d = productivity_tasks[productivity_tasks['completed_at_dt'] >= seven_days_ago]
         productivity_time = completed_last_7d['time_actual'].fillna(0).sum()
         
         # Calculate default relief points totals
@@ -553,12 +581,14 @@ class Analytics:
         total_relief_score = total_relief_duration_score
         
         # Calculate weekly relief score (sum of relief × duration for last 7 days)
-        completed_last_7d['relief_score_numeric'] = pd.to_numeric(completed_last_7d['relief_score'], errors='coerce')
-        completed_last_7d['duration_minutes_numeric'] = pd.to_numeric(completed_last_7d['duration_minutes'], errors='coerce')
-        completed_last_7d['relief_duration_score'] = (
-            completed_last_7d['relief_score_numeric'] * completed_last_7d['duration_minutes_numeric']
+        # Note: relief score includes ALL tasks (work, play, self care), not just productivity tasks
+        completed_last_7d_all = completed[completed['completed_at_dt'] >= seven_days_ago]
+        completed_last_7d_all['relief_score_numeric'] = pd.to_numeric(completed_last_7d_all['relief_score'], errors='coerce')
+        completed_last_7d_all['duration_minutes_numeric'] = pd.to_numeric(completed_last_7d_all['duration_minutes'], errors='coerce')
+        completed_last_7d_all['relief_duration_score'] = (
+            completed_last_7d_all['relief_score_numeric'] * completed_last_7d_all['duration_minutes_numeric']
         )
-        weekly_relief_score = completed_last_7d['relief_duration_score'].fillna(0).sum()
+        weekly_relief_score = completed_last_7d_all['relief_duration_score'].fillna(0).sum()
         
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
@@ -582,6 +612,8 @@ class Analytics:
     def get_weekly_hours_history(self) -> Dict[str, any]:
         """Get historical daily productivity hours data for trend analysis (last 90 days).
         
+        Productivity includes only Work and Self care tasks, not Play tasks.
+        
         Returns:
             Dict with 'dates' (list of date strings), 'hours' (list of hours per day),
             'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
@@ -597,6 +629,27 @@ class Analytics:
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
             }
+        
+        # Load tasks to get task_type and filter to only Work and Self care tasks
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join instances with tasks to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            # Fill missing task_type with 'Work' as default
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            # Normalize task_type to lowercase for comparison
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Work and Self care tasks (exclude Play)
+            completed = completed_with_type[
+                completed_with_type['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
+            ]
         
         # Get actual time from completed tasks
         def _get_actual_time(row):
