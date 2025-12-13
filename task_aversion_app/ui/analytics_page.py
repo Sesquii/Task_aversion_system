@@ -41,6 +41,7 @@ def build_analytics_page():
 
     metrics = analytics_service.get_dashboard_metrics()
     relief_summary = analytics_service.get_relief_summary()
+    life_balance = metrics.get('life_balance', {})
     with ui.row().classes("gap-3 flex-wrap mb-4"):
         for title, value in [
             ("Active", metrics['counts']['active']),
@@ -59,6 +60,40 @@ def build_analytics_page():
             with ui.card().classes("p-3 min-w-[150px]"):
                 ui.label(title).classes("text-xs text-gray-500")
                 ui.label(value).classes("text-xl font-bold")
+    
+    # Life Balance Section
+    with ui.card().classes("p-4 mb-4"):
+        ui.label("Life Balance").classes("text-xl font-bold mb-2")
+        ui.label("Comparison of Work vs Play task amounts").classes("text-sm text-gray-500 mb-3")
+        
+        balance_score = life_balance.get('balance_score', 50.0)
+        work_count = life_balance.get('work_count', 0)
+        play_count = life_balance.get('play_count', 0)
+        self_care_count = life_balance.get('self_care_count', 0)
+        work_time = life_balance.get('work_time_minutes', 0.0)
+        play_time = life_balance.get('play_time_minutes', 0.0)
+        self_care_time = life_balance.get('self_care_time_minutes', 0.0)
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Balance Score").classes("text-xs text-gray-500")
+                ui.label(f"{balance_score:.1f}").classes("text-2xl font-bold")
+                ui.label("(50 = balanced)").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Work Tasks").classes("text-xs text-gray-500")
+                ui.label(f"{work_count} tasks").classes("text-lg font-semibold")
+                ui.label(f"{work_time:.1f} min").classes("text-sm text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Play Tasks").classes("text-xs text-gray-500")
+                ui.label(f"{play_count} tasks").classes("text-lg font-semibold")
+                ui.label(f"{play_time:.1f} min").classes("text-sm text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Self Care Tasks").classes("text-xs text-gray-500")
+                ui.label(f"{self_care_count} tasks").classes("text-lg font-semibold")
+                ui.label(f"{self_care_time:.1f} min").classes("text-sm text-gray-600")
 
     with ui.row().classes("analytics-grid flex-wrap w-full"):
         _render_time_chart()

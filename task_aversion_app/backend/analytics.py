@@ -277,6 +277,9 @@ class Analytics:
             # Calculate ratio: actual / estimate (1.0 = perfect, >1 = took longer, <1 = took less)
             time_accuracy = _avg(valid_time_comparisons['time_actual_num'] / valid_time_comparisons['time_estimate_num'])
         
+        # Calculate life balance
+        life_balance = self.get_life_balance()
+        
         metrics = {
             'counts': {
                 'active': int(len(active)),
@@ -298,8 +301,117 @@ class Analytics:
                 'avg_delay': _avg(df['delay_minutes']),
                 'estimation_accuracy': round(time_accuracy, 2),
             },
+            'life_balance': life_balance,
         }
         return metrics
+
+    def get_life_balance(self) -> Dict[str, any]:
+        """Calculate life balance metric comparing work and play task amounts.
+        
+        Returns:
+            Dict with work_count, play_count, work_time_minutes, play_time_minutes,
+            balance_score (0-100, where 50 = balanced), and ratio
+        """
+        df = self._load_instances()
+        
+        if df.empty:
+            return {
+                'work_count': 0,
+                'play_count': 0,
+                'self_care_count': 0,
+                'work_time_minutes': 0.0,
+                'play_time_minutes': 0.0,
+                'self_care_time_minutes': 0.0,
+                'balance_score': 50.0,
+                'work_play_ratio': 0.0,
+            }
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        if tasks_df.empty or 'task_type' not in tasks_df.columns:
+            return {
+                'work_count': 0,
+                'play_count': 0,
+                'self_care_count': 0,
+                'work_time_minutes': 0.0,
+                'play_time_minutes': 0.0,
+                'self_care_time_minutes': 0.0,
+                'balance_score': 50.0,
+                'work_play_ratio': 0.0,
+            }
+        
+        # Join instances with tasks to get task_type
+        merged = df.merge(
+            tasks_df[['task_id', 'task_type']],
+            on='task_id',
+            how='left'
+        )
+        
+        # Filter to completed tasks only
+        completed = merged[merged['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'work_count': 0,
+                'play_count': 0,
+                'self_care_count': 0,
+                'work_time_minutes': 0.0,
+                'play_time_minutes': 0.0,
+                'self_care_time_minutes': 0.0,
+                'balance_score': 50.0,
+                'work_play_ratio': 0.0,
+            }
+        
+        # Fill missing task_type with 'Work' as default
+        completed['task_type'] = completed['task_type'].fillna('Work')
+        
+        # Normalize task_type to lowercase for comparison
+        completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+        
+        # Get duration in minutes
+        completed['duration_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce').fillna(0.0)
+        
+        # Count tasks by type (case-insensitive)
+        work_tasks = completed[completed['task_type_normalized'] == 'work']
+        play_tasks = completed[completed['task_type_normalized'] == 'play']
+        self_care_tasks = completed[completed['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])]
+        
+        work_count = len(work_tasks)
+        play_count = len(play_tasks)
+        self_care_count = len(self_care_tasks)
+        
+        # Calculate time spent
+        work_time = work_tasks['duration_numeric'].sum()
+        play_time = play_tasks['duration_numeric'].sum()
+        self_care_time = self_care_tasks['duration_numeric'].sum()
+        
+        # Calculate work/play ratio (work / (work + play))
+        total_work_play_time = work_time + play_time
+        if total_work_play_time > 0:
+            work_play_ratio = work_time / total_work_play_time
+        else:
+            work_play_ratio = 0.5  # Neutral if no data
+        
+        # Calculate balance score (0-100 scale)
+        # 50 = perfectly balanced (50% work, 50% play)
+        # 0 = all play, 100 = all work
+        # Formula: 50 + (work_play_ratio - 0.5) * 100
+        balance_score = 50.0 + ((work_play_ratio - 0.5) * 100.0)
+        balance_score = max(0.0, min(100.0, balance_score))
+        
+        return {
+            'work_count': int(work_count),
+            'play_count': int(play_count),
+            'self_care_count': int(self_care_count),
+            'work_time_minutes': round(float(work_time), 1),
+            'play_time_minutes': round(float(play_time), 1),
+            'self_care_time_minutes': round(float(self_care_time), 1),
+            'balance_score': round(balance_score, 1),
+            'work_play_ratio': round(work_play_ratio, 3),
+        }
 
     def get_relief_summary(self) -> Dict[str, any]:
         """Calculate relief points, productivity time, and relief statistics."""
