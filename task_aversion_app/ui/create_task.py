@@ -12,7 +12,7 @@ def create_task_page(task_manager, emotion_manager):
 
             name = ui.input(label="Task Name")
             desc = ui.textarea(label="Description (optional)")
-            ttype = ui.select(['one-time','recurring','routine','project'], label='Type', value='one-time')
+            task_type = ui.select(['Work', 'Play', 'Self care'], label='Task Type', value='Work')
             est = ui.number(label='Default estimate minutes', value=0)
 
             def save_task():
@@ -23,10 +23,9 @@ def create_task_page(task_manager, emotion_manager):
                 tid = task_manager.create_task(
                     name.value.strip(),
                     description=desc.value or '',
-                    ttype=ttype.value,
-                    is_recurring=(ttype.value != 'one-time'),
                     categories=json.dumps([]),
-                    default_estimate_minutes=int(est.value or 0)
+                    default_estimate_minutes=int(est.value or 0),
+                    task_type=task_type.value
                 )
 
                 ui.notify(f"Task created: {tid}", color='positive')

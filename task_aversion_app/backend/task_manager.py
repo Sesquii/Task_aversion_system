@@ -11,9 +11,9 @@ class TaskManager:
         os.makedirs(DATA_DIR, exist_ok=True)
         self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
         # task definition fields:
-        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes
+        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type
         if not os.path.exists(self.tasks_file):
-            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes']).to_csv(self.tasks_file, index=False)
+            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type']).to_csv(self.tasks_file, index=False)
         self._reload()
         self.initialization_entries = []
     def _reload(self):
@@ -21,6 +21,11 @@ class TaskManager:
         # ensure proper dtypes for numeric fields where necessary
         if 'version' not in self.df.columns:
             self.df['version'] = 1
+        # ensure task_type column exists with default value
+        if 'task_type' not in self.df.columns:
+            self.df['task_type'] = 'Work'
+        # fill any empty task_type values with default
+        self.df['task_type'] = self.df['task_type'].fillna('Work')
     def get_task(self, task_id):
         """Return a task row by id as a dict."""
         self._reload()
@@ -42,7 +47,7 @@ class TaskManager:
         self._reload()
         return self.df.copy()
 
-    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0):
+    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work'):
         """
         Creates a new task definition and returns task_id
         """
@@ -58,8 +63,12 @@ class TaskManager:
             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M"),
             'is_recurring': str(bool(is_recurring)),
             'categories': categories,
-            'default_estimate_minutes': int(default_estimate_minutes)
+            'default_estimate_minutes': int(default_estimate_minutes),
+            'task_type': task_type
         }
+        # Ensure task_type column exists in dataframe
+        if 'task_type' not in self.df.columns:
+            self.df['task_type'] = ''
         self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
         self._save()
         return task_id
