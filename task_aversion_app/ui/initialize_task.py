@@ -46,6 +46,10 @@ def initialize_task_page(task_manager, emotion_manager):
         task_id = instance.get('task_id')
         previous_averages = im.get_previous_task_averages(task_id) if task_id else {}
         
+        # Get initial aversion (first time doing the task) and previous aversion
+        initial_aversion = im.get_initial_aversion(task_id) if task_id else None
+        previous_aversion = previous_averages.get('expected_aversion')
+        
         # Helper to get default value, scaling from 0-10 to 0-100 if needed
         def get_default_value(key, default=50):
             # First check if current instance has a value
@@ -64,6 +68,8 @@ def initialize_task_page(task_manager, emotion_manager):
                 return previous_averages[key]
             return default
         
+        # Default aversion: use previous average if available, otherwise 50
+        default_aversion = previous_aversion if previous_aversion is not None else 50
         default_relief = get_default_value('expected_relief', 50)
         default_cognitive = get_default_value('expected_cognitive_load', 50)
         default_physical = get_default_value('expected_physical_load', 50)
@@ -71,6 +77,53 @@ def initialize_task_page(task_manager, emotion_manager):
         default_motivation = get_default_value('motivation', 50)
 
         with ui.column().classes("w-full max-w-xl gap-4"):
+
+            # Aversion slider at the top
+            ui.label("Aversion (0-100)").classes("text-lg font-semibold")
+            
+            # Create a container for the slider with marker
+            aversion_container = ui.column().classes("w-full gap-2")
+            
+            with aversion_container:
+                # Slider
+                aversion_slider = ui.slider(min=0, max=100, step=1, value=default_aversion)
+                aversion_value_label = ui.label(f"Value: {default_aversion}").bind_text_from(
+                    aversion_slider, 'value', lambda v: f"Value: {v}"
+                ).classes("text-sm")
+                
+                # Show initial aversion marker and previous aversion info
+                if initial_aversion is not None:
+                    ui.label(f"Initial aversion: {initial_aversion}").classes("text-xs text-blue-600 font-semibold")
+                else:
+                    ui.label("No initial aversion (first time doing this task)").classes("text-xs text-gray-500 italic")
+                
+                if previous_aversion is not None:
+                    if previous_aversion != default_aversion:
+                        ui.label(f"Previous average: {previous_aversion} (current: {default_aversion})").classes("text-xs text-gray-500")
+                    else:
+                        ui.label(f"Previous average: {previous_aversion}").classes("text-xs text-gray-500")
+            
+            # Add visual marker for initial aversion on the slider using CSS
+            if initial_aversion is not None:
+                # Create a custom style to show the initial aversion marker
+                ui.add_head_html(f"""
+                    <style>
+                        .aversion-slider-container {{
+                            position: relative;
+                        }}
+                        .aversion-marker {{
+                            position: absolute;
+                            left: {initial_aversion}%;
+                            top: -5px;
+                            width: 2px;
+                            height: 20px;
+                            background-color: #3b82f6;
+                            pointer-events: none;
+                            z-index: 10;
+                        }}
+                    </style>
+                """)
+                # Note: NiceGUI sliders don't easily support visual markers, so we'll show it in text for now
 
             description_field = ui.textarea(
                 label="Task Specifics (optional)",
@@ -258,6 +311,30 @@ def initialize_task_page(task_manager, emotion_manager):
                         # If slider doesn't exist, use default 50
                         emotion_values[emotion] = 50
 
+                # Determine if this is the first time doing the task
+                # Check if there are any other initialized instances for this task
+                is_first_time = initial_aversion is None
+                current_aversion = int(aversion_slider.value)
+                
+                # If this is the first time, set initial_aversion; otherwise use expected_aversion
+                predicted_payload = {
+                    "time_estimate_minutes": estimate_val,
+                    "emotions": emotion_list,  # Keep for backward compatibility
+                    "emotion_values": emotion_values,  # New: dictionary of emotion -> value
+                    "expected_relief": predicted_relief.value,
+                    "expected_cognitive_load": cog_load.value,
+                    "expected_physical_load": physical_load.value,
+                    "expected_emotional_load": emotional_load.value,
+                    "physical_context": physical_value,
+                    "motivation": motivation.value,
+                    "description": description_field.value or '',
+                    "expected_aversion": current_aversion,  # Current aversion value
+                }
+                
+                # If this is the first time doing the task, set initial_aversion
+                if is_first_time:
+                    predicted_payload["initial_aversion"] = current_aversion
+
                 entry = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "instance_id": instance_id,
@@ -272,19 +349,6 @@ def initialize_task_page(task_manager, emotion_manager):
                     "estimate_minutes": estimate_val,
                     "initialized": True,
                     "completed": False,
-                }
-
-                predicted_payload = {
-                    "time_estimate_minutes": estimate_val,
-                    "emotions": emotion_list,  # Keep for backward compatibility
-                    "emotion_values": emotion_values,  # New: dictionary of emotion -> value
-                    "expected_relief": predicted_relief.value,
-                    "expected_cognitive_load": cog_load.value,
-                    "expected_physical_load": physical_load.value,
-                    "expected_emotional_load": emotional_load.value,
-                    "physical_context": physical_value,
-                    "motivation": motivation.value,
-                    "description": description_field.value or ''
                 }
 
                 try:

@@ -18,6 +18,82 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
 class Analytics:
     """Central analytics + lightweight recommendation helper."""
+    
+    @staticmethod
+    def calculate_aversion_multiplier(initial_aversion: Optional[float], current_aversion: Optional[float]) -> float:
+        """Calculate aversion-based multiplier for relief points.
+        
+        Formula:
+        - If initial_aversion exists, calculate improvement: initial_aversion - current_aversion
+        - Logarithmic multiplier: 2^(improvement/10) for every 10 points of improvement
+        - Flat multiplier: 2.0 * (current_aversion / 100)
+        - Combined: base_multiplier * (1 + flat_multiplier)
+        
+        Example: initial_aversion=100, current_aversion=90
+        - improvement = 10
+        - logarithmic = 2^(10/10) = 2.0
+        - flat = 2.0 * (90/100) = 1.8
+        - total = 2.0 * (1 + 1.8) = 5.6
+        
+        Args:
+            initial_aversion: Initial aversion value (0-100) from first time doing task, or None
+            current_aversion: Current aversion value (0-100), or None
+            
+        Returns:
+            Multiplier value (>= 1.0)
+        """
+        import math
+        
+        if current_aversion is None:
+            return 1.0
+        
+        # Ensure current_aversion is in 0-100 range
+        current_aversion = max(0.0, min(100.0, float(current_aversion)))
+        
+        # Flat multiplier: 2x the aversion value (normalized to 0-1)
+        flat_multiplier = 2.0 * (current_aversion / 100.0)
+        
+        # If we have initial aversion, calculate improvement-based multiplier
+        if initial_aversion is not None:
+            initial_aversion = max(0.0, min(100.0, float(initial_aversion)))
+            improvement = initial_aversion - current_aversion
+            
+            # Logarithmic multiplier: 2^(improvement/10)
+            # For every 10 points of improvement, double the multiplier
+            if improvement > 0:
+                logarithmic_multiplier = 2.0 ** (improvement / 10.0)
+            else:
+                logarithmic_multiplier = 1.0
+            
+            # Combined: logarithmic * (1 + flat)
+            return logarithmic_multiplier * (1.0 + flat_multiplier)
+        else:
+            # No initial aversion, just use flat multiplier
+            return 1.0 + flat_multiplier
+    
+    @staticmethod
+    def get_task_type_multiplier(task_type: Optional[str]) -> float:
+        """Get task type multiplier for points calculation.
+        
+        Args:
+            task_type: Task type string ('Work', 'Self care', 'Play', etc.)
+            
+        Returns:
+            Multiplier value (work: 2.0, self care: 1.0, play: 0.5, default: 1.0)
+        """
+        if task_type is None:
+            return 1.0
+        
+        task_type_lower = str(task_type).strip().lower()
+        
+        if task_type_lower == 'work':
+            return 2.0
+        elif task_type_lower in ['self care', 'selfcare', 'self-care']:
+            return 1.0
+        elif task_type_lower == 'play':
+            return 0.5
+        else:
+            return 1.0
 
     def __init__(self):
         self.instances_file = os.path.join(DATA_DIR, 'task_instances.csv')
@@ -432,6 +508,8 @@ class Analytics:
                 'avg_relief_duration_score': 0.0,
                 'total_relief_score': 0.0,
                 'weekly_relief_score': 0.0,
+                'total_productivity_points': 0.0,
+                'net_productivity_points': 0.0,
             }
         
         # Get completed tasks only
@@ -452,6 +530,8 @@ class Analytics:
                 'avg_relief_duration_score': 0.0,
                 'total_relief_score': 0.0,
                 'weekly_relief_score': 0.0,
+                'total_productivity_points': 0.0,
+                'net_productivity_points': 0.0,
             }
         
         # Extract expected relief from predicted_dict
@@ -465,8 +545,34 @@ class Analytics:
                 pass
             return None
         
+        def _get_initial_aversion(row):
+            """Get initial aversion from predicted_dict."""
+            try:
+                pred_dict = row['predicted_dict']
+                if isinstance(pred_dict, dict):
+                    return pred_dict.get('initial_aversion', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        def _get_expected_aversion(row):
+            """Get expected aversion from predicted_dict."""
+            try:
+                pred_dict = row['predicted_dict']
+                if isinstance(pred_dict, dict):
+                    return pred_dict.get('expected_aversion', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
         completed['expected_relief'] = completed.apply(_get_expected_relief, axis=1)
         completed['expected_relief'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
+        
+        # Get initial and expected aversion
+        completed['initial_aversion'] = completed.apply(_get_initial_aversion, axis=1)
+        completed['initial_aversion'] = pd.to_numeric(completed['initial_aversion'], errors='coerce')
+        completed['expected_aversion'] = completed.apply(_get_expected_aversion, axis=1)
+        completed['expected_aversion'] = pd.to_numeric(completed['expected_aversion'], errors='coerce')
         
         # Get actual relief from relief_score column (already populated from actual_dict)
         completed['actual_relief'] = pd.to_numeric(completed['relief_score'], errors='coerce')
@@ -477,6 +583,17 @@ class Analytics:
         
         # Calculate default relief points (actual - expected, can be negative)
         relief_data['default_relief_points'] = relief_data['actual_relief'] - relief_data['expected_relief']
+        
+        # Apply aversion multipliers to relief points
+        def _apply_aversion_multiplier(row):
+            """Apply aversion-based multiplier to relief points."""
+            initial_av = row.get('initial_aversion')
+            expected_av = row.get('expected_aversion')
+            # Use expected_aversion as current_aversion (what was set during initialization)
+            aversion_mult = self.calculate_aversion_multiplier(initial_av, expected_av)
+            return row['default_relief_points'] * aversion_mult
+        
+        relief_data['default_relief_points'] = relief_data.apply(_apply_aversion_multiplier, axis=1)
         
         # Calculate net relief points (calibrated):
         # - 0 for negative net relief (when actual < expected)
@@ -517,9 +634,26 @@ class Analytics:
             productivity_tasks = completed_with_type[
                 completed_with_type['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
             ]
+            # Also merge task_type into relief_data for multiplier calculation
+            relief_data = relief_data.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            relief_data['task_type'] = relief_data['task_type'].fillna('Work')
         else:
             # Fallback: if no task_type available, use all tasks
             productivity_tasks = completed
+            relief_data['task_type'] = 'Work'
+        
+        # Apply task type multipliers to relief points
+        def _apply_task_type_multiplier(row):
+            """Apply task type multiplier to relief points."""
+            task_type = row.get('task_type')
+            type_mult = self.get_task_type_multiplier(task_type)
+            return row['default_relief_points'] * type_mult
+        
+        relief_data['default_relief_points'] = relief_data.apply(_apply_task_type_multiplier, axis=1)
         
         def _get_actual_time(row):
             try:
@@ -557,14 +691,42 @@ class Analytics:
         # Get efficiency summary
         efficiency_summary = self.get_efficiency_summary()
         
-        # Calculate relief × duration metrics
+        # Calculate relief × duration metrics with multipliers
         # Use actual relief_score and duration_minutes from completed tasks
         completed['relief_score_numeric'] = pd.to_numeric(completed['relief_score'], errors='coerce')
         completed['duration_minutes_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce')
         
-        # Calculate relief_duration_score per task instance (relief_score × duration_minutes)
+        # Join task_type if not already joined
+        if 'task_type' not in completed.columns:
+            if not tasks_df.empty and 'task_type' in tasks_df.columns:
+                completed = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+                completed['task_type'] = completed['task_type'].fillna('Work')
+            else:
+                completed['task_type'] = 'Work'
+        
+        # Calculate multipliers for each task
+        def _calculate_relief_multiplier(row):
+            """Calculate combined aversion and task type multiplier for relief."""
+            initial_av = row.get('initial_aversion')
+            expected_av = row.get('expected_aversion')
+            task_type = row.get('task_type')
+            
+            aversion_mult = self.calculate_aversion_multiplier(initial_av, expected_av)
+            type_mult = self.get_task_type_multiplier(task_type)
+            
+            return aversion_mult * type_mult
+        
+        completed['relief_multiplier'] = completed.apply(_calculate_relief_multiplier, axis=1)
+        
+        # Calculate relief_duration_score per task instance (relief_score × duration_minutes × multiplier)
         completed['relief_duration_score'] = (
-            completed['relief_score_numeric'] * completed['duration_minutes_numeric']
+            completed['relief_score_numeric'] * 
+            completed['duration_minutes_numeric'] * 
+            completed['relief_multiplier']
         )
         
         # Filter to rows with valid relief_duration_score (both relief and duration must be present)
@@ -577,18 +739,72 @@ class Analytics:
         total_relief_duration_score = valid_relief_duration['relief_duration_score'].sum() if not valid_relief_duration.empty else 0.0
         avg_relief_duration_score = valid_relief_duration['relief_duration_score'].mean() if not valid_relief_duration.empty else 0.0
         
-        # Total relief score is the same as total_relief_duration_score (sum of relief × duration)
+        # Total relief score is the same as total_relief_duration_score (sum of relief × duration × multiplier)
         total_relief_score = total_relief_duration_score
         
-        # Calculate weekly relief score (sum of relief × duration for last 7 days)
+        # Calculate weekly relief score (sum of relief × duration × multiplier for last 7 days)
         # Note: relief score includes ALL tasks (work, play, self care), not just productivity tasks
         completed_last_7d_all = completed[completed['completed_at_dt'] >= seven_days_ago]
         completed_last_7d_all['relief_score_numeric'] = pd.to_numeric(completed_last_7d_all['relief_score'], errors='coerce')
         completed_last_7d_all['duration_minutes_numeric'] = pd.to_numeric(completed_last_7d_all['duration_minutes'], errors='coerce')
         completed_last_7d_all['relief_duration_score'] = (
-            completed_last_7d_all['relief_score_numeric'] * completed_last_7d_all['duration_minutes_numeric']
+            completed_last_7d_all['relief_score_numeric'] * 
+            completed_last_7d_all['duration_minutes_numeric'] * 
+            completed_last_7d_all['relief_multiplier']
         )
         weekly_relief_score = completed_last_7d_all['relief_duration_score'].fillna(0).sum()
+        
+        # Calculate productivity points (similar to relief points but only for Work and Self care tasks)
+        # Productivity points = (actual_relief - expected_relief) × aversion_multiplier × task_type_multiplier
+        # But task_type_multiplier for productivity: work=2.0, self care=1.0, play=0 (excluded)
+        if 'task_type' in relief_data.columns:
+            relief_data['task_type_normalized'] = relief_data['task_type'].astype(str).str.strip().str.lower()
+            productivity_relief_data = relief_data[
+                relief_data['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
+            ].copy()
+        else:
+            productivity_relief_data = pd.DataFrame()
+        
+        def _calculate_productivity_multiplier(row):
+            """Calculate productivity multiplier (work: 2.0, self care: 1.0)."""
+            task_type = row.get('task_type', 'Work')
+            task_type_lower = str(task_type).strip().lower()
+            
+            if task_type_lower == 'work':
+                return 2.0
+            elif task_type_lower in ['self care', 'selfcare', 'self-care']:
+                return 1.0
+            else:
+                return 1.0
+        
+        if not productivity_relief_data.empty:
+            productivity_relief_data['productivity_multiplier'] = productivity_relief_data.apply(_calculate_productivity_multiplier, axis=1)
+            # Productivity points: we need to undo the relief task_type_multiplier and apply productivity multiplier instead
+            # default_relief_points already has: (actual - expected) × aversion_mult × relief_task_type_mult
+            # We want: (actual - expected) × aversion_mult × productivity_mult
+            # So: productivity_points = default_relief_points / relief_task_type_mult × productivity_mult
+            def _get_relief_task_type_mult(row):
+                """Get the relief task type multiplier that was already applied."""
+                task_type = row.get('task_type')
+                return self.get_task_type_multiplier(task_type)
+            
+            productivity_relief_data['relief_task_type_mult'] = productivity_relief_data.apply(_get_relief_task_type_mult, axis=1)
+            # Calculate base points without task type multiplier
+            productivity_relief_data['base_relief_points'] = (
+                productivity_relief_data['default_relief_points'] / productivity_relief_data['relief_task_type_mult']
+            )
+            # Apply productivity multiplier
+            productivity_relief_data['productivity_points'] = (
+                productivity_relief_data['base_relief_points'] * 
+                productivity_relief_data['productivity_multiplier']
+            )
+            total_productivity_points = productivity_relief_data['productivity_points'].sum()
+            net_productivity_points = productivity_relief_data[
+                productivity_relief_data['productivity_points'] > 0
+            ]['productivity_points'].sum()
+        else:
+            total_productivity_points = 0.0
+            net_productivity_points = 0.0
         
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
@@ -607,6 +823,8 @@ class Analytics:
             'avg_relief_duration_score': round(float(avg_relief_duration_score), 2),
             'total_relief_score': round(float(total_relief_score), 2),
             'weekly_relief_score': round(float(weekly_relief_score), 2),
+            'total_productivity_points': round(float(total_productivity_points), 2),
+            'net_productivity_points': round(float(net_productivity_points), 2),
         }
 
     def get_weekly_hours_history(self) -> Dict[str, any]:

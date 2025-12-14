@@ -377,7 +377,7 @@ class InstanceManager:
     def get_previous_task_averages(self, task_id: str) -> dict:
         """Get average values from previous initialized instances of the same task.
         Returns a dict with keys: expected_relief, expected_cognitive_load, 
-        expected_physical_load, expected_emotional_load, motivation.
+        expected_physical_load, expected_emotional_load, motivation, expected_aversion.
         Values are scaled to 0-100 range."""
         import json
         self._reload()
@@ -397,6 +397,7 @@ class InstanceManager:
         physical_values = []
         emotional_values = []
         motivation_values = []
+        aversion_values = []
         
         for idx in initialized.index:
             predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
@@ -410,7 +411,8 @@ class InstanceManager:
                             ('expected_cognitive_load', cognitive_values),
                             ('expected_physical_load', physical_values),
                             ('expected_emotional_load', emotional_values),
-                            ('motivation', motivation_values)
+                            ('motivation', motivation_values),
+                            ('expected_aversion', aversion_values)
                         ]:
                             val = pred_dict.get(key)
                             if val is not None:
@@ -436,6 +438,8 @@ class InstanceManager:
             result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
         if motivation_values:
             result['motivation'] = round(sum(motivation_values) / len(motivation_values))
+        if aversion_values:
+            result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
         
         return result
 
@@ -499,6 +503,89 @@ class InstanceManager:
             result['actual_emotional'] = round(sum(emotional_values) / len(emotional_values))
         
         return result
+
+    def get_initial_aversion(self, task_id: str) -> Optional[float]:
+        """Get the initial aversion value for a task (from the first initialized instance).
+        Returns None if this is the first time doing the task.
+        Values are scaled to 0-100 range."""
+        import json
+        self._reload()
+        
+        # Get all initialized instances for this task, sorted by initialized_at
+        initialized = self.df[
+            (self.df['task_id'] == task_id) & 
+            (self.df['initialized_at'].astype(str).str.strip() != '')
+        ].copy()
+        
+        if initialized.empty:
+            return None
+        
+        # Sort by initialized_at to get the first one
+        initialized['initialized_at_dt'] = pd.to_datetime(initialized['initialized_at'], errors='coerce')
+        initialized = initialized.sort_values('initialized_at_dt')
+        
+        # Get the first instance's predicted data
+        first_idx = initialized.index[0]
+        predicted_str = str(initialized.at[first_idx, 'predicted'] or '{}').strip()
+        if predicted_str and predicted_str != '{}':
+            try:
+                pred_dict = json.loads(predicted_str)
+                if isinstance(pred_dict, dict):
+                    initial_aversion = pred_dict.get('initial_aversion')
+                    if initial_aversion is not None:
+                        try:
+                            num_val = float(initial_aversion)
+                            # Scale from 0-10 to 0-100 if value is <= 10
+                            if num_val <= 10 and num_val >= 0:
+                                num_val = num_val * 10
+                            return round(num_val)
+                        except (ValueError, TypeError):
+                            pass
+            except (json.JSONDecodeError, Exception):
+                pass
+        
+        return None
+
+    def get_previous_aversion_average(self, task_id: str) -> Optional[float]:
+        """Get average aversion from previous initialized instances of the same task.
+        Returns None if no previous instances exist.
+        Values are scaled to 0-100 range."""
+        import json
+        self._reload()
+        
+        # Get all initialized instances for this task (completed or not)
+        initialized = self.df[
+            (self.df['task_id'] == task_id) & 
+            (self.df['initialized_at'].astype(str).str.strip() != '')
+        ].copy()
+        
+        if initialized.empty:
+            return None
+        
+        aversion_values = []
+        
+        for idx in initialized.index:
+            predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
+            if predicted_str and predicted_str != '{}':
+                try:
+                    pred_dict = json.loads(predicted_str)
+                    if isinstance(pred_dict, dict):
+                        val = pred_dict.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                aversion_values.append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+        
+        if aversion_values:
+            return round(sum(aversion_values) / len(aversion_values))
+        return None
 
     def scale_values_10_to_100(self):
         """Scale existing values from 0-10 range to 0-100 range.
