@@ -94,6 +94,114 @@ class Analytics:
             return 0.5
         else:
             return 1.0
+    
+    @staticmethod
+    def calculate_spontaneous_aversion_threshold(baseline_aversion: float) -> float:
+        """Calculate progressive threshold for detecting spontaneous aversion.
+        
+        Formula:
+        - 0-25: 10 + 10% of baseline
+        - 25-50: 5 + 10% of baseline
+        - 50-100: 10% of baseline
+        
+        Args:
+            baseline_aversion: Baseline aversion value (0-100)
+            
+        Returns:
+            Threshold value above which spontaneous aversion is detected
+        """
+        baseline = max(0.0, min(100.0, float(baseline_aversion)))
+        
+        if baseline <= 25:
+            threshold = 10.0 + (baseline * 0.10)
+        elif baseline <= 50:
+            threshold = 5.0 + (baseline * 0.10)
+        else:
+            threshold = baseline * 0.10
+        
+        return threshold
+    
+    @staticmethod
+    def detect_spontaneous_aversion(baseline_aversion: Optional[float], current_aversion: Optional[float]) -> Tuple[bool, float]:
+        """Detect if current aversion represents spontaneous aversion (obstacle).
+        
+        Args:
+            baseline_aversion: Baseline aversion value (0-100) or None
+            current_aversion: Current aversion value (0-100) or None
+            
+        Returns:
+            Tuple of (is_spontaneous: bool, spike_amount: float)
+        """
+        if baseline_aversion is None or current_aversion is None:
+            return False, 0.0
+        
+        baseline = max(0.0, min(100.0, float(baseline_aversion)))
+        current = max(0.0, min(100.0, float(current_aversion)))
+        
+        threshold = Analytics.calculate_spontaneous_aversion_threshold(baseline)
+        spike_amount = current - baseline
+        
+        is_spontaneous = spike_amount > threshold
+        
+        return is_spontaneous, max(0.0, spike_amount)
+    
+    @staticmethod
+    def calculate_obstacles_bonus_multiplier(spike_amount: float) -> float:
+        """Calculate weekly bonus multiplier based on obstacles overcome.
+        
+        Formula: 10% bonus per threshold level
+        - Threshold 1: 10-20 spike = 10% bonus
+        - Threshold 2: 20-30 spike = 20% bonus
+        - Threshold 3: 30-40 spike = 30% bonus
+        - etc.
+        
+        Args:
+            spike_amount: Amount of spontaneous aversion spike (current - baseline)
+            
+        Returns:
+            Bonus multiplier (1.0 = no bonus, 1.1 = 10% bonus, etc.)
+        """
+        if spike_amount <= 0:
+            return 1.0
+        
+        # Calculate threshold level (every 10 points = 1 level)
+        threshold_level = int(spike_amount / 10.0)
+        
+        # 10% bonus per level
+        bonus_multiplier = 1.0 + (threshold_level * 0.10)
+        
+        return bonus_multiplier
+    
+    @staticmethod
+    def calculate_obstacles_score(
+        baseline_aversion: Optional[float],
+        current_aversion: Optional[float],
+        relief_score: float
+    ) -> float:
+        """Calculate obstacles overcome score for a single task instance.
+        
+        Args:
+            baseline_aversion: Baseline aversion value (0-100) or None
+            current_aversion: Current aversion value (0-100) or None
+            relief_score: Relief score achieved (0-100)
+            
+        Returns:
+            Obstacles overcome score (points)
+        """
+        is_spontaneous, spike_amount = Analytics.detect_spontaneous_aversion(
+            baseline_aversion, current_aversion
+        )
+        
+        if not is_spontaneous or spike_amount <= 0:
+            return 0.0
+        
+        # Obstacles score = spike_amount × relief_score × multiplier
+        # Multiplier scales with spike amount
+        multiplier = 1.0 + (spike_amount / 20.0)  # 1.0x for 0 spike, 6.0x for 100 spike
+        
+        obstacles_score = spike_amount * relief_score * multiplier
+        
+        return obstacles_score
 
     def __init__(self):
         self.instances_file = os.path.join(DATA_DIR, 'task_instances.csv')
@@ -208,8 +316,9 @@ class Analytics:
             df['stress_efficiency'] = df['stress_efficiency'].round(2)
         
         # Auto-calculate behavioral_score: how well you adhered to planned behaviour
+        # Now includes obstacles overcome component for significant bonus
         # 0 = maximum procrastination, 50 = neutral (perfect adherence), 100 = maximum overachievement
-        # Range: 0-100 (50 = neutral)
+        # Range: 0-100 (50 = neutral), can exceed 100 with obstacles bonus
         def _calculate_behavioral_score(row):
             try:
                 # Get completion percentage
@@ -227,6 +336,28 @@ class Analytics:
                 
                 # Get procrastination score (0-10 scale)
                 procrast_score = pd.to_numeric(row.get('procrastination_score', 0), errors='coerce') or 0.0
+                
+                # Calculate obstacles component (significant bonus for overcoming obstacles)
+                obstacles_component = 0.0
+                task_id = row.get('task_id')
+                if task_id:
+                    from .instance_manager import InstanceManager
+                    im = InstanceManager()
+                    # Get baseline aversion (use robust for behavioral score)
+                    baseline_aversion = im.get_baseline_aversion_robust(task_id)
+                    expected_aversion = predicted_dict.get('expected_aversion')
+                    relief_score = pd.to_numeric(row.get('relief_score', 0), errors='coerce') or 0.0
+                    
+                    if baseline_aversion is not None and expected_aversion is not None:
+                        is_spontaneous, spike_amount = Analytics.detect_spontaneous_aversion(
+                            baseline_aversion, expected_aversion
+                        )
+                        if is_spontaneous and spike_amount > 0 and completion_pct >= 50:
+                            # Significant bonus for overcoming obstacles
+                            # Scale: 0 to +15 bonus points (can push score above 100)
+                            # Higher spike and higher relief = bigger bonus
+                            obstacles_bonus = min(15.0, (spike_amount / 10.0) * (relief_score / 10.0) * 2.0)
+                            obstacles_component = obstacles_bonus
                 
                 # Calculate components (each contributes to -10 to +10 range internally)
                 # 1. Completion component: -5 to +5 based on completion percentage
@@ -264,8 +395,11 @@ class Analytics:
                 # -10 → 0, 0 → 50, +10 → 100
                 behavioral_score = 50.0 + (behavioral_deviation * 5.0)
                 
-                # Clamp to 0-100 range
-                behavioral_score = max(0.0, min(100.0, behavioral_score))
+                # Add obstacles bonus (can push above 100)
+                behavioral_score += obstacles_component
+                
+                # Clamp to 0-115 range (allows obstacles bonus to push to 115)
+                behavioral_score = max(0.0, min(115.0, behavioral_score))
                 
                 return round(behavioral_score, 2)
             except Exception as e:
@@ -508,8 +642,19 @@ class Analytics:
                 'avg_relief_duration_score': 0.0,
                 'total_relief_score': 0.0,
                 'weekly_relief_score': 0.0,
+                'weekly_relief_score_with_bonus_robust': 0.0,
+                'weekly_relief_score_with_bonus_sensitive': 0.0,
                 'total_productivity_points': 0.0,
                 'net_productivity_points': 0.0,
+                'weekly_productivity_points': 0.0,
+                'weekly_productivity_points_with_bonus_robust': 0.0,
+                'weekly_productivity_points_with_bonus_sensitive': 0.0,
+                'total_obstacles_score_robust': 0.0,
+                'total_obstacles_score_sensitive': 0.0,
+                'weekly_obstacles_bonus_multiplier_robust': 1.0,
+                'weekly_obstacles_bonus_multiplier_sensitive': 1.0,
+                'max_obstacle_spike_robust': 0.0,
+                'max_obstacle_spike_sensitive': 0.0,
             }
         
         # Get completed tasks only
@@ -530,8 +675,19 @@ class Analytics:
                 'avg_relief_duration_score': 0.0,
                 'total_relief_score': 0.0,
                 'weekly_relief_score': 0.0,
+                'weekly_relief_score_with_bonus_robust': 0.0,
+                'weekly_relief_score_with_bonus_sensitive': 0.0,
                 'total_productivity_points': 0.0,
                 'net_productivity_points': 0.0,
+                'weekly_productivity_points': 0.0,
+                'weekly_productivity_points_with_bonus_robust': 0.0,
+                'weekly_productivity_points_with_bonus_sensitive': 0.0,
+                'total_obstacles_score_robust': 0.0,
+                'total_obstacles_score_sensitive': 0.0,
+                'weekly_obstacles_bonus_multiplier_robust': 1.0,
+                'weekly_obstacles_bonus_multiplier_sensitive': 1.0,
+                'max_obstacle_spike_robust': 0.0,
+                'max_obstacle_spike_sensitive': 0.0,
             }
         
         # Extract expected relief from predicted_dict
@@ -691,6 +847,76 @@ class Analytics:
         # Get efficiency summary
         efficiency_summary = self.get_efficiency_summary()
         
+        # Calculate obstacles overcome scores
+        from .instance_manager import InstanceManager
+        im = InstanceManager()
+        
+        # Add baseline aversion (both robust and sensitive) to relief_data
+        def _get_baseline_aversion_robust(row):
+            task_id = row.get('task_id')
+            if task_id:
+                return im.get_baseline_aversion_robust(task_id)
+            return None
+        
+        def _get_baseline_aversion_sensitive(row):
+            task_id = row.get('task_id')
+            if task_id:
+                return im.get_baseline_aversion_sensitive(task_id)
+            return None
+        
+        relief_data['baseline_aversion_robust'] = relief_data.apply(_get_baseline_aversion_robust, axis=1)
+        relief_data['baseline_aversion_sensitive'] = relief_data.apply(_get_baseline_aversion_sensitive, axis=1)
+        
+        # Calculate obstacles score using both methods
+        def _calculate_obstacles_score_robust(row):
+            baseline = row.get('baseline_aversion_robust')
+            current = row.get('expected_aversion')
+            relief = row.get('actual_relief', 0.0)
+            return self.calculate_obstacles_score(baseline, current, relief)
+        
+        def _calculate_obstacles_score_sensitive(row):
+            baseline = row.get('baseline_aversion_sensitive')
+            current = row.get('expected_aversion')
+            relief = row.get('actual_relief', 0.0)
+            return self.calculate_obstacles_score(baseline, current, relief)
+        
+        relief_data['obstacles_score_robust'] = relief_data.apply(_calculate_obstacles_score_robust, axis=1)
+        relief_data['obstacles_score_sensitive'] = relief_data.apply(_calculate_obstacles_score_sensitive, axis=1)
+        
+        # Calculate total obstacles scores
+        total_obstacles_robust = relief_data['obstacles_score_robust'].sum()
+        total_obstacles_sensitive = relief_data['obstacles_score_sensitive'].sum()
+        
+        # Calculate weekly obstacles (last 7 days) for bonus multiplier
+        relief_data['completed_at_dt'] = pd.to_datetime(relief_data['completed_at'], errors='coerce')
+        relief_data_last_7d = relief_data[relief_data['completed_at_dt'] >= seven_days_ago]
+        
+        # Calculate max spike amount for weekly bonus
+        def _get_max_spike_robust(row):
+            baseline = row.get('baseline_aversion_robust')
+            current = row.get('expected_aversion')
+            is_spontaneous, spike_amount = self.detect_spontaneous_aversion(baseline, current)
+            return spike_amount if is_spontaneous else 0.0
+        
+        def _get_max_spike_sensitive(row):
+            baseline = row.get('baseline_aversion_sensitive')
+            current = row.get('expected_aversion')
+            is_spontaneous, spike_amount = self.detect_spontaneous_aversion(baseline, current)
+            return spike_amount if is_spontaneous else 0.0
+        
+        if not relief_data_last_7d.empty:
+            relief_data_last_7d['spike_amount_robust'] = relief_data_last_7d.apply(_get_max_spike_robust, axis=1)
+            relief_data_last_7d['spike_amount_sensitive'] = relief_data_last_7d.apply(_get_max_spike_sensitive, axis=1)
+            max_spike_robust = relief_data_last_7d['spike_amount_robust'].max() if 'spike_amount_robust' in relief_data_last_7d.columns else 0.0
+            max_spike_sensitive = relief_data_last_7d['spike_amount_sensitive'].max() if 'spike_amount_sensitive' in relief_data_last_7d.columns else 0.0
+        else:
+            max_spike_robust = 0.0
+            max_spike_sensitive = 0.0
+        
+        # Calculate weekly bonus multipliers
+        weekly_bonus_multiplier_robust = self.calculate_obstacles_bonus_multiplier(max_spike_robust)
+        weekly_bonus_multiplier_sensitive = self.calculate_obstacles_bonus_multiplier(max_spike_sensitive)
+        
         # Calculate relief × duration metrics with multipliers
         # Use actual relief_score and duration_minutes from completed tasks
         completed['relief_score_numeric'] = pd.to_numeric(completed['relief_score'], errors='coerce')
@@ -752,7 +978,11 @@ class Analytics:
             completed_last_7d_all['duration_minutes_numeric'] * 
             completed_last_7d_all['relief_multiplier']
         )
-        weekly_relief_score = completed_last_7d_all['relief_duration_score'].fillna(0).sum()
+        weekly_relief_score_base = completed_last_7d_all['relief_duration_score'].fillna(0).sum()
+        
+        # Apply weekly obstacles bonus multipliers to weekly relief score
+        weekly_relief_score_robust = weekly_relief_score_base * weekly_bonus_multiplier_robust
+        weekly_relief_score_sensitive = weekly_relief_score_base * weekly_bonus_multiplier_sensitive
         
         # Calculate productivity points (similar to relief points but only for Work and Self care tasks)
         # Productivity points = (actual_relief - expected_relief) × aversion_multiplier × task_type_multiplier
@@ -802,9 +1032,21 @@ class Analytics:
             net_productivity_points = productivity_relief_data[
                 productivity_relief_data['productivity_points'] > 0
             ]['productivity_points'].sum()
+            
+            # Calculate weekly productivity points (last 7 days)
+            productivity_relief_data['completed_at_dt'] = pd.to_datetime(productivity_relief_data['completed_at'], errors='coerce')
+            productivity_last_7d = productivity_relief_data[productivity_relief_data['completed_at_dt'] >= seven_days_ago]
+            weekly_productivity_points_base = productivity_last_7d['productivity_points'].fillna(0).sum()
+            
+            # Apply weekly obstacles bonus multipliers
+            weekly_productivity_points_robust = weekly_productivity_points_base * weekly_bonus_multiplier_robust
+            weekly_productivity_points_sensitive = weekly_productivity_points_base * weekly_bonus_multiplier_sensitive
         else:
             total_productivity_points = 0.0
             net_productivity_points = 0.0
+            weekly_productivity_points_base = 0.0
+            weekly_productivity_points_robust = 0.0
+            weekly_productivity_points_sensitive = 0.0
         
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
@@ -822,9 +1064,21 @@ class Analytics:
             'total_relief_duration_score': round(float(total_relief_duration_score), 2),
             'avg_relief_duration_score': round(float(avg_relief_duration_score), 2),
             'total_relief_score': round(float(total_relief_score), 2),
-            'weekly_relief_score': round(float(weekly_relief_score), 2),
+            'weekly_relief_score': round(float(weekly_relief_score_base), 2),
+            'weekly_relief_score_with_bonus_robust': round(float(weekly_relief_score_robust), 2),
+            'weekly_relief_score_with_bonus_sensitive': round(float(weekly_relief_score_sensitive), 2),
             'total_productivity_points': round(float(total_productivity_points), 2),
             'net_productivity_points': round(float(net_productivity_points), 2),
+            'weekly_productivity_points': round(float(weekly_productivity_points_base), 2),
+            'weekly_productivity_points_with_bonus_robust': round(float(weekly_productivity_points_robust), 2),
+            'weekly_productivity_points_with_bonus_sensitive': round(float(weekly_productivity_points_sensitive), 2),
+            # Obstacles metrics
+            'total_obstacles_score_robust': round(float(total_obstacles_robust), 2),
+            'total_obstacles_score_sensitive': round(float(total_obstacles_sensitive), 2),
+            'weekly_obstacles_bonus_multiplier_robust': round(float(weekly_bonus_multiplier_robust), 3),
+            'weekly_obstacles_bonus_multiplier_sensitive': round(float(weekly_bonus_multiplier_sensitive), 3),
+            'max_obstacle_spike_robust': round(float(max_spike_robust), 1),
+            'max_obstacle_spike_sensitive': round(float(max_spike_sensitive), 1),
         }
 
     def get_weekly_hours_history(self) -> Dict[str, any]:

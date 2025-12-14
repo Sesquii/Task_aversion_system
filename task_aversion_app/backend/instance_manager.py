@@ -587,6 +587,117 @@ class InstanceManager:
             return round(sum(aversion_values) / len(aversion_values))
         return None
 
+    def get_baseline_aversion_robust(self, task_id: str) -> Optional[float]:
+        """Get robust baseline aversion using median (less sensitive to outliers).
+        Returns None if no previous instances exist.
+        Values are scaled to 0-100 range."""
+        import json
+        import numpy as np
+        self._reload()
+        
+        # Get all initialized instances for this task (completed or not)
+        initialized = self.df[
+            (self.df['task_id'] == task_id) & 
+            (self.df['initialized_at'].astype(str).str.strip() != '')
+        ].copy()
+        
+        if initialized.empty:
+            return None
+        
+        aversion_values = []
+        
+        for idx in initialized.index:
+            predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
+            if predicted_str and predicted_str != '{}':
+                try:
+                    pred_dict = json.loads(predicted_str)
+                    if isinstance(pred_dict, dict):
+                        val = pred_dict.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                aversion_values.append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+        
+        if not aversion_values:
+            return None
+        
+        # Use median for robust baseline (less sensitive to outliers)
+        baseline = float(np.median(aversion_values))
+        return round(baseline)
+    
+    def get_baseline_aversion_sensitive(self, task_id: str) -> Optional[float]:
+        """Get sensitive baseline aversion using trimmed mean (more sensitive to trends).
+        Excludes outliers using IQR method, then calculates mean of remaining values.
+        Returns None if no previous instances exist.
+        Values are scaled to 0-100 range."""
+        import json
+        import numpy as np
+        self._reload()
+        
+        # Get all initialized instances for this task (completed or not)
+        initialized = self.df[
+            (self.df['task_id'] == task_id) & 
+            (self.df['initialized_at'].astype(str).str.strip() != '')
+        ].copy()
+        
+        if initialized.empty:
+            return None
+        
+        aversion_values = []
+        
+        for idx in initialized.index:
+            predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
+            if predicted_str and predicted_str != '{}':
+                try:
+                    pred_dict = json.loads(predicted_str)
+                    if isinstance(pred_dict, dict):
+                        val = pred_dict.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                aversion_values.append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+        
+        if not aversion_values:
+            return None
+        
+        # If only 1-2 values, just use mean
+        if len(aversion_values) <= 2:
+            baseline = float(np.mean(aversion_values))
+            return round(baseline)
+        
+        # Use IQR method to exclude outliers
+        q1 = np.percentile(aversion_values, 25)
+        q3 = np.percentile(aversion_values, 75)
+        iqr = q3 - q1
+        
+        # Filter out outliers (values outside Q1 - 1.5*IQR to Q3 + 1.5*IQR)
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+        
+        filtered_values = [v for v in aversion_values if lower_bound <= v <= upper_bound]
+        
+        # If filtering removed all values, use original values
+        if not filtered_values:
+            filtered_values = aversion_values
+        
+        # Calculate trimmed mean
+        baseline = float(np.mean(filtered_values))
+        return round(baseline)
+
     def scale_values_10_to_100(self):
         """Scale existing values from 0-10 range to 0-100 range.
         This migration updates both JSON payloads and CSV columns.

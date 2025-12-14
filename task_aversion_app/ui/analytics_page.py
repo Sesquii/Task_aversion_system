@@ -54,8 +54,15 @@ def build_analytics_page():
             ("Avg Net Wellbeing", metrics['quality']['avg_net_wellbeing']),
             ("Avg Net Wellbeing (Norm)", metrics['quality']['avg_net_wellbeing_normalized']),
             ("Avg Stress Efficiency", metrics['quality']['avg_stress_efficiency'] if metrics['quality']['avg_stress_efficiency'] is not None else "N/A"),
-            ("Average Relief Score", relief_summary.get('avg_relief_duration_score', 0.0)),
-            ("Total Relief Score", relief_summary.get('total_relief_score', 0.0)),
+            ("Average Relief Score", f"{relief_summary.get('avg_relief_duration_score', 0.0):.1f}"),
+            ("Total Relief Score", f"{relief_summary.get('total_relief_score', 0.0):.1f}"),
+            ("Weekly Relief (Base)", f"{relief_summary.get('weekly_relief_score', 0.0):.1f}"),
+            ("Weekly Relief + Bonus (Robust)", f"{relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0):.1f}"),
+            ("Weekly Relief + Bonus (Sensitive)", f"{relief_summary.get('weekly_relief_score_with_bonus_sensitive', 0.0):.1f}"),
+            ("Total Productivity Points", f"{relief_summary.get('total_productivity_points', 0.0):.1f}"),
+            ("Weekly Productivity (Base)", f"{relief_summary.get('weekly_productivity_points', 0.0):.1f}"),
+            ("Weekly Productivity + Bonus (Robust)", f"{relief_summary.get('weekly_productivity_points_with_bonus_robust', 0.0):.1f}"),
+            ("Weekly Productivity + Bonus (Sensitive)", f"{relief_summary.get('weekly_productivity_points_with_bonus_sensitive', 0.0):.1f}"),
         ]:
             with ui.card().classes("p-3 min-w-[150px]"):
                 ui.label(title).classes("text-xs text-gray-500")
@@ -94,6 +101,57 @@ def build_analytics_page():
                 ui.label("Self Care Tasks").classes("text-xs text-gray-500")
                 ui.label(f"{self_care_count} tasks").classes("text-lg font-semibold")
                 ui.label(f"{self_care_time:.1f} min").classes("text-sm text-gray-600")
+    
+    # Obstacles Overcome Section
+    with ui.card().classes("p-4 mb-4"):
+        ui.label("Overcoming Obstacles").classes("text-xl font-bold mb-2")
+        ui.label("Tracking spontaneous aversion spikes and rewards for overcoming them").classes("text-sm text-gray-500 mb-3")
+        
+        total_obstacles_robust = relief_summary.get('total_obstacles_score_robust', 0.0)
+        total_obstacles_sensitive = relief_summary.get('total_obstacles_score_sensitive', 0.0)
+        max_spike_robust = relief_summary.get('max_obstacle_spike_robust', 0.0)
+        max_spike_sensitive = relief_summary.get('max_obstacle_spike_sensitive', 0.0)
+        bonus_mult_robust = relief_summary.get('weekly_obstacles_bonus_multiplier_robust', 1.0)
+        bonus_mult_sensitive = relief_summary.get('weekly_obstacles_bonus_multiplier_sensitive', 1.0)
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px] border-2 border-blue-300"):
+                ui.label("Total Obstacles Score (Robust)").classes("text-xs text-gray-500 font-semibold")
+                ui.label(f"{total_obstacles_robust:.1f}").classes("text-2xl font-bold text-blue-600")
+                ui.label("Median-based baseline").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] border-2 border-purple-300"):
+                ui.label("Total Obstacles Score (Sensitive)").classes("text-xs text-gray-500 font-semibold")
+                ui.label(f"{total_obstacles_sensitive:.1f}").classes("text-2xl font-bold text-purple-600")
+                ui.label("Trimmed mean baseline").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Max Obstacle Spike (Robust)").classes("text-xs text-gray-500")
+                ui.label(f"{max_spike_robust:.1f}").classes("text-xl font-semibold")
+                ui.label("This week").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Max Obstacle Spike (Sensitive)").classes("text-xs text-gray-500")
+                ui.label(f"{max_spike_sensitive:.1f}").classes("text-xl font-semibold")
+                ui.label("This week").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-green-50"):
+                ui.label("Weekly Bonus Multiplier (Robust)").classes("text-xs text-gray-500")
+                ui.label(f"{bonus_mult_robust:.2f}x").classes("text-xl font-bold text-green-600")
+                if bonus_mult_robust > 1.0:
+                    bonus_pct = (bonus_mult_robust - 1.0) * 100
+                    ui.label(f"+{bonus_pct:.0f}% bonus").classes("text-xs text-green-600")
+                else:
+                    ui.label("No bonus").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-green-50"):
+                ui.label("Weekly Bonus Multiplier (Sensitive)").classes("text-xs text-gray-500")
+                ui.label(f"{bonus_mult_sensitive:.2f}x").classes("text-xl font-bold text-green-600")
+                if bonus_mult_sensitive > 1.0:
+                    bonus_pct = (bonus_mult_sensitive - 1.0) * 100
+                    ui.label(f"+{bonus_pct:.0f}% bonus").classes("text-xs text-green-600")
+                else:
+                    ui.label("No bonus").classes("text-xs text-gray-400")
 
     with ui.row().classes("analytics-grid flex-wrap w-full"):
         _render_time_chart()

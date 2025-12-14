@@ -1415,6 +1415,50 @@ def build_summary_section():
                 ui.label("Total Relief Score").classes("text-xs text-gray-500")
                 total_relief = relief_summary.get('total_relief_score', 0.0)
                 ui.label(f"{total_relief:.2f}").classes("text-sm font-bold text-green-600")
+            
+            # Obstacles Overcome Section
+            ui.separator().classes("my-2")
+            ui.label("Obstacles Overcome").classes("text-sm font-semibold text-gray-700")
+            
+            # Total Obstacles Score (Robust)
+            with ui.card().classes("p-2 w-full border-l-4 border-blue-400"):
+                ui.label("Obstacles Score (Robust)").classes("text-xs text-gray-500")
+                obstacles_robust = relief_summary.get('total_obstacles_score_robust', 0.0)
+                ui.label(f"{obstacles_robust:.1f}").classes("text-sm font-bold text-blue-600")
+                ui.label("Median baseline").classes("text-xs text-gray-400")
+            
+            # Total Obstacles Score (Sensitive)
+            with ui.card().classes("p-2 w-full border-l-4 border-purple-400"):
+                ui.label("Obstacles Score (Sensitive)").classes("text-xs text-gray-500")
+                obstacles_sensitive = relief_summary.get('total_obstacles_score_sensitive', 0.0)
+                ui.label(f"{obstacles_sensitive:.1f}").classes("text-sm font-bold text-purple-600")
+                ui.label("Trimmed mean baseline").classes("text-xs text-gray-400")
+            
+            # Weekly Bonus Multipliers
+            with ui.card().classes("p-2 w-full bg-green-50"):
+                ui.label("Weekly Bonus (Robust)").classes("text-xs text-gray-500")
+                bonus_robust = relief_summary.get('weekly_obstacles_bonus_multiplier_robust', 1.0)
+                if bonus_robust > 1.0:
+                    bonus_pct = (bonus_robust - 1.0) * 100
+                    ui.label(f"{bonus_robust:.2f}x (+{bonus_pct:.0f}%)").classes("text-sm font-bold text-green-600")
+                else:
+                    ui.label("1.0x (no bonus)").classes("text-sm font-bold text-gray-600")
+            
+            with ui.card().classes("p-2 w-full bg-green-50"):
+                ui.label("Weekly Bonus (Sensitive)").classes("text-xs text-gray-500")
+                bonus_sensitive = relief_summary.get('weekly_obstacles_bonus_multiplier_sensitive', 1.0)
+                if bonus_sensitive > 1.0:
+                    bonus_pct = (bonus_sensitive - 1.0) * 100
+                    ui.label(f"{bonus_sensitive:.2f}x (+{bonus_pct:.0f}%)").classes("text-sm font-bold text-green-600")
+                else:
+                    ui.label("1.0x (no bonus)").classes("text-sm font-bold text-gray-600")
+            
+            # Max Obstacle Spike
+            with ui.card().classes("p-2 w-full"):
+                ui.label("Max Obstacle Spike (This Week)").classes("text-xs text-gray-500")
+                max_spike_robust = relief_summary.get('max_obstacle_spike_robust', 0.0)
+                max_spike_sensitive = relief_summary.get('max_obstacle_spike_sensitive', 0.0)
+                ui.label(f"Robust: {max_spike_robust:.1f} | Sensitive: {max_spike_sensitive:.1f}").classes("text-sm font-bold")
 
 
 def build_recently_completed_panel():
