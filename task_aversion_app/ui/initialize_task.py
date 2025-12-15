@@ -50,6 +50,22 @@ def initialize_task_page(task_manager, emotion_manager):
         initial_aversion = im.get_initial_aversion(task_id) if task_id else None
         previous_aversion = previous_averages.get('expected_aversion')
         
+        # Check if task has been completed at least once
+        has_completed = im.has_completed_task(task_id) if task_id else False
+        
+        # Check if task has a default_initial_aversion from template
+        template_default_aversion = None
+        if task:
+            template_aversion_str = task.get('default_initial_aversion', '').strip()
+            if template_aversion_str:
+                try:
+                    template_default_aversion = int(float(template_aversion_str))
+                    # Ensure it's in valid range
+                    if template_default_aversion < 0 or template_default_aversion > 100:
+                        template_default_aversion = None
+                except (ValueError, TypeError):
+                    template_default_aversion = None
+        
         # Helper to get default value, scaling from 0-10 to 0-100 if needed
         def get_default_value(key, default=50):
             # First check if current instance has a value
@@ -68,8 +84,17 @@ def initialize_task_page(task_manager, emotion_manager):
                 return previous_averages[key]
             return default
         
-        # Default aversion: use previous average if available, otherwise 50
-        default_aversion = previous_aversion if previous_aversion is not None else 50
+        # Default aversion logic:
+        # 1. If not first time, use previous average
+        # 2. If first time and template has default_initial_aversion, use that
+        # 3. Otherwise default to 50
+        is_first_time = initial_aversion is None
+        if previous_aversion is not None:
+            default_aversion = previous_aversion
+        elif is_first_time and template_default_aversion is not None:
+            default_aversion = template_default_aversion
+        else:
+            default_aversion = 50
         default_relief = get_default_value('expected_relief', 50)
         default_cognitive = get_default_value('expected_cognitive_load', 50)
         default_physical = get_default_value('expected_physical_load', 50)
@@ -78,155 +103,58 @@ def initialize_task_page(task_manager, emotion_manager):
 
         with ui.column().classes("w-full max-w-xl gap-4"):
 
-            # Aversion slider at the top
-            ui.label("Aversion (0-100)").classes("text-lg font-semibold")
-            
-            # Create a container for the slider with marker
-            aversion_container = ui.column().classes("w-full gap-2")
-            
-            with aversion_container:
-                # Slider
-                aversion_slider = ui.slider(min=0, max=100, step=1, value=default_aversion)
-                aversion_value_label = ui.label(f"Value: {default_aversion}").bind_text_from(
-                    aversion_slider, 'value', lambda v: f"Value: {v}"
-                ).classes("text-sm")
+            # Aversion slider - only show if task has been completed at least once
+            aversion_slider = None
+            if has_completed:
+                # Aversion slider at the top
+                ui.label("Aversion (0-100)").classes("text-lg font-semibold")
                 
-                # Show initial aversion marker and previous aversion info
+                # Create a container for the slider with marker
+                aversion_container = ui.column().classes("w-full gap-2")
+                
+                with aversion_container:
+                    # Slider
+                    aversion_slider = ui.slider(min=0, max=100, step=1, value=default_aversion)
+                    aversion_value_label = ui.label(f"Value: {default_aversion}").bind_text_from(
+                        aversion_slider, 'value', lambda v: f"Value: {v}"
+                    ).classes("text-sm")
+                    
+                    # Show initial aversion marker and previous aversion info
+                    if initial_aversion is not None:
+                        ui.label(f"Initial aversion: {initial_aversion}").classes("text-xs text-blue-600 font-semibold")
+                    
+                    if previous_aversion is not None:
+                        if previous_aversion != default_aversion:
+                            ui.label(f"Previous average: {previous_aversion} (current: {default_aversion})").classes("text-xs text-gray-500")
+                        else:
+                            ui.label(f"Previous average: {previous_aversion}").classes("text-xs text-gray-500")
+                
+                # Add visual marker for initial aversion on the slider using CSS
                 if initial_aversion is not None:
-                    ui.label(f"Initial aversion: {initial_aversion}").classes("text-xs text-blue-600 font-semibold")
-                else:
-                    ui.label("No initial aversion (first time doing this task)").classes("text-xs text-gray-500 italic")
-                
-                if previous_aversion is not None:
-                    if previous_aversion != default_aversion:
-                        ui.label(f"Previous average: {previous_aversion} (current: {default_aversion})").classes("text-xs text-gray-500")
-                    else:
-                        ui.label(f"Previous average: {previous_aversion}").classes("text-xs text-gray-500")
-            
-            # Add visual marker for initial aversion on the slider using CSS
-            if initial_aversion is not None:
-                # Create a custom style to show the initial aversion marker
-                ui.add_head_html(f"""
-                    <style>
-                        .aversion-slider-container {{
-                            position: relative;
-                        }}
-                        .aversion-marker {{
-                            position: absolute;
-                            left: {initial_aversion}%;
-                            top: -5px;
-                            width: 2px;
-                            height: 20px;
-                            background-color: #3b82f6;
-                            pointer-events: none;
-                            z-index: 10;
-                        }}
-                    </style>
-                """)
-                # Note: NiceGUI sliders don't easily support visual markers, so we'll show it in text for now
+                    # Create a custom style to show the initial aversion marker
+                    ui.add_head_html(f"""
+                        <style>
+                            .aversion-slider-container {{
+                                position: relative;
+                            }}
+                            .aversion-marker {{
+                                position: absolute;
+                                left: {initial_aversion}%;
+                                top: -5px;
+                                width: 2px;
+                                height: 20px;
+                                background-color: #3b82f6;
+                                pointer-events: none;
+                                z-index: 10;
+                            }}
+                        </style>
+                    """)
+                    # Note: NiceGUI sliders don't easily support visual markers, so we'll show it in text for now
 
             description_field = ui.textarea(
                 label="Task Specifics (optional)",
                 value='',
             )
-
-            ui.label("Emotional Context")
-
-            default_emotions = ["Excitement", "Anxiety", "Confusion", "Overwhelm", "Dread", "Neutral"]
-            stored_emotions = emotion_manager.list_emotions()
-            emotion_options = default_emotions + [e for e in stored_emotions if e not in default_emotions]
-
-            # Load existing emotion values from predicted data
-            emotion_values_dict = predicted_data.get('emotion_values', {})
-            if isinstance(emotion_values_dict, str):
-                try:
-                    emotion_values_dict = json.loads(emotion_values_dict)
-                except json.JSONDecodeError:
-                    emotion_values_dict = {}
-            if not isinstance(emotion_values_dict, dict):
-                # Handle backward compatibility: if emotions is a list, create dict with default 50
-                if isinstance(emotion_values_dict, list):
-                    emotion_values_dict = {emotion: 50 for emotion in emotion_values_dict}
-                else:
-                    # Also check if there's an old 'emotions' list field
-                    old_emotions = predicted_data.get('emotions', [])
-                    if isinstance(old_emotions, list):
-                        emotion_values_dict = {emotion: 50 for emotion in old_emotions}
-                    else:
-                        emotion_values_dict = {}
-
-            emotions = ui.select(
-                emotion_options,
-                multiple=True,
-                value=list(emotion_values_dict.keys()) if emotion_values_dict else []
-            )
-
-            new_em = ui.input(label="Add custom emotion")
-
-            # Container for emotion sliders
-            emotion_sliders_container = ui.column().classes("w-full gap-2")
-
-            # Dictionary to store emotion sliders
-            emotion_sliders = {}
-
-            def update_emotion_sliders():
-                """Update the emotion sliders based on selected emotions"""
-                # Clear existing sliders
-                emotion_sliders_container.clear()
-                emotion_sliders.clear()
-
-                selected_emotions = emotions.value or []
-                
-                if not selected_emotions:
-                    return
-
-                ui.label("Emotion Intensity (0-100)").classes("text-sm font-semibold mt-2")
-                
-                for emotion in selected_emotions:
-                    # Get default value from existing data or default to 50
-                    default_value = emotion_values_dict.get(emotion, 50)
-                    try:
-                        default_value = int(float(default_value))
-                        if default_value < 0 or default_value > 100:
-                            default_value = 50
-                    except (ValueError, TypeError):
-                        default_value = 50
-                    
-                    with emotion_sliders_container:
-                        ui.label(emotion).classes("text-sm")
-                        slider = ui.slider(min=0, max=100, step=1, value=default_value)
-                        emotion_sliders[emotion] = slider
-                        ui.label(f"Value: {default_value}").bind_text_from(slider, 'value', lambda v: f"Value: {v}").classes("text-xs text-gray-500")
-
-            def add_emotion():
-                val = (new_em.value or '').strip()
-                if not val:
-                    ui.notify("Enter an emotion", color='negative')
-                    return
-                added = emotion_manager.add_emotion(val)
-                if added:
-                    ui.notify(f"Added emotion: {val}", color='positive')
-                else:
-                    ui.notify("Emotion already exists", color='warning')
-                latest = default_emotions + [e for e in emotion_manager.list_emotions() if e not in default_emotions]
-                emotions.options = latest
-                current = set(emotions.value or [])
-                current.add(val)
-                emotions.value = list(current)
-                new_em.set_value('')
-                update_emotion_sliders()
-
-            def on_emotion_selection_change(e):
-                """Handle emotion selection changes"""
-                update_emotion_sliders()
-
-            emotions.on('update:model-value', on_emotion_selection_change)
-
-            ui.button("Add Emotion", on_click=add_emotion)
-
-            # Initialize sliders if emotions are already selected
-            if emotion_values_dict:
-                update_emotion_sliders()
 
             # Cognitive load slider (NiceGUI 1.x → no label)
             ui.label("Predicted relief")
@@ -264,6 +192,91 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
+            ui.label("Emotional Context")
+
+            # Load existing emotion values from predicted data
+            emotion_values_dict = predicted_data.get('emotion_values', {})
+            if isinstance(emotion_values_dict, str):
+                try:
+                    emotion_values_dict = json.loads(emotion_values_dict)
+                except json.JSONDecodeError:
+                    emotion_values_dict = {}
+            if not isinstance(emotion_values_dict, dict):
+                # Handle backward compatibility: if emotions is a list, create dict with default 50
+                if isinstance(emotion_values_dict, list):
+                    emotion_values_dict = {emotion: 50 for emotion in emotion_values_dict}
+                else:
+                    # Also check if there's an old 'emotions' list field
+                    old_emotions = predicted_data.get('emotions', [])
+                    if isinstance(old_emotions, list):
+                        emotion_values_dict = {emotion: 50 for emotion in old_emotions}
+                    else:
+                        emotion_values_dict = {}
+
+            # Single text input for emotions (comma-separated or one at a time)
+            existing_emotions = list(emotion_values_dict.keys()) if emotion_values_dict else []
+            emotions_input = ui.input(
+                label="Emotions (comma-separated)",
+                value=", ".join(existing_emotions) if existing_emotions else ""
+            )
+
+            def parse_emotions_input():
+                raw = emotions_input.value or ''
+                # Allow commas or semicolons as separators
+                parts = [p.strip() for p in raw.replace(';', ',').split(',') if p.strip()]
+                # Preserve order while removing duplicates
+                seen = set()
+                ordered = []
+                for p in parts:
+                    if p.lower() not in seen:
+                        seen.add(p.lower())
+                        ordered.append(p)
+                        # Persist to emotion store for future sessions
+                        emotion_manager.add_emotion(p)
+                return ordered
+
+            # Container for emotion sliders
+            emotion_sliders_container = ui.column().classes("w-full gap-2")
+
+            # Dictionary to store emotion sliders
+            emotion_sliders = {}
+
+            def update_emotion_sliders():
+                """Update the emotion sliders based on selected emotions"""
+                # Clear existing sliders
+                emotion_sliders_container.clear()
+                emotion_sliders.clear()
+
+                selected_emotions = parse_emotions_input()
+                
+                if not selected_emotions:
+                    return
+                
+                for emotion in selected_emotions:
+                    # Get default value from existing data or default to 50
+                    default_value = emotion_values_dict.get(emotion, 50)
+                    try:
+                        default_value = int(float(default_value))
+                        if default_value < 0 or default_value > 100:
+                            default_value = 50
+                    except (ValueError, TypeError):
+                        default_value = 50
+                    
+                    with emotion_sliders_container:
+                        ui.label(emotion).classes("text-sm")
+                        slider = ui.slider(min=0, max=100, step=1, value=default_value)
+                        emotion_sliders[emotion] = slider
+                        ui.label(f"Value: {default_value}").bind_text_from(slider, 'value', lambda v: f"Value: {v}").classes("text-xs text-gray-500")
+
+            def apply_emotion_input():
+                update_emotion_sliders()
+
+            ui.button("Update emotions", on_click=apply_emotion_input)
+
+            # Initialize sliders if emotions are already selected
+            if emotion_values_dict:
+                update_emotion_sliders()
+
             ui.label("Physical Context")
             physical_context = ui.select(
                 ["None", "Home", "Work", "Gym", "Outdoors", "Errands", "Custom..."]
@@ -293,7 +306,7 @@ def initialize_task_page(task_manager, emotion_manager):
             )
 
             def save():
-                emotion_list = emotions.value or []
+                emotion_list = parse_emotions_input()
                 physical_value = (
                     custom_physical.value if physical_context.value == "Custom..." else physical_context.value
                 ) or "None"
@@ -314,7 +327,13 @@ def initialize_task_page(task_manager, emotion_manager):
                 # Determine if this is the first time doing the task
                 # Check if there are any other initialized instances for this task
                 is_first_time = initial_aversion is None
-                current_aversion = int(aversion_slider.value)
+                
+                # Get aversion value: use slider if available (not first time), otherwise use default
+                if aversion_slider is not None:
+                    current_aversion = int(aversion_slider.value)
+                else:
+                    # First time - use the default aversion (50 or template default)
+                    current_aversion = default_aversion
                 
                 # If this is the first time, set initial_aversion; otherwise use expected_aversion
                 predicted_payload = {

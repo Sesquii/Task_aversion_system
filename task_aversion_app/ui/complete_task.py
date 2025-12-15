@@ -102,6 +102,35 @@ def complete_task_page(task_manager, emotion_manager):
         default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 50)
         default_physical = get_default_value('actual_physical', 'expected_physical_load', 50)
 
+        # Check if task has been completed at least once (for showing aversion slider)
+        has_completed = False
+        if task_id:
+            has_completed = im.has_completed_task(task_id)
+        
+        # Get current expected aversion for display/update
+        current_expected_aversion = predicted_data.get('expected_aversion')
+        if current_expected_aversion is not None:
+            try:
+                current_expected_aversion = float(current_expected_aversion)
+                # Scale from 0-10 to 0-100 if needed
+                if current_expected_aversion <= 10 and current_expected_aversion >= 0:
+                    current_expected_aversion = current_expected_aversion * 10
+                current_expected_aversion = int(round(current_expected_aversion))
+            except (ValueError, TypeError):
+                current_expected_aversion = 50
+        else:
+            current_expected_aversion = 50
+
+        # ----- Aversion Update (if task has been completed before) -----
+        aversion_slider = None
+        if has_completed and instance_id:
+            ui.label("Update Expected Aversion").classes("text-lg font-semibold mt-4")
+            ui.label("Your aversion to this task may have changed. Update it here if needed.").classes("text-xs text-gray-500 mb-2")
+            aversion_slider = ui.slider(min=0, max=100, step=1, value=current_expected_aversion)
+            ui.label(f"Value: {current_expected_aversion}").bind_text_from(
+                aversion_slider, 'value', lambda v: f"Value: {v}"
+            ).classes("text-sm")
+
         # ----- Actual values -----
 
         ui.label("Actual Relief")
@@ -238,7 +267,6 @@ def complete_task_page(task_manager, emotion_manager):
                 ui.label("No emotions were tracked during initialization. Add emotions below to track how completing this task affects your feelings.").classes("text-sm text-gray-600")
                 return
             
-            ui.label("Emotion Intensity (0-100)").classes("text-sm font-semibold")
             ui.label("Compare with initial values to see how completing the task affected your emotions.").classes("text-xs text-gray-500 mb-2")
             
             for emotion in all_emotions:
@@ -268,33 +296,34 @@ def complete_task_page(task_manager, emotion_manager):
         # Initialize emotion sliders
         update_emotion_sliders()
         
-        # Add new emotion section
-        ui.label("Add New Emotion").classes("text-sm font-semibold mt-4")
-        default_emotions = ["Excitement", "Anxiety", "Confusion", "Overwhelm", "Dread", "Neutral"]
-        stored_emotions = emotion_manager.list_emotions()
-        emotion_options = default_emotions + [e for e in stored_emotions if e not in default_emotions]
-        
-        new_emotion_input = ui.input(label="Add custom emotion")
-        
-        def add_new_emotion():
-            val = (new_emotion_input.value or '').strip()
-            if not val:
-                ui.notify("Enter an emotion", color='negative')
-                return
-            if val in all_emotions:
-                ui.notify("Emotion already tracked", color='warning')
-                return
-            
-            # Add emotion to emotion manager if it's new
-            emotion_manager.add_emotion(val)
-            
-            # Add to all_emotions and update sliders
-            all_emotions.append(val)
+        # Single input for emotions (comma-separated)
+        ui.label("Track emotions by listing them (comma-separated)").classes("text-sm text-gray-600 mt-4")
+        emotions_input = ui.input(
+            label="Emotions",
+            value=", ".join(all_emotions) if all_emotions else "",
+            placeholder="e.g., Excitement, Anxiety, Relief"
+        )
+
+        def parse_emotions_input():
+            raw = emotions_input.value or ''
+            parts = [p.strip() for p in raw.replace(';', ',').split(',') if p.strip()]
+            seen = set()
+            ordered = []
+            for p in parts:
+                key = p.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(p)
+                emotion_manager.add_emotion(p)
+            return ordered
+
+        def apply_emotion_input():
+            nonlocal all_emotions
+            all_emotions = parse_emotions_input()
             update_emotion_sliders()
-            new_emotion_input.set_value('')
-            ui.notify(f"Added emotion: {val}", color='positive')
-        
-        ui.button("Add New Emotion", on_click=add_new_emotion).classes("mb-4")
+
+        ui.button("Update emotions", on_click=apply_emotion_input).classes("mb-4")
 
         ui.label("Completion %")
         completion_pct = ui.slider(min=0, max=100, step=5, value=100)
@@ -361,6 +390,23 @@ def complete_task_page(task_manager, emotion_manager):
             try:
                 result = im.complete_instance(iid, actual)
                 print("[complete_task] complete_instance result:", result)
+                
+                # If aversion slider was shown and used, update the predicted aversion
+                if aversion_slider is not None:
+                    updated_aversion = int(aversion_slider.value)
+                    # Get current predicted data and update expected_aversion
+                    instance = im.get_instance(iid)
+                    if instance:
+                        predicted_raw = instance.get('predicted') or '{}'
+                        try:
+                            predicted_dict = json.loads(predicted_raw) if predicted_raw else {}
+                            predicted_dict['expected_aversion'] = updated_aversion
+                            # Update the instance with new predicted data
+                            im.add_prediction_to_instance(iid, predicted_dict)
+                            print(f"[complete_task] Updated expected_aversion to {updated_aversion}")
+                        except json.JSONDecodeError:
+                            pass
+                
             except Exception as e:
                 print("[complete_task] ERROR:", e)
                 ui.notify(str(e), color='negative')

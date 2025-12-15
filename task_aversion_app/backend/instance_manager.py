@@ -546,6 +546,31 @@ class InstanceManager:
         
         return None
 
+    def has_completed_task(self, task_id: str) -> bool:
+        """Check if this task has been completed at least once."""
+        self._reload()
+        if not task_id:
+            return False
+        
+        # Filter to this task_id first
+        task_instances = self.df[self.df['task_id'] == task_id]
+        if task_instances.empty:
+            return False
+        
+        # Check if any instance has is_completed == 'True' (case-insensitive)
+        is_completed_check = task_instances['is_completed'].astype(str).str.strip().str.lower() == 'true'
+        
+        # Check if any instance has completed_at set
+        completed_at_check = task_instances['completed_at'].astype(str).str.strip() != ''
+        
+        # Check if any instance has status == 'completed' (case-insensitive)
+        status_check = task_instances['status'].astype(str).str.strip().str.lower() == 'completed'
+        
+        # Return True if any of these conditions are met
+        has_completed = (is_completed_check | completed_at_check | status_check).any()
+        
+        return bool(has_completed)
+
     def get_previous_aversion_average(self, task_id: str) -> Optional[float]:
         """Get average aversion from previous initialized instances of the same task.
         Returns None if no previous instances exist.
