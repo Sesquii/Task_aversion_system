@@ -147,21 +147,66 @@ def show_details(instance_id):
         ui.button("Close", on_click=dialog.close)
 
     dialog.open()
-def refresh_templates():
-    print("[Dashboard] refresh_templates() called")
+def refresh_templates(search_query=None):
+    """
+    Refresh the task templates display with optional search filtering.
+    
+    Args:
+        search_query: Optional string to filter templates by name, description, or task_type
+    """
+    print(f"[Dashboard] refresh_templates() called with search_query='{search_query}'")
+    print(f"[Dashboard] search_query type: {type(search_query)}, value: {repr(search_query)}")
 
     df = tm.get_all()
+    print(f"[Dashboard] Retrieved dataframe: shape={df.shape if df is not None else 'None'}, empty={df.empty if df is not None else 'N/A'}")
+    
     if df is None or df.empty:
-        print("[Dashboard] no templates found")
+        print("[Dashboard] no templates found - dataframe is None or empty")
         template_col.clear()
         with template_col:
             ui.markdown("_No templates available_")
         return
 
     rows = df.to_dict(orient='records')
-    print(f"[Dashboard] showing {len(rows)} templates")
+    print(f"[Dashboard] Total templates before filtering: {len(rows)}")
+    
+    # Apply search filter if provided
+    if search_query:
+        search_query = str(search_query).strip().lower()
+        print(f"[Dashboard] Applying search filter: '{search_query}'")
+        
+        filtered_rows = []
+        for row in rows:
+            # Search in name, description, and task_type
+            name = str(row.get('name', '')).lower()
+            description = str(row.get('description', '')).lower()
+            task_type = str(row.get('task_type', '')).lower()
+            
+            matches_name = search_query in name
+            matches_description = search_query in description
+            matches_task_type = search_query in task_type
+            
+            if matches_name or matches_description or matches_task_type:
+                filtered_rows.append(row)
+                print(f"[Dashboard] Template '{row.get('name')}' matched search (name={matches_name}, desc={matches_description}, type={matches_task_type})")
+        
+        rows = filtered_rows
+        print(f"[Dashboard] Templates after filtering: {len(rows)}")
+    else:
+        print("[Dashboard] No search query provided, showing all templates")
 
     template_col.clear()
+
+    if not rows:
+        print("[Dashboard] No templates to display after filtering")
+        with template_col:
+            if search_query:
+                ui.markdown(f"_No templates match '{search_query}'_")
+            else:
+                ui.markdown("_No templates available_")
+        return
+
+    print(f"[Dashboard] Rendering {len(rows)} templates in 3-column layout")
 
     # Use 3 nested columns for templates
     with template_col:
@@ -172,6 +217,7 @@ def refresh_templates():
         
         for idx, t in enumerate(rows):
             col = columns[idx % 3]
+            print(f"[Dashboard] Rendering template {idx+1}/{len(rows)}: '{t.get('name')}' in column {idx % 3 + 1}")
             with col:
                 with ui.card().classes("p-2 mb-2 w-full"):
                     ui.markdown(f"**{t['name']}**").classes("text-xs")
@@ -179,6 +225,8 @@ def refresh_templates():
                         ui.button("INIT", on_click=lambda tid=t['task_id']: init_quick(tid)).props("dense size=sm")
                         ui.button("EDIT", on_click=lambda task=t: edit_template(task)).props("dense size=sm color=blue")
                         ui.button("DELETE", on_click=lambda tid=t['task_id']: delete_template(tid)).props("dense size=sm color=red")
+    
+    print(f"[Dashboard] refresh_templates() completed successfully")
 
 
 def delete_instance(instance_id):
@@ -1214,6 +1262,56 @@ def build_dashboard(task_manager):
                 # Task Templates section - directly below the row
                 with ui.column().classes("scrollable-section flex-1"):
                     ui.markdown("### Task Templates")
+                    
+                    # Search bar for templates
+                    print("[Dashboard] Creating search bar for task templates")
+                    search_input = ui.input(
+                        label="Search templates",
+                        placeholder="Search by name, description, or type..."
+                    ).classes("w-full mb-2")
+                    print(f"[Dashboard] Search input created: {search_input}")
+                    
+                    def handle_template_search(e):
+                        """Handle search input changes."""
+                        print(f"[Dashboard] handle_template_search() called with event: {e}")
+                        print(f"[Dashboard] Event type: {type(e)}")
+                        if hasattr(e, 'args'):
+                            print(f"[Dashboard] Event args: {repr(e.args)}, type: {type(e.args)}")
+                        
+                        # Extract value from event
+                        value = None
+                        if hasattr(e, 'args'):
+                            # Handle case where args is directly a string (most common for input events)
+                            if isinstance(e.args, str):
+                                value = e.args
+                                print(f"[Dashboard] Extracted string value directly from args: {repr(value)}")
+                            elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                                value = e.args[0]
+                                print(f"[Dashboard] Extracted value from list/tuple args: {repr(value)}")
+                            elif isinstance(e.args, dict):
+                                value = e.args.get('value') or e.args.get('label')
+                                print(f"[Dashboard] Extracted value from dict args: {repr(value)}")
+                        elif hasattr(e, 'value'):
+                            value = e.value
+                            print(f"[Dashboard] Extracted value from event.value: {repr(value)}")
+                        else:
+                            # Try to get value directly from input
+                            try:
+                                value = search_input.value
+                                print(f"[Dashboard] Extracted value from search_input.value: {repr(value)}")
+                            except Exception as ex:
+                                print(f"[Dashboard] Could not get value from input: {ex}")
+                        
+                        print(f"[Dashboard] Final extracted search value: {repr(value)}")
+                        search_query = str(value).strip() if value else None
+                        if search_query == '':
+                            search_query = None
+                        print(f"[Dashboard] Calling refresh_templates with search_query='{search_query}'")
+                        refresh_templates(search_query=search_query)
+                    
+                    # Bind the on_change event properly using NiceGUI pattern
+                    search_input.on('update:model-value', handle_template_search)
+                    print("[Dashboard] Search input event handler attached")
                     
                     global template_col
                     template_col = ui.row().classes('w-full gap-2')
