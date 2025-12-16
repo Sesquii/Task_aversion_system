@@ -171,7 +171,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
             ui.label("Mental Energy Needed").classes("text-lg font-semibold")
-            ui.label("How much mental effort is required to understand and process this task?", classes="text-xs text-gray-500")
+            ui.label("How much mental effort is required to understand and process this task?").classes("text-xs text-gray-500")
             mental_energy = ui.slider(min=0, max=100, step=1, value=default_mental_energy)
             if 'expected_mental_energy' in previous_averages:
                 prev_val = previous_averages['expected_mental_energy']
@@ -185,7 +185,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 ui.label(f"Previous average (from old data): {prev_val}").classes("text-xs text-gray-500")
             
             ui.label("Task Difficulty").classes("text-lg font-semibold")
-            ui.label("How inherently difficult or complex is this task?", classes="text-xs text-gray-500")
+            ui.label("How inherently difficult or complex is this task?").classes("text-xs text-gray-500")
             task_difficulty = ui.slider(min=0, max=100, step=1, value=default_difficulty)
             if 'expected_difficulty' in previous_averages:
                 prev_val = previous_averages['expected_difficulty']
@@ -199,7 +199,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 ui.label(f"Previous average (from old data): {prev_val}").classes("text-xs text-gray-500")
             
             ui.label("Expected Distress").classes("text-lg font-semibold")
-            ui.label("How much stress or emotional activation do you expect?", classes="text-xs text-gray-500")
+            ui.label("How much stress or emotional activation do you expect?").classes("text-xs text-gray-500")
             emotional_load = ui.slider(min=0, max=100, step=1, value=default_emotional)
             if 'expected_emotional_load' in previous_averages:
                 prev_val = previous_averages['expected_emotional_load']

@@ -287,23 +287,23 @@ class DataAuditor:
                     actual_values.append(actual_dict.get('actual_aversion') or np.nan)
                     predicted_values.append(predicted_dict.get('expected_aversion') or predicted_dict.get('aversion') or np.nan)
             
-            actual_series = pd.Series(actual_values)
-            predicted_series = pd.Series(predicted_values)
+            actual_series = pd.to_numeric(pd.Series(actual_values), errors='coerce')
+            predicted_series = pd.to_numeric(pd.Series(predicted_values), errors='coerce')
             
             metrics_data[metric] = {
                 'actual': {
-                    'mean': actual_series.mean(),
-                    'std': actual_series.std(),
-                    'min': actual_series.min(),
-                    'max': actual_series.max(),
+                    'mean': actual_series.mean() if actual_series.notna().any() else None,
+                    'std': actual_series.std() if actual_series.notna().any() else None,
+                    'min': actual_series.min() if actual_series.notna().any() else None,
+                    'max': actual_series.max() if actual_series.notna().any() else None,
                     'count': actual_series.notna().sum(),
                     'outliers_high': ((actual_series > 100) | (actual_series < 0)).sum() if not actual_series.empty else 0
                 },
                 'predicted': {
-                    'mean': predicted_series.mean(),
-                    'std': predicted_series.std(),
-                    'min': predicted_series.min(),
-                    'max': predicted_series.max(),
+                    'mean': predicted_series.mean() if predicted_series.notna().any() else None,
+                    'std': predicted_series.std() if predicted_series.notna().any() else None,
+                    'min': predicted_series.min() if predicted_series.notna().any() else None,
+                    'max': predicted_series.max() if predicted_series.notna().any() else None,
                     'count': predicted_series.notna().sum(),
                     'outliers_high': ((predicted_series > 100) | (predicted_series < 0)).sum() if not predicted_series.empty else 0
                 }
@@ -409,35 +409,35 @@ class DataAuditor:
         pred_values = [m['predicted'] for m in matching_indices]
         actual_values = [m['actual'] for m in matching_indices]
         
-        pred_series = pd.Series(pred_values)
-        actual_series = pd.Series(actual_values)
+        pred_series = pd.to_numeric(pd.Series(pred_values), errors='coerce')
+        actual_series = pd.to_numeric(pd.Series(actual_values), errors='coerce')
         
         # Calculate differences
         differences = actual_series - pred_series
         
         return {
             'predicted': {
-                'mean': pred_series.mean(),
-                'std': pred_series.std(),
-                'min': pred_series.min(),
-                'max': pred_series.max(),
-                'count': len(pred_series)
+                'mean': pred_series.mean() if pred_series.notna().any() else None,
+                'std': pred_series.std() if pred_series.notna().any() else None,
+                'min': pred_series.min() if pred_series.notna().any() else None,
+                'max': pred_series.max() if pred_series.notna().any() else None,
+                'count': pred_series.notna().sum()
             },
             'actual': {
-                'mean': actual_series.mean(),
-                'std': actual_series.std(),
-                'min': actual_series.min(),
-                'max': actual_series.max(),
-                'count': len(actual_series)
+                'mean': actual_series.mean() if actual_series.notna().any() else None,
+                'std': actual_series.std() if actual_series.notna().any() else None,
+                'min': actual_series.min() if actual_series.notna().any() else None,
+                'max': actual_series.max() if actual_series.notna().any() else None,
+                'count': actual_series.notna().sum()
             },
             'difference': {
-                'mean': differences.mean(),
-                'std': differences.std(),
-                'min': differences.min(),
-                'max': differences.max(),
-                'spread': abs(differences.mean())  # Absolute mean difference
+                'mean': differences.mean() if differences.notna().any() else None,
+                'std': differences.std() if differences.notna().any() else None,
+                'min': differences.min() if differences.notna().any() else None,
+                'max': differences.max() if differences.notna().any() else None,
+                'spread': abs(differences.mean()) if differences.notna().any() else None  # Absolute mean difference
             },
-            'correlation': np.corrcoef(pred_series, actual_series)[0, 1] if len(pred_series) > 1 else None,
+            'correlation': np.corrcoef(pred_series.dropna(), actual_series.dropna())[0, 1] if len(pred_series.dropna()) > 1 and len(actual_series.dropna()) > 1 else None,
             'total_pairs': len(matching_indices)
         }
     
@@ -487,26 +487,28 @@ class DataAuditor:
                     aversion = aversion * 10
                 aversion_values.append(aversion)
         
-        relief_series = pd.Series(relief_values)
-        stress_series = pd.Series(stress_values)
-        aversion_series = pd.Series(aversion_values)
+        relief_series = pd.to_numeric(pd.Series(relief_values), errors='coerce').dropna()
+        stress_series = pd.to_numeric(pd.Series(stress_values), errors='coerce').dropna()
+        aversion_series = pd.to_numeric(pd.Series(aversion_values), errors='coerce').dropna()
         
         # Psychological validity checks
         validity_issues = []
         
         # Relief should typically be positive (0-100)
         if len(relief_series) > 0:
-            if relief_series.mean() < 20:
-                validity_issues.append(f"Low average relief ({relief_series.mean():.1f}), may indicate measurement issues")
+            relief_mean = relief_series.mean()
+            if relief_mean < 20:
+                validity_issues.append(f"Low average relief ({relief_mean:.1f}), may indicate measurement issues")
             if relief_series.max() > 100:
                 validity_issues.append(f"Relief values exceed 100 (max: {relief_series.max():.1f})")
         
         # Stress should be moderate (typically 30-70 for challenging tasks)
         if len(stress_series) > 0:
-            if stress_series.mean() > 80:
-                validity_issues.append(f"Very high average stress ({stress_series.mean():.1f}), may indicate burnout")
-            if stress_series.mean() < 10:
-                validity_issues.append(f"Very low average stress ({stress_series.mean():.1f}), may indicate measurement issues")
+            stress_mean = stress_series.mean()
+            if stress_mean > 80:
+                validity_issues.append(f"Very high average stress ({stress_mean:.1f}), may indicate burnout")
+            if stress_mean < 10:
+                validity_issues.append(f"Very low average stress ({stress_mean:.1f}), may indicate measurement issues")
         
         # Aversion should correlate with stress
         if len(aversion_series) > 0 and len(stress_series) > 0:

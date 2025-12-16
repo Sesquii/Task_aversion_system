@@ -545,11 +545,11 @@ class Analytics:
         ]
 
         def _median(series):
-            clean = series.dropna()
+            clean = pd.to_numeric(series, errors='coerce').dropna()
             return round(float(clean.median()), 2) if not clean.empty else 0.0
 
         def _avg(series):
-            clean = series.dropna()
+            clean = pd.to_numeric(series, errors='coerce').dropna()
             return round(float(clean.mean()), 2) if not clean.empty else 0.0
 
         df['delay_minutes'] = (
@@ -935,7 +935,7 @@ class Analytics:
         
         negative_count = len(negative_relief)
         negative_total = abs(negative_relief['default_relief_points'].sum()) if negative_count > 0 else 0.0
-        negative_avg = abs(negative_relief['default_relief_points'].mean()) if negative_count > 0 else 0.0
+        negative_avg = abs(pd.to_numeric(negative_relief['default_relief_points'], errors='coerce').mean()) if negative_count > 0 else 0.0
         
         # Get efficiency summary
         efficiency_summary = self.get_efficiency_summary()
@@ -1056,7 +1056,7 @@ class Analytics:
         
         # Calculate totals and averages
         total_relief_duration_score = valid_relief_duration['relief_duration_score'].sum() if not valid_relief_duration.empty else 0.0
-        avg_relief_duration_score = valid_relief_duration['relief_duration_score'].mean() if not valid_relief_duration.empty else 0.0
+        avg_relief_duration_score = pd.to_numeric(valid_relief_duration['relief_duration_score'], errors='coerce').mean() if not valid_relief_duration.empty else 0.0
         
         # Total relief score is the same as total_relief_duration_score (sum of relief × duration × multiplier)
         total_relief_score = total_relief_duration_score
@@ -1276,10 +1276,10 @@ class Analytics:
         # Calculate weekly average (average of daily hours over last 7 days with data)
         # This is the average daily value, used for chart comparison
         last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
-        weekly_average = last_7_days['hours'].mean() if not last_7_days.empty else 0.0
+        weekly_average = pd.to_numeric(last_7_days['hours'], errors='coerce').mean() if not last_7_days.empty else 0.0
         
         # Calculate 3-month average (average of daily hours over all days with data)
-        three_month_average = daily_data['hours'].mean() if not daily_data.empty else 0.0
+        three_month_average = pd.to_numeric(daily_data['hours'], errors='coerce').mean() if not daily_data.empty else 0.0
         
         # Check if we have at least 2 weeks of data
         days_with_data = len(daily_data)
@@ -1372,10 +1372,10 @@ class Analytics:
         # Calculate weekly average (average of daily relief points over last 7 days with data)
         # This is the average daily value, used for chart comparison
         last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
-        weekly_average = last_7_days['relief_points'].mean() if not last_7_days.empty else 0.0
+        weekly_average = pd.to_numeric(last_7_days['relief_points'], errors='coerce').mean() if not last_7_days.empty else 0.0
         
         # Calculate 3-month average (average of daily relief points over all days with data)
-        three_month_average = daily_data['relief_points'].mean() if not daily_data.empty else 0.0
+        three_month_average = pd.to_numeric(daily_data['relief_points'], errors='coerce').mean() if not daily_data.empty else 0.0
         
         # Check if we have at least 2 weeks of data
         days_with_data = len(daily_data)
@@ -1510,7 +1510,7 @@ class Analytics:
                 'efficiency_by_completion': {},
             }
         
-        avg_efficiency = valid_efficiency['efficiency_score'].mean()
+        avg_efficiency = pd.to_numeric(valid_efficiency['efficiency_score'], errors='coerce').mean()
         high_efficiency = valid_efficiency[valid_efficiency['efficiency_score'] >= 80]
         low_efficiency = valid_efficiency[valid_efficiency['efficiency_score'] < 50]
         
@@ -1534,7 +1534,7 @@ class Analytics:
                 return 'unknown'
         
         completed['completion_range'] = completed.apply(_get_completion_range, axis=1)
-        efficiency_by_completion = completed.groupby('completion_range')['efficiency_score'].mean().to_dict()
+        efficiency_by_completion = completed.groupby('completion_range')['efficiency_score'].apply(lambda x: pd.to_numeric(x, errors='coerce').mean()).to_dict()
         
         return {
             'avg_efficiency': round(float(avg_efficiency), 2),
@@ -1782,11 +1782,17 @@ class Analytics:
             for task_id in completed['task_id'].unique():
                 task_completed = completed[completed['task_id'] == task_id]
                 if not task_completed.empty:
+                    # Convert columns to numeric before calculating means
+                    relief_series = pd.to_numeric(task_completed['relief_score'], errors='coerce')
+                    cognitive_series = pd.to_numeric(task_completed['cognitive_load'], errors='coerce')
+                    emotional_series = pd.to_numeric(task_completed['emotional_load'], errors='coerce')
+                    duration_series = pd.to_numeric(task_completed['duration_minutes'], errors='coerce')
+                    
                     task_stats[task_id] = {
-                        'avg_relief': task_completed['relief_score'].mean() if task_completed['relief_score'].notna().any() else None,
-                        'avg_cognitive_load': task_completed['cognitive_load'].mean() if task_completed['cognitive_load'].notna().any() else None,
-                        'avg_emotional_load': task_completed['emotional_load'].mean() if task_completed['emotional_load'].notna().any() else None,
-                        'avg_duration': task_completed['duration_minutes'].mean() if task_completed['duration_minutes'].notna().any() else None,
+                        'avg_relief': relief_series.mean() if relief_series.notna().any() else None,
+                        'avg_cognitive_load': cognitive_series.mean() if cognitive_series.notna().any() else None,
+                        'avg_emotional_load': emotional_series.mean() if emotional_series.notna().any() else None,
+                        'avg_duration': duration_series.mean() if duration_series.notna().any() else None,
                         'count': len(task_completed),
                     }
         
@@ -1946,15 +1952,21 @@ class Analytics:
             for task_id in completed['task_id'].unique():
                 task_completed = completed[completed['task_id'] == task_id]
                 if not task_completed.empty:
+                    # Convert columns to numeric before calculating means
+                    relief_series = pd.to_numeric(task_completed['relief_score'], errors='coerce')
+                    cognitive_series = pd.to_numeric(task_completed['cognitive_load'], errors='coerce')
+                    emotional_series = pd.to_numeric(task_completed['emotional_load'], errors='coerce')
+                    duration_series = pd.to_numeric(task_completed['duration_minutes'], errors='coerce')
+                    
                     task_stats[task_id] = {
-                        'avg_relief': task_completed['relief_score'].mean() if task_completed['relief_score'].notna().any() else None,
-                        'avg_cognitive_load': task_completed['cognitive_load'].mean() if task_completed['cognitive_load'].notna().any() else None,
-                        'avg_emotional_load': task_completed['emotional_load'].mean() if task_completed['emotional_load'].notna().any() else None,
-                        'avg_duration': task_completed['duration_minutes'].mean() if task_completed['duration_minutes'].notna().any() else None,
-                        'avg_stress_level': task_completed['stress_level'].mean() if 'stress_level' in task_completed and task_completed['stress_level'].notna().any() else None,
-                        'avg_behavioral_score': task_completed['behavioral_score'].mean() if 'behavioral_score' in task_completed and task_completed['behavioral_score'].notna().any() else None,
-                        'avg_net_wellbeing': task_completed['net_wellbeing_normalized'].mean() if 'net_wellbeing_normalized' in task_completed and task_completed['net_wellbeing_normalized'].notna().any() else None,
-                        'avg_physical_load': task_completed['physical_load'].mean() if 'physical_load' in task_completed and task_completed['physical_load'].notna().any() else None,
+                        'avg_relief': relief_series.mean() if relief_series.notna().any() else None,
+                        'avg_cognitive_load': cognitive_series.mean() if cognitive_series.notna().any() else None,
+                        'avg_emotional_load': emotional_series.mean() if emotional_series.notna().any() else None,
+                        'avg_duration': duration_series.mean() if duration_series.notna().any() else None,
+                        'avg_stress_level': pd.to_numeric(task_completed['stress_level'], errors='coerce').mean() if 'stress_level' in task_completed and task_completed['stress_level'].notna().any() else None,
+                        'avg_behavioral_score': pd.to_numeric(task_completed['behavioral_score'], errors='coerce').mean() if 'behavioral_score' in task_completed and task_completed['behavioral_score'].notna().any() else None,
+                        'avg_net_wellbeing': pd.to_numeric(task_completed['net_wellbeing_normalized'], errors='coerce').mean() if 'net_wellbeing_normalized' in task_completed and task_completed['net_wellbeing_normalized'].notna().any() else None,
+                        'avg_physical_load': pd.to_numeric(task_completed['physical_load'], errors='coerce').mean() if 'physical_load' in task_completed and task_completed['physical_load'].notna().any() else None,
                         'count': len(task_completed),
                     }
         

@@ -2,9 +2,10 @@
 name: Enhanced Analytics and Tracking System
 overview: ""
 todos:
-  - id: 8ae4e96c-14bf-47f1-9d74-a4b973b9a5a7
-    content: "Improve input forms in initialize_task.py and complete_task.py: group related inputs, add collapsible sections, tooltips, and prominent previous averages"
-    status: pending
+
+- id: 8ae4e96c-14bf-47f1-9d74-a4b973b9a5a7
+content: "Improve input forms in initialize_task.py and complete_task.py: group related inputs, add collapsible sections, tooltips, and prominent previous averages"
+status: pending
 ---
 
 # Enhanced Analytics and Tracking System
