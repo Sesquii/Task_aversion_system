@@ -12,6 +12,7 @@ import pandas as pd
 from scipy import stats
 
 from .task_schema import TASK_ATTRIBUTES, attribute_defaults
+from .gap_detector import GapDetector
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
@@ -210,6 +211,33 @@ class Analytics:
     # ------------------------------------------------------------------
     # Data loading helpers
     # ------------------------------------------------------------------
+    def _apply_gap_filtering(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Apply gap filtering based on user preference."""
+        if df.empty or 'created_at' not in df.columns:
+            return df
+        
+        gap_detector = GapDetector()
+        preference = gap_detector.get_gap_handling_preference()
+        
+        # If no preference set or continue_as_is, return all data (gap will be excluded from trends elsewhere)
+        if preference != 'fresh_start':
+            return df
+        
+        # For fresh_start, only return post-gap data
+        largest_gap = gap_detector.get_largest_gap()
+        if not largest_gap:
+            return df
+        
+        gap_end = largest_gap['gap_end']
+        df['created_at_parsed'] = pd.to_datetime(df['created_at'], errors='coerce')
+        df_filtered = df[df['created_at_parsed'] >= gap_end].copy()
+        
+        # Remove parsed column before returning
+        if 'created_at_parsed' in df_filtered.columns:
+            df_filtered = df_filtered.drop(columns=['created_at_parsed'])
+        
+        return df_filtered
+    
     def _load_instances(self) -> pd.DataFrame:
         if not os.path.exists(self.instances_file):
             return pd.DataFrame()
@@ -224,6 +252,9 @@ class Analytics:
         for attr, default in attr_defaults.items():
             _ensure_column(attr, default)
         _ensure_column('status', 'active')
+        
+        # Apply gap filtering based on user preference
+        df = self._apply_gap_filtering(df)
 
         def _safe_json(cell: str) -> Dict:
             if isinstance(cell, dict):
