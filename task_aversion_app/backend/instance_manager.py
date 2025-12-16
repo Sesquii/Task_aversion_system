@@ -246,7 +246,11 @@ class InstanceManager:
             # Direct mappings
             'duration_minutes': ['duration_minutes', 'time_actual_minutes', 'actual_time'],
             'relief_score': ['relief_score', 'actual_relief', 'expected_relief'],
-            'cognitive_load': ['cognitive_load', 'actual_cognitive', 'expected_cognitive_load', 'expected_cognitive'],
+            # New cognitive load components (per Cognitive Load Theory)
+            'mental_energy_needed': ['mental_energy_needed', 'actual_mental_energy', 'expected_mental_energy'],
+            'task_difficulty': ['task_difficulty', 'actual_difficulty', 'expected_difficulty'],
+            # Backward compatibility: map old cognitive_load to both new components
+            # (will be handled in analytics.py for data loading)
             'emotional_load': ['emotional_load', 'actual_emotional', 'expected_emotional_load', 'expected_emotional'],
             'environmental_effect': ['environmental_effect', 'environmental_fit'],
             'skills_improved': ['skills_improved'],
@@ -376,7 +380,7 @@ class InstanceManager:
 
     def get_previous_task_averages(self, task_id: str) -> dict:
         """Get average values from previous initialized instances of the same task.
-        Returns a dict with keys: expected_relief, expected_cognitive_load, 
+        Returns a dict with keys: expected_relief, expected_mental_energy, expected_difficulty,
         expected_physical_load, expected_emotional_load, motivation, expected_aversion.
         Values are scaled to 0-100 range."""
         import json
@@ -393,7 +397,9 @@ class InstanceManager:
         
         # Extract values from predicted JSON
         relief_values = []
-        cognitive_values = []
+        mental_energy_values = []
+        difficulty_values = []
+        cognitive_values = []  # Keep for backward compatibility
         physical_values = []
         emotional_values = []
         motivation_values = []
@@ -408,7 +414,9 @@ class InstanceManager:
                         # Extract values, handling both 0-10 and 0-100 scales
                         for key, value_list in [
                             ('expected_relief', relief_values),
-                            ('expected_cognitive_load', cognitive_values),
+                            ('expected_mental_energy', mental_energy_values),
+                            ('expected_difficulty', difficulty_values),
+                            ('expected_cognitive_load', cognitive_values),  # Backward compatibility
                             ('expected_physical_load', physical_values),
                             ('expected_emotional_load', emotional_values),
                             ('motivation', motivation_values),
@@ -424,14 +432,32 @@ class InstanceManager:
                                     value_list.append(num_val)
                                 except (ValueError, TypeError):
                                     pass
+                        
+                        # Backward compatibility: if old cognitive_load exists but new fields don't, use it for both
+                        if 'expected_mental_energy' not in pred_dict and 'expected_difficulty' not in pred_dict:
+                            old_cog = pred_dict.get('expected_cognitive_load')
+                            if old_cog is not None:
+                                try:
+                                    num_val = float(old_cog)
+                                    if num_val <= 10 and num_val >= 0:
+                                        num_val = num_val * 10
+                                    # Use old cognitive_load for both new fields
+                                    mental_energy_values.append(num_val)
+                                    difficulty_values.append(num_val)
+                                except (ValueError, TypeError):
+                                    pass
                 except (json.JSONDecodeError, Exception):
                     pass
         
         result = {}
         if relief_values:
             result['expected_relief'] = round(sum(relief_values) / len(relief_values))
+        if mental_energy_values:
+            result['expected_mental_energy'] = round(sum(mental_energy_values) / len(mental_energy_values))
+        if difficulty_values:
+            result['expected_difficulty'] = round(sum(difficulty_values) / len(difficulty_values))
         if cognitive_values:
-            result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))
+            result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))  # Backward compatibility
         if physical_values:
             result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
         if emotional_values:

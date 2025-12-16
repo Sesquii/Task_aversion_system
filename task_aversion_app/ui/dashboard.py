@@ -19,8 +19,9 @@ dash_filters = {}
 RECOMMENDATION_METRICS = [
     {"label": "Relief score (high)", "key": "relief_score"},
     {"label": "Net relief (high)", "key": "net_relief_proxy"},
-    {"label": "Cognitive load (low)", "key": "cognitive_load"},
-    {"label": "Emotional load (low)", "key": "emotional_load"},
+    {"label": "Mental Energy Needed (low)", "key": "mental_energy_needed"},
+    {"label": "Task Difficulty (low)", "key": "task_difficulty"},
+    {"label": "Distress (low)", "key": "emotional_load"},
     {"label": "Net load (low)", "key": "net_load"},
     {"label": "Efficiency (high)", "key": "historical_efficiency"},
     {"label": "Stress level (low)", "key": "stress_level"},
@@ -417,17 +418,57 @@ def format_colored_tooltip(predicted_data, task_id):
         except (ValueError, TypeError):
             pass
     
-    # Cognitive Load
-    cog_load = predicted_data.get('expected_cognitive_load')
-    if cog_load is not None:
+    # Mental Energy Needed
+    mental_energy = predicted_data.get('expected_mental_energy')
+    if mental_energy is None:
+        # Backward compatibility: try old cognitive_load
+        old_cog = predicted_data.get('expected_cognitive_load')
+        if old_cog is not None:
+            try:
+                old_cog = float(old_cog)
+                if old_cog <= 10:
+                    old_cog = old_cog * 10
+                mental_energy = old_cog
+            except (ValueError, TypeError):
+                pass
+    if mental_energy is not None:
         try:
-            cog_load = float(cog_load)
-            if cog_load <= 10:
-                cog_load = cog_load * 10  # Scale from 0-10 to 0-100
-            avg_cog = averages.get('expected_cognitive_load')
-            cog_color = get_value_with_deviation_color(cog_load, avg_cog, higher_is_worse=True)
-            avg_text = f" (avg: {avg_cog:.1f})" if avg_cog else ""
-            lines.append(f'<div><strong>Cognitive Load:</strong> <span style="color: {cog_color}; font-weight: bold;">{cog_load:.1f}</span>{avg_text}</div>')
+            mental_energy = float(mental_energy)
+            if mental_energy <= 10:
+                mental_energy = mental_energy * 10  # Scale from 0-10 to 0-100
+            avg_mental = averages.get('expected_mental_energy')
+            if avg_mental is None:
+                avg_mental = averages.get('expected_cognitive_load')  # Backward compatibility
+            mental_color = get_value_with_deviation_color(mental_energy, avg_mental, higher_is_worse=True)
+            avg_text = f" (avg: {avg_mental:.1f})" if avg_mental else ""
+            lines.append(f'<div><strong>Mental Energy Needed:</strong> <span style="color: {mental_color}; font-weight: bold;">{mental_energy:.1f}</span>{avg_text}</div>')
+        except (ValueError, TypeError):
+            pass
+    
+    # Task Difficulty
+    difficulty = predicted_data.get('expected_difficulty')
+    if difficulty is None:
+        # Backward compatibility: try old cognitive_load
+        old_cog = predicted_data.get('expected_cognitive_load')
+        if old_cog is not None:
+            try:
+                old_cog = float(old_cog)
+                if old_cog <= 10:
+                    old_cog = old_cog * 10
+                difficulty = old_cog
+            except (ValueError, TypeError):
+                pass
+    if difficulty is not None:
+        try:
+            difficulty = float(difficulty)
+            if difficulty <= 10:
+                difficulty = difficulty * 10  # Scale from 0-10 to 0-100
+            avg_diff = averages.get('expected_difficulty')
+            if avg_diff is None:
+                avg_diff = averages.get('expected_cognitive_load')  # Backward compatibility
+            diff_color = get_value_with_deviation_color(difficulty, avg_diff, higher_is_worse=True)
+            avg_text = f" (avg: {avg_diff:.1f})" if avg_diff else ""
+            lines.append(f'<div><strong>Task Difficulty:</strong> <span style="color: {diff_color}; font-weight: bold;">{difficulty:.1f}</span>{avg_text}</div>')
         except (ValueError, TypeError):
             pass
     
@@ -445,7 +486,7 @@ def format_colored_tooltip(predicted_data, task_id):
         except (ValueError, TypeError):
             pass
     
-    # Emotional Load
+    # Expected Distress
     emo_load = predicted_data.get('expected_emotional_load')
     if emo_load is not None:
         try:
@@ -455,7 +496,7 @@ def format_colored_tooltip(predicted_data, task_id):
             avg_emo = averages.get('expected_emotional_load')
             emo_color = get_value_with_deviation_color(emo_load, avg_emo, higher_is_worse=True)
             avg_text = f" (avg: {avg_emo:.1f})" if avg_emo else ""
-            lines.append(f'<div><strong>Emotional Load:</strong> <span style="color: {emo_color}; font-weight: bold;">{emo_load:.1f}</span>{avg_text}</div>')
+            lines.append(f'<div><strong>Expected Distress:</strong> <span style="color: {emo_color}; font-weight: bold;">{emo_load:.1f}</span>{avg_text}</div>')
         except (ValueError, TypeError):
             pass
     

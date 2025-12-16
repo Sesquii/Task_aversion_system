@@ -98,7 +98,13 @@ def complete_task_page(task_manager, emotion_manager):
         
         # Map predicted keys to actual keys for baseline
         default_relief = get_default_value('actual_relief', 'expected_relief', 50)
-        default_cognitive = get_default_value('actual_cognitive', 'expected_cognitive_load', 50)
+        # Get defaults for new cognitive components (with backward compatibility)
+        default_mental_energy = get_default_value('actual_mental_energy', 'expected_mental_energy', None)
+        if default_mental_energy is None:
+            default_mental_energy = get_default_value('actual_cognitive', 'expected_cognitive_load', 50)  # Fallback
+        default_difficulty = get_default_value('actual_difficulty', 'expected_difficulty', None)
+        if default_difficulty is None:
+            default_difficulty = get_default_value('actual_cognitive', 'expected_cognitive_load', 50)  # Fallback
         default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 50)
         default_physical = get_default_value('actual_physical', 'expected_physical_load', 50)
 
@@ -127,13 +133,10 @@ def complete_task_page(task_manager, emotion_manager):
             ui.label("Update Expected Aversion").classes("text-lg font-semibold mt-4")
             ui.label("Your aversion to this task may have changed. Update it here if needed.").classes("text-xs text-gray-500 mb-2")
             aversion_slider = ui.slider(min=0, max=100, step=1, value=current_expected_aversion)
-            ui.label(f"Value: {current_expected_aversion}").bind_text_from(
-                aversion_slider, 'value', lambda v: f"Value: {v}"
-            ).classes("text-sm")
 
         # ----- Actual values -----
 
-        ui.label("Actual Relief")
+        ui.label("Actual Relief").classes("text-lg font-semibold")
         actual_relief = ui.slider(min=0, max=100, step=1, value=default_relief)
         # Show predicted value from initialization if available
         if 'expected_relief' in predicted_data:
@@ -150,24 +153,66 @@ def complete_task_page(task_manager, emotion_manager):
             except (ValueError, TypeError):
                 pass
 
-        ui.label("Actual Cognitive Demand")
-        actual_cognitive = ui.slider(min=0, max=100, step=1, value=default_cognitive)
+        ui.label("Mental Energy Needed").classes("text-lg font-semibold")
+        ui.label("How much mental effort was required to understand and process this task?").classes("text-xs text-gray-500")
+        actual_mental_energy = ui.slider(min=0, max=100, step=1, value=default_mental_energy)
         # Show predicted value from initialization if available
-        if 'expected_cognitive_load' in predicted_data:
+        if 'expected_mental_energy' in predicted_data:
+            pred_val = predicted_data.get('expected_mental_energy')
+            try:
+                pred_num = float(pred_val)
+                if pred_num <= 10 and pred_num >= 0:
+                    pred_num = pred_num * 10
+                pred_val = int(round(pred_num))
+                if pred_val != default_mental_energy:
+                    ui.label(f"Initialized: {pred_val} (current: {default_mental_energy})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
+        elif 'expected_cognitive_load' in predicted_data:
+            # Backward compatibility
             pred_val = predicted_data.get('expected_cognitive_load')
             try:
                 pred_num = float(pred_val)
                 if pred_num <= 10 and pred_num >= 0:
                     pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
-                if pred_val != default_cognitive:
-                    ui.label(f"Initialized: {pred_val} (current: {default_cognitive})").classes("text-xs text-gray-500")
+                ui.label(f"Initialized (from old data): {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
+
+        ui.label("Task Difficulty").classes("text-lg font-semibold")
+        ui.label("How inherently difficult or complex was this task?").classes("text-xs text-gray-500")
+        actual_difficulty = ui.slider(min=0, max=100, step=1, value=default_difficulty)
+        # Show predicted value from initialization if available
+        if 'expected_difficulty' in predicted_data:
+            pred_val = predicted_data.get('expected_difficulty')
+            try:
+                pred_num = float(pred_val)
+                if pred_num <= 10 and pred_num >= 0:
+                    pred_num = pred_num * 10
+                pred_val = int(round(pred_num))
+                if pred_val != default_difficulty:
+                    ui.label(f"Initialized: {pred_val} (current: {default_difficulty})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
             except (ValueError, TypeError):
                 pass
+        elif 'expected_cognitive_load' in predicted_data:
+            # Backward compatibility
+            pred_val = predicted_data.get('expected_cognitive_load')
+            try:
+                pred_num = float(pred_val)
+                if pred_num <= 10 and pred_num >= 0:
+                    pred_num = pred_num * 10
+                pred_val = int(round(pred_num))
+                ui.label(f"Initialized (from old data): {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
 
-        ui.label("Actual Emotional Demand")
+        ui.label("Actual Distress").classes("text-lg font-semibold")
+        ui.label("How much stress or emotional activation did you experience?").classes("text-xs text-gray-500")
         actual_emotional = ui.slider(min=0, max=100, step=1, value=default_emotional)
         # Show predicted value from initialization if available
         if 'expected_emotional_load' in predicted_data:
@@ -184,7 +229,7 @@ def complete_task_page(task_manager, emotion_manager):
             except (ValueError, TypeError):
                 pass
 
-        ui.label("Actual Physical Demand")
+        ui.label("Actual Physical Demand").classes("text-lg font-semibold")
         actual_physical = ui.slider(min=0, max=100, step=1, value=default_physical)
         # Show predicted value from initialization if available
         if 'expected_physical_load' in predicted_data:
@@ -264,7 +309,7 @@ def complete_task_page(task_manager, emotion_manager):
             emotion_sliders.clear()
             
             if not all_emotions:
-                ui.label("No emotions were tracked during initialization. Add emotions below to track how completing this task affects your feelings.").classes("text-sm text-gray-600")
+                ui.label("No emotions were tracked during initialization. Add emotions below to track how completing this task affects your feelings.").classes("text-xs text-gray-500")
                 return
             
             ui.label("Compare with initial values to see how completing the task affected your emotions.").classes("text-xs text-gray-500 mb-2")
@@ -297,7 +342,7 @@ def complete_task_page(task_manager, emotion_manager):
         update_emotion_sliders()
         
         # Single input for emotions (comma-separated)
-        ui.label("Track emotions by listing them (comma-separated)").classes("text-sm text-gray-600 mt-4")
+        ui.label("Track emotions by listing them (comma-separated)").classes("text-xs text-gray-500 mt-4")
         emotions_input = ui.input(
             label="Emotions",
             value=", ".join(all_emotions) if all_emotions else "",
@@ -325,8 +370,18 @@ def complete_task_page(task_manager, emotion_manager):
 
         ui.button("Update emotions", on_click=apply_emotion_input).classes("mb-4")
 
-        ui.label("Completion %")
-        completion_pct = ui.slider(min=0, max=100, step=5, value=100)
+        ui.label("Completion %").classes("text-lg font-semibold")
+        ui.label("Enter percentage completed. Use values > 100% if you completed more work than expected.").classes("text-xs text-gray-500 mb-2")
+        completion_pct = ui.number(
+            label="Completion Percentage",
+            value=100,
+            min=0,
+            precision=0
+        )
+        over_completion_note = ui.textarea(
+            label="Over-completion Note (optional)",
+            placeholder="If you completed more than 100%, describe what extra work you did..."
+        ).classes("mt-2")
 
         # Calculate default duration based on whether task was started
         default_duration = 0
@@ -351,7 +406,7 @@ def complete_task_page(task_manager, emotion_manager):
                 except (ValueError, TypeError, json.JSONDecodeError):
                     pass
 
-        ui.label("Actual Time (minutes)")
+        ui.label("Actual Time (minutes)").classes("text-lg font-semibold")
         actual_time = ui.number(value=int(default_duration) if default_duration > 0 else 0)
 
         notes = ui.textarea(label='Notes (optional)')
@@ -374,15 +429,30 @@ def complete_task_page(task_manager, emotion_manager):
                     # Fallback to default if slider doesn't exist
                     emotion_values[emotion] = get_emotion_default_value(emotion)
 
+            # Get completion percentage, defaulting to 100 if not provided
+            completion_value = completion_pct.value if completion_pct.value is not None else 100
+            completion_value = float(completion_value) if completion_value else 100.0
+            
+            # Combine notes with over-completion note if provided
+            combined_notes = notes.value or ""
+            if over_completion_note.value and over_completion_note.value.strip():
+                if combined_notes:
+                    combined_notes += "\n\nOver-completion: " + over_completion_note.value.strip()
+                else:
+                    combined_notes = "Over-completion: " + over_completion_note.value.strip()
+            
             actual = {
                 'actual_relief': int(actual_relief.value),
-                'actual_cognitive': int(actual_cognitive.value),
-                'actual_emotional': int(actual_emotional.value),
+                'actual_mental_energy': int(actual_mental_energy.value),
+                'actual_difficulty': int(actual_difficulty.value),
+                'actual_emotional': int(actual_emotional.value),  # Keep internal name for formulas
                 'actual_physical': int(actual_physical.value),
-                'completion_percent': int(completion_pct.value),
+                'completion_percent': int(round(completion_value)),
                 'time_actual_minutes': int(actual_time.value or 0),
-                'notes': notes.value or "",
-                'emotion_values': emotion_values  # Store actual emotion values
+                'notes': combined_notes,
+                'emotion_values': emotion_values,  # Store actual emotion values
+                # Backward compatibility: also include old cognitive field
+                'actual_cognitive': int((actual_mental_energy.value + actual_difficulty.value) / 2),
             }
 
             print("[complete_task] actual payload:", actual)

@@ -278,10 +278,14 @@ class Analytics:
             if column == 'relief_score':
                 df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_relief')))
                 df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_relief')))
-            # Similar for cognitive_load
-            if column == 'cognitive_load':
-                df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_cognitive')))
-                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+            # Handle new cognitive load components (mental_energy_needed and task_difficulty)
+            if column == 'mental_energy_needed':
+                df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_mental_energy') or r.get('actual_cognitive')))
+                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_mental_energy') or r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+            if column == 'task_difficulty':
+                df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_difficulty') or r.get('actual_cognitive')))
+                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_difficulty') or r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+            
             # Similar for emotional_load
             if column == 'emotional_load':
                 df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_emotional')))
@@ -296,6 +300,29 @@ class Analytics:
                 # Replace NaN with default after numeric conversion
                 df[column] = df[column].fillna(attr.default)
 
+        # Backward compatibility: if old cognitive_load exists, use it for both new components
+        # This allows existing data to work with the new schema
+        if 'cognitive_load' in df.columns:
+            cognitive_numeric = pd.to_numeric(df['cognitive_load'], errors='coerce')
+            # Scale from 0-10 to 0-100 if needed (for old data)
+            cognitive_scaled = cognitive_numeric.copy()
+            scale_mask = (cognitive_numeric >= 0) & (cognitive_numeric <= 10) & (cognitive_numeric.notna())
+            cognitive_scaled.loc[scale_mask] = cognitive_numeric.loc[scale_mask] * 10.0
+            
+            # Use cognitive_load for missing mental_energy_needed
+            if 'mental_energy_needed' in df.columns:
+                mental_numeric = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
+                missing_mental = mental_numeric.isna() | (mental_numeric == 0)
+                has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
+                df.loc[has_cognitive & missing_mental, 'mental_energy_needed'] = cognitive_scaled.loc[has_cognitive & missing_mental]
+            
+            # Use cognitive_load for missing task_difficulty
+            if 'task_difficulty' in df.columns:
+                difficulty_numeric = pd.to_numeric(df['task_difficulty'], errors='coerce')
+                missing_difficulty = difficulty_numeric.isna() | (difficulty_numeric == 0)
+                has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
+                df.loc[has_cognitive & missing_difficulty, 'task_difficulty'] = cognitive_scaled.loc[has_cognitive & missing_difficulty]
+
         # Extract physical_load from JSON if not in CSV columns
         if 'physical_load' not in df.columns:
             df['physical_load'] = pd.NA
@@ -305,16 +332,51 @@ class Analytics:
         df['physical_load'] = pd.to_numeric(df['physical_load'], errors='coerce')
         df['physical_load'] = df['physical_load'].fillna(0.0)  # Default to 0 if missing
 
-        # Calculate stress_level: average of all loads (0-100 scale to match relief)
+        # Extract expected_aversion from JSON for stress calculation
+        # Use expected_aversion from predicted_dict (what was set during initialization)
+        df['expected_aversion'] = df['predicted_dict'].apply(lambda r: r.get('expected_aversion') if isinstance(r, dict) else None)
+        df['expected_aversion'] = pd.to_numeric(df['expected_aversion'], errors='coerce')
+        df['expected_aversion'] = df['expected_aversion'].fillna(0.0)  # Default to 0 if missing
+
+        # Extract and normalize new cognitive load components (per Cognitive Load Theory)
+        # mental_energy_needed = Germane load, task_difficulty = Intrinsic load
+        # Extraneous load is excluded from stress calculation for now
+        if 'mental_energy_needed' not in df.columns:
+            df['mental_energy_needed'] = pd.NA
+        if 'task_difficulty' not in df.columns:
+            df['task_difficulty'] = pd.NA
+        
+        # Normalize to 0-100 if they're on 0-10 scale (backward compatibility)
+        df['mental_energy_needed'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
+        df['task_difficulty'] = pd.to_numeric(df['task_difficulty'], errors='coerce')
+        
+        # Scale from 0-10 to 0-100 if needed (for backward compatibility with old data)
+        mental_energy_mask = (df['mental_energy_needed'] >= 0) & (df['mental_energy_needed'] <= 10) & (df['mental_energy_needed'].notna())
+        df.loc[mental_energy_mask, 'mental_energy_needed'] = df.loc[mental_energy_mask, 'mental_energy_needed'] * 10.0
+        
+        difficulty_mask = (df['task_difficulty'] >= 0) & (df['task_difficulty'] <= 10) & (df['task_difficulty'].notna())
+        df.loc[difficulty_mask, 'task_difficulty'] = df.loc[difficulty_mask, 'task_difficulty'] * 10.0
+        
+        df['mental_energy_needed'] = df['mental_energy_needed'].fillna(50.0)  # Default to 50 if missing
+        df['task_difficulty'] = df['task_difficulty'].fillna(50.0)  # Default to 50 if missing
+
+        # Calculate stress_level: weighted average with cognitive components at 0.5 weight each
+        # Per Cognitive Load Theory: mental_energy_needed (Germane) and task_difficulty (Intrinsic) 
+        # are components of what was previously "cognitive_load", so each gets 0.5 weight
+        # Aversion is weighted 2x to increase correlation from 0.20 to ~0.40 (middle of expected 0.35-0.45 range)
         df['relief_score_numeric'] = pd.to_numeric(df['relief_score'], errors='coerce').fillna(0.0)
-        df['cognitive_load_numeric'] = pd.to_numeric(df['cognitive_load'], errors='coerce').fillna(0.0)
+        df['mental_energy_numeric'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce').fillna(50.0)
+        df['task_difficulty_numeric'] = pd.to_numeric(df['task_difficulty'], errors='coerce').fillna(50.0)
         df['emotional_load_numeric'] = pd.to_numeric(df['emotional_load'], errors='coerce').fillna(0.0)
         df['physical_load_numeric'] = pd.to_numeric(df['physical_load'], errors='coerce').fillna(0.0)
+        df['expected_aversion_numeric'] = pd.to_numeric(df['expected_aversion'], errors='coerce').fillna(0.0)
         
         df['stress_level'] = (
-            (df['cognitive_load_numeric'] + 
+            (df['mental_energy_numeric'] * 0.5 + 
+             df['task_difficulty_numeric'] * 0.5 + 
              df['emotional_load_numeric'] + 
-             df['physical_load_numeric']) / 3.0
+             df['physical_load_numeric'] + 
+             df['expected_aversion_numeric'] * 2.0) / 5.0
         )
         
         # Calculate net_wellbeing: relief minus stress (can be positive or negative)

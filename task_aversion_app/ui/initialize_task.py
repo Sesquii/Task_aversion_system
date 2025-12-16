@@ -96,7 +96,13 @@ def initialize_task_page(task_manager, emotion_manager):
         else:
             default_aversion = 50
         default_relief = get_default_value('expected_relief', 50)
-        default_cognitive = get_default_value('expected_cognitive_load', 50)
+        # Get defaults for new cognitive components (with backward compatibility)
+        default_mental_energy = get_default_value('expected_mental_energy', None)
+        if default_mental_energy is None:
+            default_mental_energy = get_default_value('expected_cognitive_load', 50)  # Fallback to old field
+        default_difficulty = get_default_value('expected_difficulty', None)
+        if default_difficulty is None:
+            default_difficulty = get_default_value('expected_cognitive_load', 50)  # Fallback to old field
         default_physical = get_default_value('expected_physical_load', 50)
         default_emotional = get_default_value('expected_emotional_load', 50)
         default_motivation = get_default_value('motivation', 50)
@@ -115,9 +121,6 @@ def initialize_task_page(task_manager, emotion_manager):
                 with aversion_container:
                     # Slider
                     aversion_slider = ui.slider(min=0, max=100, step=1, value=default_aversion)
-                    aversion_value_label = ui.label(f"Value: {default_aversion}").bind_text_from(
-                        aversion_slider, 'value', lambda v: f"Value: {v}"
-                    ).classes("text-sm")
                     
                     # Show initial aversion marker and previous aversion info
                     if initial_aversion is not None:
@@ -167,15 +170,36 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
-            ui.label("Expected Cognitive Load")
-            cog_load = ui.slider(min=0, max=100, step=1, value=default_cognitive)
-            if 'expected_cognitive_load' in previous_averages:
-                prev_val = previous_averages['expected_cognitive_load']
-                if prev_val != default_cognitive:
-                    ui.label(f"Previous average: {prev_val} (current: {default_cognitive})").classes("text-xs text-gray-500")
+            ui.label("Mental Energy Needed").classes("text-lg font-semibold")
+            ui.label("How much mental effort is required to understand and process this task?", classes="text-xs text-gray-500")
+            mental_energy = ui.slider(min=0, max=100, step=1, value=default_mental_energy)
+            if 'expected_mental_energy' in previous_averages:
+                prev_val = previous_averages['expected_mental_energy']
+                if prev_val != default_mental_energy:
+                    ui.label(f"Previous average: {prev_val} (current: {default_mental_energy})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
-            ui.label("Expected Emotional Load")
+            elif 'expected_cognitive_load' in previous_averages:
+                # Backward compatibility: show old cognitive_load average
+                prev_val = previous_averages['expected_cognitive_load']
+                ui.label(f"Previous average (from old data): {prev_val}").classes("text-xs text-gray-500")
+            
+            ui.label("Task Difficulty").classes("text-lg font-semibold")
+            ui.label("How inherently difficult or complex is this task?", classes="text-xs text-gray-500")
+            task_difficulty = ui.slider(min=0, max=100, step=1, value=default_difficulty)
+            if 'expected_difficulty' in previous_averages:
+                prev_val = previous_averages['expected_difficulty']
+                if prev_val != default_difficulty:
+                    ui.label(f"Previous average: {prev_val} (current: {default_difficulty})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
+            elif 'expected_cognitive_load' in previous_averages:
+                # Backward compatibility: show old cognitive_load average
+                prev_val = previous_averages['expected_cognitive_load']
+                ui.label(f"Previous average (from old data): {prev_val}").classes("text-xs text-gray-500")
+            
+            ui.label("Expected Distress").classes("text-lg font-semibold")
+            ui.label("How much stress or emotional activation do you expect?", classes="text-xs text-gray-500")
             emotional_load = ui.slider(min=0, max=100, step=1, value=default_emotional)
             if 'expected_emotional_load' in previous_averages:
                 prev_val = previous_averages['expected_emotional_load']
@@ -341,13 +365,16 @@ def initialize_task_page(task_manager, emotion_manager):
                     "emotions": emotion_list,  # Keep for backward compatibility
                     "emotion_values": emotion_values,  # New: dictionary of emotion -> value
                     "expected_relief": predicted_relief.value,
-                    "expected_cognitive_load": cog_load.value,
+                    "expected_mental_energy": mental_energy.value,
+                    "expected_difficulty": task_difficulty.value,
                     "expected_physical_load": physical_load.value,
-                    "expected_emotional_load": emotional_load.value,
+                    "expected_emotional_load": emotional_load.value,  # Keep internal name for formulas
                     "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or '',
                     "expected_aversion": current_aversion,  # Current aversion value
+                    # Backward compatibility: also include old cognitive_load field
+                    "expected_cognitive_load": (mental_energy.value + task_difficulty.value) / 2,
                 }
                 
                 # If this is the first time doing the task, set initial_aversion
@@ -359,7 +386,8 @@ def initialize_task_page(task_manager, emotion_manager):
                     "instance_id": instance_id,
                     "task": instance.get('task_id'),
                     "emotions": ",".join(emotion_list),
-                    "expected_cognitive_load": cog_load.value,
+                    "expected_mental_energy": mental_energy.value,
+                    "expected_difficulty": task_difficulty.value,
                     "expected_physical_load": physical_load.value,
                     "expected_emotional_load": emotional_load.value,
                     "physical_context": physical_value,
@@ -368,6 +396,8 @@ def initialize_task_page(task_manager, emotion_manager):
                     "estimate_minutes": estimate_val,
                     "initialized": True,
                     "completed": False,
+                    # Backward compatibility
+                    "expected_cognitive_load": (mental_energy.value + task_difficulty.value) / 2,
                 }
 
                 try:
