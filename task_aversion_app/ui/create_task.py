@@ -23,8 +23,8 @@ def create_task_page(task_manager, emotion_manager):
                     ui.notify("Task name required", color='negative')
                     return
 
-                # If checkbox is checked, set default aversion to 50, otherwise None
-                default_aversion = 50 if aversion_checkbox.value else None
+                # If checkbox is checked, set default aversion to 50, otherwise 0
+                default_aversion = 50 if aversion_checkbox.value else 0
 
                 tid = task_manager.create_task(
                     name.value.strip(),

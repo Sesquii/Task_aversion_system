@@ -87,14 +87,14 @@ def initialize_task_page(task_manager, emotion_manager):
         # Default aversion logic:
         # 1. If not first time, use previous average
         # 2. If first time and template has default_initial_aversion, use that
-        # 3. Otherwise default to 50
+        # 3. Otherwise default to 0
         is_first_time = initial_aversion is None
         if previous_aversion is not None:
             default_aversion = previous_aversion
         elif is_first_time and template_default_aversion is not None:
             default_aversion = template_default_aversion
         else:
-            default_aversion = 50
+            default_aversion = 0
         default_relief = get_default_value('expected_relief', 50)
         # Get defaults for new cognitive components (with backward compatibility)
         default_mental_energy = get_default_value('expected_mental_energy', None)
@@ -109,50 +109,47 @@ def initialize_task_page(task_manager, emotion_manager):
 
         with ui.column().classes("w-full max-w-xl gap-4"):
 
-            # Aversion slider - only show if task has been completed at least once
-            aversion_slider = None
-            if has_completed:
-                # Aversion slider at the top
-                ui.label("Aversion (0-100)").classes("text-lg font-semibold")
+            # Aversion slider - always show so it can be adjusted for future instances
+            ui.label("Aversion (0-100)").classes("text-lg font-semibold")
+            
+            # Create a container for the slider with marker
+            aversion_container = ui.column().classes("w-full gap-2")
+            
+            with aversion_container:
+                # Slider - always visible, defaults to 0 if not marked as aversive, or 50 if marked
+                aversion_slider = ui.slider(min=0, max=100, step=1, value=default_aversion)
                 
-                # Create a container for the slider with marker
-                aversion_container = ui.column().classes("w-full gap-2")
-                
-                with aversion_container:
-                    # Slider
-                    aversion_slider = ui.slider(min=0, max=100, step=1, value=default_aversion)
-                    
-                    # Show initial aversion marker and previous aversion info
-                    if initial_aversion is not None:
-                        ui.label(f"Initial aversion: {initial_aversion}").classes("text-xs text-blue-600 font-semibold")
-                    
-                    if previous_aversion is not None:
-                        if previous_aversion != default_aversion:
-                            ui.label(f"Previous average: {previous_aversion} (current: {default_aversion})").classes("text-xs text-gray-500")
-                        else:
-                            ui.label(f"Previous average: {previous_aversion}").classes("text-xs text-gray-500")
-                
-                # Add visual marker for initial aversion on the slider using CSS
+                # Show initial aversion marker and previous aversion info
                 if initial_aversion is not None:
-                    # Create a custom style to show the initial aversion marker
-                    ui.add_head_html(f"""
-                        <style>
-                            .aversion-slider-container {{
-                                position: relative;
-                            }}
-                            .aversion-marker {{
-                                position: absolute;
-                                left: {initial_aversion}%;
-                                top: -5px;
-                                width: 2px;
-                                height: 20px;
-                                background-color: #3b82f6;
-                                pointer-events: none;
-                                z-index: 10;
-                            }}
-                        </style>
-                    """)
-                    # Note: NiceGUI sliders don't easily support visual markers, so we'll show it in text for now
+                    ui.label(f"Initial aversion: {initial_aversion}").classes("text-xs text-blue-600 font-semibold")
+                
+                if previous_aversion is not None:
+                    if previous_aversion != default_aversion:
+                        ui.label(f"Previous average: {previous_aversion} (current: {default_aversion})").classes("text-xs text-gray-500")
+                    else:
+                        ui.label(f"Previous average: {previous_aversion}").classes("text-xs text-gray-500")
+            
+            # Add visual marker for initial aversion on the slider using CSS
+            if initial_aversion is not None:
+                # Create a custom style to show the initial aversion marker
+                ui.add_head_html(f"""
+                    <style>
+                        .aversion-slider-container {{
+                            position: relative;
+                        }}
+                        .aversion-marker {{
+                            position: absolute;
+                            left: {initial_aversion}%;
+                            top: -5px;
+                            width: 2px;
+                            height: 20px;
+                            background-color: #3b82f6;
+                            pointer-events: none;
+                            z-index: 10;
+                        }}
+                    </style>
+                """)
+                # Note: NiceGUI sliders don't easily support visual markers, so we'll show it in text for now
 
             description_field = ui.textarea(
                 label="Task Specifics (optional)",
@@ -352,12 +349,8 @@ def initialize_task_page(task_manager, emotion_manager):
                 # Check if there are any other initialized instances for this task
                 is_first_time = initial_aversion is None
                 
-                # Get aversion value: use slider if available (not first time), otherwise use default
-                if aversion_slider is not None:
-                    current_aversion = int(aversion_slider.value)
-                else:
-                    # First time - use the default aversion (50 or template default)
-                    current_aversion = default_aversion
+                # Get aversion value: always use slider value (slider is now always shown)
+                current_aversion = int(aversion_slider.value)
                 
                 # If this is the first time, set initial_aversion; otherwise use expected_aversion
                 predicted_payload = {
@@ -380,6 +373,10 @@ def initialize_task_page(task_manager, emotion_manager):
                 # If this is the first time doing the task, set initial_aversion
                 if is_first_time:
                     predicted_payload["initial_aversion"] = current_aversion
+                
+                # Always store the initialization value separately so it can be preserved
+                # This allows the completion page to always show the original initialization value
+                predicted_payload["initialization_expected_aversion"] = current_aversion
 
                 entry = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),

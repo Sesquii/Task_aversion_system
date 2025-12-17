@@ -108,28 +108,38 @@ def complete_task_page(task_manager, emotion_manager):
         default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 50)
         default_physical = get_default_value('actual_physical', 'expected_physical_load', 50)
 
-        # Check if task has been completed at least once (for showing aversion slider)
-        has_completed = False
-        if task_id:
-            has_completed = im.has_completed_task(task_id)
+        # Get the initialization aversion value (the value set when this instance was initialized)
+        # Always use initialization_expected_aversion if it exists (preserved from initialization)
+        # Otherwise fall back to expected_aversion or initial_aversion
+        initialization_aversion = None
         
-        # Get current expected aversion for display/update
-        current_expected_aversion = predicted_data.get('expected_aversion')
-        if current_expected_aversion is not None:
+        # First check for initialization_expected_aversion (preserved initialization value)
+        if 'initialization_expected_aversion' in predicted_data:
+            initialization_aversion = predicted_data.get('initialization_expected_aversion')
+        
+        # Fallback to initial_aversion (set on first initialization of this task)
+        if initialization_aversion is None and 'initial_aversion' in predicted_data:
+            initialization_aversion = predicted_data.get('initial_aversion')
+        
+        # Final fallback to expected_aversion (may have been updated, but use it if nothing else)
+        if initialization_aversion is None:
+            initialization_aversion = predicted_data.get('expected_aversion')
+        
+        # Process the value: scale if needed and convert to int
+        current_expected_aversion = 0
+        if initialization_aversion is not None:
             try:
-                current_expected_aversion = float(current_expected_aversion)
+                current_expected_aversion = float(initialization_aversion)
                 # Scale from 0-10 to 0-100 if needed
                 if current_expected_aversion <= 10 and current_expected_aversion >= 0:
                     current_expected_aversion = current_expected_aversion * 10
                 current_expected_aversion = int(round(current_expected_aversion))
             except (ValueError, TypeError):
-                current_expected_aversion = 50
-        else:
-            current_expected_aversion = 50
+                current_expected_aversion = 0
 
-        # ----- Aversion Update (if task has been completed before) -----
+        # ----- Aversion Update (always show so it can be adjusted) -----
         aversion_slider = None
-        if has_completed and instance_id:
+        if instance_id:
             ui.label("Update Expected Aversion").classes("text-lg font-semibold mt-4")
             ui.label("Your aversion to this task may have changed. Update it here if needed.").classes("text-xs text-gray-500 mb-2")
             aversion_slider = ui.slider(min=0, max=100, step=1, value=current_expected_aversion)
@@ -461,7 +471,8 @@ def complete_task_page(task_manager, emotion_manager):
                 result = im.complete_instance(iid, actual)
                 print("[complete_task] complete_instance result:", result)
                 
-                # If aversion slider was shown and used, update the predicted aversion
+                # If aversion slider exists, update the predicted aversion
+                # Note: We preserve initialization_expected_aversion so it always shows the original initialization value
                 if aversion_slider is not None:
                     updated_aversion = int(aversion_slider.value)
                     # Get current predicted data and update expected_aversion
@@ -470,7 +481,14 @@ def complete_task_page(task_manager, emotion_manager):
                         predicted_raw = instance.get('predicted') or '{}'
                         try:
                             predicted_dict = json.loads(predicted_raw) if predicted_raw else {}
+                            # Update expected_aversion but preserve initialization_expected_aversion
                             predicted_dict['expected_aversion'] = updated_aversion
+                            # Preserve initialization_expected_aversion if it exists (don't overwrite it)
+                            if 'initialization_expected_aversion' not in predicted_dict:
+                                # If it doesn't exist, create it from current expected_aversion before update
+                                # This handles cases where the instance was initialized before this change
+                                original_aversion = predicted_dict.get('expected_aversion', updated_aversion)
+                                predicted_dict['initialization_expected_aversion'] = original_aversion
                             # Update the instance with new predicted data
                             im.add_prediction_to_instance(iid, predicted_dict)
                             print(f"[complete_task] Updated expected_aversion to {updated_aversion}")
