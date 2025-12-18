@@ -17,6 +17,7 @@ This document compiles findings from psychological and mathematical literature r
 - Cognitive load is measured in three types: intrinsic, extraneous, and germane
 - Intrinsic load: inherent difficulty of the material
 - Extraneous load: caused by poor instructional design
+- Extraneous load: caused by poor instructional design
 - Germane load: effort to construct schemas
 - **Measurement:** Typically measured subjectively using rating scales (1-9 or 1-7)
 - No single formula for combining different load types - they are typically analyzed separately

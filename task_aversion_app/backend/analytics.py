@@ -80,7 +80,7 @@ class Analytics:
             task_type: Task type string ('Work', 'Self care', 'Play', etc.)
             
         Returns:
-            Multiplier value (work: 2.0, self care: 1.0, play: 0.5, default: 1.0)
+            Multiplier value (work: 1.0, self care: 3.0, play: 0.5, default: 1.0)
         """
         if task_type is None:
             return 1.0
@@ -88,13 +88,104 @@ class Analytics:
         task_type_lower = str(task_type).strip().lower()
         
         if task_type_lower == 'work':
-            return 2.0
-        elif task_type_lower in ['self care', 'selfcare', 'self-care']:
             return 1.0
+        elif task_type_lower in ['self care', 'selfcare', 'self-care']:
+            return 3.0
         elif task_type_lower == 'play':
             return 0.5
         else:
             return 1.0
+    
+    def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0) -> float:
+        """Calculate productivity score based on completion percentage vs time ratio.
+        
+        Args:
+            row: Task instance row with actual_dict, predicted_dict, task_type, completed_at
+            self_care_tasks_per_day: Dictionary mapping date strings to count of self care tasks completed that day
+            weekly_avg_time: Weekly average productivity time in minutes (for bonus/penalty calculation)
+            
+        Returns:
+            Productivity score (can be negative for play tasks)
+        """
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_type = row.get('task_type', 'Work')
+            completed_at = row.get('completed_at', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            # Get completion percentage and time data
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            
+            # Normalize task type
+            task_type_lower = str(task_type).strip().lower()
+            
+            # Calculate completion/time ratio
+            # Ratio = (completion_percent / 100) / (time_actual / time_estimate)
+            # = (completion_percent * time_estimate) / (100 * time_actual)
+            if time_estimate > 0 and time_actual > 0:
+                completion_time_ratio = (completion_pct * time_estimate) / (100.0 * time_actual)
+            else:
+                # If no time data, assume 1.0 ratio
+                completion_time_ratio = 1.0
+            
+            # Apply multipliers based on task type
+            if task_type_lower == 'work':
+                # Work: 3x up to 100% ratio, 5x if > 100%
+                if completion_time_ratio <= 1.0:
+                    multiplier = 3.0
+                else:
+                    multiplier = 5.0
+                # Base score is completion percentage
+                base_score = completion_pct
+                score = base_score * multiplier
+            
+            elif task_type_lower in ['self care', 'selfcare', 'self-care']:
+                # Self care: multiplier = number of self care tasks completed per day
+                # Get date from completed_at
+                try:
+                    completed_date = pd.to_datetime(completed_at).date()
+                    date_str = completed_date.isoformat()
+                    multiplier = float(self_care_tasks_per_day.get(date_str, 1))
+                except (ValueError, TypeError, AttributeError):
+                    multiplier = 1.0
+                # Base score is completion percentage
+                base_score = completion_pct
+                score = base_score * multiplier
+            
+            elif task_type_lower == 'play':
+                # Play: -0.01x multiplier per percentage of time completed compared to estimated time
+                # Percentage = (time_actual / time_estimate) * 100
+                if time_estimate > 0:
+                    time_percentage = (time_actual / time_estimate) * 100.0
+                else:
+                    time_percentage = 100.0
+                multiplier = -0.01 * time_percentage
+                # Base score is completion percentage
+                base_score = completion_pct
+                score = base_score * multiplier
+            
+            else:
+                # Default: no multiplier
+                score = completion_pct
+            
+            # Apply weekly average bonus/penalty
+            # +0.01x bonus per percentage above weekly average, -0.01x penalty per percentage below
+            if weekly_avg_time > 0 and time_actual > 0:
+                # Calculate percentage difference from weekly average
+                time_percentage_diff = ((time_actual - weekly_avg_time) / weekly_avg_time) * 100.0
+                # Apply bonus/penalty multiplier: +0.01x per percentage above, -0.01x per percentage below
+                weekly_bonus_multiplier = 1.0 + (0.01 * time_percentage_diff)
+                score = score * weekly_bonus_multiplier
+            
+            return score
+        
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            return 0.0
     
     @staticmethod
     def calculate_spontaneous_aversion_threshold(baseline_aversion: float) -> float:
@@ -197,10 +288,12 @@ class Analytics:
             return 0.0
         
         # Obstacles score = spike_amount × relief_score × multiplier
+        # Normalize to reasonable scale: divide by 100 to get 0-100 range
         # Multiplier scales with spike amount
         multiplier = 1.0 + (spike_amount / 20.0)  # 1.0x for 0 spike, 6.0x for 100 spike
         
-        obstacles_score = spike_amount * relief_score * multiplier
+        # Normalize: divide by 100 to keep scores in reasonable range (0-600 max instead of 0-60000)
+        obstacles_score = (spike_amount * relief_score * multiplier) / 100.0
         
         return obstacles_score
 
@@ -742,6 +835,8 @@ class Analytics:
                 'weekly_productivity_points': 0.0,
                 'weekly_productivity_points_with_bonus_robust': 0.0,
                 'weekly_productivity_points_with_bonus_sensitive': 0.0,
+                'total_productivity_score': 0.0,
+                'weekly_productivity_score': 0.0,
                 'total_obstacles_score_robust': 0.0,
                 'total_obstacles_score_sensitive': 0.0,
                 'weekly_obstacles_bonus_multiplier_robust': 1.0,
@@ -775,6 +870,8 @@ class Analytics:
                 'weekly_productivity_points': 0.0,
                 'weekly_productivity_points_with_bonus_robust': 0.0,
                 'weekly_productivity_points_with_bonus_sensitive': 0.0,
+                'total_productivity_score': 0.0,
+                'weekly_productivity_score': 0.0,
                 'total_obstacles_score_robust': 0.0,
                 'total_obstacles_score_sensitive': 0.0,
                 'weekly_obstacles_bonus_multiplier_robust': 1.0,
@@ -1042,11 +1139,12 @@ class Analytics:
         completed['relief_multiplier'] = completed.apply(_calculate_relief_multiplier, axis=1)
         
         # Calculate relief_duration_score per task instance (relief_score × duration_minutes × multiplier)
+        # Normalize by dividing by 60 to convert minutes to hours scale (keeps scores more reasonable)
         completed['relief_duration_score'] = (
             completed['relief_score_numeric'] * 
             completed['duration_minutes_numeric'] * 
             completed['relief_multiplier']
-        )
+        ) / 60.0
         
         # Filter to rows with valid relief_duration_score (both relief and duration must be present)
         valid_relief_duration = completed[
@@ -1070,7 +1168,7 @@ class Analytics:
             completed_last_7d_all['relief_score_numeric'] * 
             completed_last_7d_all['duration_minutes_numeric'] * 
             completed_last_7d_all['relief_multiplier']
-        )
+        ) / 60.0
         weekly_relief_score_base = completed_last_7d_all['relief_duration_score'].fillna(0).sum()
         
         # Apply weekly obstacles bonus multipliers to weekly relief score
@@ -1141,6 +1239,95 @@ class Analytics:
             weekly_productivity_points_robust = 0.0
             weekly_productivity_points_sensitive = 0.0
         
+        # Calculate new productivity score based on completion/time ratio
+        # First, ensure completed has task_type
+        if 'task_type' not in completed.columns:
+            # Load tasks to get task_type if not already loaded
+            if 'tasks_df' not in locals():
+                from .task_manager import TaskManager
+                task_manager = TaskManager()
+                tasks_df = task_manager.get_all()
+            if not tasks_df.empty and 'task_type' in tasks_df.columns:
+                completed = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+                completed['task_type'] = completed['task_type'].fillna('Work')
+        
+        # Count self care tasks per day
+        self_care_tasks_per_day = {}
+        if 'task_type' in completed.columns:
+            completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+            self_care_tasks = completed[
+                completed['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+            ].copy()
+            if not self_care_tasks.empty:
+                self_care_tasks['completed_at_dt'] = pd.to_datetime(self_care_tasks['completed_at'], errors='coerce')
+                self_care_tasks = self_care_tasks[self_care_tasks['completed_at_dt'].notna()]
+                if not self_care_tasks.empty:
+                    self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                    daily_counts = self_care_tasks.groupby('date').size()
+                    for date, count in daily_counts.items():
+                        self_care_tasks_per_day[date.isoformat()] = int(count)
+        
+        # Calculate weekly average productivity time for bonus/penalty calculation
+        # Get all completed tasks with actual time
+        def _get_actual_time_for_avg(row):
+            """Get actual time from actual_dict for weekly average calculation."""
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed['time_actual_for_avg'] = completed.apply(_get_actual_time_for_avg, axis=1)
+        completed['time_actual_for_avg'] = pd.to_numeric(completed['time_actual_for_avg'], errors='coerce')
+        
+        # Calculate weekly average: average time per task across all completed tasks
+        valid_times = completed[completed['time_actual_for_avg'].notna() & (completed['time_actual_for_avg'] > 0)]
+        if not valid_times.empty:
+            weekly_avg_time = valid_times['time_actual_for_avg'].mean()
+        else:
+            weekly_avg_time = 0.0
+        
+        # Calculate productivity score for all completed tasks
+        # Ensure completed has the required columns
+        if 'actual_dict' not in completed.columns or 'predicted_dict' not in completed.columns:
+            # If dictionaries aren't available, try to create them
+            def _safe_json(cell):
+                if isinstance(cell, dict):
+                    return cell
+                cell = cell or '{}'
+                try:
+                    return json.loads(cell)
+                except Exception:
+                    return {}
+            
+            if 'actual' in completed.columns:
+                completed['actual_dict'] = completed['actual'].apply(_safe_json)
+            else:
+                completed['actual_dict'] = pd.Series([{}] * len(completed))
+            
+            if 'predicted' in completed.columns:
+                completed['predicted_dict'] = completed['predicted'].apply(_safe_json)
+            else:
+                completed['predicted_dict'] = pd.Series([{}] * len(completed))
+        
+        completed['productivity_score'] = completed.apply(
+            lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time),
+            axis=1
+        )
+        
+        # Calculate totals
+        total_productivity_score = completed['productivity_score'].fillna(0).sum()
+        
+        # Calculate weekly productivity score (last 7 days)
+        completed_last_7d_for_score = completed[completed['completed_at_dt'] >= seven_days_ago]
+        weekly_productivity_score = completed_last_7d_for_score['productivity_score'].fillna(0).sum()
+        
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
             'default_relief_points': round(float(default_total), 2),
@@ -1165,6 +1352,9 @@ class Analytics:
             'weekly_productivity_points': round(float(weekly_productivity_points_base), 2),
             'weekly_productivity_points_with_bonus_robust': round(float(weekly_productivity_points_robust), 2),
             'weekly_productivity_points_with_bonus_sensitive': round(float(weekly_productivity_points_sensitive), 2),
+            # New productivity score based on completion/time ratio
+            'total_productivity_score': round(float(total_productivity_score), 2),
+            'weekly_productivity_score': round(float(weekly_productivity_score), 2),
             # Obstacles metrics
             'total_obstacles_score_robust': round(float(total_obstacles_robust), 2),
             'total_obstacles_score_sensitive': round(float(total_obstacles_sensitive), 2),
@@ -2252,7 +2442,7 @@ class Analytics:
         """Return daily aggregated values for a single attribute."""
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
-        if completed.empty or attribute_key not in completed.columns:
+        if completed.empty:
             return {'dates': [], 'values': [], 'aggregation': aggregation}
 
         completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
@@ -2261,6 +2451,81 @@ class Analytics:
             cutoff = datetime.now() - timedelta(days=days)
             completed = completed[completed['completed_at_dt'] >= cutoff]
         if completed.empty:
+            return {'dates': [], 'values': [], 'aggregation': aggregation}
+
+        # Handle calculated metrics that need to be computed
+        if attribute_key == 'productivity_score':
+            # Calculate productivity score for trend data
+            from .task_manager import TaskManager
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
+            
+            # Merge task_type if needed
+            if 'task_type' not in completed.columns and not tasks_df.empty and 'task_type' in tasks_df.columns:
+                completed = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+                completed['task_type'] = completed['task_type'].fillna('Work')
+            
+            # Count self care tasks per day
+            self_care_tasks_per_day = {}
+            if 'task_type' in completed.columns:
+                completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+                self_care_tasks = completed[
+                    completed['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+                ].copy()
+                if not self_care_tasks.empty:
+                    self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                    daily_counts = self_care_tasks.groupby('date').size()
+                    for date, count in daily_counts.items():
+                        self_care_tasks_per_day[date.isoformat()] = int(count)
+            
+            # Calculate weekly average time
+            def _get_actual_time_for_avg(row):
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, dict):
+                        return actual_dict.get('time_actual_minutes', None)
+                except (KeyError, TypeError):
+                    pass
+                return None
+            
+            completed['time_actual_for_avg'] = completed.apply(_get_actual_time_for_avg, axis=1)
+            completed['time_actual_for_avg'] = pd.to_numeric(completed['time_actual_for_avg'], errors='coerce')
+            valid_times = completed[completed['time_actual_for_avg'].notna() & (completed['time_actual_for_avg'] > 0)]
+            weekly_avg_time = valid_times['time_actual_for_avg'].mean() if not valid_times.empty else 0.0
+            
+            # Calculate productivity score
+            completed['productivity_score'] = completed.apply(
+                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time),
+                axis=1
+            )
+        elif attribute_key == 'relief_duration_score':
+            # Calculate relief_duration_score if not already present
+            if 'relief_duration_score' not in completed.columns:
+                # Calculate relief multiplier
+                def _calculate_relief_multiplier(row):
+                    task_type = row.get('task_type', 'Work')
+                    type_mult = self.get_task_type_multiplier(task_type)
+                    initial_av = row.get('initial_aversion')
+                    expected_av = row.get('expected_aversion')
+                    aversion_mult = self.calculate_aversion_multiplier(initial_av, expected_av)
+                    return type_mult * aversion_mult
+                
+                if 'relief_multiplier' not in completed.columns:
+                    completed['relief_multiplier'] = completed.apply(_calculate_relief_multiplier, axis=1)
+                
+                completed['relief_score_numeric'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+                completed['duration_minutes_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce')
+                completed['relief_duration_score'] = (
+                    completed['relief_score_numeric'] * 
+                    completed['duration_minutes_numeric'] * 
+                    completed['relief_multiplier']
+                ) / 60.0  # Divide by 60 to normalize (convert minutes to hours scale)
+        
+        if attribute_key not in completed.columns:
             return {'dates': [], 'values': [], 'aggregation': aggregation}
 
         # Convert to numeric where possible

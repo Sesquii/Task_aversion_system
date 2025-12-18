@@ -19,6 +19,8 @@ CALCULATED_METRICS = [
     {'label': 'Net Wellbeing', 'value': 'net_wellbeing'},
     {'label': 'Net Wellbeing (Normalized)', 'value': 'net_wellbeing_normalized'},
     {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
+    {'label': 'Productivity Score', 'value': 'productivity_score'},
+    {'label': 'Relief Duration Score', 'value': 'relief_duration_score'},
 ]
 
 ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
@@ -64,6 +66,8 @@ def build_analytics_page():
             ("Weekly Productivity (Base)", f"{relief_summary.get('weekly_productivity_points', 0.0):.1f}"),
             ("Weekly Productivity + Bonus (Robust)", f"{relief_summary.get('weekly_productivity_points_with_bonus_robust', 0.0):.1f}"),
             ("Weekly Productivity + Bonus (Sensitive)", f"{relief_summary.get('weekly_productivity_points_with_bonus_sensitive', 0.0):.1f}"),
+            ("Total Productivity Score", f"{relief_summary.get('total_productivity_score', 0.0):.1f}"),
+            ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
         ]:
             with ui.card().classes("p-3 min-w-[150px]"):
                 ui.label(title).classes("text-xs text-gray-500")
