@@ -628,8 +628,9 @@ class Analytics:
         if df.empty:
             return {
                 'counts': {'active': 0, 'completed_7d': 0, 'total_created': 0, 'total_completed': 0, 'completion_rate': 0.0},
-                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None},
+                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None, 'avg_aversion': 0.0, 'adjusted_wellbeing': 0.0, 'adjusted_wellbeing_normalized': 50.0},
                 'time': {'median_duration': 0.0, 'avg_delay': 0.0, 'estimation_accuracy': 0.0},
+                'aversion': {'general_aversion_score': 0.0},
             }
         active = df[df['status'].isin(['active', 'in_progress'])]
         completed = df[df['completed_at'].astype(str).str.len() > 0]
@@ -676,6 +677,44 @@ class Analytics:
         # Calculate life balance
         life_balance = self.get_life_balance()
         
+        # Calculate average aversion from completed tasks (expected_aversion at time of completion)
+        completed_aversion = completed['predicted_dict'].apply(
+            lambda d: float(d.get('expected_aversion', 0)) if isinstance(d, dict) else 0
+        )
+        completed_aversion = pd.to_numeric(completed_aversion, errors='coerce')
+        avg_aversion_completed = _avg(completed_aversion)
+        
+        # Calculate general aversion score (average expected_aversion from active/upcoming tasks)
+        # This represents how averse you are to tasks you expect to do in general
+        active_aversion = active['predicted_dict'].apply(
+            lambda d: float(d.get('expected_aversion', 0)) if isinstance(d, dict) else 0
+        )
+        active_aversion = pd.to_numeric(active_aversion, errors='coerce')
+        general_aversion_score = _avg(active_aversion) if not active.empty else 0.0
+        
+        # If no active tasks, use all tasks with predicted data as fallback
+        if general_aversion_score == 0.0 or pd.isna(general_aversion_score):
+            all_aversion = df['predicted_dict'].apply(
+                lambda d: float(d.get('expected_aversion', 0)) if isinstance(d, dict) else 0
+            )
+            all_aversion = pd.to_numeric(all_aversion, errors='coerce')
+            general_aversion_score = _avg(all_aversion)
+        
+        # Calculate adjusted wellbeing that factors in general aversion
+        # Higher general aversion = lower adjusted wellbeing (calibration factor)
+        # Formula: adjusted_wellbeing = net_wellbeing - (general_aversion * calibration_factor)
+        # Calibration factor of 0.3 means: general_aversion of 50 reduces wellbeing by 15 points
+        # This accounts for the psychological burden of dreading upcoming tasks
+        calibration_factor = 0.3
+        avg_net_wellbeing = _avg(df['net_wellbeing'])
+        # Handle NaN case for general_aversion_score
+        if pd.isna(general_aversion_score):
+            general_aversion_score = 0.0
+        adjusted_wellbeing = avg_net_wellbeing - (general_aversion_score * calibration_factor)
+        adjusted_wellbeing_normalized = 50.0 + (adjusted_wellbeing / 2.0)
+        # Clamp to 0-100 range
+        adjusted_wellbeing_normalized = max(0.0, min(100.0, adjusted_wellbeing_normalized))
+        
         metrics = {
             'counts': {
                 'active': int(len(active)),
@@ -691,6 +730,9 @@ class Analytics:
                 'avg_net_wellbeing': _avg(df['net_wellbeing']),
                 'avg_net_wellbeing_normalized': _avg(df['net_wellbeing_normalized']),
                 'avg_stress_efficiency': _avg(df['stress_efficiency']),
+                'avg_aversion': round(avg_aversion_completed, 1),
+                'adjusted_wellbeing': round(adjusted_wellbeing, 2),
+                'adjusted_wellbeing_normalized': round(adjusted_wellbeing_normalized, 2),
             },
             'time': {
                 'median_duration': _median(df['duration_minutes']),
@@ -698,6 +740,9 @@ class Analytics:
                 'estimation_accuracy': round(time_accuracy, 2),
             },
             'life_balance': life_balance,
+            'aversion': {
+                'general_aversion_score': round(general_aversion_score, 1),
+            },
         }
         return metrics
 
@@ -827,6 +872,8 @@ class Analytics:
                 'total_relief_duration_score': 0.0,
                 'avg_relief_duration_score': 0.0,
                 'total_relief_score': 0.0,
+                'total_relief_score_no_mult': 0.0,
+                'avg_relief_score_no_mult': 0.0,
                 'weekly_relief_score': 0.0,
                 'weekly_relief_score_with_bonus_robust': 0.0,
                 'weekly_relief_score_with_bonus_sensitive': 0.0,
@@ -862,6 +909,8 @@ class Analytics:
                 'total_relief_duration_score': 0.0,
                 'avg_relief_duration_score': 0.0,
                 'total_relief_score': 0.0,
+                'total_relief_score_no_mult': 0.0,
+                'avg_relief_score_no_mult': 0.0,
                 'weekly_relief_score': 0.0,
                 'weekly_relief_score_with_bonus_robust': 0.0,
                 'weekly_relief_score_with_bonus_sensitive': 0.0,
@@ -1152,24 +1201,35 @@ class Analytics:
             (completed['relief_duration_score'] != 0)
         ]
         
-        # Calculate totals and averages
+        # Calculate totals and averages WITH multipliers
         total_relief_duration_score = valid_relief_duration['relief_duration_score'].sum() if not valid_relief_duration.empty else 0.0
         avg_relief_duration_score = pd.to_numeric(valid_relief_duration['relief_duration_score'], errors='coerce').mean() if not valid_relief_duration.empty else 0.0
         
-        # Total relief score is the same as total_relief_duration_score (sum of relief × duration × multiplier)
+        # Calculate relief scores WITHOUT multipliers (raw relief × duration)
+        # This is the accurate baseline without inflation from multipliers
+        completed['relief_duration_score_no_mult'] = (
+            completed['relief_score_numeric'] * 
+            completed['duration_minutes_numeric']
+        ) / 60.0
+        valid_relief_no_mult = completed[
+            completed['relief_duration_score_no_mult'].notna() & 
+            (completed['relief_duration_score_no_mult'] != 0)
+        ]
+        total_relief_score_no_mult = valid_relief_no_mult['relief_duration_score_no_mult'].sum() if not valid_relief_no_mult.empty else 0.0
+        avg_relief_score_no_mult = pd.to_numeric(valid_relief_no_mult['relief_duration_score_no_mult'], errors='coerce').mean() if not valid_relief_no_mult.empty else 0.0
+        
+        # Total relief score WITH multipliers (for backward compatibility, but should be labeled)
         total_relief_score = total_relief_duration_score
         
-        # Calculate weekly relief score (sum of relief × duration × multiplier for last 7 days)
+        # Calculate weekly relief score (sum of relief × duration for last 7 days, WITHOUT multipliers)
         # Note: relief score includes ALL tasks (work, play, self care), not just productivity tasks
+        # Weekly relief score should be raw relief × duration, not multiplied by aversion/task type
         completed_last_7d_all = completed[completed['completed_at_dt'] >= seven_days_ago]
-        completed_last_7d_all['relief_score_numeric'] = pd.to_numeric(completed_last_7d_all['relief_score'], errors='coerce')
-        completed_last_7d_all['duration_minutes_numeric'] = pd.to_numeric(completed_last_7d_all['duration_minutes'], errors='coerce')
-        completed_last_7d_all['relief_duration_score'] = (
+        # Calculate weekly relief score without multipliers: just relief × duration / 60
+        weekly_relief_score_base = (
             completed_last_7d_all['relief_score_numeric'] * 
-            completed_last_7d_all['duration_minutes_numeric'] * 
-            completed_last_7d_all['relief_multiplier']
-        ) / 60.0
-        weekly_relief_score_base = completed_last_7d_all['relief_duration_score'].fillna(0).sum()
+            completed_last_7d_all['duration_minutes_numeric']
+        ).fillna(0).sum() / 60.0
         
         # Apply weekly obstacles bonus multipliers to weekly relief score
         weekly_relief_score_robust = weekly_relief_score_base * weekly_bonus_multiplier_robust
@@ -1211,8 +1271,14 @@ class Analytics:
             
             productivity_relief_data['relief_task_type_mult'] = productivity_relief_data.apply(_get_relief_task_type_mult, axis=1)
             # Calculate base points without task type multiplier
-            productivity_relief_data['base_relief_points'] = (
-                productivity_relief_data['default_relief_points'] / productivity_relief_data['relief_task_type_mult']
+            # Avoid division by zero - if relief_task_type_mult is 0 or very small, use default_relief_points directly
+            productivity_relief_data['base_relief_points'] = productivity_relief_data.apply(
+                lambda row: (
+                    row['default_relief_points'] / row['relief_task_type_mult'] 
+                    if row['relief_task_type_mult'] > 0.01 
+                    else row['default_relief_points']
+                ),
+                axis=1
             )
             # Apply productivity multiplier
             productivity_relief_data['productivity_points'] = (
@@ -1341,9 +1407,14 @@ class Analytics:
             'avg_efficiency': efficiency_summary.get('avg_efficiency', 0.0),
             'high_efficiency_count': efficiency_summary.get('high_efficiency_count', 0),
             'low_efficiency_count': efficiency_summary.get('low_efficiency_count', 0),
+            # Relief scores WITH multipliers (inflated, for backward compatibility)
             'total_relief_duration_score': round(float(total_relief_duration_score), 2),
             'avg_relief_duration_score': round(float(avg_relief_duration_score), 2),
             'total_relief_score': round(float(total_relief_score), 2),
+            # Relief scores WITHOUT multipliers (accurate baseline)
+            'total_relief_score_no_mult': round(float(total_relief_score_no_mult), 2),
+            'avg_relief_score_no_mult': round(float(avg_relief_score_no_mult), 2),
+            # Weekly relief score (already without multipliers)
             'weekly_relief_score': round(float(weekly_relief_score_base), 2),
             'weekly_relief_score_with_bonus_robust': round(float(weekly_relief_score_robust), 2),
             'weekly_relief_score_with_bonus_sensitive': round(float(weekly_relief_score_sensitive), 2),
