@@ -265,37 +265,198 @@ class Analytics:
         return bonus_multiplier
     
     @staticmethod
-    def calculate_obstacles_score(
+    def _is_test_task(task_name: str) -> bool:
+        """Check if a task is a test/dev task that should be excluded from calculations.
+        
+        Args:
+            task_name: Name of the task
+            
+        Returns:
+            True if task should be excluded, False otherwise
+        """
+        if not task_name:
+            return False
+        
+        try:
+            # Handle pandas NaN and None values
+            if pd.isna(task_name) if hasattr(pd, 'isna') else (task_name is None or str(task_name).lower() == 'nan'):
+                return False
+        except (TypeError, ValueError):
+            pass
+        
+        task_name_lower = str(task_name).lower().strip()
+        if not task_name_lower or task_name_lower == 'nan':
+            return False
+        
+        test_patterns = ['test', 'devtest', 'dev test', 'example', 'fix', 'completion test', 'dev']
+        
+        for pattern in test_patterns:
+            if pattern in task_name_lower:
+                return True
+        
+        return False
+    
+    @staticmethod
+    def calculate_obstacles_scores(
         baseline_aversion: Optional[float],
         current_aversion: Optional[float],
-        relief_score: float
-    ) -> float:
-        """Calculate obstacles overcome score for a single task instance.
+        expected_relief: Optional[float],
+        actual_relief: Optional[float]
+    ) -> Dict[str, float]:
+        """Calculate multiple obstacles overcome scores using different formulas for comparison.
+        
+        Returns a dictionary with multiple scoring methods to assess which best captures
+        the psychological meaning of overcoming obstacles.
+        
+        All formulas weight spike amount more heavily than relief, especially when relief is low.
+        This creates positive correlation: higher spike + lower relief = more impressive = higher score.
+        
+        Formula variants:
+        1. "expected_only": Uses expected_relief (decision-making context)
+        2. "actual_only": Uses actual_relief (outcome-based)
+        3. "minimum": Uses min(expected, actual) - most conservative/impressive
+        4. "average": Uses (expected + actual) / 2 - balanced
+        5. "net_penalty": Uses expected_relief but penalizes if actual < expected (disappointment)
+        6. "net_bonus": Uses expected_relief but rewards if actual > expected (surprise benefit)
+        7. "net_weighted": Uses expected_relief weighted by net relief factor
+        
+        Base formula for all: score = spike_amount × multiplier / 50.0
+        Multiplier: 1 + (spike_amount / 100) × (1 - relief_proportion) × 9
         
         Args:
             baseline_aversion: Baseline aversion value (0-100) or None
             current_aversion: Current aversion value (0-100) or None
-            relief_score: Relief score achieved (0-100)
+            expected_relief: Expected relief score (0-100) or None
+            actual_relief: Actual relief score (0-100) or None
             
         Returns:
-            Obstacles overcome score (points)
+            Dictionary with keys: 'expected_only', 'actual_only', 'minimum', 'average', 
+            'net_penalty', 'net_bonus', 'net_weighted', each with score value
         """
         is_spontaneous, spike_amount = Analytics.detect_spontaneous_aversion(
             baseline_aversion, current_aversion
         )
         
         if not is_spontaneous or spike_amount <= 0:
-            return 0.0
+            return {
+                'expected_only': 0.0,
+                'actual_only': 0.0,
+                'minimum': 0.0,
+                'average': 0.0,
+                'net_penalty': 0.0,
+                'net_bonus': 0.0,
+                'net_weighted': 0.0
+            }
         
-        # Obstacles score = spike_amount × relief_score × multiplier
-        # Normalize to reasonable scale: divide by 100 to get 0-100 range
-        # Multiplier scales with spike amount
-        multiplier = 1.0 + (spike_amount / 20.0)  # 1.0x for 0 spike, 6.0x for 100 spike
+        # Normalize inputs
+        spike_amount = max(0.0, min(100.0, float(spike_amount)))
+        expected_relief = max(0.0, min(100.0, float(expected_relief))) if expected_relief is not None else None
+        actual_relief = max(0.0, min(100.0, float(actual_relief))) if actual_relief is not None else None
         
-        # Normalize: divide by 100 to keep scores in reasonable range (0-600 max instead of 0-60000)
-        obstacles_score = (spike_amount * relief_score * multiplier) / 100.0
+        # Calculate net relief (actual - expected)
+        net_relief = None
+        if expected_relief is not None and actual_relief is not None:
+            net_relief = actual_relief - expected_relief  # Can be negative
         
-        return obstacles_score
+        def _calculate_score_with_relief(relief_value: Optional[float]) -> float:
+            """Calculate obstacles score using a specific relief value."""
+            if relief_value is None:
+                return 0.0
+            
+            relief_proportion = relief_value / 100.0
+            spike_proportion = spike_amount / 100.0
+            
+            # Multiplier: 1x to 10x based on spike and inverse of relief
+            multiplier = 1.0 + (spike_proportion * (1.0 - relief_proportion) * 9.0)
+            
+            # Base score: spike_amount × multiplier / 50.0
+            score = (spike_amount * multiplier) / 50.0
+            return score
+        
+        # 1. Expected only (decision-making context)
+        score_expected = _calculate_score_with_relief(expected_relief)
+        
+        # 2. Actual only (outcome-based)
+        score_actual = _calculate_score_with_relief(actual_relief)
+        
+        # 3. Minimum (most conservative - rewards only when both are low)
+        relief_min = None
+        if expected_relief is not None and actual_relief is not None:
+            relief_min = min(expected_relief, actual_relief)
+        elif expected_relief is not None:
+            relief_min = expected_relief
+        elif actual_relief is not None:
+            relief_min = actual_relief
+        score_minimum = _calculate_score_with_relief(relief_min)
+        
+        # 4. Average (balanced approach)
+        relief_avg = None
+        if expected_relief is not None and actual_relief is not None:
+            relief_avg = (expected_relief + actual_relief) / 2.0
+        elif expected_relief is not None:
+            relief_avg = expected_relief
+        elif actual_relief is not None:
+            relief_avg = actual_relief
+        score_average = _calculate_score_with_relief(relief_avg)
+        
+        # 5. Net penalty (uses expected, but penalizes if actual < expected)
+        # If you got less than expected, that's MORE impressive (you did it for less reward)
+        score_net_penalty = score_expected
+        if net_relief is not None and net_relief < 0:
+            # Penalty factor: the more you got less than expected, the more impressive
+            # Add bonus multiplier based on how much less you got
+            penalty_factor = abs(net_relief) / 100.0  # 0.0 to 1.0
+            bonus_multiplier = 1.0 + (penalty_factor * 0.5)  # Up to 1.5x bonus
+            score_net_penalty = score_expected * bonus_multiplier
+        
+        # 6. Net bonus (uses expected, but rewards if actual > expected)
+        # If you got more than expected, that's a pleasant surprise
+        score_net_bonus = score_expected
+        if net_relief is not None and net_relief > 0:
+            # Bonus factor: getting more than expected is good, but less impressive for obstacles
+            # So we reduce the bonus (or keep it neutral)
+            bonus_factor = net_relief / 100.0  # 0.0 to 1.0
+            bonus_multiplier = 1.0 - (bonus_factor * 0.2)  # Slight reduction (0.8x to 1.0x)
+            score_net_bonus = score_expected * bonus_multiplier
+        
+        # 7. Net weighted (uses expected, weighted by net relief factor)
+        # Considers both expected relief and how it relates to actual
+        score_net_weighted = score_expected
+        if net_relief is not None:
+            # Weight expected relief by net relief factor
+            # Negative net (got less) = more impressive = higher weight
+            # Positive net (got more) = less impressive for obstacles = lower weight
+            net_factor = 1.0 - (net_relief / 200.0)  # Range: 0.5 (big positive) to 1.5 (big negative)
+            net_factor = max(0.5, min(1.5, net_factor))  # Clamp to reasonable range
+            score_net_weighted = score_expected * net_factor
+        
+        return {
+            'expected_only': round(score_expected, 2),
+            'actual_only': round(score_actual, 2),
+            'minimum': round(score_minimum, 2),
+            'average': round(score_average, 2),
+            'net_penalty': round(score_net_penalty, 2),
+            'net_bonus': round(score_net_bonus, 2),
+            'net_weighted': round(score_net_weighted, 2)
+        }
+    
+    @staticmethod
+    def calculate_obstacles_score(
+        baseline_aversion: Optional[float],
+        current_aversion: Optional[float],
+        relief_score: float
+    ) -> float:
+        """Legacy method: Calculate obstacles overcome score using single relief value.
+        
+        This is kept for backward compatibility. New code should use calculate_obstacles_scores()
+        to get multiple formula variants for comparison.
+        
+        Uses the same formula as 'expected_only' variant.
+        """
+        scores = Analytics.calculate_obstacles_scores(
+            baseline_aversion, current_aversion, relief_score, None
+        )
+        return scores['expected_only']
 
     def __init__(self):
         self.instances_file = os.path.join(DATA_DIR, 'task_instances.csv')
@@ -627,7 +788,7 @@ class Analytics:
         df = self._load_instances()
         if df.empty:
             return {
-                'counts': {'active': 0, 'completed_7d': 0, 'total_created': 0, 'total_completed': 0, 'completion_rate': 0.0},
+                'counts': {'active': 0, 'completed_7d': 0, 'total_created': 0, 'total_completed': 0, 'completion_rate': 0.0, 'daily_self_care_tasks': 0, 'avg_daily_self_care_tasks': 0.0},
                 'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None, 'avg_aversion': 0.0, 'adjusted_wellbeing': 0.0, 'adjusted_wellbeing_normalized': 50.0},
                 'time': {'median_duration': 0.0, 'avg_delay': 0.0, 'estimation_accuracy': 0.0},
                 'aversion': {'general_aversion_score': 0.0},
@@ -677,6 +838,52 @@ class Analytics:
         # Calculate life balance
         life_balance = self.get_life_balance()
         
+        # Calculate daily self care tasks metrics
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        daily_self_care_tasks = 0
+        avg_daily_self_care_tasks = 0.0
+        
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            # Join completed tasks with task types
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            
+            # Filter to self care tasks
+            self_care_tasks = completed_with_type[
+                completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+            ]
+            
+            if not self_care_tasks.empty:
+                # Parse completed_at dates
+                self_care_tasks['completed_at_dt'] = pd.to_datetime(self_care_tasks['completed_at'], errors='coerce')
+                self_care_tasks = self_care_tasks[self_care_tasks['completed_at_dt'].notna()]
+                
+                if not self_care_tasks.empty:
+                    self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                    
+                    # Count self care tasks for today
+                    today = datetime.now().date()
+                    today_self_care = self_care_tasks[self_care_tasks['date'] == today]
+                    daily_self_care_tasks = len(today_self_care)
+                    
+                    # Calculate average daily self care tasks over last 30 days
+                    thirty_days_ago = datetime.now() - timedelta(days=30)
+                    recent_self_care = self_care_tasks[
+                        self_care_tasks['completed_at_dt'] >= thirty_days_ago
+                    ]
+                    
+                    if not recent_self_care.empty:
+                        daily_counts = recent_self_care.groupby('date').size()
+                        avg_daily_self_care_tasks = round(float(daily_counts.mean()), 2) if not daily_counts.empty else 0.0
+        
         # Calculate average aversion from completed tasks (expected_aversion at time of completion)
         completed_aversion = completed['predicted_dict'].apply(
             lambda d: float(d.get('expected_aversion', 0)) if isinstance(d, dict) else 0
@@ -722,6 +929,8 @@ class Analytics:
                 'total_created': int(total_created),
                 'total_completed': int(total_completed),
                 'completion_rate': round(completion_rate, 1),
+                'daily_self_care_tasks': daily_self_care_tasks,
+                'avg_daily_self_care_tasks': avg_daily_self_care_tasks,
             },
             'quality': {
                 'avg_relief': _avg(df['relief_score']),
@@ -1086,11 +1295,20 @@ class Analytics:
         # Get efficiency summary
         efficiency_summary = self.get_efficiency_summary()
         
+        # Filter out test/dev tasks from obstacles calculation
+        # Keep all tasks for relief calculations, but exclude test tasks from obstacles
+        if 'task_name' in relief_data.columns:
+            relief_data_for_obstacles = relief_data[
+                ~relief_data['task_name'].apply(self._is_test_task)
+            ].copy()
+        else:
+            relief_data_for_obstacles = relief_data.copy()
+        
         # Calculate obstacles overcome scores
         from .instance_manager import InstanceManager
         im = InstanceManager()
         
-        # Add baseline aversion (both robust and sensitive) to relief_data
+        # Add baseline aversion (both robust and sensitive) to relief_data_for_obstacles
         def _get_baseline_aversion_robust(row):
             task_id = row.get('task_id')
             if task_id:
@@ -1103,32 +1321,64 @@ class Analytics:
                 return im.get_baseline_aversion_sensitive(task_id)
             return None
         
-        relief_data['baseline_aversion_robust'] = relief_data.apply(_get_baseline_aversion_robust, axis=1)
-        relief_data['baseline_aversion_sensitive'] = relief_data.apply(_get_baseline_aversion_sensitive, axis=1)
+        relief_data_for_obstacles['baseline_aversion_robust'] = relief_data_for_obstacles.apply(_get_baseline_aversion_robust, axis=1)
+        relief_data_for_obstacles['baseline_aversion_sensitive'] = relief_data_for_obstacles.apply(_get_baseline_aversion_sensitive, axis=1)
         
-        # Calculate obstacles score using both methods
-        def _calculate_obstacles_score_robust(row):
+        # Calculate obstacles scores using multiple formulas for comparison
+        def _calculate_obstacles_scores_robust(row):
             baseline = row.get('baseline_aversion_robust')
             current = row.get('expected_aversion')
-            relief = row.get('actual_relief', 0.0)
-            return self.calculate_obstacles_score(baseline, current, relief)
+            expected_relief = row.get('expected_relief')
+            actual_relief = row.get('actual_relief')
+            # Convert to float, handling NaN
+            expected_relief = float(expected_relief) if expected_relief is not None and not pd.isna(expected_relief) else None
+            actual_relief = float(actual_relief) if actual_relief is not None and not pd.isna(actual_relief) else None
+            scores = self.calculate_obstacles_scores(baseline, current, expected_relief, actual_relief)
+            return scores
         
-        def _calculate_obstacles_score_sensitive(row):
+        def _calculate_obstacles_scores_sensitive(row):
             baseline = row.get('baseline_aversion_sensitive')
             current = row.get('expected_aversion')
-            relief = row.get('actual_relief', 0.0)
-            return self.calculate_obstacles_score(baseline, current, relief)
+            expected_relief = row.get('expected_relief')
+            actual_relief = row.get('actual_relief')
+            # Convert to float, handling NaN
+            expected_relief = float(expected_relief) if expected_relief is not None and not pd.isna(expected_relief) else None
+            actual_relief = float(actual_relief) if actual_relief is not None and not pd.isna(actual_relief) else None
+            scores = self.calculate_obstacles_scores(baseline, current, expected_relief, actual_relief)
+            return scores
         
-        relief_data['obstacles_score_robust'] = relief_data.apply(_calculate_obstacles_score_robust, axis=1)
-        relief_data['obstacles_score_sensitive'] = relief_data.apply(_calculate_obstacles_score_sensitive, axis=1)
+        # Calculate all score variants
+        relief_data_for_obstacles['obstacles_scores_robust'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_robust, axis=1)
+        relief_data_for_obstacles['obstacles_scores_sensitive'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_sensitive, axis=1)
         
-        # Calculate total obstacles scores
-        total_obstacles_robust = relief_data['obstacles_score_robust'].sum()
-        total_obstacles_sensitive = relief_data['obstacles_score_sensitive'].sum()
+        # Extract individual scores for backward compatibility and new analytics
+        score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+        for variant in score_variants:
+            relief_data_for_obstacles[f'obstacles_score_{variant}_robust'] = relief_data_for_obstacles['obstacles_scores_robust'].apply(
+                lambda x: x.get(variant, 0.0) if isinstance(x, dict) else 0.0
+            )
+            relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'] = relief_data_for_obstacles['obstacles_scores_sensitive'].apply(
+                lambda x: x.get(variant, 0.0) if isinstance(x, dict) else 0.0
+            )
+        
+        # Keep backward compatibility: use expected_only as the default
+        relief_data_for_obstacles['obstacles_score_robust'] = relief_data_for_obstacles['obstacles_score_expected_only_robust']
+        relief_data_for_obstacles['obstacles_score_sensitive'] = relief_data_for_obstacles['obstacles_score_expected_only_sensitive']
+        
+        # Calculate total obstacles scores for all variants
+        total_obstacles_robust = relief_data_for_obstacles['obstacles_score_robust'].sum()
+        total_obstacles_sensitive = relief_data_for_obstacles['obstacles_score_sensitive'].sum()
+        
+        # Calculate totals for all score variants
+        score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+        obstacles_totals = {}
+        for variant in score_variants:
+            obstacles_totals[f'total_obstacles_{variant}_robust'] = relief_data_for_obstacles[f'obstacles_score_{variant}_robust'].sum()
+            obstacles_totals[f'total_obstacles_{variant}_sensitive'] = relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'].sum()
         
         # Calculate weekly obstacles (last 7 days) for bonus multiplier
-        relief_data['completed_at_dt'] = pd.to_datetime(relief_data['completed_at'], errors='coerce')
-        relief_data_last_7d = relief_data[relief_data['completed_at_dt'] >= seven_days_ago]
+        relief_data_for_obstacles['completed_at_dt'] = pd.to_datetime(relief_data_for_obstacles['completed_at'], errors='coerce')
+        relief_data_last_7d = relief_data_for_obstacles[relief_data_for_obstacles['completed_at_dt'] >= seven_days_ago]
         
         # Calculate max spike amount for weekly bonus
         def _get_max_spike_robust(row):
@@ -1426,13 +1676,15 @@ class Analytics:
             # New productivity score based on completion/time ratio
             'total_productivity_score': round(float(total_productivity_score), 2),
             'weekly_productivity_score': round(float(weekly_productivity_score), 2),
-            # Obstacles metrics
+            # Obstacles metrics (backward compatibility - uses expected_only)
             'total_obstacles_score_robust': round(float(total_obstacles_robust), 2),
             'total_obstacles_score_sensitive': round(float(total_obstacles_sensitive), 2),
             'weekly_obstacles_bonus_multiplier_robust': round(float(weekly_bonus_multiplier_robust), 3),
             'weekly_obstacles_bonus_multiplier_sensitive': round(float(weekly_bonus_multiplier_sensitive), 3),
             'max_obstacle_spike_robust': round(float(max_spike_robust), 1),
             'max_obstacle_spike_sensitive': round(float(max_spike_sensitive), 1),
+            # Aversion analytics: all score variants for comparison
+            **{k: round(float(v), 2) for k, v in obstacles_totals.items()},
         }
 
     def get_weekly_hours_history(self) -> Dict[str, any]:
@@ -2595,6 +2847,55 @@ class Analytics:
                     completed['duration_minutes_numeric'] * 
                     completed['relief_multiplier']
                 ) / 60.0  # Divide by 60 to normalize (convert minutes to hours scale)
+        elif attribute_key == 'daily_self_care_tasks':
+            # Calculate daily self care tasks count
+            from .task_manager import TaskManager
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
+            
+            # Merge task_type if needed
+            if 'task_type' not in completed.columns and not tasks_df.empty and 'task_type' in tasks_df.columns:
+                completed = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+                completed['task_type'] = completed['task_type'].fillna('Work')
+            
+            # Filter to self care tasks and count per day
+            if 'task_type' in completed.columns:
+                completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+                self_care_tasks = completed[
+                    completed['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+                ].copy()
+                
+                if not self_care_tasks.empty:
+                    self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                    # Count self care tasks per day
+                    daily_counts = self_care_tasks.groupby('date').size().reset_index(name='count')
+                    daily_counts = daily_counts.sort_values('date')
+                    
+                    # Create a complete date range and fill missing days with 0
+                    if days:
+                        cutoff = datetime.now() - timedelta(days=days)
+                        date_range = pd.date_range(start=cutoff, end=datetime.now(), freq='D')
+                    else:
+                        min_date = daily_counts['date'].min()
+                        max_date = daily_counts['date'].max()
+                        date_range = pd.date_range(start=pd.Timestamp(min_date), end=pd.Timestamp(max_date), freq='D')
+                    
+                    date_df = pd.DataFrame({'date': [d.date() for d in date_range]})
+                    daily_counts = date_df.merge(daily_counts, on='date', how='left')
+                    daily_counts['count'] = daily_counts['count'].fillna(0).astype(int)
+                    
+                    return {
+                        'dates': daily_counts['date'].astype(str).tolist(),
+                        'values': daily_counts['count'].tolist(),
+                        'aggregation': 'count',
+                    }
+            
+            # If no self care tasks or no task_type, return empty
+            return {'dates': [], 'values': [], 'aggregation': 'count'}
         
         if attribute_key not in completed.columns:
             return {'dates': [], 'values': [], 'aggregation': aggregation}

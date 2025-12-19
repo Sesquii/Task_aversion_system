@@ -21,6 +21,7 @@ CALCULATED_METRICS = [
     {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
     {'label': 'Productivity Score', 'value': 'productivity_score'},
     {'label': 'Relief Duration Score', 'value': 'relief_duration_score'},
+    {'label': 'Daily Self Care Tasks', 'value': 'daily_self_care_tasks'},
 ]
 
 ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
@@ -49,6 +50,8 @@ def build_analytics_page():
             ("Active", metrics['counts']['active']),
             ("Completed 7d", metrics['counts']['completed_7d']),
             ("Completion Rate", f"{metrics['counts']['completion_rate']}%"),
+            ("Daily Self Care Tasks", metrics['counts']['daily_self_care_tasks']),
+            ("Avg Daily Self Care Tasks", f"{metrics['counts']['avg_daily_self_care_tasks']:.1f}"),
             ("Time Est. Accuracy", f"{metrics['time']['estimation_accuracy']:.2f}x" if metrics['time']['estimation_accuracy'] > 0 else "N/A"),
             ("Avg Relief", metrics['quality']['avg_relief']),
             ("Avg Mental Energy", metrics['quality'].get('avg_mental_energy_needed', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
@@ -159,6 +162,50 @@ def build_analytics_page():
                     ui.label(f"+{bonus_pct:.0f}% bonus").classes("text-xs text-green-600")
                 else:
                     ui.label("No bonus").classes("text-xs text-gray-400")
+    
+    # Aversion Analytics Section - Multiple Formula Comparison
+    with ui.card().classes("p-4 mb-4"):
+        ui.label("Aversion Analytics").classes("text-xl font-bold mb-2")
+        ui.label("Comparing different obstacles score formulas to understand how net relief and relief expectations affect scoring").classes("text-sm text-gray-500 mb-3")
+        
+        # Formula descriptions
+        formula_descriptions = {
+            'expected_only': 'Uses expected relief (decision-making context)',
+            'actual_only': 'Uses actual relief (outcome-based)',
+            'minimum': 'Uses min(expected, actual) - most conservative',
+            'average': 'Uses (expected + actual) / 2 - balanced',
+            'net_penalty': 'Uses expected, bonus if actual < expected (disappointment factor)',
+            'net_bonus': 'Uses expected, reduced if actual > expected (surprise benefit)',
+            'net_weighted': 'Uses expected, weighted by net relief factor'
+        }
+        
+        # Display scores in a grid
+        with ui.row().classes("gap-3 flex-wrap"):
+            score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+            
+            for variant in score_variants:
+                robust_key = f'total_obstacles_{variant}_robust'
+                sensitive_key = f'total_obstacles_{variant}_sensitive'
+                
+                robust_score = relief_summary.get(robust_key, 0.0)
+                sensitive_score = relief_summary.get(sensitive_key, 0.0)
+                
+                with ui.card().classes("p-3 min-w-[220px] border border-gray-200"):
+                    # Variant name (formatted)
+                    variant_label = variant.replace('_', ' ').title()
+                    ui.label(variant_label).classes("text-xs font-semibold text-gray-700 mb-1")
+                    
+                    # Description
+                    ui.label(formula_descriptions.get(variant, '')).classes("text-xs text-gray-500 mb-2")
+                    
+                    # Scores
+                    with ui.row().classes("gap-2 items-center"):
+                        ui.label("Robust:").classes("text-xs text-gray-600")
+                        ui.label(f"{robust_score:.1f}").classes("text-sm font-bold text-blue-600")
+                    
+                    with ui.row().classes("gap-2 items-center"):
+                        ui.label("Sensitive:").classes("text-xs text-gray-600")
+                        ui.label(f"{sensitive_score:.1f}").classes("text-sm font-bold text-purple-600")
 
     with ui.row().classes("analytics-grid flex-wrap w-full"):
         _render_time_chart()
