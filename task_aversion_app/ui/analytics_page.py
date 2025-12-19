@@ -23,6 +23,8 @@ CALCULATED_METRICS = [
     {'label': 'Grit Score', 'value': 'grit_score'},
     {'label': 'Relief Duration Score', 'value': 'relief_duration_score'},
     {'label': "Today's self care tasks", 'value': 'daily_self_care_tasks'},
+    {'label': 'Work Time (minutes)', 'value': 'work_time'},
+    {'label': 'Play Time (minutes)', 'value': 'play_time'},
 ]
 
 ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
@@ -469,75 +471,238 @@ def _render_metric_comparison():
                         
                         ui.label(f"Sample size: {n}").classes("text-xs text-gray-500")
                 
-                # Efficiency metrics for productivity vs grit
-                if show_efficiency.value and x_attr == 'productivity_score' and y_attr == 'grit_score':
-                    with ui.card().classes("p-3 bg-blue-50"):
-                        ui.label("Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
+                # Efficiency analysis for various metric combinations
+                if show_efficiency.value:
+                    # Define disclaimers for problematic combinations
+                    disclaimers = {
+                        # Productivity score already factors time efficiency
+                        ('duration_minutes', 'productivity_score'): "⚠️ Note: Productivity Score already incorporates time efficiency (rewards completing faster than estimated). This ratio shows absolute productivity density, not efficiency relative to estimates.",
+                        ('productivity_score', 'duration_minutes'): "⚠️ Note: Productivity Score already incorporates time efficiency (rewards completing faster than estimated). This ratio shows absolute productivity density, not efficiency relative to estimates.",
+                        # Stress efficiency is already relief/stress
+                        ('stress_level', 'stress_efficiency'): "⚠️ Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                        ('stress_efficiency', 'stress_level'): "⚠️ Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                        ('relief_score', 'stress_efficiency'): "⚠️ Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                        ('stress_efficiency', 'relief_score'): "⚠️ Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                    }
+                    
+                    # Define efficiency analysis configurations
+                    # Format: (x_attr, y_attr): (ratio_formula, description, interpretation_thresholds, label, use_time_efficiency)
+                    efficiency_configs = {
+                        # Productivity vs Grit
+                        ('productivity_score', 'grit_score'): (
+                            lambda x, y: x / y if y > 0 else None,
+                            "Productivity per unit of Grit",
+                            {'high': 2.0, 'moderate': 0.5},
+                            "Higher ratio = more productivity with less grit investment",
+                            False
+                        ),
+                        ('grit_score', 'productivity_score'): (
+                            lambda x, y: y / x if x > 0 else None,
+                            "Productivity per unit of Grit",
+                            {'high': 2.0, 'moderate': 0.5},
+                            "Higher ratio = more productivity with less grit investment",
+                            False
+                        ),
+                        # Work Time vs Play Time
+                        ('work_time', 'play_time'): (
+                            lambda x, y: x / y if y > 0 else None,
+                            "Work Time per unit of Play Time",
+                            {'high': 2.0, 'moderate': 0.5},
+                            "Ratio shows work-play balance (1.0 = balanced)",
+                            False
+                        ),
+                        ('play_time', 'work_time'): (
+                            lambda x, y: x / y if y > 0 else None,
+                            "Play Time per unit of Work Time",
+                            {'high': 0.5, 'moderate': 0.2},
+                            "Ratio shows play-work balance (1.0 = balanced)",
+                            False
+                        ),
+                        # Stress vs Relief (Stress Efficiency)
+                        ('stress_level', 'relief_score'): (
+                            lambda x, y: y / x if x > 0 else None,
+                            "Relief per unit of Stress (Stress Efficiency)",
+                            {'high': 2.0, 'moderate': 1.0},
+                            "Higher ratio = more relief for less stress. Note: This is the same calculation as the Stress Efficiency metric.",
+                            False
+                        ),
+                        ('relief_score', 'stress_level'): (
+                            lambda x, y: x / y if y > 0 else None,
+                            "Relief per unit of Stress (Stress Efficiency)",
+                            {'high': 2.0, 'moderate': 1.0},
+                            "Higher ratio = more relief for less stress. Note: This is the same calculation as the Stress Efficiency metric.",
+                            False
+                        ),
+                        # Time vs Productivity - Use new time efficiency metric
+                        ('duration_minutes', 'productivity_score'): (
+                            None,  # Will use time efficiency calculation instead
+                            "Time Efficiency (Estimate/Actual)",
+                            {'high': 1.2, 'moderate': 1.0},
+                            "Higher ratio = completed faster than estimated. 1.0 = on time, >1.0 = faster, <1.0 = slower.",
+                            True
+                        ),
+                        ('productivity_score', 'duration_minutes'): (
+                            None,  # Will use time efficiency calculation instead
+                            "Time Efficiency (Estimate/Actual)",
+                            {'high': 1.2, 'moderate': 1.0},
+                            "Higher ratio = completed faster than estimated. 1.0 = on time, >1.0 = faster, <1.0 = slower.",
+                            True
+                        ),
+                        # Stress vs Net Wellbeing
+                        ('stress_level', 'net_wellbeing'): (
+                            lambda x, y: y / x if x > 0 else None,
+                            "Net Wellbeing per unit of Stress",
+                            {'high': 1.0, 'moderate': 0.5},
+                            "Higher ratio = better wellbeing despite stress",
+                            False
+                        ),
+                        ('net_wellbeing', 'stress_level'): (
+                            lambda x, y: x / y if y > 0 else None,
+                            "Net Wellbeing per unit of Stress",
+                            {'high': 1.0, 'moderate': 0.5},
+                            "Higher ratio = better wellbeing despite stress",
+                            False
+                        ),
+                        # Relief vs Net Wellbeing
+                        ('relief_score', 'net_wellbeing'): (
+                            lambda x, y: y / x if x > 0 else None,
+                            "Net Wellbeing per unit of Relief",
+                            {'high': 1.5, 'moderate': 1.0},
+                            "Higher ratio = wellbeing exceeds relief (positive impact)",
+                            False
+                        ),
+                        ('net_wellbeing', 'relief_score'): (
+                            lambda x, y: x / y if y > 0 else None,
+                            "Net Wellbeing per unit of Relief",
+                            {'high': 1.5, 'moderate': 1.0},
+                            "Higher ratio = wellbeing exceeds relief (positive impact)",
+                            False
+                        ),
+                        # Time vs Relief
+                        ('duration_minutes', 'relief_score'): (
+                            lambda x, y: y / x if x > 0 else None,
+                            "Relief per minute",
+                            {'high': 0.5, 'moderate': 0.2},
+                            "Higher ratio = more relief per time invested",
+                            False
+                        ),
+                        ('relief_score', 'duration_minutes'): (
+                            lambda x, y: x / y if y > 0 else None,
+                            "Relief per minute",
+                            {'high': 0.5, 'moderate': 0.2},
+                            "Higher ratio = more relief per time invested",
+                            False
+                        ),
+                    }
+                    
+                    # Check if current combination has efficiency analysis
+                    key = (x_attr, y_attr)
+                    if key in efficiency_configs:
+                        config = efficiency_configs[key]
+                        use_time_efficiency = config[4] if len(config) > 4 else False
                         
-                        # Calculate efficiency metrics
-                        x_vals = scatter['x']
-                        y_vals = scatter['y']
-                        
-                        # Filter out zeros and negatives for ratio calculation
-                        valid_pairs = [(x, y) for x, y in zip(x_vals, y_vals) if y > 0 and x is not None and y is not None]
-                        
-                        if valid_pairs:
-                            efficiency_ratios = [x / y for x, y in valid_pairs]
-                            avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios) if efficiency_ratios else 0
+                        if use_time_efficiency:
+                            # Use new time efficiency metric based on estimates
+                            ratio_func, description, thresholds, interpretation_label, _ = config
                             
-                            with ui.column().classes("gap-1"):
-                                ui.label(f"Average Efficiency Ratio: {avg_efficiency:.3f}").classes("text-sm")
-                                ui.label("(Productivity per unit of Grit)").classes("text-xs text-gray-600")
+                            with ui.card().classes("p-3 bg-blue-50"):
+                                ui.label("Time Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
                                 
-                                # Interpretation
-                                if avg_efficiency > 2.0:
-                                    interpretation = "Highly Efficient"
-                                    color = "text-green-600"
-                                elif avg_efficiency > 0.5:
-                                    interpretation = "Moderately Efficient"
-                                    color = "text-yellow-600"
+                                # Show disclaimer if applicable
+                                if key in disclaimers:
+                                    with ui.row().classes("mb-2"):
+                                        ui.icon("info", size="sm").classes("text-yellow-600 mt-0.5")
+                                        ui.label(disclaimers[key]).classes("text-xs text-yellow-700")
+                                
+                                # Get time data from scatter
+                                time_data = scatter.get('time_data')
+                                if time_data and 'time_estimate' in time_data and 'time_actual' in time_data:
+                                    time_estimates = time_data['time_estimate']
+                                    time_actuals = time_data['time_actual']
+                                    
+                                    # Calculate time efficiency: estimate/actual (higher = faster than estimated)
+                                    efficiency_ratios = []
+                                    for est, actual in zip(time_estimates, time_actuals):
+                                        if est is not None and actual is not None and est > 0 and actual > 0:
+                                            ratio = est / actual  # >1.0 means faster than estimated
+                                            efficiency_ratios.append(ratio)
+                                    
+                                    if efficiency_ratios:
+                                        avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios)
+                                        
+                                        with ui.column().classes("gap-1"):
+                                            ui.label(f"Average Time Efficiency: {avg_efficiency:.3f}").classes("text-sm")
+                                            ui.label(f"({description})").classes("text-xs text-gray-600")
+                                            
+                                            # Interpretation
+                                            high_threshold = thresholds.get('high', 1.0)
+                                            moderate_threshold = thresholds.get('moderate', 1.0)
+                                            
+                                            if avg_efficiency >= high_threshold:
+                                                interpretation = "Highly Efficient (Faster than Estimated)"
+                                                color = "text-green-600"
+                                            elif avg_efficiency >= moderate_threshold:
+                                                interpretation = "On Time or Moderately Efficient"
+                                                color = "text-yellow-600"
+                                            else:
+                                                interpretation = "Less Efficient (Slower than Estimated)"
+                                                color = "text-orange-600"
+                                            
+                                            ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
+                                            ui.label(interpretation_label).classes("text-xs text-gray-500 mt-1")
+                                    else:
+                                        ui.label("Insufficient time estimate data for efficiency calculation").classes("text-xs text-gray-500")
                                 else:
-                                    interpretation = "Less Efficient"
-                                    color = "text-orange-600"
-                                
-                                ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
-                                
-                                ui.label("Higher ratio = more productivity with less grit investment").classes("text-xs text-gray-500 mt-1")
+                                    ui.label("Time estimate data not available. Complete tasks with time estimates to see efficiency analysis.").classes("text-xs text-gray-500")
                         else:
-                            ui.label("Insufficient data for efficiency calculation").classes("text-xs text-gray-500")
-                
-                elif show_efficiency.value and y_attr == 'productivity_score' and x_attr == 'grit_score':
-                    # Same but reversed
-                    with ui.card().classes("p-3 bg-blue-50"):
-                        ui.label("Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
-                        
-                        x_vals = scatter['x']
-                        y_vals = scatter['y']
-                        
-                        valid_pairs = [(x, y) for x, y in zip(x_vals, y_vals) if x > 0 and x is not None and y is not None]
-                        
-                        if valid_pairs:
-                            efficiency_ratios = [y / x for x, y in valid_pairs]
-                            avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios) if efficiency_ratios else 0
+                            # Standard efficiency calculation
+                            ratio_func, description, thresholds, interpretation_label, _ = config
                             
-                            with ui.column().classes("gap-1"):
-                                ui.label(f"Average Efficiency Ratio: {avg_efficiency:.3f}").classes("text-sm")
-                                ui.label("(Productivity per unit of Grit)").classes("text-xs text-gray-600")
+                            with ui.card().classes("p-3 bg-blue-50"):
+                                ui.label("Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
                                 
-                                if avg_efficiency > 2.0:
-                                    interpretation = "Highly Efficient"
-                                    color = "text-green-600"
-                                elif avg_efficiency > 0.5:
-                                    interpretation = "Moderately Efficient"
-                                    color = "text-yellow-600"
+                                # Show disclaimer if applicable
+                                if key in disclaimers:
+                                    with ui.row().classes("mb-2"):
+                                        ui.icon("info", size="sm").classes("text-yellow-600 mt-0.5")
+                                        ui.label(disclaimers[key]).classes("text-xs text-yellow-700")
+                                
+                                x_vals = scatter['x']
+                                y_vals = scatter['y']
+                                
+                                # Calculate efficiency ratios
+                                efficiency_ratios = []
+                                for x, y in zip(x_vals, y_vals):
+                                    if x is not None and y is not None:
+                                        ratio = ratio_func(x, y)
+                                        if ratio is not None:
+                                            efficiency_ratios.append(ratio)
+                                
+                                if efficiency_ratios:
+                                    avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios)
+                                    
+                                    with ui.column().classes("gap-1"):
+                                        ui.label(f"Average Efficiency Ratio: {avg_efficiency:.3f}").classes("text-sm")
+                                        ui.label(f"({description})").classes("text-xs text-gray-600")
+                                        
+                                        # Interpretation based on thresholds
+                                        high_threshold = thresholds.get('high', 1.0)
+                                        moderate_threshold = thresholds.get('moderate', 0.5)
+                                        
+                                        if avg_efficiency >= high_threshold:
+                                            interpretation = "Highly Efficient"
+                                            color = "text-green-600"
+                                        elif avg_efficiency >= moderate_threshold:
+                                            interpretation = "Moderately Efficient"
+                                            color = "text-yellow-600"
+                                        else:
+                                            interpretation = "Less Efficient"
+                                            color = "text-orange-600"
+                                        
+                                        ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
+                                        ui.label(interpretation_label).classes("text-xs text-gray-500 mt-1")
                                 else:
-                                    interpretation = "Less Efficient"
-                                    color = "text-orange-600"
-                                
-                                ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
-                                ui.label("Higher ratio = more productivity with less grit investment").classes("text-xs text-gray-500 mt-1")
-                        else:
-                            ui.label("Insufficient data for efficiency calculation").classes("text-xs text-gray-500")
+                                    ui.label("Insufficient data for efficiency calculation").classes("text-xs text-gray-500")
         
         # Set up event handlers
         x_select.on('update:model-value', lambda e: render_comparison())

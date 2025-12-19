@@ -107,7 +107,7 @@ def initialize_task_page(task_manager, emotion_manager):
         default_emotional = get_default_value('expected_emotional_load', 50)
         default_motivation = get_default_value('motivation', 50)
 
-        with ui.column().classes("w-full max-w-xl gap-4"):
+        with ui.column().classes("w-full gap-4"):
 
             # Aversion slider - always show so it can be adjusted for future instances
             ui.label("Aversion (0-100)").classes("text-lg font-semibold")

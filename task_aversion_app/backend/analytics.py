@@ -446,13 +446,17 @@ class Analytics:
         else:
             return 1.0
     
-    def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0) -> float:
+    def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0, 
+                                     work_play_time_per_day: Optional[Dict[str, Dict[str, float]]] = None,
+                                     play_penalty_threshold: float = 2.0) -> float:
         """Calculate productivity score based on completion percentage vs time ratio.
         
         Args:
             row: Task instance row with actual_dict, predicted_dict, task_type, completed_at
             self_care_tasks_per_day: Dictionary mapping date strings to count of self care tasks completed that day
             weekly_avg_time: Weekly average productivity time in minutes (for bonus/penalty calculation)
+            work_play_time_per_day: Dictionary mapping date strings to dict with 'work_time' and 'play_time' in minutes
+            play_penalty_threshold: Threshold multiplier for play penalty (default 2.0 = play must exceed work by 2x)
             
         Returns:
             Productivity score (can be negative for productivity penalty from play tasks)
@@ -483,6 +487,19 @@ class Analytics:
                 # If no time data, assume 1.0 ratio
                 completion_time_ratio = 1.0
             
+            # Get work/play time for the day (if available)
+            work_time_today = 0.0
+            play_time_today = 0.0
+            if work_play_time_per_day:
+                try:
+                    completed_date = pd.to_datetime(completed_at).date()
+                    date_str = completed_date.isoformat()
+                    day_data = work_play_time_per_day.get(date_str, {})
+                    work_time_today = float(day_data.get('work_time', 0) or 0)
+                    play_time_today = float(day_data.get('play_time', 0) or 0)
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            
             # Apply multipliers based on task type
             if task_type_lower == 'work':
                 # Work: Smooth multiplier transition from 3x to 5x based on completion_time_ratio
@@ -496,6 +513,27 @@ class Analytics:
                     # Smooth transition between 1.0 and 1.5
                     smooth_factor = (completion_time_ratio - 1.0) / 0.5  # 0.0 to 1.0
                     multiplier = 3.0 + (2.0 * smooth_factor)
+                
+                # Apply diminishing returns penalty if working too much without play
+                # This models burnout: productivity still increases but at a diminishing rate
+                # Use exponential decay: penalty = 1.0 - (1.0 - exp(-work_time / burn_threshold))
+                # When play_time = 0 and work_time is high, apply penalty
+                if play_time_today == 0 and work_time_today > 0:
+                    # Burnout threshold: 8 hours (480 minutes) of work with no play
+                    # Penalty increases as work time exceeds threshold
+                    burn_threshold = 480.0  # 8 hours in minutes
+                    if work_time_today > burn_threshold:
+                        # Calculate diminishing returns: exponential decay
+                        # More work = more penalty, but penalty approaches 1.0 (max 100% reduction)
+                        excess_work = work_time_today - burn_threshold
+                        # Penalty factor: 0.0 (no penalty) to 1.0 (max penalty)
+                        # Using exponential decay: penalty = 1 - exp(-excess_work / scale)
+                        # Scale of 240 means penalty reaches ~63% at 240 min excess (4 hours)
+                        penalty_factor = 1.0 - math.exp(-excess_work / 240.0)
+                        # Apply penalty: reduce multiplier by penalty_factor
+                        # e.g., if multiplier is 3.0 and penalty_factor is 0.5, new multiplier = 3.0 * (1 - 0.5) = 1.5
+                        multiplier = multiplier * (1.0 - penalty_factor * 0.5)  # Max 50% reduction
+                
                 # Base score is completion percentage
                 base_score = completion_pct
                 score = base_score * multiplier
@@ -514,17 +552,31 @@ class Analytics:
                 score = base_score * multiplier
             
             elif task_type_lower == 'play':
-                # Productivity penalty from play: -0.01x multiplier per percentage of time completed compared to estimated time
-                # Percentage = (time_actual / time_estimate) * 100
-                # This creates a negative score (penalty) for play tasks
-                if time_estimate > 0:
-                    time_percentage = (time_actual / time_estimate) * 100.0
+                # Productivity penalty from play: only applies when play exceeds work by threshold
+                # Check if play time exceeds work time by the threshold
+                if work_time_today > 0:
+                    play_work_ratio = play_time_today / work_time_today
+                    apply_penalty = play_work_ratio > play_penalty_threshold
                 else:
-                    time_percentage = 100.0
-                multiplier = -0.01 * time_percentage
-                # Base score is completion percentage
-                base_score = completion_pct
-                score = base_score * multiplier
+                    # If no work time, apply penalty if play time exists (all play, no work)
+                    apply_penalty = play_time_today > 0
+                
+                if apply_penalty:
+                    # Productivity penalty from play: -0.01x multiplier per percentage of time completed compared to estimated time
+                    # Percentage = (time_actual / time_estimate) * 100
+                    # This creates a negative score (penalty) for play tasks
+                    if time_estimate > 0:
+                        time_percentage = (time_actual / time_estimate) * 100.0
+                    else:
+                        time_percentage = 100.0
+                    multiplier = -0.01 * time_percentage
+                    # Base score is completion percentage
+                    base_score = completion_pct
+                    score = base_score * multiplier
+                else:
+                    # No penalty: play is within acceptable ratio to work
+                    # Just use completion percentage (neutral score)
+                    score = completion_pct
             
             else:
                 # Default: no multiplier
@@ -2049,6 +2101,46 @@ class Analytics:
                     for date, count in daily_counts.items():
                         self_care_tasks_per_day[date.isoformat()] = int(count)
         
+        # Calculate work/play time per day for play penalty and work burnout penalty
+        work_play_time_per_day = {}
+        if 'task_type' in completed.columns:
+            # Ensure completed_at_dt exists
+            if 'completed_at_dt' not in completed.columns:
+                completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+            
+            # Get actual time from actual_dict
+            def _get_actual_time_for_work_play(row):
+                """Get actual time from actual_dict for work/play time calculation."""
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, dict):
+                        return float(actual_dict.get('time_actual_minutes', 0) or 0)
+                except (KeyError, TypeError, ValueError):
+                    pass
+                return 0.0
+            
+            completed['time_for_work_play'] = completed.apply(_get_actual_time_for_work_play, axis=1)
+            completed['time_for_work_play'] = pd.to_numeric(completed['time_for_work_play'], errors='coerce').fillna(0.0)
+            
+            # Filter to completed tasks with valid dates
+            valid_for_work_play = completed[
+                completed['completed_at_dt'].notna() & 
+                (completed['time_for_work_play'] > 0)
+            ].copy()
+            
+            if not valid_for_work_play.empty:
+                valid_for_work_play['date'] = valid_for_work_play['completed_at_dt'].dt.date
+                
+                # Group by date and task type
+                for date, group in valid_for_work_play.groupby('date'):
+                    date_str = date.isoformat()
+                    work_time = group[group['task_type_normalized'] == 'work']['time_for_work_play'].sum()
+                    play_time = group[group['task_type_normalized'] == 'play']['time_for_work_play'].sum()
+                    work_play_time_per_day[date_str] = {
+                        'work_time': float(work_time),
+                        'play_time': float(play_time)
+                    }
+        
         # Calculate weekly average productivity time for bonus/penalty calculation
         # Get all completed tasks with actual time
         def _get_actual_time_for_avg(row):
@@ -2095,7 +2187,7 @@ class Analytics:
                 completed['predicted_dict'] = pd.Series([{}] * len(completed))
         
         completed['productivity_score'] = completed.apply(
-            lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time),
+            lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
             axis=1
         )
         
@@ -3357,6 +3449,32 @@ class Analytics:
                     for date, count in daily_counts.items():
                         self_care_tasks_per_day[date.isoformat()] = int(count)
             
+            # Calculate work/play time per day
+            work_play_time_per_day = {}
+            if 'task_type' in completed.columns:
+                def _get_actual_time_for_work_play(row):
+                    try:
+                        actual_dict = row.get('actual_dict', {})
+                        if isinstance(actual_dict, dict):
+                            return float(actual_dict.get('time_actual_minutes', 0) or 0)
+                    except (KeyError, TypeError, ValueError):
+                        pass
+                    return 0.0
+                
+                completed['time_for_work_play'] = completed.apply(_get_actual_time_for_work_play, axis=1)
+                completed['time_for_work_play'] = pd.to_numeric(completed['time_for_work_play'], errors='coerce').fillna(0.0)
+                valid_for_work_play = completed[completed['completed_at_dt'].notna() & (completed['time_for_work_play'] > 0)].copy()
+                if not valid_for_work_play.empty:
+                    valid_for_work_play['date'] = valid_for_work_play['completed_at_dt'].dt.date
+                    for date, group in valid_for_work_play.groupby('date'):
+                        date_str = date.isoformat()
+                        work_time = group[group['task_type_normalized'] == 'work']['time_for_work_play'].sum()
+                        play_time = group[group['task_type_normalized'] == 'play']['time_for_work_play'].sum()
+                        work_play_time_per_day[date_str] = {
+                            'work_time': float(work_time),
+                            'play_time': float(play_time)
+                        }
+            
             # Calculate weekly average time
             def _get_actual_time_for_avg(row):
                 try:
@@ -3374,7 +3492,7 @@ class Analytics:
             
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time),
+                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
                 axis=1
             )
         elif attribute_key == 'grit_score':
@@ -3678,6 +3796,37 @@ class Analytics:
                         except (ValueError, TypeError):
                             pass
             
+            # Calculate work/play time per day
+            work_play_time_per_day = {}
+            if 'task_type' in completed.columns and 'completed_at' in completed.columns:
+                # Ensure completed_at_dt exists
+                if 'completed_at_dt' not in completed.columns:
+                    completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                
+                def _get_actual_time_for_work_play(row):
+                    try:
+                        actual_dict = row.get('actual_dict', {})
+                        if isinstance(actual_dict, dict):
+                            return float(actual_dict.get('time_actual_minutes', 0) or 0)
+                    except (KeyError, TypeError, ValueError):
+                        pass
+                    return 0.0
+                
+                completed['time_for_work_play'] = completed.apply(_get_actual_time_for_work_play, axis=1)
+                completed['time_for_work_play'] = pd.to_numeric(completed['time_for_work_play'], errors='coerce').fillna(0.0)
+                completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+                valid_for_work_play = completed[completed['completed_at_dt'].notna() & (completed['time_for_work_play'] > 0)].copy()
+                if not valid_for_work_play.empty:
+                    valid_for_work_play['date'] = valid_for_work_play['completed_at_dt'].dt.date
+                    for date, group in valid_for_work_play.groupby('date'):
+                        date_str = date.isoformat()
+                        work_time = group[group['task_type_normalized'] == 'work']['time_for_work_play'].sum()
+                        play_time = group[group['task_type_normalized'] == 'play']['time_for_work_play'].sum()
+                        work_play_time_per_day[date_str] = {
+                            'work_time': float(work_time),
+                            'play_time': float(play_time)
+                        }
+            
             # Calculate weekly average time
             def _get_actual_time_for_avg(row):
                 try:
@@ -3694,7 +3843,7 @@ class Analytics:
             
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time),
+                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
                 axis=1
             )
         
@@ -3713,6 +3862,62 @@ class Analytics:
                 axis=1
             )
         
+        # Calculate work_time and play_time if needed
+        if attribute_x == 'work_time' or attribute_y == 'work_time' or attribute_x == 'play_time' or attribute_y == 'play_time':
+            # Load tasks to get task_type
+            from .task_manager import TaskManager
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
+            
+            if not tasks_df.empty and 'task_type' in tasks_df.columns:
+                # Merge to get task_type
+                completed = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+            
+            # Normalize task_type
+            completed['task_type'] = completed['task_type'].fillna('Work')
+            completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+            
+            # Get duration in minutes
+            def _get_duration_for_work_play(row):
+                """Get duration from actual_dict or duration_minutes."""
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, dict):
+                        time_actual = actual_dict.get('time_actual_minutes', None)
+                        if time_actual is not None:
+                            return float(time_actual)
+                except (ValueError, TypeError, AttributeError):
+                    pass
+                # Fallback to duration_minutes
+                try:
+                    duration = pd.to_numeric(row.get('duration_minutes', 0), errors='coerce')
+                    return float(duration) if pd.notna(duration) else 0.0
+                except (ValueError, TypeError):
+                    return 0.0
+            
+            completed['duration_for_work_play'] = completed.apply(_get_duration_for_work_play, axis=1)
+            
+            # Calculate work_time and play_time per instance
+            # For each instance, if it's a work task, work_time = duration, play_time = 0
+            # If it's a play task, play_time = duration, work_time = 0
+            # Otherwise, both are 0
+            def _get_work_time(row):
+                if row.get('task_type_normalized') == 'work':
+                    return row.get('duration_for_work_play', 0.0)
+                return 0.0
+            
+            def _get_play_time(row):
+                if row.get('task_type_normalized') == 'play':
+                    return row.get('duration_for_work_play', 0.0)
+                return 0.0
+            
+            completed['work_time'] = completed.apply(_get_work_time, axis=1)
+            completed['play_time'] = completed.apply(_get_play_time, axis=1)
+        
         # Check if attributes exist (either in columns or calculated)
         if attribute_x not in completed.columns or attribute_y not in completed.columns:
             return {'x': [], 'y': [], 'n': 0}
@@ -3720,11 +3925,55 @@ class Analytics:
         completed['x_val'] = pd.to_numeric(completed[attribute_x], errors='coerce')
         completed['y_val'] = pd.to_numeric(completed[attribute_y], errors='coerce')
         clean = completed[['x_val', 'y_val']].dropna()
-        return {
+        
+        # Include time estimates for efficiency calculations if needed
+        time_data = None
+        if ('duration_minutes' in [attribute_x, attribute_y] and 'productivity_score' in [attribute_x, attribute_y]):
+            # Extract time_estimate and time_actual for time efficiency calculation
+            # Use the same rows that passed the dropna() filter
+            time_estimates = []
+            time_actuals = []
+            
+            for idx in clean.index:
+                # Get time estimate
+                time_est = None
+                try:
+                    row = completed.loc[idx]
+                    predicted_dict = row.get('predicted_dict', {})
+                    if isinstance(predicted_dict, dict):
+                        val = predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0
+                        if val:
+                            time_est = float(val)
+                except (ValueError, TypeError, AttributeError, KeyError):
+                    pass
+                time_estimates.append(time_est)
+                
+                # Get time actual
+                time_act = None
+                try:
+                    row = completed.loc[idx]
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, dict):
+                        val = actual_dict.get('time_actual_minutes', 0) or 0
+                        if val:
+                            time_act = float(val)
+                except (ValueError, TypeError, AttributeError, KeyError):
+                    pass
+                time_actuals.append(time_act)
+            
+            time_data = {
+                'time_estimate': time_estimates,
+                'time_actual': time_actuals,
+            }
+        
+        result = {
             'x': clean['x_val'].astype(float).tolist(),
             'y': clean['y_val'].astype(float).tolist(),
             'n': len(clean),
         }
+        if time_data:
+            result['time_data'] = time_data
+        return result
 
     # ------------------------------------------------------------------
     # Priority heuristics (used for legacy views)
