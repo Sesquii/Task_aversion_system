@@ -26,7 +26,31 @@ def register_pages():
         # Check for gap handling needs before showing dashboard
         if check_and_redirect_to_gap_handling():
             return
-        build_dashboard(task_manager)
+        try:
+            build_dashboard(task_manager)
+        except Exception as e:
+            # Show user-friendly error page instead of crashing
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"[App] Error building dashboard: {error_details}")
+            
+            ui.label("⚠️ Dashboard Error").classes("text-2xl font-bold text-red-600 mb-4")
+            
+            with ui.card().classes("w-full max-w-2xl p-6 bg-red-50 border border-red-200"):
+                ui.label("Unable to load the dashboard.").classes("text-lg font-semibold text-red-700 mb-2")
+                ui.label(
+                    "This may be caused by:\n"
+                    "• Data file is open in Excel or another program\n"
+                    "• OneDrive sync is in progress\n"
+                    "• File permissions issue\n"
+                    "• Data corruption"
+                ).classes("text-sm text-red-600 mb-4 whitespace-pre-line")
+                
+                with ui.expansion("Technical Details", icon="info").classes("w-full"):
+                    ui.code(error_details).classes("text-xs")
+                
+                ui.button("Retry", on_click=lambda: ui.navigate.to('/')).classes("mt-4")
+                ui.button("Go to Settings", on_click=lambda: ui.navigate.to('/settings')).classes("mt-2")
     
     @ui.page('/gap-handling')
     def gap_handling():

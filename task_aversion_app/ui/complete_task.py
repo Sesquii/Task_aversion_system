@@ -293,7 +293,12 @@ def complete_task_page(task_manager, emotion_manager):
         emotion_sliders = {}
         
         def get_emotion_default_value(emotion):
-            """Get default value for an emotion: actual value if exists, else initial value, else 50"""
+            """Get default value for an emotion: actual value if exists, else initial value, else 50
+            
+            Note: If an emotion was initialized but is not in actual_emotion_values, it means
+            it was either never set or was set to 0 (and filtered out). We default to showing
+            the initial value so the user can see what it was and adjust if needed.
+            """
             if emotion in actual_emotion_values:
                 val = actual_emotion_values[emotion]
                 try:
@@ -426,13 +431,23 @@ def complete_task_page(task_manager, emotion_manager):
                 return
 
             # Collect emotion values from sliders
+            # Filter out emotions with 0 values (0 means emotion is not present/not being tracked)
+            # This keeps the data clean: if an emotion was initialized but set to 0 on completion,
+            # it means the emotion is no longer present and won't clutter the data.
+            # When loading, initialized emotions are still shown so users can see the full picture.
             emotion_values = {}
             for emotion in all_emotions:
                 if emotion in emotion_sliders:
-                    emotion_values[emotion] = int(emotion_sliders[emotion].value)
+                    value = int(emotion_sliders[emotion].value)
+                    # Only store non-zero values (0 means emotion is not present)
+                    if value > 0:
+                        emotion_values[emotion] = value
                 else:
                     # Fallback to default if slider doesn't exist
-                    emotion_values[emotion] = get_emotion_default_value(emotion)
+                    default_val = get_emotion_default_value(emotion)
+                    # Only store if > 0
+                    if default_val > 0:
+                        emotion_values[emotion] = default_val
 
             # Get completion percentage, defaulting to 100 if not provided
             completion_value = completion_pct.value if completion_pct.value is not None else 100

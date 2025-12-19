@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 from typing import Optional
 import json
+import time
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 class InstanceManager:
@@ -20,8 +21,48 @@ class InstanceManager:
             ]).to_csv(self.file, index=False)
         self._reload()
 
-    def _reload(self):
-        self.df = pd.read_csv(self.file, dtype=str).fillna('')
+    def _reload(self, max_retries=5, initial_delay=0.1):
+        """
+        Reload CSV file with retry logic to handle file locking issues.
+        Common causes: Excel/other programs have file open, OneDrive sync, or concurrent access.
+        """
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                self.df = pd.read_csv(self.file, dtype=str).fillna('')
+                # Success - break out of retry loop
+                break
+            except PermissionError as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
+                    delay = initial_delay * (2 ** attempt)
+                    print(f"[InstanceManager] Permission denied reading {self.file} (attempt {attempt + 1}/{max_retries}). "
+                          f"Retrying in {delay:.2f}s... "
+                          f"Tip: Close Excel/other programs that may have this file open.")
+                    time.sleep(delay)
+                else:
+                    # Last attempt failed
+                    print(f"[InstanceManager] ERROR: Failed to read {self.file} after {max_retries} attempts. "
+                          f"File may be locked by another process (Excel, OneDrive sync, etc.). "
+                          f"Using empty DataFrame as fallback.")
+                    # Fallback to empty DataFrame with expected columns
+                    self.df = pd.DataFrame(columns=[
+                        'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
+                        'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
+                        'is_completed','is_deleted','status','delay_minutes'
+                    ])
+            except Exception as e:
+                # Other errors (file not found, corrupted, etc.)
+                last_error = e
+                print(f"[InstanceManager] ERROR reading {self.file}: {e}")
+                # Fallback to empty DataFrame
+                self.df = pd.DataFrame(columns=[
+                    'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
+                    'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
+                    'is_completed','is_deleted','status','delay_minutes'
+                ])
+                break
         defaults = {
             'predicted': '',
             'actual': '',
@@ -56,9 +97,41 @@ class InstanceManager:
             self.df['status'] = self.df['status'].replace('', None)
             self.df['status'] = self.df['status'].fillna(fallback)
 
-    def _save(self):
-        self.df.to_csv(self.file, index=False)
-        self._reload()
+    def _save(self, max_retries=5, initial_delay=0.1):
+        """
+        Save DataFrame to CSV with retry logic to handle file locking issues.
+        Common causes: Excel/other programs have file open, OneDrive sync, or concurrent access.
+        """
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                self.df.to_csv(self.file, index=False)
+                # Success - reload and break out of retry loop
+                self._reload()
+                break
+            except PermissionError as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
+                    delay = initial_delay * (2 ** attempt)
+                    print(f"[InstanceManager] Permission denied writing to {self.file} (attempt {attempt + 1}/{max_retries}). "
+                          f"Retrying in {delay:.2f}s... "
+                          f"Tip: Close Excel/other programs that may have this file open.")
+                    time.sleep(delay)
+                else:
+                    # Last attempt failed
+                    print(f"[InstanceManager] ERROR: Failed to write to {self.file} after {max_retries} attempts. "
+                          f"File may be locked by another process (Excel, OneDrive sync, etc.). "
+                          f"Changes were not saved.")
+                    raise PermissionError(
+                        f"Cannot save to {self.file}. File is locked. "
+                        f"Please close any programs (Excel, etc.) that have this file open and try again."
+                    ) from e
+            except Exception as e:
+                # Other errors (disk full, etc.)
+                last_error = e
+                print(f"[InstanceManager] ERROR writing to {self.file}: {e}")
+                raise
 
     def create_instance(self, task_id, task_name, task_version=1, predicted: dict = None):
         self._reload()
@@ -648,7 +721,11 @@ class InstanceManager:
         Values are scaled to 0-100 range."""
         import json
         import numpy as np
-        self._reload()
+        try:
+            self._reload()
+        except Exception as e:
+            print(f"[InstanceManager] Error reloading in get_baseline_aversion_robust: {e}")
+            # Continue with existing self.df or empty DataFrame
         
         # Get all initialized instances for this task (completed or not)
         initialized = self.df[
@@ -694,7 +771,11 @@ class InstanceManager:
         Values are scaled to 0-100 range."""
         import json
         import numpy as np
-        self._reload()
+        try:
+            self._reload()
+        except Exception as e:
+            print(f"[InstanceManager] Error reloading in get_baseline_aversion_sensitive: {e}")
+            # Continue with existing self.df or empty DataFrame
         
         # Get all initialized instances for this task (completed or not)
         initialized = self.df[

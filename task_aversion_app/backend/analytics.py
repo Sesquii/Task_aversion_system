@@ -1312,17 +1312,31 @@ class Analytics:
         def _get_baseline_aversion_robust(row):
             task_id = row.get('task_id')
             if task_id:
-                return im.get_baseline_aversion_robust(task_id)
+                try:
+                    return im.get_baseline_aversion_robust(task_id)
+                except Exception as e:
+                    print(f"[Analytics] Error getting baseline_aversion_robust for task {task_id}: {e}")
+                    return None
             return None
         
         def _get_baseline_aversion_sensitive(row):
             task_id = row.get('task_id')
             if task_id:
-                return im.get_baseline_aversion_sensitive(task_id)
+                try:
+                    return im.get_baseline_aversion_sensitive(task_id)
+                except Exception as e:
+                    print(f"[Analytics] Error getting baseline_aversion_sensitive for task {task_id}: {e}")
+                    return None
             return None
         
-        relief_data_for_obstacles['baseline_aversion_robust'] = relief_data_for_obstacles.apply(_get_baseline_aversion_robust, axis=1)
-        relief_data_for_obstacles['baseline_aversion_sensitive'] = relief_data_for_obstacles.apply(_get_baseline_aversion_sensitive, axis=1)
+        try:
+            relief_data_for_obstacles['baseline_aversion_robust'] = relief_data_for_obstacles.apply(_get_baseline_aversion_robust, axis=1)
+            relief_data_for_obstacles['baseline_aversion_sensitive'] = relief_data_for_obstacles.apply(_get_baseline_aversion_sensitive, axis=1)
+        except Exception as e:
+            print(f"[Analytics] Error calculating baseline aversion: {e}")
+            # Set default values if calculation fails
+            relief_data_for_obstacles['baseline_aversion_robust'] = None
+            relief_data_for_obstacles['baseline_aversion_sensitive'] = None
         
         # Calculate obstacles scores using multiple formulas for comparison
         def _calculate_obstacles_scores_robust(row):
@@ -2262,11 +2276,19 @@ class Analytics:
     def default_filters(self) -> Dict[str, Optional[float]]:
         return {
             'max_duration': None,
+            'min_duration': None,
+            'task_type': None,
+            'is_recurring': None,
+            'categories': None,
         }
 
     def available_filters(self) -> List[Dict[str, str]]:
         return [
             {'key': 'max_duration', 'label': 'Max Duration (minutes)'},
+            {'key': 'min_duration', 'label': 'Min Duration (minutes)'},
+            {'key': 'task_type', 'label': 'Task Type'},
+            {'key': 'is_recurring', 'label': 'Recurring'},
+            {'key': 'categories', 'label': 'Categories'},
         ]
 
     def recommendations(self, filters: Optional[Dict[str, float]] = None) -> List[Dict[str, str]]:
@@ -2488,6 +2510,8 @@ class Analytics:
         
         # Build recommendation candidates from all task templates
         candidates = []
+        
+        # Parse filters
         max_duration_filter = None
         if filters.get('max_duration'):
             try:
@@ -2495,10 +2519,58 @@ class Analytics:
             except (ValueError, TypeError):
                 max_duration_filter = None
         
+        min_duration_filter = None
+        if filters.get('min_duration'):
+            try:
+                min_duration_filter = float(filters['min_duration'])
+            except (ValueError, TypeError):
+                min_duration_filter = None
+        
+        task_type_filter = filters.get('task_type')
+        is_recurring_filter = filters.get('is_recurring')
+        categories_filter = filters.get('categories')
+        
         for _, task_row in all_tasks_df.iterrows():
             task_id = task_row['task_id']
             task_name = task_row['name']
             default_estimate = task_row.get('default_estimate_minutes', 0)
+            task_type = task_row.get('task_type', '')
+            is_recurring = task_row.get('is_recurring', 'False')
+            categories_str = task_row.get('categories', '[]')
+            
+            # Apply task_type filter
+            if task_type_filter:
+                if str(task_type).strip() != str(task_type_filter).strip():
+                    continue
+            
+            # Apply is_recurring filter
+            if is_recurring_filter:
+                is_recurring_str = str(is_recurring).strip().lower()
+                filter_str = str(is_recurring_filter).strip().lower()
+                if filter_str == 'true' and is_recurring_str != 'true':
+                    continue
+                elif filter_str == 'false' and is_recurring_str == 'true':
+                    continue
+            
+            # Apply categories filter (search in categories JSON)
+            if categories_filter:
+                categories_query = str(categories_filter).strip().lower()
+                if categories_query:
+                    try:
+                        import json
+                        categories_list = json.loads(categories_str) if categories_str else []
+                        if not isinstance(categories_list, list):
+                            categories_list = []
+                        # Check if any category matches the search query
+                        categories_match = any(
+                            categories_query in str(cat).lower() 
+                            for cat in categories_list
+                        )
+                        if not categories_match:
+                            continue
+                    except (json.JSONDecodeError, Exception):
+                        # If categories can't be parsed, skip this filter
+                        pass
             
             try:
                 default_estimate = float(default_estimate) if default_estimate else 0
@@ -2527,9 +2599,12 @@ class Analytics:
             physical_load = avg_physical if avg_physical is not None else 0.0  # Default minimal physical load
             duration_minutes = avg_duration if avg_duration else default_estimate
             
-            # Apply max_duration filter
+            # Apply duration filters
             if max_duration_filter is not None:
                 if duration_minutes > max_duration_filter:
+                    continue
+            if min_duration_filter is not None:
+                if duration_minutes < min_duration_filter:
                     continue
             
             candidates.append({

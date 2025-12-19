@@ -337,12 +337,19 @@ def initialize_task_page(task_manager, emotion_manager):
                     estimate_val = 0
 
                 # Collect emotion values from sliders
+                # Filter out emotions with 0 values (0 means emotion is not present/not being tracked)
+                # This keeps the data clean: if an emotion is set to 0, it's effectively removed from tracking
+                # The emotions list is still stored separately for backward compatibility
                 emotion_values = {}
                 for emotion in emotion_list:
                     if emotion in emotion_sliders:
-                        emotion_values[emotion] = int(emotion_sliders[emotion].value)
+                        value = int(emotion_sliders[emotion].value)
+                        # Only store non-zero values (0 means emotion is not present)
+                        if value > 0:
+                            emotion_values[emotion] = value
                     else:
-                        # If slider doesn't exist, use default 50
+                        # If slider doesn't exist, use default 50 (but only if > 0)
+                        # This shouldn't happen in normal flow, but handle it gracefully
                         emotion_values[emotion] = 50
 
                 # Determine if this is the first time doing the task

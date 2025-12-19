@@ -1111,7 +1111,34 @@ def build_dashboard(task_manager):
                     left_half = ui.column().classes("half-width-left gap-2")
                     with left_half:
                         # Productivity metrics
-                        relief_summary = an.get_relief_summary()
+                        try:
+                            relief_summary = an.get_relief_summary()
+                        except Exception as e:
+                            print(f"[Dashboard] Error getting relief summary: {e}")
+                            # Show error message to user
+                            error_card = ui.card().classes("w-full p-4 bg-red-50 border border-red-200")
+                            with error_card:
+                                ui.label("⚠️ Data Loading Error").classes("text-lg font-bold text-red-700 mb-2")
+                                ui.label(
+                                    "Unable to load analytics data. This may be due to:\n"
+                                    "• File is open in Excel or another program\n"
+                                    "• OneDrive sync is in progress\n"
+                                    "• File permissions issue"
+                                ).classes("text-sm text-red-600 mb-2")
+                                ui.label(f"Error details: {str(e)}").classes("text-xs text-red-500")
+                                ui.button("Retry", on_click=lambda: ui.navigate.to('/')).classes("mt-2")
+                            # Use empty/default values to prevent further errors
+                            relief_summary = {
+                                'productivity_time_minutes': 0,
+                                'default_relief_points': 0,
+                                'net_relief_points': 0,
+                                'positive_count': 0,
+                                'positive_avg': 0,
+                                'negative_count': 0,
+                                'negative_avg': 0,
+                                'obstacles_overcome_robust': 0,
+                                'obstacles_overcome_sensitive': 0,
+                            }
                         
                         # Get historical data for weekly hours
                         hours_history = an.get_weekly_hours_history()
@@ -1644,7 +1671,7 @@ def build_recently_completed_panel():
 
 
 def build_recommendations_section():
-    """Build the recommendations section with multi-metric filtering."""
+    """Build the recommendations section with search-based metric filtering."""
     print(f"[Dashboard] Rendering recommendations section")
     global dash_filters
     if not dash_filters:
@@ -1657,55 +1684,140 @@ def build_recommendations_section():
         metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
         default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
         
-        # Metric multi-select
-        metrics_select = ui.select(
-            options=metric_labels,
-            label="Filter by metrics (multi-select)",
-            value=default_metrics,
-            multiple=True,
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
         ).classes("w-full mb-2")
         
-        # Max duration filter
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes."""
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            search_query = str(value).strip().lower() if value else None
+            if search_query == '':
+                search_query = None
+            
+            # Filter metrics based on search
+            if search_query:
+                filtered_metrics = [
+                    label for label in metric_labels
+                    if search_query in label.lower()
+                ]
+                # If search matches nothing, show all metrics (better UX than showing nothing)
+                selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+            else:
+                # Empty search shows default metrics
+                selected_metrics_state[:] = default_metrics
+            
+            print(f"[Dashboard] Metric search: '{search_query}' -> {len(selected_metrics_state)} metrics selected: {selected_metrics_state}")
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
+        
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
         filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
         
         with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
             max_duration = ui.number(
                 label="Max duration (min)",
                 value=dash_filters.get('max_duration'),
             ).classes("w-32")
             
-            def apply_filter():
-                value = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if value is not None:
-                    try:
-                        value = float(value)
-                    except (TypeError, ValueError):
-                        value = None
-                dash_filters['max_duration'] = value
-                print(f"[Dashboard] Filter applied: max_duration = {value}, filters = {dash_filters}")
-                refresh_recommendations(rec_container, metrics_select.value, metric_key_map)
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
             
-            ui.button("APPLY", on_click=apply_filter).props("dense")
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                print(f"[Dashboard] Filters applied: {dash_filters}")
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
         
         # Recommendations container
         rec_container = ui.column().classes("w-full")
         
-        # Refresh on metric changes
-        def on_metrics_change(e=None):
-            selected_values = None
-            if e and hasattr(e, 'args') and e.args:
-                if isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    selected_values = e.args[0]
-                elif isinstance(e.args, dict):
-                    selected_values = e.args.get('value') or e.args.get('label')
-            if selected_values is None:
-                selected_values = metrics_select.value if hasattr(metrics_select, 'value') else default_metrics
-            refresh_recommendations(rec_container, selected_values, metric_key_map)
-        
-        metrics_select.on('update:model-value', on_metrics_change)
-        
         # Initial render
-        refresh_recommendations(rec_container, metrics_select.value, metric_key_map)
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
 
 
 def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None):
