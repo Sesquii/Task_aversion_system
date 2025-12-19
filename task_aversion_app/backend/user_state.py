@@ -105,6 +105,40 @@ class UserStateManager:
         completed = str(prefs.get("tutorial_completed", "False")).lower() == "true"
         return auto_show and not completed
 
+    def get_score_weights(self, user_id: str) -> Dict[str, float]:
+        """Get composite score weights for a user.
+        
+        Returns:
+            Dict of component_name -> weight (default: equal weights)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        weights_json = prefs.get("composite_score_weights", "")
+        if not weights_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(weights_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_score_weights(self, user_id: str, weights: Dict[str, float]) -> Dict[str, Any]:
+        """Set composite score weights for a user.
+        
+        Args:
+            user_id: User ID
+            weights: Dict of component_name -> weight
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        weights_json = json.dumps(weights)
+        return self.update_preference(user_id, "composite_score_weights", weights_json)
+
     # -----------------------------
     # JavaScript helpers
     # -----------------------------

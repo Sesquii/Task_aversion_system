@@ -1776,6 +1776,277 @@ class Analytics:
             'gap_hours': round(float(gap_hours), 1),
         }
 
+    def calculate_time_tracking_consistency_score(
+        self, 
+        days: int = 7,
+        target_sleep_hours: float = 8.0
+    ) -> Dict[str, any]:
+        """Calculate time tracking consistency score based on tracked vs untracked time.
+        
+        Penalizes untracked time (time not logged as work/play/self_care/sleep).
+        Rewards sleep up to target_sleep_hours (default 8 hours).
+        Sleep beyond target_sleep_hours is treated as untracked time.
+        
+        Formula:
+        - Tracked time = work + play + self_care + sleep (capped at target_sleep_hours)
+        - Untracked time = 24 hours - tracked time
+        - Score = 100 * (1 - untracked_proportion)
+        - Score is penalized more heavily as untracked time increases
+        
+        Args:
+            days: Number of days to analyze (default 7)
+            target_sleep_hours: Target sleep hours per day to reward (default 8.0)
+            
+        Returns:
+            Dict with:
+            - tracking_consistency_score (0-100): Overall score
+            - avg_tracked_time_minutes: Average tracked time per day
+            - avg_untracked_time_minutes: Average untracked time per day
+            - avg_sleep_time_minutes: Average sleep time per day
+            - tracking_coverage: Proportion of day tracked (0-1)
+            - daily_scores: List of daily scores
+        """
+        df = self._load_instances()
+        
+        if df.empty:
+            return {
+                'tracking_consistency_score': 0.0,
+                'avg_tracked_time_minutes': 0.0,
+                'avg_untracked_time_minutes': 1440.0,  # 24 hours
+                'avg_sleep_time_minutes': 0.0,
+                'tracking_coverage': 0.0,
+                'daily_scores': [],
+            }
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        if tasks_df.empty or 'task_type' not in tasks_df.columns:
+            return {
+                'tracking_consistency_score': 0.0,
+                'avg_tracked_time_minutes': 0.0,
+                'avg_untracked_time_minutes': 1440.0,
+                'avg_sleep_time_minutes': 0.0,
+                'tracking_coverage': 0.0,
+                'daily_scores': [],
+            }
+        
+        # Join instances with tasks to get task_type
+        merged = df.merge(
+            tasks_df[['task_id', 'task_type']],
+            on='task_id',
+            how='left'
+        )
+        
+        # Filter to completed tasks only
+        completed = merged[merged['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'tracking_consistency_score': 0.0,
+                'avg_tracked_time_minutes': 0.0,
+                'avg_untracked_time_minutes': 1440.0,
+                'avg_sleep_time_minutes': 0.0,
+                'tracking_coverage': 0.0,
+                'daily_scores': [],
+            }
+        
+        # Parse completion dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'tracking_consistency_score': 0.0,
+                'avg_tracked_time_minutes': 0.0,
+                'avg_untracked_time_minutes': 1440.0,
+                'avg_sleep_time_minutes': 0.0,
+                'tracking_coverage': 0.0,
+                'daily_scores': [],
+            }
+        
+        # Filter to recent days
+        cutoff_date = datetime.now() - timedelta(days=days)
+        completed = completed[completed['completed_at_dt'] >= cutoff_date].copy()
+        
+        if completed.empty:
+            return {
+                'tracking_consistency_score': 0.0,
+                'avg_tracked_time_minutes': 0.0,
+                'avg_untracked_time_minutes': 1440.0,
+                'avg_sleep_time_minutes': 0.0,
+                'tracking_coverage': 0.0,
+                'daily_scores': [],
+            }
+        
+        # Fill missing task_type with 'Work' as default
+        completed['task_type'] = completed['task_type'].fillna('Work')
+        completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+        
+        # Get duration in minutes
+        completed['duration_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce').fillna(0.0)
+        
+        # Group by date
+        completed['date'] = completed['completed_at_dt'].dt.date
+        
+        # Calculate daily tracked time
+        target_sleep_minutes = target_sleep_hours * 60.0
+        minutes_per_day = 24.0 * 60.0  # 1440 minutes
+        
+        daily_data = []
+        daily_scores = []
+        
+        for date, group in completed.groupby('date'):
+            # Calculate time by category
+            work_time = group[group['task_type_normalized'] == 'work']['duration_numeric'].sum()
+            play_time = group[group['task_type_normalized'] == 'play']['duration_numeric'].sum()
+            self_care_time = group[group['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])]['duration_numeric'].sum()
+            sleep_time = group[group['task_type_normalized'] == 'sleep']['duration_numeric'].sum()
+            
+            # Cap sleep at target (reward up to target, treat excess as untracked)
+            rewarded_sleep = min(sleep_time, target_sleep_minutes)
+            excess_sleep = max(0.0, sleep_time - target_sleep_minutes)
+            
+            # Tracked time = work + play + self_care + rewarded_sleep
+            tracked_time = work_time + play_time + self_care_time + rewarded_sleep
+            
+            # Untracked time = 24 hours - tracked time (including excess sleep)
+            untracked_time = minutes_per_day - tracked_time
+            
+            # Calculate tracking coverage (proportion of day tracked)
+            tracking_coverage = tracked_time / minutes_per_day
+            
+            # Score: penalize untracked time more heavily
+            # Use exponential penalty: score = 100 * (1 - exp(-tracking_coverage * k))
+            # k = 2.0 makes it so 50% coverage ≈ 63 score, 75% coverage ≈ 78 score, 90% coverage ≈ 83 score
+            k = 2.0
+            daily_score = 100.0 * (1.0 - math.exp(-tracking_coverage * k))
+            daily_score = max(0.0, min(100.0, daily_score))
+            
+            daily_data.append({
+                'date': date,
+                'work_time': work_time,
+                'play_time': play_time,
+                'self_care_time': self_care_time,
+                'sleep_time': sleep_time,
+                'rewarded_sleep': rewarded_sleep,
+                'tracked_time': tracked_time,
+                'untracked_time': untracked_time,
+                'tracking_coverage': tracking_coverage,
+                'score': daily_score,
+            })
+            daily_scores.append(daily_score)
+        
+        if not daily_data:
+            return {
+                'tracking_consistency_score': 0.0,
+                'avg_tracked_time_minutes': 0.0,
+                'avg_untracked_time_minutes': 1440.0,
+                'avg_sleep_time_minutes': 0.0,
+                'tracking_coverage': 0.0,
+                'daily_scores': [],
+            }
+        
+        # Calculate averages
+        avg_tracked = sum(d['tracked_time'] for d in daily_data) / len(daily_data)
+        avg_untracked = sum(d['untracked_time'] for d in daily_data) / len(daily_data)
+        avg_sleep = sum(d['sleep_time'] for d in daily_data) / len(daily_data)
+        avg_coverage = sum(d['tracking_coverage'] for d in daily_data) / len(daily_data)
+        overall_score = sum(daily_scores) / len(daily_scores) if daily_scores else 0.0
+        
+        return {
+            'tracking_consistency_score': round(float(overall_score), 1),
+            'avg_tracked_time_minutes': round(float(avg_tracked), 1),
+            'avg_untracked_time_minutes': round(float(avg_untracked), 1),
+            'avg_sleep_time_minutes': round(float(avg_sleep), 1),
+            'tracking_coverage': round(float(avg_coverage), 3),
+            'daily_scores': [round(float(s), 1) for s in daily_scores],
+        }
+
+    def calculate_composite_score(
+        self,
+        components: Dict[str, float],
+        weights: Optional[Dict[str, float]] = None,
+        normalize_components: bool = True
+    ) -> Dict[str, any]:
+        """Calculate composite score from multiple weighted components.
+        
+        Combines scores, bonuses, and penalties into a single normalized score (0-100).
+        Each component can be weighted independently.
+        
+        Args:
+            components: Dict of component_name -> score_value
+                - Scores should be in 0-100 range (will be normalized if normalize_components=True)
+                - Can include bonuses (positive) and penalties (negative)
+            weights: Optional dict of component_name -> weight (default: equal weights)
+                - Weights are normalized to sum to 1.0
+            normalize_components: If True, clamp components to 0-100 range before weighting
+            
+        Returns:
+            Dict with:
+            - composite_score (0-100): Final normalized composite score
+            - weighted_sum: Sum of weighted components before normalization
+            - component_contributions: Dict of component_name -> weighted_contribution
+            - normalized_weights: Dict of component_name -> normalized_weight
+        """
+        if not components:
+            return {
+                'composite_score': 0.0,
+                'weighted_sum': 0.0,
+                'component_contributions': {},
+                'normalized_weights': {},
+            }
+        
+        # Normalize weights (default: equal weights)
+        if weights is None:
+            weights = {name: 1.0 for name in components.keys()}
+        
+        # Ensure all components have weights
+        for name in components.keys():
+            if name not in weights:
+                weights[name] = 1.0
+        
+        # Normalize weights to sum to 1.0
+        total_weight = sum(weights.values())
+        if total_weight == 0:
+            normalized_weights = {name: 1.0 / len(components) for name in components.keys()}
+        else:
+            normalized_weights = {name: weight / total_weight for name, weight in weights.items()}
+        
+        # Normalize components to 0-100 range if requested
+        normalized_components = {}
+        for name, value in components.items():
+            if normalize_components:
+                # Clamp to 0-100 range
+                normalized_value = max(0.0, min(100.0, float(value)))
+            else:
+                normalized_value = float(value)
+            normalized_components[name] = normalized_value
+        
+        # Calculate weighted sum
+        weighted_sum = sum(
+            normalized_components[name] * normalized_weights[name]
+            for name in components.keys()
+        )
+        
+        # Calculate component contributions
+        component_contributions = {
+            name: normalized_components[name] * normalized_weights[name]
+            for name in components.keys()
+        }
+        
+        # Final composite score (already in 0-100 range due to normalization)
+        composite_score = max(0.0, min(100.0, weighted_sum))
+        
+        return {
+            'composite_score': round(float(composite_score), 1),
+            'weighted_sum': round(float(weighted_sum), 1),
+            'component_contributions': {k: round(float(v), 2) for k, v in component_contributions.items()},
+            'normalized_weights': {k: round(float(v), 3) for k, v in normalized_weights.items()},
+        }
+
     def calculate_composite_productivity_score(self, efficiency_score: float, volume_score: float, 
                                                 consistency_score: float) -> float:
         """Calculate composite productivity score combining efficiency, volume, and consistency.
@@ -1796,6 +2067,76 @@ class Analytics:
         composite = (normalized_efficiency * 0.4) + (volume_score * 0.4) + (consistency_score * 0.2)
         
         return round(float(composite), 1)
+
+    def get_all_scores_for_composite(self, days: int = 7) -> Dict[str, float]:
+        """Get all available scores, bonuses, and penalties for composite score calculation.
+        
+        Returns a dictionary of component_name -> score_value that can be used
+        with calculate_composite_score().
+        
+        Args:
+            days: Number of days to analyze for time-based metrics
+            
+        Returns:
+            Dict with component_name -> score_value (0-100 range where applicable)
+        """
+        scores = {}
+        
+        # Get dashboard metrics
+        metrics = self.get_dashboard_metrics()
+        
+        # Quality scores (0-100 range)
+        quality = metrics.get('quality', {})
+        scores['avg_stress_level'] = 100.0 - float(quality.get('avg_stress_level', 50.0))  # Invert: lower stress = higher score
+        scores['avg_net_wellbeing'] = float(quality.get('avg_net_wellbeing_normalized', 50.0))
+        scores['avg_stress_efficiency'] = float(quality.get('avg_stress_efficiency', 50.0)) if quality.get('avg_stress_efficiency') is not None else 50.0
+        scores['avg_relief'] = float(quality.get('avg_relief', 50.0))
+        
+        # Productivity scores
+        productivity_volume = metrics.get('productivity_volume', {})
+        scores['work_volume_score'] = float(productivity_volume.get('work_volume_score', 0.0))
+        scores['work_consistency_score'] = float(productivity_volume.get('work_consistency_score', 50.0))
+        
+        # Life balance
+        life_balance = metrics.get('life_balance', {})
+        scores['life_balance_score'] = float(life_balance.get('balance_score', 50.0))
+        
+        # Relief summary
+        relief_summary = self.get_relief_summary()
+        # Normalize weekly relief to 0-100 (assuming typical range 0-1000)
+        weekly_relief = float(relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0))
+        scores['weekly_relief_score'] = min(100.0, weekly_relief / 10.0)  # Scale down if needed
+        
+        # Time tracking consistency score
+        tracking_data = self.calculate_time_tracking_consistency_score(days=days)
+        scores['tracking_consistency_score'] = float(tracking_data.get('tracking_consistency_score', 0.0))
+        
+        # Counts (normalize to 0-100)
+        counts = metrics.get('counts', {})
+        completion_rate = float(counts.get('completion_rate', 0.0))
+        scores['completion_rate'] = completion_rate  # Already 0-100
+        
+        # Self-care frequency (normalize: assume 0-5 tasks/day = 0-100)
+        avg_self_care = float(counts.get('avg_daily_self_care_tasks', 0.0))
+        scores['self_care_frequency'] = min(100.0, avg_self_care * 20.0)  # 5 tasks = 100 score
+        
+        return scores
+
+    def get_tracking_consistency_multiplier(self, days: int = 7) -> float:
+        """Get tracking consistency score as a multiplier (0.0 to 1.0).
+        
+        Useful for adjusting other scores based on time tracking completeness.
+        Returns 1.0 for perfect tracking, 0.0 for no tracking.
+        
+        Args:
+            days: Number of days to analyze (default 7)
+            
+        Returns:
+            Multiplier value (0.0 to 1.0)
+        """
+        tracking_data = self.calculate_time_tracking_consistency_score(days=days)
+        score = tracking_data.get('tracking_consistency_score', 0.0)
+        return max(0.0, min(1.0, score / 100.0))
 
     def get_relief_summary(self) -> Dict[str, any]:
         """Calculate relief points, productivity time, and relief statistics."""

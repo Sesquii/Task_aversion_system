@@ -45,6 +45,12 @@ def complete_task_page(task_manager, emotion_manager):
                     current_actual_data = json.loads(actual_raw) if actual_raw else {}
                 except json.JSONDecodeError:
                     current_actual_data = {}
+        
+        # Display task description at the top if available
+        task_description = predicted_data.get('description', '')
+        if task_description and task_description.strip():
+            ui.label("Task Description").classes("text-lg font-semibold mt-4")
+            ui.label(task_description).classes("text-sm text-gray-700 mb-4 p-3 bg-gray-50 rounded border")
 
         inst_input = ui.input(
             label='Instance ID (or leave blank to choose)',
