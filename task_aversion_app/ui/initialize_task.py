@@ -157,7 +157,7 @@ def initialize_task_page(task_manager, emotion_manager):
             )
 
             # Cognitive load slider (NiceGUI 1.x → no label)
-            ui.label("Predicted relief")
+            ui.label("Predicted relief").classes("text-lg font-semibold")
             predicted_relief = ui.slider(min=0, max=100, step=1, value=default_relief)
             # Show previous value indicator if available
             if 'expected_relief' in previous_averages:
@@ -204,7 +204,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     ui.label(f"Previous average: {prev_val} (current: {default_emotional})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
-            ui.label("Expected Physical Load")
+            ui.label("Expected Physical Load").classes("text-lg font-semibold")
             physical_load = ui.slider(min=0, max=100, step=1, value=default_physical)
             if 'expected_physical_load' in previous_averages:
                 prev_val = previous_averages['expected_physical_load']
@@ -213,7 +213,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
-            ui.label("Emotional Context")
+            ui.label("Emotional Context").classes("text-lg font-semibold")
 
             # Load existing emotion values from predicted data
             emotion_values_dict = predicted_data.get('emotion_values', {})
@@ -298,7 +298,7 @@ def initialize_task_page(task_manager, emotion_manager):
             if emotion_values_dict:
                 update_emotion_sliders()
 
-            ui.label("Physical Context")
+            ui.label("Physical Context").classes("text-lg font-semibold")
             physical_context = ui.select(
                 ["None", "Home", "Work", "Gym", "Outdoors", "Errands", "Custom..."]
             )
@@ -311,7 +311,7 @@ def initialize_task_page(task_manager, emotion_manager):
 
             physical_context.on("update:model-value", physical_changed)
 
-            ui.label("Motivation Level")
+            ui.label("Motivation Level").classes("text-lg font-semibold")
             motivation = ui.slider(min=0, max=100, step=1, value=default_motivation)
             if 'motivation' in previous_averages:
                 prev_val = previous_averages['motivation']

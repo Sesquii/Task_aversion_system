@@ -77,10 +77,11 @@ def complete_task_page(task_manager, emotion_manager):
             inst_select.on('update:model-value', on_choose)
 
         # Helper to get default value from predicted (initialization) values, scaling from 0-10 to 0-100 if needed
-        def get_default_value(actual_key, predicted_key, default=50):
+        # IMPORTANT: This function copies initialization values even if they are zero. No fallback to task creation.
+        def get_default_value(actual_key, predicted_key, default=0):
             # First check if current instance already has actual values (for editing)
-            val = current_actual_data.get(actual_key)
-            if val is not None:
+            if actual_key in current_actual_data:
+                val = current_actual_data[actual_key]
                 try:
                     num_val = float(val)
                     # Scale from 0-10 to 0-100 if value is <= 10
@@ -90,8 +91,9 @@ def complete_task_page(task_manager, emotion_manager):
                 except (ValueError, TypeError):
                     pass
             # Then use predicted values from initialization as baseline
-            val = predicted_data.get(predicted_key)
-            if val is not None:
+            # Check if key exists (even if value is 0) - use 'in' operator to distinguish missing key from 0 value
+            if predicted_key in predicted_data:
+                val = predicted_data[predicted_key]
                 try:
                     num_val = float(val)
                     # Scale from 0-10 to 0-100 if value is <= 10
@@ -103,16 +105,13 @@ def complete_task_page(task_manager, emotion_manager):
             return default
         
         # Map predicted keys to actual keys for baseline
-        default_relief = get_default_value('actual_relief', 'expected_relief', 50)
-        # Get defaults for new cognitive components (with backward compatibility)
-        default_mental_energy = get_default_value('actual_mental_energy', 'expected_mental_energy', None)
-        if default_mental_energy is None:
-            default_mental_energy = get_default_value('actual_cognitive', 'expected_cognitive_load', 50)  # Fallback
-        default_difficulty = get_default_value('actual_difficulty', 'expected_difficulty', None)
-        if default_difficulty is None:
-            default_difficulty = get_default_value('actual_cognitive', 'expected_cognitive_load', 50)  # Fallback
-        default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 50)
-        default_physical = get_default_value('actual_physical', 'expected_physical_load', 50)
+        # Use 0 as default (not 50) to ensure we copy initialization values even if zero
+        default_relief = get_default_value('actual_relief', 'expected_relief', 0)
+        # Get defaults for cognitive components - NO fallback to task creation values
+        default_mental_energy = get_default_value('actual_mental_energy', 'expected_mental_energy', 0)
+        default_difficulty = get_default_value('actual_difficulty', 'expected_difficulty', 0)
+        default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 0)
+        default_physical = get_default_value('actual_physical', 'expected_physical_load', 0)
 
         # Get the initialization aversion value (the value set when this instance was initialized)
         # Only use initialization_expected_aversion (preserved from initialization of this specific instance)
@@ -435,6 +434,12 @@ def complete_task_page(task_manager, emotion_manager):
             if not iid:
                 ui.notify("Instance ID required", color='negative')
                 return
+            
+            # Validate that the instance exists
+            instance_check = im.get_instance(iid)
+            if not instance_check:
+                ui.notify(f"Instance {iid} not found", color='negative')
+                return
 
             # Collect emotion values from sliders
             # Filter out emotions with 0 values (0 means emotion is not present/not being tracked)
@@ -467,18 +472,40 @@ def complete_task_page(task_manager, emotion_manager):
                 else:
                     combined_notes = "Over-completion: " + over_completion_note.value.strip()
             
+            # Safely get slider values with fallbacks
+            try:
+                relief_val = int(actual_relief.value) if actual_relief.value is not None else 0
+            except (AttributeError, TypeError, ValueError):
+                relief_val = 0
+            try:
+                mental_energy_val = int(actual_mental_energy.value) if actual_mental_energy.value is not None else 0
+            except (AttributeError, TypeError, ValueError):
+                mental_energy_val = 0
+            try:
+                difficulty_val = int(actual_difficulty.value) if actual_difficulty.value is not None else 0
+            except (AttributeError, TypeError, ValueError):
+                difficulty_val = 0
+            try:
+                emotional_val = int(actual_emotional.value) if actual_emotional.value is not None else 0
+            except (AttributeError, TypeError, ValueError):
+                emotional_val = 0
+            try:
+                physical_val = int(actual_physical.value) if actual_physical.value is not None else 0
+            except (AttributeError, TypeError, ValueError):
+                physical_val = 0
+            
             actual = {
-                'actual_relief': int(actual_relief.value),
-                'actual_mental_energy': int(actual_mental_energy.value),
-                'actual_difficulty': int(actual_difficulty.value),
-                'actual_emotional': int(actual_emotional.value),  # Keep internal name for formulas
-                'actual_physical': int(actual_physical.value),
+                'actual_relief': relief_val,
+                'actual_mental_energy': mental_energy_val,
+                'actual_difficulty': difficulty_val,
+                'actual_emotional': emotional_val,  # Keep internal name for formulas
+                'actual_physical': physical_val,
                 'completion_percent': int(round(completion_value)),
                 'time_actual_minutes': int(actual_time.value or 0),
                 'notes': combined_notes,
                 'emotion_values': emotion_values,  # Store actual emotion values
                 # Backward compatibility: also include old cognitive field
-                'actual_cognitive': int((actual_mental_energy.value + actual_difficulty.value) / 2),
+                'actual_cognitive': int((mental_energy_val + difficulty_val) / 2),
             }
 
             print("[complete_task] actual payload:", actual)
