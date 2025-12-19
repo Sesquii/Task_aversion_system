@@ -109,25 +109,19 @@ def complete_task_page(task_manager, emotion_manager):
         default_physical = get_default_value('actual_physical', 'expected_physical_load', 50)
 
         # Get the initialization aversion value (the value set when this instance was initialized)
-        # Always use initialization_expected_aversion if it exists (preserved from initialization)
-        # Otherwise fall back to expected_aversion or initial_aversion
-        initialization_aversion = None
+        # Only use initialization_expected_aversion (preserved from initialization of this specific instance)
+        # Do NOT use initial_aversion (first-time value for this task) or expected_aversion (may be an average)
+        # Handle 0 as a valid initialization value
         
-        # First check for initialization_expected_aversion (preserved initialization value)
-        if 'initialization_expected_aversion' in predicted_data:
-            initialization_aversion = predicted_data.get('initialization_expected_aversion')
-        
-        # Fallback to initial_aversion (set on first initialization of this task)
-        if initialization_aversion is None and 'initial_aversion' in predicted_data:
-            initialization_aversion = predicted_data.get('initial_aversion')
-        
-        # Final fallback to expected_aversion (may have been updated, but use it if nothing else)
-        if initialization_aversion is None:
-            initialization_aversion = predicted_data.get('expected_aversion')
+        # Only check for initialization_expected_aversion (preserved initialization value for this instance)
+        # Use .get() with a sentinel value to distinguish between missing key and 0 value
+        initialization_aversion = predicted_data.get('initialization_expected_aversion', None)
         
         # Process the value: scale if needed and convert to int
+        # Handle 0 as a valid value (0 is not None, so we check if the key exists)
         current_expected_aversion = 0
-        if initialization_aversion is not None:
+        if 'initialization_expected_aversion' in predicted_data:
+            # Key exists, so process the value (even if it's 0)
             try:
                 current_expected_aversion = float(initialization_aversion)
                 # Scale from 0-10 to 0-100 if needed
@@ -136,6 +130,7 @@ def complete_task_page(task_manager, emotion_manager):
                 current_expected_aversion = int(round(current_expected_aversion))
             except (ValueError, TypeError):
                 current_expected_aversion = 0
+        # If key doesn't exist, current_expected_aversion remains 0 (default)
 
         # ----- Aversion Update (always show so it can be adjusted) -----
         aversion_slider = None
