@@ -1272,6 +1272,14 @@ class Analytics:
                 'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None, 'avg_aversion': 0.0, 'adjusted_wellbeing': 0.0, 'adjusted_wellbeing_normalized': 50.0},
                 'time': {'median_duration': 0.0, 'avg_delay': 0.0, 'estimation_accuracy': 0.0},
                 'aversion': {'general_aversion_score': 0.0},
+                'productivity_volume': {
+                    'avg_daily_work_time': 0.0,
+                    'work_volume_score': 0.0,
+                    'work_consistency_score': 50.0,
+                    'productivity_potential_score': 0.0,
+                    'work_volume_gap': 0.0,
+                    'composite_productivity_score': 0.0,
+                },
             }
         active = df[df['status'].isin(['active', 'in_progress'])]
         completed = df[df['completed_at'].astype(str).str.len() > 0]
@@ -1317,6 +1325,30 @@ class Analytics:
         
         # Calculate life balance
         life_balance = self.get_life_balance()
+        
+        # Calculate daily work volume metrics
+        work_volume_metrics = self.get_daily_work_volume_metrics(days=30)
+        avg_daily_work_time = work_volume_metrics.get('avg_daily_work_time', 0.0)
+        work_volume_score = work_volume_metrics.get('work_volume_score', 0.0)
+        work_consistency_score = work_volume_metrics.get('work_consistency_score', 50.0)
+        
+        # Calculate average efficiency score for productivity potential
+        efficiency_summary = self.get_efficiency_summary()
+        avg_efficiency_score = efficiency_summary.get('avg_efficiency', 0.0)
+        
+        # Calculate productivity potential (target: 6 hours/day = 360 minutes)
+        productivity_potential = self.calculate_productivity_potential(
+            avg_efficiency_score=avg_efficiency_score,
+            avg_daily_work_time=avg_daily_work_time,
+            target_hours_per_day=360.0
+        )
+        
+        # Calculate composite productivity score
+        composite_productivity = self.calculate_composite_productivity_score(
+            efficiency_score=avg_efficiency_score,
+            volume_score=work_volume_score,
+            consistency_score=work_consistency_score
+        )
         
         # Calculate daily self care tasks metrics
         from .task_manager import TaskManager
@@ -1432,6 +1464,14 @@ class Analytics:
             'aversion': {
                 'general_aversion_score': round(general_aversion_score, 1),
             },
+            'productivity_volume': {
+                'avg_daily_work_time': round(avg_daily_work_time, 1),
+                'work_volume_score': round(work_volume_score, 1),
+                'work_consistency_score': round(work_consistency_score, 1),
+                'productivity_potential_score': round(productivity_potential.get('potential_score', 0.0), 1),
+                'work_volume_gap': round(productivity_potential.get('gap_hours', 0.0), 1),
+                'composite_productivity_score': round(composite_productivity, 1),
+            },
         }
         return metrics
 
@@ -1542,6 +1582,220 @@ class Analytics:
             'balance_score': round(balance_score, 1),
             'work_play_ratio': round(work_play_ratio, 3),
         }
+
+    def get_daily_work_volume_metrics(self, days: int = 30) -> Dict[str, any]:
+        """Calculate daily work volume metrics including average work time, volume score, and consistency.
+        
+        Args:
+            days: Number of days to analyze (default 30)
+            
+        Returns:
+            Dict with avg_daily_work_time, work_volume_score (0-100), work_consistency_score (0-100),
+            daily_work_times (list of daily work times), and work_days_count
+        """
+        df = self._load_instances()
+        
+        if df.empty:
+            return {
+                'avg_daily_work_time': 0.0,
+                'work_volume_score': 0.0,
+                'work_consistency_score': 50.0,
+                'daily_work_times': [],
+                'work_days_count': 0,
+            }
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        if tasks_df.empty or 'task_type' not in tasks_df.columns:
+            return {
+                'avg_daily_work_time': 0.0,
+                'work_volume_score': 0.0,
+                'work_consistency_score': 50.0,
+                'daily_work_times': [],
+                'work_days_count': 0,
+            }
+        
+        # Join instances with tasks to get task_type
+        merged = df.merge(
+            tasks_df[['task_id', 'task_type']],
+            on='task_id',
+            how='left'
+        )
+        
+        # Filter to completed work tasks only
+        completed = merged[merged['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'avg_daily_work_time': 0.0,
+                'work_volume_score': 0.0,
+                'work_consistency_score': 50.0,
+                'daily_work_times': [],
+                'work_days_count': 0,
+            }
+        
+        # Fill missing task_type with 'Work' as default
+        completed['task_type'] = completed['task_type'].fillna('Work')
+        completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+        
+        # Get duration in minutes
+        completed['duration_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce').fillna(0.0)
+        
+        # Filter to work tasks
+        work_tasks = completed[completed['task_type_normalized'] == 'work'].copy()
+        
+        if work_tasks.empty:
+            return {
+                'avg_daily_work_time': 0.0,
+                'work_volume_score': 0.0,
+                'work_consistency_score': 50.0,
+                'daily_work_times': [],
+                'work_days_count': 0,
+            }
+        
+        # Parse completed_at dates
+        work_tasks['completed_at_dt'] = pd.to_datetime(work_tasks['completed_at'], errors='coerce')
+        work_tasks = work_tasks[work_tasks['completed_at_dt'].notna()]
+        
+        if work_tasks.empty:
+            return {
+                'avg_daily_work_time': 0.0,
+                'work_volume_score': 0.0,
+                'work_consistency_score': 50.0,
+                'daily_work_times': [],
+                'work_days_count': 0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now() - timedelta(days=days)
+        recent_work = work_tasks[work_tasks['completed_at_dt'] >= cutoff_date].copy()
+        
+        if recent_work.empty:
+            return {
+                'avg_daily_work_time': 0.0,
+                'work_volume_score': 0.0,
+                'work_consistency_score': 50.0,
+                'daily_work_times': [],
+                'work_days_count': 0,
+            }
+        
+        # Group by date and sum work time per day
+        recent_work['date'] = recent_work['completed_at_dt'].dt.date
+        daily_work = recent_work.groupby('date')['duration_numeric'].sum()
+        
+        daily_work_times = [float(time) for time in daily_work.values if time > 0]
+        work_days_count = len(daily_work_times)
+        
+        if work_days_count == 0:
+            return {
+                'avg_daily_work_time': 0.0,
+                'work_volume_score': 0.0,
+                'work_consistency_score': 50.0,
+                'daily_work_times': [],
+                'work_days_count': 0,
+            }
+        
+        # Calculate average daily work time
+        avg_daily_work_time = sum(daily_work_times) / work_days_count
+        
+        # Calculate work volume score (0-100)
+        # 0-2 hours/day = 0-25 (low volume)
+        # 2-4 hours/day = 25-50 (moderate)
+        # 4-6 hours/day = 50-75 (good)
+        # 6-8 hours/day = 75-100 (high volume)
+        if avg_daily_work_time <= 120:  # 2 hours
+            work_volume_score = (avg_daily_work_time / 120) * 25
+        elif avg_daily_work_time <= 240:  # 4 hours
+            work_volume_score = 25 + ((avg_daily_work_time - 120) / 120) * 25
+        elif avg_daily_work_time <= 360:  # 6 hours
+            work_volume_score = 50 + ((avg_daily_work_time - 240) / 120) * 25
+        else:  # 6+ hours
+            work_volume_score = 75 + min(25, ((avg_daily_work_time - 360) / 120) * 25)
+        
+        work_volume_score = max(0.0, min(100.0, work_volume_score))
+        
+        # Calculate work consistency score (0-100)
+        # Lower variance = higher consistency score
+        if len(daily_work_times) > 1:
+            variance = np.var(daily_work_times)
+            # Normalize variance: assume max reasonable variance is 4 hours (240 min) squared
+            # Lower variance = higher score
+            max_variance = 240.0 ** 2
+            consistency_score = max(0.0, min(100.0, 100.0 * (1.0 - min(1.0, variance / max_variance))))
+        else:
+            # Single day = perfect consistency
+            consistency_score = 100.0
+        
+        return {
+            'avg_daily_work_time': round(float(avg_daily_work_time), 1),
+            'work_volume_score': round(float(work_volume_score), 1),
+            'work_consistency_score': round(float(consistency_score), 1),
+            'daily_work_times': daily_work_times,
+            'work_days_count': work_days_count,
+        }
+
+    def calculate_productivity_potential(self, avg_efficiency_score: float, avg_daily_work_time: float, 
+                                         target_hours_per_day: float = 360.0) -> Dict[str, any]:
+        """Calculate productivity potential based on current efficiency and target work time.
+        
+        Args:
+            avg_efficiency_score: Average efficiency score from completed tasks
+            avg_daily_work_time: Current average daily work time in minutes
+            target_hours_per_day: Target work hours per day in minutes (default 360 = 6 hours)
+            
+        Returns:
+            Dict with potential_score, current_score, multiplier, and gap_hours
+        """
+        if avg_daily_work_time <= 0:
+            return {
+                'potential_score': 0.0,
+                'current_score': 0.0,
+                'multiplier': 0.0,
+                'gap_hours': target_hours_per_day / 60.0,
+            }
+        
+        # Current productivity score (efficiency * current hours)
+        current_score = avg_efficiency_score * (avg_daily_work_time / 60.0)
+        
+        # Potential productivity score (efficiency * target hours)
+        potential_score = avg_efficiency_score * (target_hours_per_day / 60.0)
+        
+        # Multiplier: how much more you could achieve
+        multiplier = target_hours_per_day / max(avg_daily_work_time, 1.0)
+        
+        # Gap in hours
+        gap_hours = (target_hours_per_day - avg_daily_work_time) / 60.0
+        
+        return {
+            'potential_score': round(float(potential_score), 1),
+            'current_score': round(float(current_score), 1),
+            'multiplier': round(float(multiplier), 2),
+            'gap_hours': round(float(gap_hours), 1),
+        }
+
+    def calculate_composite_productivity_score(self, efficiency_score: float, volume_score: float, 
+                                                consistency_score: float) -> float:
+        """Calculate composite productivity score combining efficiency, volume, and consistency.
+        
+        Args:
+            efficiency_score: Per-task efficiency score (0-100+)
+            volume_score: Daily work volume score (0-100)
+            consistency_score: Work consistency score (0-100)
+            
+        Returns:
+            Composite productivity score (0-100+)
+        """
+        # Normalize efficiency score to 0-100 range for combination
+        # Assume efficiency scores typically range 0-200, so divide by 2
+        normalized_efficiency = min(100.0, efficiency_score / 2.0) if efficiency_score > 0 else 0.0
+        
+        # Weighted combination: 40% efficiency, 40% volume, 20% consistency
+        composite = (normalized_efficiency * 0.4) + (volume_score * 0.4) + (consistency_score * 0.2)
+        
+        return round(float(composite), 1)
 
     def get_relief_summary(self) -> Dict[str, any]:
         """Calculate relief points, productivity time, and relief statistics."""
