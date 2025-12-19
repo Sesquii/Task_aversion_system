@@ -217,6 +217,7 @@ def build_analytics_page():
     _render_trends_section()
     _render_task_rankings()
     _render_stress_efficiency_leaderboard()
+    _render_metric_comparison()
     _render_correlation_explorer()
 
 
@@ -349,6 +350,203 @@ def _render_trends_section():
         normalize_switch.on('update:model-value', lambda e: update_chart())
 
         update_chart()
+
+
+def _render_metric_comparison():
+    """Render a flexible metric comparison tool with scatter plots."""
+    ui.separator().classes("my-4")
+    with ui.card().classes("p-4 w-full"):
+        ui.label("Metric Comparison").classes("text-xl font-bold mb-2")
+        ui.label("Compare any two metrics with interactive scatter plots. Perfect for analyzing relationships like Productivity vs Grit.").classes(
+            "text-sm text-gray-500 mb-3"
+        )
+        
+        with ui.row().classes("gap-3 flex-wrap"):
+            x_select = ui.select(
+                options=ATTRIBUTE_OPTIONS_DICT,
+                value='productivity_score' if 'productivity_score' in ATTRIBUTE_OPTIONS_DICT else (next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None),
+                label="X-Axis Metric",
+            ).props("dense outlined clearable").classes("min-w-[200px]")
+            
+            y_select = ui.select(
+                options=ATTRIBUTE_OPTIONS_DICT,
+                value='grit_score' if 'grit_score' in ATTRIBUTE_OPTIONS_DICT else (next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None),
+                label="Y-Axis Metric",
+            ).props("dense outlined clearable").classes("min-w-[200px]")
+            
+            show_trendline = ui.switch("Show trendline", value=True).props("dense")
+            show_efficiency = ui.switch("Show efficiency metrics", value=True).props("dense")
+        
+        chart_area = ui.column().classes("mt-3 w-full gap-3")
+        stats_area = ui.column().classes("mt-3 w-full gap-2")
+        
+        def render_comparison():
+            chart_area.clear()
+            stats_area.clear()
+            
+            x_attr = x_select.value
+            y_attr = y_select.value
+            
+            if not x_attr or not y_attr:
+                with chart_area:
+                    ui.label("Select both X and Y metrics to compare.").classes("text-xs text-gray-500")
+                return
+            
+            if x_attr == y_attr:
+                with chart_area:
+                    ui.label("Choose two different metrics to compare.").classes("text-xs text-gray-500")
+                return
+            
+            # Get scatter data
+            scatter = analytics_service.get_scatter_data(x_attr, y_attr)
+            stats = analytics_service.calculate_correlation(x_attr, y_attr, method='pearson')
+            
+            label_x = ATTRIBUTE_LABELS.get(x_attr, x_attr)
+            label_y = ATTRIBUTE_LABELS.get(y_attr, y_attr)
+            
+            if scatter.get('n', 0) == 0:
+                with chart_area:
+                    ui.label("Not enough data to plot. Complete some tasks first.").classes("text-xs text-gray-500")
+                return
+            
+            # Create scatter plot
+            scatter_df = pd.DataFrame({
+                'x': scatter['x'],
+                'y': scatter['y']
+            })
+            
+            fig = px.scatter(
+                scatter_df,
+                x='x',
+                y='y',
+                labels={'x': label_x, 'y': label_y},
+                title=f"{label_x} vs {label_y}",
+                trendline='ols' if show_trendline.value else None,
+            )
+            fig.update_layout(
+                margin=dict(l=20, r=20, t=40, b=20),
+                hovermode='closest'
+            )
+            
+            with chart_area:
+                ui.plotly(fig)
+            
+            # Show statistics
+            with stats_area:
+                corr = stats.get('correlation')
+                p_val = stats.get('p_value')
+                r_sq = stats.get('r_squared')
+                n = stats.get('n')
+                
+                with ui.card().classes("p-3"):
+                    ui.label("Correlation Statistics").classes("font-semibold text-sm mb-2")
+                    with ui.column().classes("gap-1"):
+                        if corr is not None:
+                            ui.label(f"Correlation (r): {corr:.3f}").classes("text-sm")
+                            # Interpret correlation strength
+                            if abs(corr) >= 0.7:
+                                strength = "Strong"
+                                color = "text-green-600"
+                            elif abs(corr) >= 0.4:
+                                strength = "Moderate"
+                                color = "text-yellow-600"
+                            elif abs(corr) >= 0.2:
+                                strength = "Weak"
+                                color = "text-orange-600"
+                            else:
+                                strength = "Very Weak"
+                                color = "text-gray-600"
+                            ui.label(f"Strength: {strength}").classes(f"text-xs {color}")
+                        else:
+                            ui.label("Correlation: N/A").classes("text-sm")
+                        
+                        if r_sq is not None:
+                            ui.label(f"R²: {r_sq:.3f} ({r_sq*100:.1f}% variance explained)").classes("text-sm")
+                        
+                        if p_val is not None:
+                            significance = "Significant" if p_val < 0.05 else "Not Significant"
+                            ui.label(f"p-value: {p_val:.4f} ({significance})").classes("text-sm")
+                        
+                        ui.label(f"Sample size: {n}").classes("text-xs text-gray-500")
+                
+                # Efficiency metrics for productivity vs grit
+                if show_efficiency.value and x_attr == 'productivity_score' and y_attr == 'grit_score':
+                    with ui.card().classes("p-3 bg-blue-50"):
+                        ui.label("Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
+                        
+                        # Calculate efficiency metrics
+                        x_vals = scatter['x']
+                        y_vals = scatter['y']
+                        
+                        # Filter out zeros and negatives for ratio calculation
+                        valid_pairs = [(x, y) for x, y in zip(x_vals, y_vals) if y > 0 and x is not None and y is not None]
+                        
+                        if valid_pairs:
+                            efficiency_ratios = [x / y for x, y in valid_pairs]
+                            avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios) if efficiency_ratios else 0
+                            
+                            with ui.column().classes("gap-1"):
+                                ui.label(f"Average Efficiency Ratio: {avg_efficiency:.3f}").classes("text-sm")
+                                ui.label("(Productivity per unit of Grit)").classes("text-xs text-gray-600")
+                                
+                                # Interpretation
+                                if avg_efficiency > 2.0:
+                                    interpretation = "Highly Efficient"
+                                    color = "text-green-600"
+                                elif avg_efficiency > 0.5:
+                                    interpretation = "Moderately Efficient"
+                                    color = "text-yellow-600"
+                                else:
+                                    interpretation = "Less Efficient"
+                                    color = "text-orange-600"
+                                
+                                ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
+                                
+                                ui.label("Higher ratio = more productivity with less grit investment").classes("text-xs text-gray-500 mt-1")
+                        else:
+                            ui.label("Insufficient data for efficiency calculation").classes("text-xs text-gray-500")
+                
+                elif show_efficiency.value and y_attr == 'productivity_score' and x_attr == 'grit_score':
+                    # Same but reversed
+                    with ui.card().classes("p-3 bg-blue-50"):
+                        ui.label("Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
+                        
+                        x_vals = scatter['x']
+                        y_vals = scatter['y']
+                        
+                        valid_pairs = [(x, y) for x, y in zip(x_vals, y_vals) if x > 0 and x is not None and y is not None]
+                        
+                        if valid_pairs:
+                            efficiency_ratios = [y / x for x, y in valid_pairs]
+                            avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios) if efficiency_ratios else 0
+                            
+                            with ui.column().classes("gap-1"):
+                                ui.label(f"Average Efficiency Ratio: {avg_efficiency:.3f}").classes("text-sm")
+                                ui.label("(Productivity per unit of Grit)").classes("text-xs text-gray-600")
+                                
+                                if avg_efficiency > 2.0:
+                                    interpretation = "Highly Efficient"
+                                    color = "text-green-600"
+                                elif avg_efficiency > 0.5:
+                                    interpretation = "Moderately Efficient"
+                                    color = "text-yellow-600"
+                                else:
+                                    interpretation = "Less Efficient"
+                                    color = "text-orange-600"
+                                
+                                ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
+                                ui.label("Higher ratio = more productivity with less grit investment").classes("text-xs text-gray-500 mt-1")
+                        else:
+                            ui.label("Insufficient data for efficiency calculation").classes("text-xs text-gray-500")
+        
+        # Set up event handlers
+        x_select.on('update:model-value', lambda e: render_comparison())
+        y_select.on('update:model-value', lambda e: render_comparison())
+        show_trendline.on('update:model-value', lambda e: render_comparison())
+        show_efficiency.on('update:model-value', lambda e: render_comparison())
+        
+        # Initial render
+        render_comparison()
 
 
 def _render_correlation_explorer():

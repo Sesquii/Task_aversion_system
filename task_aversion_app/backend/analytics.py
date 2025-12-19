@@ -2128,7 +2128,9 @@ class Analytics:
         total_grit_score = completed['grit_score'].fillna(0).sum()
         
         # Calculate weekly grit score (last 7 days)
-        weekly_grit_score = completed_last_7d_for_score['grit_score'].fillna(0).sum()
+        # Recreate the filtered DataFrame after grit_score has been calculated
+        completed_last_7d_for_grit = completed[completed['completed_at_dt'] >= seven_days_ago]
+        weekly_grit_score = completed_last_7d_for_grit['grit_score'].fillna(0).sum()
         
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
@@ -3624,10 +3626,95 @@ class Analytics:
         }
 
     def get_scatter_data(self, attribute_x: str, attribute_y: str) -> Dict[str, any]:
-        """Return paired scatter values for two attributes."""
+        """Return paired scatter values for two attributes.
+        
+        Supports calculated metrics like productivity_score and grit_score by computing them on-the-fly.
+        """
+        
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
-        if completed.empty or attribute_x not in completed.columns or attribute_y not in completed.columns:
+        if completed.empty:
+            return {'x': [], 'y': [], 'n': 0}
+        
+        # Ensure actual_dict and predicted_dict exist (they should from _load_instances, but check)
+        if 'actual_dict' not in completed.columns:
+            def _safe_json(cell):
+                if isinstance(cell, dict):
+                    return cell
+                cell = cell or '{}'
+                try:
+                    import json
+                    return json.loads(cell)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    return {}
+            completed['actual_dict'] = completed['actual'].apply(_safe_json) if 'actual' in completed.columns else pd.Series([{}] * len(completed))
+        
+        if 'predicted_dict' not in completed.columns:
+            def _safe_json(cell):
+                if isinstance(cell, dict):
+                    return cell
+                cell = cell or '{}'
+                try:
+                    import json
+                    return json.loads(cell)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    return {}
+            completed['predicted_dict'] = completed['predicted'].apply(_safe_json) if 'predicted' in completed.columns else pd.Series([{}] * len(completed))
+        
+        # Calculate productivity_score if needed
+        if attribute_x == 'productivity_score' or attribute_y == 'productivity_score':
+            from datetime import datetime
+            # Get self-care tasks per day
+            self_care_tasks_per_day = {}
+            if 'task_type' in completed.columns and 'completed_at' in completed.columns:
+                for _, row in completed.iterrows():
+                    task_type = str(row.get('task_type', '')).strip().lower()
+                    completed_at = row.get('completed_at', '')
+                    if task_type in ['self care', 'selfcare', 'self-care'] and completed_at:
+                        try:
+                            completed_date = pd.to_datetime(completed_at).date()
+                            date_str = completed_date.isoformat()
+                            self_care_tasks_per_day[date_str] = self_care_tasks_per_day.get(date_str, 0) + 1
+                        except (ValueError, TypeError):
+                            pass
+            
+            # Calculate weekly average time
+            def _get_actual_time_for_avg(row):
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, dict):
+                        return float(actual_dict.get('time_actual_minutes', 0) or 0)
+                except (ValueError, TypeError, AttributeError):
+                    return None
+            
+            completed['time_actual_for_avg'] = completed.apply(_get_actual_time_for_avg, axis=1)
+            completed['time_actual_for_avg'] = pd.to_numeric(completed['time_actual_for_avg'], errors='coerce')
+            valid_times = completed[completed['time_actual_for_avg'].notna() & (completed['time_actual_for_avg'] > 0)]
+            weekly_avg_time = valid_times['time_actual_for_avg'].mean() if not valid_times.empty else 0.0
+            
+            # Calculate productivity score
+            completed['productivity_score'] = completed.apply(
+                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time),
+                axis=1
+            )
+        
+        # Calculate grit_score if needed
+        if attribute_x == 'grit_score' or attribute_y == 'grit_score':
+            # Count how many times each task has been completed
+            task_completion_counts = {}
+            if 'task_id' in completed.columns:
+                task_counts = completed.groupby('task_id').size()
+                for task_id, count in task_counts.items():
+                    task_completion_counts[task_id] = int(count)
+            
+            # Calculate grit score
+            completed['grit_score'] = completed.apply(
+                lambda row: self.calculate_grit_score(row, task_completion_counts),
+                axis=1
+            )
+        
+        # Check if attributes exist (either in columns or calculated)
+        if attribute_x not in completed.columns or attribute_y not in completed.columns:
             return {'x': [], 'y': [], 'n': 0}
 
         completed['x_val'] = pd.to_numeric(completed[attribute_x], errors='coerce')
