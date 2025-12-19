@@ -15,7 +15,7 @@ def complete_task_page(task_manager, emotion_manager):
         print("[complete_task] Request headers:", request.headers)
         print("[complete_task] Query params:", request.query_params)
 
-        ui.label("Complete Task").classes("text-xl font-bold")
+        ui.label("Complete Task").classes("text-3xl font-bold mb-4")
 
         params = dict(request.query_params)
         instance_id = params.get("instance_id")

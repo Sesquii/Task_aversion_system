@@ -109,6 +109,14 @@ def initialize_task_page(task_manager, emotion_manager):
 
         with ui.column().classes("w-full gap-4"):
 
+            # Page title
+            ui.label("Initialize Task").classes("text-3xl font-bold mb-4")
+
+            description_field = ui.textarea(
+                label="Task Specifics (optional)",
+                value='',
+            )
+
             # Aversion slider - always show so it can be adjusted for future instances
             ui.label("Aversion (0-100)").classes("text-lg font-semibold")
             
@@ -150,11 +158,6 @@ def initialize_task_page(task_manager, emotion_manager):
                     </style>
                 """)
                 # Note: NiceGUI sliders don't easily support visual markers, so we'll show it in text for now
-
-            description_field = ui.textarea(
-                label="Task Specifics (optional)",
-                value='',
-            )
 
             # Cognitive load slider (NiceGUI 1.x → no label)
             ui.label("Predicted relief").classes("text-lg font-semibold")
