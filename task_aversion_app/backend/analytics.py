@@ -529,9 +529,12 @@ class Analytics:
             df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get(column)))
             df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get(column)))
             # Special handling for relief_score: check for actual_relief in JSON if relief_score is missing
+            # IMPORTANT: relief_score should ONLY come from actual_relief, never from expected_relief
+            # expected_relief should stay in predicted JSON only
             if column == 'relief_score':
                 df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_relief')))
-                df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_relief')))
+                # DO NOT use expected_relief as fallback - relief_score is for actual values only
+                # df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_relief')))  # REMOVED
             # Handle new cognitive load components (mental_energy_needed and task_difficulty)
             if column == 'mental_energy_needed':
                 df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_mental_energy') or r.get('actual_cognitive')))
@@ -1178,8 +1181,24 @@ class Analytics:
         completed['expected_aversion'] = completed.apply(_get_expected_aversion, axis=1)
         completed['expected_aversion'] = pd.to_numeric(completed['expected_aversion'], errors='coerce')
         
-        # Get actual relief from relief_score column (already populated from actual_dict)
-        completed['actual_relief'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+        # Get actual relief from actual_dict (from completion page), not from relief_score column
+        # This ensures we get the actual value even if CSV column was previously overwritten
+        def _get_actual_relief(row):
+            try:
+                actual_dict = row['actual_dict']
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('actual_relief', None)
+            except (KeyError, TypeError):
+                pass
+            # Fallback to relief_score column if actual_dict doesn't have it
+            try:
+                return row.get('relief_score')
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed['actual_relief'] = completed.apply(_get_actual_relief, axis=1)
+        completed['actual_relief'] = pd.to_numeric(completed['actual_relief'], errors='coerce')
         
         # Filter to rows where we have both expected and actual relief
         has_both = completed['expected_relief'].notna() & completed['actual_relief'].notna()

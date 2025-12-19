@@ -319,16 +319,20 @@ class InstanceManager:
         
         # Mapping from payload keys to CSV column names
         # Handles both direct matches and common aliases
+        # IMPORTANT: CSV columns should only contain ACTUAL values (from completion), not expected values
+        # Expected values should only be stored in the 'predicted' JSON column
         attribute_mappings = {
             # Direct mappings
             'duration_minutes': ['duration_minutes', 'time_actual_minutes', 'actual_time'],
-            'relief_score': ['relief_score', 'actual_relief', 'expected_relief'],
+            # relief_score should ONLY come from actual_relief (from completion), never from expected_relief
+            'relief_score': ['relief_score', 'actual_relief'],
             # New cognitive load components (per Cognitive Load Theory)
-            'mental_energy_needed': ['mental_energy_needed', 'actual_mental_energy', 'expected_mental_energy'],
-            'task_difficulty': ['task_difficulty', 'actual_difficulty', 'expected_difficulty'],
+            # CSV columns should only contain ACTUAL values
+            'mental_energy_needed': ['mental_energy_needed', 'actual_mental_energy'],
+            'task_difficulty': ['task_difficulty', 'actual_difficulty'],
             # Backward compatibility: map old cognitive_load to both new components
             # (will be handled in analytics.py for data loading)
-            'emotional_load': ['emotional_load', 'actual_emotional', 'expected_emotional_load', 'expected_emotional'],
+            'emotional_load': ['emotional_load', 'actual_emotional'],
             'environmental_effect': ['environmental_effect', 'environmental_fit'],
             'skills_improved': ['skills_improved'],
             'behavioral_score': ['behavioral_score'],
@@ -399,10 +403,11 @@ class InstanceManager:
                 try:
                     actual_dict = json.loads(actual_str)
                     if isinstance(actual_dict, dict) and actual_dict:
-                        # Update attributes from actual data
+                        # Update attributes from actual data only
+                        # relief_score should ONLY come from actual_relief, never from expected_relief
                         mappings = {
                             'duration_minutes': ['time_actual_minutes', 'actual_time', 'duration_minutes'],
-                            'relief_score': ['actual_relief', 'relief_score'],
+                            'relief_score': ['actual_relief', 'relief_score'],  # Only actual values
                             'cognitive_load': ['actual_cognitive', 'cognitive_load'],
                             'emotional_load': ['actual_emotional', 'emotional_load'],
                         }
@@ -425,9 +430,13 @@ class InstanceManager:
                 try:
                     predicted_dict = json.loads(predicted_str)
                     if isinstance(predicted_dict, dict) and predicted_dict:
+                        # IMPORTANT: Do NOT write expected values to CSV columns that should contain actual values
+                        # expected_relief should stay in predicted JSON only, not in relief_score column
+                        # Only backfill if the column is empty AND we don't have actual data
                         mappings = {
                             'duration_minutes': ['time_estimate_minutes', 'estimate', 'duration_minutes'],
-                            'relief_score': ['expected_relief', 'relief_score'],
+                            # DO NOT map expected_relief to relief_score - relief_score is for actual values only
+                            # 'relief_score': ['expected_relief', 'relief_score'],  # REMOVED - expected should not overwrite actual
                             'cognitive_load': ['expected_cognitive_load', 'expected_cognitive', 'cognitive_load'],
                             'emotional_load': ['expected_emotional_load', 'expected_emotional', 'emotional_load'],
                         }
