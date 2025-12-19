@@ -20,8 +20,9 @@ CALCULATED_METRICS = [
     {'label': 'Net Wellbeing (Normalized)', 'value': 'net_wellbeing_normalized'},
     {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
     {'label': 'Productivity Score', 'value': 'productivity_score'},
+    {'label': 'Grit Score', 'value': 'grit_score'},
     {'label': 'Relief Duration Score', 'value': 'relief_duration_score'},
-    {'label': 'Daily Self Care Tasks', 'value': 'daily_self_care_tasks'},
+    {'label': "Today's self care tasks", 'value': 'daily_self_care_tasks'},
 ]
 
 ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
@@ -50,7 +51,7 @@ def build_analytics_page():
             ("Active", metrics['counts']['active']),
             ("Completed 7d", metrics['counts']['completed_7d']),
             ("Completion Rate", f"{metrics['counts']['completion_rate']}%"),
-            ("Daily Self Care Tasks", metrics['counts']['daily_self_care_tasks']),
+            ("Today's self care tasks", metrics['counts']['daily_self_care_tasks']),
             ("Avg Daily Self Care Tasks", f"{metrics['counts']['avg_daily_self_care_tasks']:.1f}"),
             ("Time Est. Accuracy", f"{metrics['time']['estimation_accuracy']:.2f}x" if metrics['time']['estimation_accuracy'] > 0 else "N/A"),
             ("Avg Relief", metrics['quality']['avg_relief']),
@@ -73,6 +74,8 @@ def build_analytics_page():
             ("Weekly Relief + Bonus (Sensitive)", f"{relief_summary.get('weekly_relief_score_with_bonus_sensitive', 0.0):.1f}"),
             ("Total Productivity Score", f"{relief_summary.get('total_productivity_score', 0.0):.1f}"),
             ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
+            ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
+            ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
         ]:
             with ui.card().classes("p-3 min-w-[150px]"):
                 ui.label(title).classes("text-xs text-gray-500")

@@ -21,56 +21,406 @@ class Analytics:
     """Central analytics + lightweight recommendation helper."""
     
     @staticmethod
-    def calculate_aversion_multiplier(initial_aversion: Optional[float], current_aversion: Optional[float]) -> float:
-        """Calculate aversion-based multiplier for relief points.
+    def calculate_difficulty_bonus(
+        current_aversion: Optional[float],
+        stress_level: Optional[float] = None,
+        mental_energy: Optional[float] = None,
+        task_difficulty: Optional[float] = None
+    ) -> float:
+        """Calculate difficulty bonus based on aversion and task load.
         
-        Formula:
-        - If initial_aversion exists, calculate improvement: initial_aversion - current_aversion
-        - Logarithmic multiplier: 2^(improvement/10) for every 10 points of improvement
-        - Flat multiplier: 2.0 * (current_aversion / 100)
-        - Combined: base_multiplier * (1 + flat_multiplier)
+        Rewards completing difficult tasks (high aversion + high load).
+        Uses exponential scaling with flat/low exponent for smooth curve.
+        Higher weight to aversion (0.7) vs load (0.3).
         
-        Example: initial_aversion=100, current_aversion=90
-        - improvement = 10
-        - logarithmic = 2^(10/10) = 2.0
-        - flat = 2.0 * (90/100) = 1.8
-        - total = 2.0 * (1 + 1.8) = 5.6
+        Formula: bonus = 1.0 * (1 - exp(-(w_aversion * aversion + w_load * load) / k))
+        - Max bonus = 1.0 (so multiplier ranges 1.0 to 2.0)
+        - Uses exponential decay for smooth, diminishing returns curve
         
         Args:
-            initial_aversion: Initial aversion value (0-100) from first time doing task, or None
-            current_aversion: Current aversion value (0-100), or None
-            
+            current_aversion: Current aversion value (0-100) or None
+            stress_level: Stress level (0-100) or None (preferred if available)
+            mental_energy: Mental energy needed (0-100) or None
+            task_difficulty: Task difficulty (0-100) or None
+        
         Returns:
-            Multiplier value (>= 1.0)
+            Difficulty bonus (0.0 to 1.0), where 1.0 = 100% bonus = 2x multiplier
         """
         import math
         
         if current_aversion is None:
-            return 1.0
+            return 0.0
         
-        # Ensure current_aversion is in 0-100 range
-        current_aversion = max(0.0, min(100.0, float(current_aversion)))
+        # Normalize aversion to 0-100
+        aversion = max(0.0, min(100.0, float(current_aversion)))
         
-        # Flat multiplier: 2x the aversion value (normalized to 0-1)
-        flat_multiplier = 2.0 * (current_aversion / 100.0)
+        # Calculate load (prefer stress_level, fallback to mental_energy + task_difficulty)
+        load = 0.0
+        if stress_level is not None:
+            load = max(0.0, min(100.0, float(stress_level)))
+        elif mental_energy is not None or task_difficulty is not None:
+            mental = max(0.0, min(100.0, float(mental_energy))) if mental_energy is not None else 50.0
+            difficulty = max(0.0, min(100.0, float(task_difficulty))) if task_difficulty is not None else 50.0
+            load = (mental + difficulty) / 2.0
         
-        # If we have initial aversion, calculate improvement-based multiplier
-        if initial_aversion is not None:
-            initial_aversion = max(0.0, min(100.0, float(initial_aversion)))
-            improvement = initial_aversion - current_aversion
+        # Weights: aversion gets higher weight (0.7) vs load (0.3)
+        w_aversion = 0.7
+        w_load = 0.3
+        
+        # Combined difficulty score
+        combined_difficulty = (w_aversion * aversion) + (w_load * load)
+        
+        # Exponential decay formula: 1 - exp(-x/k)
+        # k = 50.0 provides smooth curve that approaches 1.0 at high difficulty
+        k = 50.0
+        difficulty_bonus = 1.0 * (1.0 - math.exp(-combined_difficulty / k))
+        
+        # Clamp to 0.0 - 1.0 (max bonus = 1.0 = 100% = 2x multiplier)
+        return max(0.0, min(1.0, difficulty_bonus))
+    
+    @staticmethod
+    def calculate_improvement_multiplier(
+        initial_aversion: Optional[float],
+        current_aversion: Optional[float]
+    ) -> float:
+        """Calculate improvement multiplier based on aversion reduction over time.
+        
+        Uses exponential decay formula for logarithmic scaling that shows
+        diminishing returns (early improvements count more).
+        
+        Formula: improvement_bonus = 1.0 * (1 - exp(-improvement / k))
+        - Max bonus = 1.0 (so multiplier ranges 1.0 to 2.0)
+        - k = 30.0 provides smooth curve (tuning parameter)
+        
+        Args:
+            initial_aversion: Initial aversion value (0-100) from first time doing task, or None
+            current_aversion: Current aversion value (0-100), or None
+        
+        Returns:
+            Improvement bonus (0.0 to 1.0), where 1.0 = 100% bonus = 2x multiplier
+        """
+        import math
+        
+        if initial_aversion is None or current_aversion is None:
+            return 0.0
+        
+        # Normalize to 0-100
+        initial = max(0.0, min(100.0, float(initial_aversion)))
+        current = max(0.0, min(100.0, float(current_aversion)))
+        
+        # Calculate improvement (positive = reduced aversion = better)
+        improvement = initial - current
+        
+        if improvement <= 0:
+            return 0.0
+        
+        # Exponential decay formula: 1 - exp(-improvement / k)
+        # k = 30.0 provides smooth curve that approaches 1.0 at high improvement
+        k = 30.0
+        improvement_bonus = 1.0 * (1.0 - math.exp(-improvement / k))
+        
+        # Clamp to 0.0 - 1.0 (max bonus = 1.0 = 100% = 2x multiplier)
+        return max(0.0, min(1.0, improvement_bonus))
+    
+    @staticmethod
+    def calculate_overall_improvement_ratio(
+        current_self_care_per_day: float,
+        avg_self_care_per_day: float,
+        current_relief_score: Optional[float],
+        avg_relief_score: float,
+        high_performing_metrics: Optional[Dict[str, float]] = None,
+        poor_performing_metrics: Optional[Dict[str, float]] = None,
+        metric_weights: Optional[Dict[str, float]] = None
+    ) -> float:
+        """Calculate overarching improvement ratio from multiple performance factors.
+        
+        Combines:
+        1. Self-care frequency improvement (more self-care than average)
+        2. Relief score improvement (higher relief than average)
+        3. Overall performance balance (high-performing vs poor-performing metrics)
+        
+        Formula uses exponential decay for smooth scaling with max bonus = 1.0.
+        
+        Args:
+            current_self_care_per_day: Current self-care tasks per day
+            avg_self_care_per_day: Average self-care tasks per day (baseline)
+            current_relief_score: Current relief score (0-100) or None
+            avg_relief_score: Average relief score (baseline, 0-100)
+            high_performing_metrics: Dict of metric_name -> value for metrics performing well
+            poor_performing_metrics: Dict of metric_name -> value for metrics performing poorly
+            metric_weights: Optional weights for each metric (default: equal weights)
+        
+        Returns:
+            Overall improvement ratio (0.0 to 1.0), where 1.0 = 100% bonus = 2x multiplier
+        """
+        import math
+        
+        if avg_self_care_per_day <= 0:
+            avg_self_care_per_day = 1.0  # Avoid division by zero
+        
+        # 1. Self-care frequency improvement
+        # Improvement = (current - average) / average (percentage improvement)
+        self_care_improvement = (current_self_care_per_day - avg_self_care_per_day) / avg_self_care_per_day
+        # Only positive improvements count (doing more than average)
+        self_care_improvement = max(0.0, self_care_improvement)
+        # Scale to 0-100 range for consistency (cap at 200% improvement = 2x average)
+        self_care_normalized = min(100.0, self_care_improvement * 100.0)
+        
+        # 2. Relief score improvement
+        relief_improvement = 0.0
+        if current_relief_score is not None:
+            relief_diff = current_relief_score - avg_relief_score
+            # Only positive improvements count (higher relief than average)
+            relief_improvement = max(0.0, relief_diff)
+            # Already in 0-100 range
+        
+        # 3. Overall performance balance
+        performance_balance = 0.0
+        if high_performing_metrics or poor_performing_metrics:
+            high_score = 0.0
+            poor_score = 0.0
             
-            # Logarithmic multiplier: 2^(improvement/10)
-            # For every 10 points of improvement, double the multiplier
-            if improvement > 0:
-                logarithmic_multiplier = 2.0 ** (improvement / 10.0)
-            else:
-                logarithmic_multiplier = 1.0
+            # Calculate weighted high-performing score
+            if high_performing_metrics:
+                weights = metric_weights or {}
+                total_weight = 0.0
+                for metric_name, value in high_performing_metrics.items():
+                    weight = weights.get(metric_name, 1.0)
+                    # Normalize value to 0-100 if needed (assuming metrics are 0-100 scale)
+                    normalized_value = max(0.0, min(100.0, float(value)))
+                    high_score += normalized_value * weight
+                    total_weight += weight
+                if total_weight > 0:
+                    high_score = high_score / total_weight
             
-            # Combined: logarithmic * (1 + flat)
-            return logarithmic_multiplier * (1.0 + flat_multiplier)
+            # Calculate weighted poor-performing score
+            if poor_performing_metrics:
+                weights = metric_weights or {}
+                total_weight = 0.0
+                for metric_name, value in poor_performing_metrics.items():
+                    weight = weights.get(metric_name, 1.0)
+                    # Normalize value to 0-100 if needed
+                    normalized_value = max(0.0, min(100.0, float(value)))
+                    poor_score += normalized_value * weight
+                    total_weight += weight
+                if total_weight > 0:
+                    poor_score = poor_score / total_weight
+            
+            # Balance = high_score - poor_score (positive = better performance)
+            # Normalize to 0-100 range
+            performance_balance = max(0.0, min(100.0, high_score - poor_score + 50.0))
+        
+        # Combine improvements with weights
+        # Weights: self-care (0.3), relief (0.4), performance balance (0.3)
+        w_self_care = 0.3
+        w_relief = 0.4
+        w_performance = 0.3
+        
+        # Weighted average of improvements
+        combined_improvement = (
+            (self_care_normalized * w_self_care) +
+            (relief_improvement * w_relief) +
+            (performance_balance * w_performance)
+        )
+        
+        # Exponential decay formula: 1 - exp(-improvement / k)
+        # k = 40.0 provides smooth curve that approaches 1.0 at high improvement
+        k = 40.0
+        improvement_ratio = 1.0 * (1.0 - math.exp(-combined_improvement / k))
+        
+        # Clamp to 0.0 - 1.0 (max bonus = 1.0 = 100% = 2x multiplier)
+        return max(0.0, min(1.0, improvement_ratio))
+    
+    def calculate_overall_improvement_from_instance(
+        self,
+        row: pd.Series,
+        avg_self_care_per_day: float,
+        avg_relief_score: float,
+        completed_instances: Optional[pd.DataFrame] = None
+    ) -> float:
+        """Calculate overall improvement ratio from a task instance row.
+        
+        Helper method that extracts data from a task instance and calculates
+        the overall improvement ratio using calculate_overall_improvement_ratio().
+        
+        Args:
+            row: Task instance row with task_type, relief_score, completed_at, etc.
+            avg_self_care_per_day: Average self-care tasks per day (baseline)
+            avg_relief_score: Average relief score (baseline, 0-100)
+            completed_instances: Optional DataFrame of all completed instances for metric calculation
+        
+        Returns:
+            Overall improvement ratio (0.0 to 1.0)
+        """
+        # Get current self-care count for today
+        current_self_care = 0.0
+        task_type = str(row.get('task_type', '')).strip().lower()
+        completed_at = row.get('completed_at', '')
+        
+        # If this is a self-care task and we have completion date, count today's self-care tasks
+        if task_type in ['self care', 'selfcare', 'self-care'] and completed_at:
+            try:
+                from datetime import datetime
+                completed_date = pd.to_datetime(completed_at).date()
+                today = datetime.now().date()
+                
+                if completed_date == today and completed_instances is not None:
+                    # Count self-care tasks completed today
+                    completed_instances['completed_at_dt'] = pd.to_datetime(
+                        completed_instances['completed_at'], errors='coerce'
+                    )
+                    today_instances = completed_instances[
+                        completed_instances['completed_at_dt'].dt.date == today
+                    ]
+                    
+                    # Get task types for today's instances
+                    from .task_manager import TaskManager
+                    task_manager = TaskManager()
+                    tasks_df = task_manager.get_all()
+                    
+                    if not tasks_df.empty and 'task_type' in tasks_df.columns:
+                        today_with_type = today_instances.merge(
+                            tasks_df[['task_id', 'task_type']],
+                            on='task_id',
+                            how='left'
+                        )
+                        today_with_type['task_type'] = today_with_type['task_type'].fillna('Work')
+                        today_with_type['task_type_normalized'] = (
+                            today_with_type['task_type'].astype(str).str.strip().str.lower()
+                        )
+                        self_care_today = today_with_type[
+                            today_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+                        ]
+                        current_self_care = float(len(self_care_today))
+            except (ValueError, TypeError, AttributeError):
+                pass
+        
+        # Get current relief score
+        current_relief = pd.to_numeric(row.get('relief_score', 0), errors='coerce')
+        if pd.isna(current_relief):
+            current_relief = None
         else:
-            # No initial aversion, just use flat multiplier
-            return 1.0 + flat_multiplier
+            current_relief = float(current_relief)
+        
+        # Calculate high-performing and poor-performing metrics
+        high_metrics = {}
+        poor_metrics = {}
+        
+        if completed_instances is not None:
+            # Calculate averages for comparison
+            completed_instances['relief_score_numeric'] = pd.to_numeric(
+                completed_instances['relief_score'], errors='coerce'
+            )
+            completed_instances['stress_level_numeric'] = pd.to_numeric(
+                completed_instances.get('stress_level', 0), errors='coerce'
+            )
+            completed_instances['net_wellbeing_numeric'] = pd.to_numeric(
+                completed_instances.get('net_wellbeing', 0), errors='coerce'
+            )
+            completed_instances['stress_efficiency_numeric'] = pd.to_numeric(
+                completed_instances.get('stress_efficiency', 0), errors='coerce'
+            )
+            
+            # Compare current instance to averages
+            avg_stress = completed_instances['stress_level_numeric'].mean() if 'stress_level_numeric' in completed_instances.columns else 50.0
+            avg_net_wellbeing = completed_instances['net_wellbeing_numeric'].mean() if 'net_wellbeing_numeric' in completed_instances.columns else 0.0
+            avg_stress_efficiency = completed_instances['stress_efficiency_numeric'].mean() if 'stress_efficiency_numeric' in completed_instances.columns else 1.0
+            
+            # Current values
+            current_stress = pd.to_numeric(row.get('stress_level', 0), errors='coerce') or avg_stress
+            current_net_wellbeing = pd.to_numeric(row.get('net_wellbeing', 0), errors='coerce') or avg_net_wellbeing
+            current_stress_efficiency = pd.to_numeric(row.get('stress_efficiency', 0), errors='coerce') or avg_stress_efficiency
+            
+            # High-performing: lower stress, higher net wellbeing, higher stress efficiency
+            if current_stress < avg_stress:
+                high_metrics['stress_level'] = avg_stress - current_stress  # Improvement amount
+            if current_net_wellbeing > avg_net_wellbeing:
+                high_metrics['net_wellbeing'] = current_net_wellbeing - avg_net_wellbeing
+            if current_stress_efficiency > avg_stress_efficiency:
+                high_metrics['stress_efficiency'] = current_stress_efficiency - avg_stress_efficiency
+            
+            # Poor-performing: higher stress, lower net wellbeing, lower stress efficiency
+            if current_stress > avg_stress:
+                poor_metrics['stress_level'] = current_stress - avg_stress
+            if current_net_wellbeing < avg_net_wellbeing:
+                poor_metrics['net_wellbeing'] = avg_net_wellbeing - current_net_wellbeing
+            if current_stress_efficiency < avg_stress_efficiency:
+                poor_metrics['stress_efficiency'] = avg_stress_efficiency - current_stress_efficiency
+        
+        # Calculate overall improvement ratio
+        return self.calculate_overall_improvement_ratio(
+            current_self_care_per_day=current_self_care,
+            avg_self_care_per_day=avg_self_care_per_day,
+            current_relief_score=current_relief,
+            avg_relief_score=avg_relief_score,
+            high_performing_metrics=high_metrics if high_metrics else None,
+            poor_performing_metrics=poor_metrics if poor_metrics else None
+        )
+    
+    @staticmethod
+    def calculate_aversion_multiplier(
+        initial_aversion: Optional[float],
+        current_aversion: Optional[float],
+        stress_level: Optional[float] = None,
+        mental_energy: Optional[float] = None,
+        task_difficulty: Optional[float] = None
+    ) -> float:
+        """Calculate combined aversion multiplier from difficulty bonus and improvement.
+        
+        Combines difficulty bonus (rewarding hard tasks) and improvement multiplier
+        (rewarding progress over time) into a single multiplier.
+        
+        Formula: multiplier = 1.0 + difficulty_bonus + improvement_bonus
+        - Max multiplier = 2.0 (when both bonuses are 1.0)
+        - Min multiplier = 1.0 (when both bonuses are 0.0)
+        
+        This replaces the old formula that mixed difficulty and improvement incorrectly.
+        
+        Args:
+            initial_aversion: Initial aversion value (0-100) from first time doing task, or None
+            current_aversion: Current aversion value (0-100), or None
+            stress_level: Stress level (0-100) or None (for difficulty calculation)
+            mental_energy: Mental energy needed (0-100) or None (for difficulty calculation)
+            task_difficulty: Task difficulty (0-100) or None (for difficulty calculation)
+        
+        Returns:
+            Combined multiplier (1.0 to 2.0)
+        """
+        # Calculate difficulty bonus (rewards completing difficult tasks)
+        difficulty_bonus = Analytics.calculate_difficulty_bonus(
+            current_aversion=current_aversion,
+            stress_level=stress_level,
+            mental_energy=mental_energy,
+            task_difficulty=task_difficulty
+        )
+        
+        # Calculate improvement bonus (rewards progress over time)
+        # This can be either:
+        # 1. Aversion-based improvement (reduced aversion over time)
+        # 2. Overall improvement ratio (self-care, relief, performance balance)
+        # For now, use aversion-based improvement
+        improvement_bonus = Analytics.calculate_improvement_multiplier(
+            initial_aversion=initial_aversion,
+            current_aversion=current_aversion
+        )
+        
+        # Combine bonuses: use maximum to ensure max bonus = 1.0 (max multiplier = 2.0)
+        # This rewards either high difficulty OR high improvement (or both)
+        # Alternative: weighted average (0.6 * difficulty + 0.4 * improvement)
+        # Using max() ensures we don't exceed 1.0 bonus limit
+        total_bonus = max(difficulty_bonus, improvement_bonus)
+        
+        # If both are significant, add small bonus (diminishing returns)
+        if difficulty_bonus > 0.3 and improvement_bonus > 0.3:
+            # Small additional bonus when both are present (max 0.1 extra)
+            combined_bonus = min(1.0, total_bonus + 0.1)
+        else:
+            combined_bonus = total_bonus
+        
+        multiplier = 1.0 + combined_bonus
+        
+        # Clamp to 1.0 - 2.0 range (max bonus = 1.0 = 100% = 2x multiplier)
+        return max(1.0, min(2.0, multiplier))
     
     @staticmethod
     def get_task_type_multiplier(task_type: Optional[str]) -> float:
@@ -105,7 +455,7 @@ class Analytics:
             weekly_avg_time: Weekly average productivity time in minutes (for bonus/penalty calculation)
             
         Returns:
-            Productivity score (can be negative for play tasks)
+            Productivity score (can be negative for productivity penalty from play tasks)
         """
         try:
             actual_dict = row.get('actual_dict', {})
@@ -135,11 +485,17 @@ class Analytics:
             
             # Apply multipliers based on task type
             if task_type_lower == 'work':
-                # Work: 3x up to 100% ratio, 5x if > 100%
+                # Work: Smooth multiplier transition from 3x to 5x based on completion_time_ratio
+                # Smooth transition: 3.0 + (2.0 * smooth_factor) where smooth_factor transitions from 0 to 1
+                # Transition happens between ratio 1.0 and 1.5 (smooth over 0.5 range)
                 if completion_time_ratio <= 1.0:
                     multiplier = 3.0
-                else:
+                elif completion_time_ratio >= 1.5:
                     multiplier = 5.0
+                else:
+                    # Smooth transition between 1.0 and 1.5
+                    smooth_factor = (completion_time_ratio - 1.0) / 0.5  # 0.0 to 1.0
+                    multiplier = 3.0 + (2.0 * smooth_factor)
                 # Base score is completion percentage
                 base_score = completion_pct
                 score = base_score * multiplier
@@ -158,8 +514,9 @@ class Analytics:
                 score = base_score * multiplier
             
             elif task_type_lower == 'play':
-                # Play: -0.01x multiplier per percentage of time completed compared to estimated time
+                # Productivity penalty from play: -0.01x multiplier per percentage of time completed compared to estimated time
                 # Percentage = (time_actual / time_estimate) * 100
+                # This creates a negative score (penalty) for play tasks
                 if time_estimate > 0:
                     time_percentage = (time_actual / time_estimate) * 100.0
                 else:
@@ -174,13 +531,81 @@ class Analytics:
                 score = completion_pct
             
             # Apply weekly average bonus/penalty
-            # +0.01x bonus per percentage above weekly average, -0.01x penalty per percentage below
+            # FIXED: Taking longer should reduce score, not increase it
+            # -0.01x penalty per percentage above weekly average, +0.01x bonus per percentage below
             if weekly_avg_time > 0 and time_actual > 0:
                 # Calculate percentage difference from weekly average
                 time_percentage_diff = ((time_actual - weekly_avg_time) / weekly_avg_time) * 100.0
-                # Apply bonus/penalty multiplier: +0.01x per percentage above, -0.01x per percentage below
-                weekly_bonus_multiplier = 1.0 + (0.01 * time_percentage_diff)
+                # Apply bonus/penalty multiplier: -0.01x per percentage above (penalty), +0.01x per percentage below (bonus)
+                # Reversed sign: taking longer = negative diff = penalty, taking less = positive diff = bonus
+                weekly_bonus_multiplier = 1.0 - (0.01 * time_percentage_diff)
                 score = score * weekly_bonus_multiplier
+            
+            return score
+        
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            return 0.0
+    
+    def calculate_grit_score(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score that rewards taking longer on tasks you're persistent with.
+        
+        Grit score rewards persistence (doing the same task multiple times) and taking longer
+        on those persistent tasks. This is separate from productivity score, which rewards efficiency.
+        
+        Formula:
+        - Base score = completion percentage
+        - Persistence multiplier = min(2.0, 1.0 + (completion_count - 1) * 0.1)
+          - 1 completion: 1.0x (no bonus)
+          - 2 completions: 1.1x (10% bonus)
+          - 3 completions: 1.2x (20% bonus)
+          - ... up to 2.0x max (11+ completions)
+        - Time bonus = rewards taking longer than estimated (opposite of productivity)
+          - If time_actual > time_estimate: bonus = 1.0 + (time_ratio - 1.0) * 0.5
+          - If time_actual <= time_estimate: bonus = 1.0 (no bonus for efficiency)
+        
+        Args:
+            row: Task instance row with actual_dict, predicted_dict, task_id
+            task_completion_counts: Dictionary mapping task_id to count of completed instances
+            
+        Returns:
+            Grit score (0-200+ range, higher = more grit/persistence)
+        """
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_id = row.get('task_id', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            # Get completion percentage and time data
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            
+            # Base score is completion percentage
+            base_score = completion_pct
+            
+            # Calculate persistence multiplier based on how many times this task has been completed
+            completion_count = task_completion_counts.get(task_id, 1)
+            # Persistence bonus: 10% per additional completion beyond first, max 2.0x
+            persistence_multiplier = min(2.0, 1.0 + (completion_count - 1) * 0.1)
+            
+            # Calculate time bonus (rewards taking longer, opposite of productivity)
+            if time_estimate > 0 and time_actual > 0:
+                time_ratio = time_actual / time_estimate
+                if time_ratio > 1.0:
+                    # Taking longer than estimated: bonus = 1.0 + (excess_time * 0.5)
+                    # Example: 2x longer = 1.0 + (1.0 * 0.5) = 1.5x bonus
+                    time_bonus = 1.0 + ((time_ratio - 1.0) * 0.5)
+                else:
+                    # Taking less time: no bonus (efficiency is rewarded in productivity, not grit)
+                    time_bonus = 1.0
+            else:
+                time_bonus = 1.0
+            
+            # Final score = base * persistence * time_bonus
+            score = base_score * persistence_multiplier * time_bonus
             
             return score
         
@@ -1096,6 +1521,8 @@ class Analytics:
                 'weekly_productivity_points_with_bonus_sensitive': 0.0,
                 'total_productivity_score': 0.0,
                 'weekly_productivity_score': 0.0,
+                'total_grit_score': 0.0,
+                'weekly_grit_score': 0.0,
                 'total_obstacles_score_robust': 0.0,
                 'total_obstacles_score_sensitive': 0.0,
                 'weekly_obstacles_bonus_multiplier_robust': 1.0,
@@ -1133,6 +1560,8 @@ class Analytics:
                 'weekly_productivity_points_with_bonus_sensitive': 0.0,
                 'total_productivity_score': 0.0,
                 'weekly_productivity_score': 0.0,
+                'total_grit_score': 0.0,
+                'weekly_grit_score': 0.0,
                 'total_obstacles_score_robust': 0.0,
                 'total_obstacles_score_sensitive': 0.0,
                 'weekly_obstacles_bonus_multiplier_robust': 1.0,
@@ -1673,9 +2102,33 @@ class Analytics:
         # Calculate totals
         total_productivity_score = completed['productivity_score'].fillna(0).sum()
         
+        # Ensure completed_at_dt exists for weekly calculations
+        if 'completed_at_dt' not in completed.columns:
+            completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
         # Calculate weekly productivity score (last 7 days)
         completed_last_7d_for_score = completed[completed['completed_at_dt'] >= seven_days_ago]
         weekly_productivity_score = completed_last_7d_for_score['productivity_score'].fillna(0).sum()
+        
+        # Calculate grit score: rewards persistence and taking longer
+        # First, count how many times each task has been completed
+        task_completion_counts = {}
+        if 'task_id' in completed.columns:
+            task_counts = completed.groupby('task_id').size()
+            for task_id, count in task_counts.items():
+                task_completion_counts[task_id] = int(count)
+        
+        # Calculate grit score for all completed tasks
+        completed['grit_score'] = completed.apply(
+            lambda row: self.calculate_grit_score(row, task_completion_counts),
+            axis=1
+        )
+        
+        # Calculate grit score totals
+        total_grit_score = completed['grit_score'].fillna(0).sum()
+        
+        # Calculate weekly grit score (last 7 days)
+        weekly_grit_score = completed_last_7d_for_score['grit_score'].fillna(0).sum()
         
         return {
             'productivity_time_minutes': round(float(productivity_time), 1),
@@ -1709,6 +2162,9 @@ class Analytics:
             # New productivity score based on completion/time ratio
             'total_productivity_score': round(float(total_productivity_score), 2),
             'weekly_productivity_score': round(float(weekly_productivity_score), 2),
+            # Grit score: rewards persistence and taking longer (separate from productivity)
+            'total_grit_score': round(float(total_grit_score), 2),
+            'weekly_grit_score': round(float(weekly_grit_score), 2),
             # Obstacles metrics (backward compatibility - uses expected_only)
             'total_obstacles_score_robust': round(float(total_obstacles_robust), 2),
             'total_obstacles_score_sensitive': round(float(total_obstacles_sensitive), 2),
@@ -2917,6 +3373,20 @@ class Analytics:
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
                 lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time),
+                axis=1
+            )
+        elif attribute_key == 'grit_score':
+            # Calculate grit score for trend data
+            # Count how many times each task has been completed
+            task_completion_counts = {}
+            if 'task_id' in completed.columns:
+                task_counts = completed.groupby('task_id').size()
+                for task_id, count in task_counts.items():
+                    task_completion_counts[task_id] = int(count)
+            
+            # Calculate grit score
+            completed['grit_score'] = completed.apply(
+                lambda row: self.calculate_grit_score(row, task_completion_counts),
                 axis=1
             )
         elif attribute_key == 'relief_duration_score':
