@@ -1,0 +1,208 @@
+---
+description: SQL migration patterns for gradual CSV-to-database transition
+globs: ["backend/**/*.py", "backend/database.py", "backend/migrate*.py"]
+alwaysApply: true
+---
+
+# SQL Migration Rules
+
+## Dual Backend Support Pattern
+- Manager classes must support both CSV (default) and database (via `DATABASE_URL` env var)
+- Use feature flag pattern: Check `os.getenv('DATABASE_URL')` to determine backend
+- Keep CSV as default fallback - database is opt-in during migration period
+- Example pattern:
+  
+  def __init__(self):
+      self.use_db = bool(os.getenv('DATABASE_URL'))
+      if self.use_db:
+          from backend.database import get_session, Task
+          self.db_session = get_session
+      else:
+          # CSV initialization (existing code)
+          os.makedirs(DATA_DIR, exist_ok=True)
+          self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
+          self._reload()
+  ## SQLAlchemy Model Patterns
+- All models must inherit from `Base` (declarative_base)
+- Use PostgreSQL-compatible types: `String`, `Integer`, `Float`, `DateTime`, `Boolean`
+- JSON columns: Use `JSON` type (PostgreSQL) or `Text` with JSON validation (SQLite compatibility)
+- Always include `created_at` and `updated_at` timestamp fields
+- Primary keys: Use `String` for IDs (matching CSV pattern: `t{timestamp}`)
+- Example:
+ 
+  class Task(Base):
+      __tablename__ = 'tasks'
+      task_id = Column(String, primary_key=True)
+      name = Column(String, nullable=False)
+      description = Column(String, default='')
+      created_at = Column(DateTime, default=datetime.utcnow)
+      updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+      # JSON fields stored as JSON type
+      categories = Column(JSON, default=list)
+  ## Session Management
+- Use context managers or try/finally for database sessions
+- Always commit or rollback transactions explicitly
+- Handle database errors gracefully with fallback to CSV if needed
+- Pattern:
+  def get_task(self, task_id):
+      if self.use_db:
+          try:
+              with self.db_session() as session:
+                  task = session.query(Task).filter(Task.task_id == task_id).first()
+                  return task.to_dict() if task else None
+          except Exception as e:
+              print(f"[TaskManager] Database error: {e}, falling back to CSV")
+              self.use_db = False  # Temporary fallback
+              return self._get_task_csv(task_id)
+      else:
+          return self._get_task_csv(task_id)
+  
+## Migration Script Patterns
+- Always backup CSV files before migration
+- Verify row counts match after migration
+- Test rollback capability (export database → CSV)
+- Use transactions for atomicity
+- Pattern:
+  def migrate_csv_to_db():
+      # 1. Backup CSV
+      backup_csv_files()
+      
+      # 2. Load CSV data
+      df = pd.read_csv('data/tasks.csv')
+      
+      # 3. Migrate in transaction
+      with get_session() as session:
+          try:
+              for _, row in df.iterrows():
+                  task = Task(**row.to_dict())
+                  session.add(task)
+              session.commit()
+              
+              # 4. Verify
+              db_count = session.query(Task).count()
+              assert db_count == len(df), f"Count mismatch: {db_count} != {len(df)}"
+              
+          except Exception as e:
+              session.rollback()
+              raise MigrationError(f"Migration failed: {e}")
+  ## Error Handling
+- Database connection errors: Log and fallback to CSV
+- Transaction errors: Always rollback, never leave partial state
+- Data validation errors: Log specific row/field that failed
+- Pattern:
+  try:
+      with self.db_session() as session:
+          # database operation
+          session.commit()
+  except sqlalchemy.exc.OperationalError as e:
+      # Connection issue - fallback to CSV
+      print(f"[Manager] Database unavailable: {e}")
+      return self._csv_fallback()
+  except sqlalchemy.exc.IntegrityError as e:
+      # Data constraint violation
+      print(f"[Manager] Data error: {e}")
+      session.rollback()
+      raise
+  except Exception as e:
+      # Unknown error - log and fallback
+      print(f"[Manager] Unexpected error: {e}")
+      session.rollback()
+      return self._csv_fallback()
+  ## Manager Class Method Compatibility
+- Maintain same method signatures for CSV and database backends
+- Return types must match: `None` for not found, `dict` for single items, `List[dict]` for lists
+- Internal methods: Prefix CSV-specific with `_csv_` (e.g., `_get_task_csv`, `_save_csv`)
+- Example:
+  
+  def get_task(self, task_id):
+      """Return a task row by id as a dict. Works with both CSV and database."""
+      if self.use_db:
+          return self._get_task_db(task_id)
+      else:
+          return self._get_task_csv(task_id)
+  
+  def _get_task_csv(self, task_id):
+      """CSV-specific implementation."""
+      self._reload()
+      rows = self.df[self.df['task_id'] == task_id]
+      return rows.iloc[0].to_dict() if not rows.empty else None
+  
+  def _get_task_db(self, task_id):
+      """Database-specific implementation."""
+      with self.db_session() as session:
+          task = session.query(Task).filter(Task.task_id == task_id).first()
+          return task.to_dict() if task else None
+  ## Connection Configuration
+- Use `DATABASE_URL` environment variable (SQLAlchemy standard)
+- Support both SQLite (local dev) and PostgreSQL (production)
+- Format: `postgresql://user:password@host:port/dbname` or `sqlite:///path/to/db.sqlite`
+- Create `backend/database.py` with:
+  from sqlalchemy import create_engine
+  from sqlalchemy.orm import sessionmaker, declarative_base
+  import os
+  
+  Base = declarative_base()
+  
+  DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///data/task_aversion.db')
+  engine = create_engine(DATABASE_URL, echo=False)
+  SessionLocal = sessionmaker(bind=engine)
+  
+  def get_session():
+      return SessionLocal()
+  
+  def init_db():
+      Base.metadata.create_all(engine)
+  ## Data Type Conversions
+- CSV stores everything as strings - convert when reading
+- Database stores proper types - convert when writing from CSV
+- JSON fields: Parse from CSV string, store as JSON in database
+- Datetime fields: Parse CSV strings, store as DateTime in database
+- Pattern:
+  def _csv_to_db_dict(self, csv_row):
+      """Convert CSV row dict to database-compatible dict."""
+      db_dict = csv_row.copy()
+      
+      # Convert JSON strings
+      if 'categories' in db_dict and isinstance(db_dict['categories'], str):
+          try:
+              db_dict['categories'] = json.loads(db_dict['categories'] or '[]')
+          except:
+              db_dict['categories'] = []
+      
+      # Convert datetimes
+      for field in ['created_at', 'updated_at']:
+          if field in db_dict and db_dict[field]:
+              db_dict[field] = datetime.fromisoformat(db_dict[field])
+      
+      # Convert booleans
+      for field in ['is_recurring', 'is_completed']:
+          if field in db_dict:
+              db_dict[field] = str(db_dict[field]).lower() == 'true'
+      
+      return db_dict
+  ## Testing Patterns
+- Test both backends: CSV and database
+- Test migration script with sample data first
+- Test rollback procedure
+- Verify data integrity after migration
+- Pattern:on
+  def test_dual_backend():
+      # Test CSV
+      manager = TaskManager()
+      assert manager.use_db == False
+      task = manager.get_task('test_id')
+      
+      # Test database
+      os.environ['DATABASE_URL'] = 'sqlite:///test.db'
+      manager_db = TaskManager()
+      assert manager_db.use_db == True
+      task_db = manager_db.get_task('test_id')
+      
+      # Results should match
+      assert task == task_db
+  ## Migration Safety
+- Never delete CSV files during migration (keep as backup)
+- Always test migration on copy of data first
+- Create rollback script before running migration
+- Verify data integrity: row counts, sample records, relationships
+- Keep CSV export capability for data portability

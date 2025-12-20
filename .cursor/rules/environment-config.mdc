@@ -1,0 +1,37 @@
+
+## **Additional Rule: Environment Configuration**
+
+Create `.cursor/rules/environment-config.mdc`:
+
+---
+description: Environment variable and configuration patterns
+globs: ["**/*.py", ".env*", "app.py"]
+alwaysApply: true
+---
+
+# Environment Configuration Rules
+
+## Environment Variables
+- Use `python-dotenv` to load `.env` files
+- Never commit `.env` files (add to `.gitignore`)
+- Create `.env.example` with placeholder values
+- Required variables:
+  - `DATABASE_URL`: Database connection string (optional, defaults to CSV)
+  - `ENVIRONMENT`: `development`, `staging`, or `production`
+  - Feature flags: `ENABLE_ADVANCED_ANALYTICS`, etc.
+
+## Configuration Pattern
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # Load .env file
+
+DATABASE_URL = os.getenv('DATABASE_URL')  # None = use CSV
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+ENABLE_ADVANCED_ANALYTICS = os.getenv('ENABLE_ADVANCED_ANALYTICS', 'false').lower() == 'true'
+```
+
+## Feature Flags
+- Use environment variables for feature toggles
+- Default to safe/limited features (advanced analytics off for public)
+- Same codebase, different configs for local vs production

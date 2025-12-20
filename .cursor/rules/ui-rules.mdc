@@ -1,0 +1,37 @@
+---
+description: NiceGUI UI layout patterns for responsive design
+globs: ["ui/**/*.py"]
+alwaysApply: true
+---
+
+# NiceGUI UI Layout Patterns
+
+## Column and Row Structure
+- Always use `ui.column()` or `ui.row()` context managers with explicit width classes
+- For responsive layouts, use flexbox classes: `flex`, `flex-wrap`, `gap-*`
+- Set explicit widths: `w-full`, `w-1/2`, `w-1/3`, etc. to prevent overflow
+- Use `box-sizing: border-box` in custom CSS when setting widths
+
+## Responsive Design Patterns
+- Use min-width and max-width together: `min-w-[250px] max-w-[400px]`
+- For multi-column layouts, always specify both flex-basis and max-width:
+  ui.column().classes("flex-0 flex-[0_0_25%] max-w-[25%] min-w-[250px]")
+  - Test layouts at different screen sizes; use media queries in CSS for breakpoints
+- For mobile: consider stacking columns vertically with `flex-col` on small screens
+
+## Layout Best Practices
+- When nesting columns/rows, ensure parent has explicit width constraints
+- Use `gap-*` classes for spacing instead of margins when possible
+- For scrollable sections, set `overflow-y: auto` and `flex: 1` on container
+- Avoid mixing percentage widths with fixed widths in the same row without flex constraints
+
+## Common Patterns
+- Three-column layout: Use `flex-[0_0_25%]`, `flex-[0_0_35%]`, `flex-[0_0_40%]` with min-widths
+- Half-width columns: Use `flex-[0_0_50%]` with `max-w-[50%]` and `box-sizing: border-box`
+- Responsive grid: Use `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3` for card layouts
+
+## Debugging Layout Issues
+- Add temporary borders: `.style("border: 1px solid red")` to visualize container boundaries
+- Check that all nested elements have width constraints
+- Verify flex properties: `flex: 1` for growing, `flex: 0 0 <size>` for fixed
+- Use browser dev tools to inspect computed widths and flex properties
