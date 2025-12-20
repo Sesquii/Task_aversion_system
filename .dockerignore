@@ -23,10 +23,9 @@ ENV/
 .git/
 .gitignore
 
-# Data files (these will be mounted as volumes)
-# Uncomment if you want to exclude data from image
-# data/*.csv
-# data/archived/
+# Data files (excluded so users get fresh data, not developer's data)
+# The app will create an empty data directory automatically
+task_aversion_app/data/
 
 # Documentation
 docs/

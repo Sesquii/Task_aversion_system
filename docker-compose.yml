@@ -6,10 +6,16 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Mount data directory so data persists between restarts
-      - ./task_aversion_app/data:/app/data
+      # Use a named volume so each user gets their own fresh data directory
+      # The app will automatically create empty CSV files on first run
+      # To use a specific folder on your computer instead, change to:
+      # - ./my-task-data:/app/data
+      - task-aversion-data:/app/data
     environment:
       - NICEGUI_HOST=0.0.0.0
     restart: unless-stopped
     container_name: task-aversion-system
 
+volumes:
+  task-aversion-data:
+    # Named volume - data persists but is separate from the repository

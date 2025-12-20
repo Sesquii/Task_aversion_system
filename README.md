@@ -188,15 +188,24 @@ If you're not comfortable with Python setup, you can use Docker instead. Docker 
    docker-compose up
    ```
    
-   Or if you prefer Docker directly:
-   ```bash
-   docker build -t task-aversion-system .
-   docker run -p 8080:8080 -v ./task_aversion_app/data:/app/data task-aversion-system
-   ```
+   The first time you run this, the app will automatically create empty data files. Each user gets their own fresh data directory.
 
 3. **Access the application:**
    - Open your browser to `http://localhost:8080`
-   - Your data will be saved in the `task_aversion_app/data` folder
+   - Your data is stored in a Docker volume (persists between restarts but separate from the repository)
+
+### Alternative: Use Your Own Data Folder
+
+If you prefer to store data in a specific folder on your computer, edit `docker-compose.yml` and change:
+```yaml
+volumes:
+  - task-aversion-data:/app/data
+```
+to:
+```yaml
+volumes:
+  - ./my-task-data:/app/data  # or any path you want
+```
 
 ### Using a Release Tag
 
@@ -211,10 +220,12 @@ docker-compose up
 
 ### Docker Notes
 
-- Data persistence: Your CSV files are stored in `task_aversion_app/data` and persist between container restarts
-- Stopping the app: Press `Ctrl+C` in the terminal, or run `docker-compose down`
-- Viewing logs: Run `docker-compose logs -f` to see application output
-- Port conflicts: If port 8080 is in use, edit `docker-compose.yml` and change `"8080:8080"` to `"8081:8080"` (then access at `http://localhost:8081`)
+- **Fresh data for each user**: The default setup uses a Docker named volume, so each user starts with empty data files (the app creates them automatically)
+- **Data persistence**: Your data persists between container restarts
+- **Stopping the app**: Press `Ctrl+C` in the terminal, or run `docker-compose down`
+- **Viewing logs**: Run `docker-compose logs -f` to see application output
+- **Port conflicts**: If port 8080 is in use, edit `docker-compose.yml` and change `"8080:8080"` to `"8081:8080"` (then access at `http://localhost:8081`)
+- **Finding your data**: If using the default named volume, your data is stored in Docker's volume system. To access it directly, you can change the volume mount in `docker-compose.yml` to a folder path (see "Alternative: Use Your Own Data Folder" above)
 
 ---
 
