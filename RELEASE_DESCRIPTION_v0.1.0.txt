@@ -1,0 +1,26 @@
+🚀 **Quick Start for New Users:** Download the ZIP file from this release, extract it, and open `Install_instructions.txt`. Follow the simple steps - no Python knowledge required!
+
+**⚠️ Pre-Release Notice:** This is a pre-release version. Docker support is new and I'm testing it with users. If you encounter any issues, please report them - your feedback helps make this better!
+
+This release adds Docker support, making the Task Aversion System accessible to everyone. Just install Docker Desktop and run `docker-compose up` - that's it!
+
+**What's New:**
+- Complete Docker containerization (Dockerfile + docker-compose.yml)
+- One-command setup: `docker-compose up`
+- Fresh data for each user (no developer data included)
+- Beginner-friendly `Install_instructions.txt` with step-by-step guide
+- Updated README with Docker installation options
+
+**Installation:**
+- **Non-technical users:** Download ZIP → Follow `Install_instructions.txt`
+- **Developers:** Traditional Python setup still works (see README.md)
+
+**Technical Notes:**
+- Python 3.11-slim base image
+- Data persists in Docker volumes
+- Port 8080 (configurable)
+- All existing features unchanged
+
+This is the first Docker release (pre-release) focused on making installation easier. The core app functionality remains the same. We're testing the Docker setup with users and welcome feedback before making it a full release.
+
+Need help? Check `Install_instructions.txt` or open an issue.
