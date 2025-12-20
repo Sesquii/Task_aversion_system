@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  task-aversion-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount data directory so data persists between restarts
+      - ./task_aversion_app/data:/app/data
+    environment:
+      - NICEGUI_HOST=0.0.0.0
+    restart: unless-stopped
+    container_name: task-aversion-system
+

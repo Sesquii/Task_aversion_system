@@ -66,5 +66,7 @@ def register_pages():
 
 if __name__ in {"__main__", "__mp_main__"}:
     register_pages()
-    ui.run(title='Task Aversion System', port=8080, reload=False)
+    import os
+    host = os.getenv('NICEGUI_HOST', '127.0.0.1')  # Default to localhost, use env var in Docker
+    ui.run(title='Task Aversion System', port=8080, host=host, reload=False)
 

@@ -167,6 +167,57 @@ This system goes beyond a simple to-do list by incorporating psychological and b
 
 ---
 
+## Docker Installation (Recommended for Non-Technical Users)
+
+If you're not comfortable with Python setup, you can use Docker instead. Docker packages everything needed to run the app.
+
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine (Linux)
+
+### Quick Start with Docker
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repository-url>
+   cd Task_aversion_system
+   ```
+
+2. **Start the application:**
+   ```bash
+   docker-compose up
+   ```
+   
+   Or if you prefer Docker directly:
+   ```bash
+   docker build -t task-aversion-system .
+   docker run -p 8080:8080 -v ./task_aversion_app/data:/app/data task-aversion-system
+   ```
+
+3. **Access the application:**
+   - Open your browser to `http://localhost:8080`
+   - Your data will be saved in the `task_aversion_app/data` folder
+
+### Using a Release Tag
+
+If you want to use a specific release version:
+
+```bash
+git clone <repository-url>
+cd Task_aversion_system
+git checkout v0.1.0  # Replace with actual tag
+docker-compose up
+```
+
+### Docker Notes
+
+- Data persistence: Your CSV files are stored in `task_aversion_app/data` and persist between container restarts
+- Stopping the app: Press `Ctrl+C` in the terminal, or run `docker-compose down`
+- Viewing logs: Run `docker-compose logs -f` to see application output
+- Port conflicts: If port 8080 is in use, edit `docker-compose.yml` and change `"8080:8080"` to `"8081:8080"` (then access at `http://localhost:8081`)
+
+---
+
 ## Usage
 
 ### Getting Started
