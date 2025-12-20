@@ -1,0 +1,164 @@
+---
+description: Database performance optimization patterns
+globs: ["backend/**/*.py", "backend/analytics.py"]
+alwaysApply: false
+---
+
+# Performance Optimization Patterns
+
+## Performance Context
+- Database queries are faster than CSV for large datasets
+- But: Initial page load might be slower if doing too many queries
+- Current slow load might be from: CSV file I/O, multiple CSV reads, heavy analytics calculations
+- Database should help by: Faster queries (indexed lookups), selective loading, connection pooling
+
+## Query Optimization
+
+### Avoid N+1 Queries
+```python
+# BAD: Multiple queries in loop
+for task_id in task_ids:
+    task = session.query(Task).filter(Task.task_id == task_id).first()  # N queries
+
+# GOOD: Single query with IN clause
+tasks = session.query(Task).filter(Task.task_id.in_(task_ids)).all()  # 1 query
+```
+
+### Eager Loading (Reduce Query Count)
+```python
+# Load related data in one query
+from sqlalchemy.orm import joinedload
+
+instances = session.query(TaskInstance)\
+    .options(joinedload(TaskInstance.task))\
+    .all()  # Loads instances AND their tasks in one query
+```
+
+### Select Only Needed Columns
+```python
+# BAD: Load entire objects
+tasks = session.query(Task).all()
+
+# GOOD: Load only needed fields
+tasks = session.query(Task.task_id, Task.name).all()
+```
+
+## Caching Patterns
+
+### Cache Frequently Accessed Data
+```python
+class TaskManager:
+    def __init__(self):
+        self._task_cache = None
+        self._cache_timestamp = None
+    
+    def list_tasks(self):
+        # Refresh cache if older than 5 minutes
+        if not self._task_cache or (time.time() - self._cache_timestamp) > 300:
+            self._task_cache = self._load_tasks_from_db()
+            self._cache_timestamp = time.time()
+        return self._task_cache
+    
+    def create_task(self, **kwargs):
+        # Invalidate cache on write
+        self._task_cache = None
+        # ... create task ...
+```
+
+## Database Indexing
+
+### Add Indexes on Frequently Queried Columns
+```python
+class Task(Base):
+    __tablename__ = 'tasks'
+    task_id = Column(String, primary_key=True, index=True)
+    created_at = Column(DateTime, index=True)  # Index for date queries
+    is_completed = Column(Boolean, index=True)  # Index for filtering
+    task_type = Column(String, index=True)  # Index for type filtering
+```
+
+### Composite Indexes for Common Query Patterns
+```python
+# If you often query by type and completion status together
+Index('idx_task_type_completed', Task.task_type, Task.is_completed)
+```
+
+## Data Validation & Performance
+- Validation can slow down writes but prevents errors
+- Balance: Validate critical fields, skip validation for trusted sources
+- Pattern:
+  ```python
+  def create_task(self, name, **kwargs):
+      # Validate required fields (fast)
+      if not name or not name.strip():
+          raise ValueError("Task name is required")
+      
+      # Type validation (fast)
+      if 'default_estimate_minutes' in kwargs:
+          try:
+              kwargs['default_estimate_minutes'] = int(kwargs['default_estimate_minutes'])
+          except (ValueError, TypeError):
+            kwargs['default_estimate_minutes'] = 0
+      
+      # Database-level constraints (slower but safer)
+      # Add NOT NULL, CHECK constraints in model for critical fields
+      task = Task(name=name, **kwargs)
+      session.add(task)
+      session.commit()  # Database validates constraints
+  ```
+
+## Performance Debugging
+
+### Enable SQL Query Logging
+```python
+# Log all SQL queries
+engine = create_engine(DATABASE_URL, echo=True)
+```
+
+### Log Slow Queries
+```python
+from sqlalchemy import event
+import time
+
+@event.listens_for(engine, "before_cursor_execute")
+def receive_before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    conn.info.setdefault('query_start_time', []).append(time.time())
+
+@event.listens_for(engine, "after_cursor_execute")
+def receive_after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    total = time.time() - conn.info['query_start_time'].pop(-1)
+    if total > 0.1:  # Log slow queries (>100ms)
+        print(f"SLOW QUERY ({total:.2f}s): {statement[:100]}")
+```
+
+### Measure Page Load Performance
+```python
+import time
+
+def build_dashboard(task_manager):
+    start_time = time.time()
+    
+    # ... dashboard code ...
+    
+    load_time = time.time() - start_time
+    print(f"[Dashboard] Load time: {load_time:.2f}s")
+    
+    # Compare CSV vs database load times
+```
+
+## Batch Operations
+```python
+# BAD: Individual inserts
+for task in tasks:
+    session.add(task)
+    session.commit()  # N commits
+
+# GOOD: Batch insert
+session.add_all(tasks)
+session.commit()  # 1 commit
+```
+
+## Connection Pooling
+- See `connection-pooling.mdc` for detailed connection pool configuration
+- Default SQLAlchemy pool (5 connections) is usually sufficient for single user
+- Increase pool_size for production with multiple users

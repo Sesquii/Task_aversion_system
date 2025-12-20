@@ -1,0 +1,258 @@
+---
+description: Testing and debugging patterns for migration scripts
+globs: ["backend/migrate*.py", "tests/**/*.py", "**/*migration*.py"]
+alwaysApply: false
+---
+
+# Migration Script Testing & Debugging
+
+## Comprehensive Print Debugging
+- Migration scripts should be verbose with progress indicators
+- Print every step, row counts, and any issues
+- Use clear section markers and progress indicators
+- Pattern:
+  ```python
+  def migrate_csv_to_db():
+      print("=" * 60)
+      print("MIGRATION: CSV → Database")
+      print("=" * 60)
+      
+      # Step 1: Backup
+      print("\n[1/5] Creating CSV backup...")
+      backup_path = backup_csv_files()
+      print(f"✓ Backup created: {backup_path}")
+      
+      # Step 2: Load CSV
+      print("\n[2/5] Loading CSV data...")
+      df = pd.read_csv('data/tasks.csv')
+      print(f"✓ Loaded {len(df)} rows from CSV")
+      print(f"  Columns: {', '.join(df.columns)}")
+      
+      # Step 3: Validate data
+      print("\n[3/5] Validating CSV data...")
+      issues = validate_csv_data(df)
+      if issues:
+          print(f"⚠ Found {len(issues)} issues:")
+          for issue in issues[:5]:  # Show first 5
+              print(f"  - {issue}")
+          if len(issues) > 5:
+              print(f"  ... and {len(issues) - 5} more")
+      else:
+          print("✓ All data valid")
+      
+      # Step 4: Migrate
+      print("\n[4/5] Migrating to database...")
+      migrated_count = 0
+      error_count = 0
+      
+      with get_session() as session:
+          try:
+              for idx, row in df.iterrows():
+                  try:
+                      task_dict = _csv_to_db_dict(row.to_dict())
+                      task = Task(**task_dict)
+                      session.add(task)
+                      migrated_count += 1
+                      
+                      # Progress indicator every 10 rows
+                      if (idx + 1) % 10 == 0:
+                          print(f"  Progress: {idx + 1}/{len(df)} rows...")
+                          
+                  except Exception as e:
+                      error_count += 1
+                      print(f"  ✗ Error on row {idx + 1}: {e}")
+                      print(f"    Row data: {row.to_dict()}")
+                      if error_count > 10:
+                          print("  Too many errors, stopping migration")
+                          raise
+              
+              session.commit()
+              print(f"✓ Committed {migrated_count} rows to database")
+              
+          except Exception as e:
+              session.rollback()
+              print(f"\n✗ Migration failed: {e}")
+              print("  Rolling back transaction...")
+              raise
+      
+      # Step 5: Verify
+      print("\n[5/5] Verifying migration...")
+      with get_session() as session:
+          db_count = session.query(Task).count()
+          print(f"  CSV rows: {len(df)}")
+          print(f"  DB rows: {db_count}")
+          
+          if db_count == len(df):
+              print("✓ Row counts match!")
+          else:
+              print(f"✗ Row count mismatch: {db_count} != {len(df)}")
+              raise ValueError("Migration verification failed")
+          
+          # Sample verification
+          sample_ids = df['task_id'].head(3).tolist()
+          for task_id in sample_ids:
+              task = session.query(Task).filter(Task.task_id == task_id).first()
+              if task:
+                  print(f"  ✓ Sample task '{task.name}' verified")
+              else:
+                  print(f"  ✗ Sample task {task_id} not found")
+                  raise ValueError("Sample verification failed")
+      
+      print("\n" + "=" * 60)
+      print("MIGRATION COMPLETE ✓")
+      print("=" * 60)
+  ```
+
+## Unit Test Patterns
+
+### Test Migration with Sample Data
+```python
+import pytest
+import tempfile
+import os
+from backend.database import Base, get_session, Task
+from backend.migrate_data import migrate_csv_to_db
+
+def test_migration_with_sample_data():
+    """Test migration with known good data."""
+    # Setup: Create test CSV
+    test_csv = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')
+    test_csv.write('task_id,name,description,type,version,created_at,is_recurring,categories\n')
+    test_csv.write('t123,Test Task,Test description,one-time,1,2024-01-01,false,[]\n')
+    test_csv.close()
+    
+    # Setup: Create test database
+    test_db = 'sqlite:///test_migration.db'
+    os.environ['DATABASE_URL'] = test_db
+    engine = create_engine(test_db)
+    Base.metadata.create_all(engine)
+    
+    try:
+        # Run migration
+        migrate_csv_to_db(csv_path=test_csv.name)
+        
+        # Verify
+        with get_session() as session:
+            task = session.query(Task).filter(Task.task_id == 't123').first()
+            assert task is not None
+            assert task.name == 'Test Task'
+            assert task.description == 'Test description'
+            
+    finally:
+        # Cleanup
+        os.unlink(test_csv.name)
+        os.unlink('test_migration.db')
+```
+
+### Test Dual Backend Compatibility
+```python
+def test_dual_backend():
+    """Test that CSV and database backends return same results."""
+    # Test CSV
+    manager = TaskManager()
+    assert manager.use_db == False
+    task_csv = manager.get_task('test_id')
+    
+    # Test database
+    os.environ['DATABASE_URL'] = 'sqlite:///test.db'
+    manager_db = TaskManager()
+    assert manager_db.use_db == True
+    task_db = manager_db.get_task('test_id')
+    
+    # Results should match
+    assert task_csv == task_db
+```
+
+### Test Rollback
+```python
+def test_migration_rollback():
+    """Test that rollback works if migration fails."""
+    # ... test rollback scenario
+```
+
+## Dry Run Mode
+```python
+def migrate_csv_to_db(dry_run=True):
+    """Migrate with option to test without committing."""
+    print(f"MIGRATION MODE: {'DRY RUN' if dry_run else 'LIVE'}")
+    
+    # ... migration logic ...
+    
+    if dry_run:
+        print("\n[DRY RUN] Would commit changes (not actually committing)")
+        session.rollback()
+    else:
+        session.commit()
+        print("\n[LIVE] Changes committed to database")
+```
+
+## Error Recovery Patterns
+
+### Resume from Checkpoint
+```python
+def migrate_with_resume():
+    """Resume migration from last successful point."""
+    checkpoint_file = 'migration_checkpoint.json'
+    
+    # Load checkpoint
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file) as f:
+            checkpoint = json.load(f)
+            start_from = checkpoint['last_row']
+            print(f"Resuming from row {start_from}")
+    else:
+        start_from = 0
+    
+    # Migrate from checkpoint
+    for idx, row in df.iterrows():
+        if idx < start_from:
+            continue  # Skip already migrated rows
+        
+        try:
+            # ... migrate row ...
+            
+            # Save checkpoint every 10 rows
+            if idx % 10 == 0:
+                with open(checkpoint_file, 'w') as f:
+                    json.dump({'last_row': idx}, f)
+                    
+        except Exception as e:
+            print(f"Error at row {idx}, checkpoint saved at row {start_from}")
+            raise
+```
+
+## Debugging Checklist
+- [ ] Print row counts at each step
+- [ ] Print sample data before/after conversion
+- [ ] Print any errors with full context (row number, data)
+- [ ] Verify data types match expectations
+- [ ] Check for None/empty values that might break
+- [ ] Test with small dataset first (10 rows)
+- [ ] Test with full dataset
+- [ ] Verify rollback works
+- [ ] Compare sample records manually (CSV vs DB)
+
+## Data Validation Helpers
+```python
+def validate_csv_data(df):
+    """Validate CSV data before migration."""
+    issues = []
+    
+    # Check required columns
+    required = ['task_id', 'name']
+    for col in required:
+        if col not in df.columns:
+            issues.append(f"Missing required column: {col}")
+    
+    # Check for duplicates
+    if df['task_id'].duplicated().any():
+        dupes = df[df['task_id'].duplicated()]['task_id'].tolist()
+        issues.append(f"Duplicate task_ids: {dupes[:5]}")
+    
+    # Check data types
+    for idx, row in df.iterrows():
+        if pd.isna(row['task_id']) or not str(row['task_id']).strip():
+            issues.append(f"Row {idx}: Empty task_id")
+    
+    return issues
+```

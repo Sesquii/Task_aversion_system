@@ -1,17 +1,25 @@
 ---
-description: SQL migration patterns for gradual CSV-to-database transition
-globs: ["backend/**/*.py", "backend/database.py", "backend/migrate*.py"]
+description: Core SQL migration patterns for gradual CSV-to-database transition
+globs: ["backend/**/*.py", "backend/database.py"]
 alwaysApply: true
 ---
 
-# SQL Migration Rules
+# SQL Migration Core Rules
+
+## Troubleshooting Rule Conflicts
+- If AI generates code with persistent errors related to these rules, try:
+  1. First: Ask AI to explain which rule is causing the issue
+  2. Temporarily disable specific rule sections with comments in the rule file
+  3. As last resort: Temporarily rename rule file (add `.disabled` extension) and regenerate
+  4. After fixing: Re-enable rules and verify they work correctly
+- Rules are meant to guide, not constrain - if a pattern doesn't fit your specific case, adapt it
 
 ## Dual Backend Support Pattern
 - Manager classes must support both CSV (default) and database (via `DATABASE_URL` env var)
 - Use feature flag pattern: Check `os.getenv('DATABASE_URL')` to determine backend
 - Keep CSV as default fallback - database is opt-in during migration period
 - Example pattern:
-  
+  ```python
   def __init__(self):
       self.use_db = bool(os.getenv('DATABASE_URL'))
       if self.use_db:
@@ -22,14 +30,16 @@ alwaysApply: true
           os.makedirs(DATA_DIR, exist_ok=True)
           self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
           self._reload()
-  ## SQLAlchemy Model Patterns
+  ```
+
+## SQLAlchemy Model Patterns
 - All models must inherit from `Base` (declarative_base)
 - Use PostgreSQL-compatible types: `String`, `Integer`, `Float`, `DateTime`, `Boolean`
 - JSON columns: Use `JSON` type (PostgreSQL) or `Text` with JSON validation (SQLite compatibility)
 - Always include `created_at` and `updated_at` timestamp fields
 - Primary keys: Use `String` for IDs (matching CSV pattern: `t{timestamp}`)
 - Example:
- 
+  ```python
   class Task(Base):
       __tablename__ = 'tasks'
       task_id = Column(String, primary_key=True)
@@ -39,11 +49,14 @@ alwaysApply: true
       updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
       # JSON fields stored as JSON type
       categories = Column(JSON, default=list)
-  ## Session Management
+  ```
+
+## Session Management
 - Use context managers or try/finally for database sessions
 - Always commit or rollback transactions explicitly
 - Handle database errors gracefully with fallback to CSV if needed
 - Pattern:
+  ```python
   def get_task(self, task_id):
       if self.use_db:
           try:
@@ -56,40 +69,14 @@ alwaysApply: true
               return self._get_task_csv(task_id)
       else:
           return self._get_task_csv(task_id)
-  
-## Migration Script Patterns
-- Always backup CSV files before migration
-- Verify row counts match after migration
-- Test rollback capability (export database → CSV)
-- Use transactions for atomicity
-- Pattern:
-  def migrate_csv_to_db():
-      # 1. Backup CSV
-      backup_csv_files()
-      
-      # 2. Load CSV data
-      df = pd.read_csv('data/tasks.csv')
-      
-      # 3. Migrate in transaction
-      with get_session() as session:
-          try:
-              for _, row in df.iterrows():
-                  task = Task(**row.to_dict())
-                  session.add(task)
-              session.commit()
-              
-              # 4. Verify
-              db_count = session.query(Task).count()
-              assert db_count == len(df), f"Count mismatch: {db_count} != {len(df)}"
-              
-          except Exception as e:
-              session.rollback()
-              raise MigrationError(f"Migration failed: {e}")
-  ## Error Handling
+  ```
+
+## Error Handling
 - Database connection errors: Log and fallback to CSV
 - Transaction errors: Always rollback, never leave partial state
 - Data validation errors: Log specific row/field that failed
 - Pattern:
+  ```python
   try:
       with self.db_session() as session:
           # database operation
@@ -108,12 +95,14 @@ alwaysApply: true
       print(f"[Manager] Unexpected error: {e}")
       session.rollback()
       return self._csv_fallback()
-  ## Manager Class Method Compatibility
+  ```
+
+## Manager Class Method Compatibility
 - Maintain same method signatures for CSV and database backends
 - Return types must match: `None` for not found, `dict` for single items, `List[dict]` for lists
 - Internal methods: Prefix CSV-specific with `_csv_` (e.g., `_get_task_csv`, `_save_csv`)
 - Example:
-  
+  ```python
   def get_task(self, task_id):
       """Return a task row by id as a dict. Works with both CSV and database."""
       if self.use_db:
@@ -132,11 +121,14 @@ alwaysApply: true
       with self.db_session() as session:
           task = session.query(Task).filter(Task.task_id == task_id).first()
           return task.to_dict() if task else None
-  ## Connection Configuration
+  ```
+
+## Connection Configuration
 - Use `DATABASE_URL` environment variable (SQLAlchemy standard)
 - Support both SQLite (local dev) and PostgreSQL (production)
 - Format: `postgresql://user:password@host:port/dbname` or `sqlite:///path/to/db.sqlite`
 - Create `backend/database.py` with:
+  ```python
   from sqlalchemy import create_engine
   from sqlalchemy.orm import sessionmaker, declarative_base
   import os
@@ -152,12 +144,15 @@ alwaysApply: true
   
   def init_db():
       Base.metadata.create_all(engine)
-  ## Data Type Conversions
+  ```
+
+## Data Type Conversions
 - CSV stores everything as strings - convert when reading
 - Database stores proper types - convert when writing from CSV
 - JSON fields: Parse from CSV string, store as JSON in database
 - Datetime fields: Parse CSV strings, store as DateTime in database
 - Pattern:
+  ```python
   def _csv_to_db_dict(self, csv_row):
       """Convert CSV row dict to database-compatible dict."""
       db_dict = csv_row.copy()
@@ -180,27 +175,9 @@ alwaysApply: true
               db_dict[field] = str(db_dict[field]).lower() == 'true'
       
       return db_dict
-  ## Testing Patterns
-- Test both backends: CSV and database
-- Test migration script with sample data first
-- Test rollback procedure
-- Verify data integrity after migration
-- Pattern:on
-  def test_dual_backend():
-      # Test CSV
-      manager = TaskManager()
-      assert manager.use_db == False
-      task = manager.get_task('test_id')
-      
-      # Test database
-      os.environ['DATABASE_URL'] = 'sqlite:///test.db'
-      manager_db = TaskManager()
-      assert manager_db.use_db == True
-      task_db = manager_db.get_task('test_id')
-      
-      # Results should match
-      assert task == task_db
-  ## Migration Safety
+  ```
+
+## Migration Safety
 - Never delete CSV files during migration (keep as backup)
 - Always test migration on copy of data first
 - Create rollback script before running migration

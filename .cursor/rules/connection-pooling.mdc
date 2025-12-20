@@ -1,0 +1,84 @@
+
+## **3. Connection Pooling Explanation Rule**
+
+Create `.cursor/rules/connection-pooling.mdc`:
+e.py"]
+alwaysApply: false
+---
+
+# Connection Pooling Guide
+
+## What is Connection Pooling?
+- **Problem:** Opening/closing database connections is expensive (network overhead, authentication)
+- **Solution:** Reuse a pool of pre-established connections
+- **Analogy:** Like a taxi stand - keep a few taxis ready instead of calling new ones each time
+
+## When You Need It
+- **Single user (you):** Not critical, but helps with performance
+- **Multiple users (production):** Essential - prevents connection exhaustion
+- **High traffic:** Critical - handles concurrent requests efficiently
+
+## SQLAlchemy Connection Pooling (Automatic)
+- SQLAlchemy creates a connection pool automatically
+- Default pool size: 5 connections
+- Connections are reused automatically - you don't manage them manually
+
+## Basic Configuration (Default - Usually Sufficient)
+from sqlalchemy import create_engine
+
+# Default pool (5 connections, auto-recycle after 1 hour)
+engine = create_engine(DATABASE_URL)## Advanced Configuration (For Production)
+from sqlalchemy import create_engine
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=10,              # Number of connections to keep
+    max_overflow=20,            # Extra connections if pool is full
+    pool_pre_ping=True,         # Verify connections before using
+    pool_recycle=3600,          # Recycle connections after 1 hour
+    echo=False                  # Set True to see SQL queries
+)## Connection Pool Parameters Explained
+- **pool_size:** Base number of connections (default: 5)
+  - Too small: Users wait for available connection
+  - Too large: Wastes database resources
+  - Sweet spot: 5-10 for small apps, 10-20 for medium apps
+
+- **max_overflow:** Extra connections beyond pool_size (default: 10)
+  - Allows temporary spikes in traffic
+  - These connections are closed when not needed
+
+- **pool_pre_ping:** Test connection before using (default: False)
+  - Prevents "connection lost" errors
+  - Slight performance cost, but worth it for reliability
+  - **Recommendation:** Set to `True` for production
+
+- **pool_recycle:** Close and recreate connections after N seconds
+  - Prevents stale connections (databases sometimes close idle connections)
+  - Default: -1 (never recycle)
+  - **Recommendation:** 3600 (1 hour) for production
+
+## Session Management with Pooling
+- Each `get_session()` call gets a connection from the pool
+- Connection returns to pool when session closes
+- No manual connection management needed
+
+# This automatically uses connection pool
+def get_task(self, task_id):
+    with self.db_session() as session:  # Gets connection from pool
+        task = session.query(Task).filter(Task.task_id == task_id).first()
+        return task.to_dict() if task else None
+    # Connection automatically returns to pool## Monitoring Connection Pool
+# Check pool status (for debugging)
+print(f"Pool size: {engine.pool.size()}")
+print(f"Checked out: {engine.pool.checkedout()}")
+print(f"Overflow: {engine.pool.overflow()}")## Common Issues
+- **"Too many connections":** Increase pool_size or max_overflow
+- **"Connection lost":** Enable pool_pre_ping=True
+- **Slow queries:** Check if pool is exhausted (all connections busy)
+- **Connection timeout:** Increase pool_recycle or check database timeout settings
+
+## When to Configure
+- **Development:** Default settings are fine
+- **Production with < 10 users:** pool_size=10, max_overflow=10, pool_pre_ping=True
+- **Production with 10-100 users:** pool_size=20, max_overflow=20, pool_pre_ping=True
+- **Production with > 100 users:** Monitor and adjust based on metrics

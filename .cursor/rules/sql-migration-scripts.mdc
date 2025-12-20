@@ -1,0 +1,105 @@
+---
+description: Migration script patterns for CSV to database migration
+globs: ["backend/migrate*.py", "**/migrate*.py"]
+alwaysApply: false
+---
+
+# Migration Script Patterns
+
+## Migration Script Structure
+- Always backup CSV files before migration
+- Verify row counts match after migration
+- Test rollback capability (export database → CSV)
+- Use transactions for atomicity
+- Pattern:
+  ```python
+  def migrate_csv_to_db():
+      # 1. Backup CSV
+      backup_csv_files()
+      
+      # 2. Load CSV data
+      df = pd.read_csv('data/tasks.csv')
+      
+      # 3. Migrate in transaction
+      with get_session() as session:
+          try:
+              for _, row in df.iterrows():
+                  task = Task(**row.to_dict())
+                  session.add(task)
+              session.commit()
+              
+              # 4. Verify
+              db_count = session.query(Task).count()
+              assert db_count == len(df), f"Count mismatch: {db_count} != {len(df)}"
+              
+          except Exception as e:
+              session.rollback()
+              raise MigrationError(f"Migration failed: {e}")
+  ```
+
+## Backup Strategy
+```python
+import shutil
+from datetime import datetime
+
+def backup_csv_files():
+    """Create timestamped backup of all CSV files."""
+    backup_dir = f"data/backups/pre_migration_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    csv_files = ['tasks.csv', 'task_instances.csv', 'emotions.csv']
+    for csv_file in csv_files:
+        src = os.path.join('data', csv_file)
+        if os.path.exists(src):
+            dst = os.path.join(backup_dir, csv_file)
+            shutil.copy2(src, dst)
+            print(f"Backed up {csv_file} to {dst}")
+    
+    return backup_dir
+```
+
+## Verification Patterns
+```python
+def verify_migration(session, csv_df, model_class, id_column='task_id'):
+    """Verify migration completed successfully."""
+    # Row count check
+    db_count = session.query(model_class).count()
+    csv_count = len(csv_df)
+    
+    if db_count != csv_count:
+        raise ValueError(f"Row count mismatch: DB={db_count}, CSV={csv_count}")
+    
+    # Sample record check
+    sample_ids = csv_df[id_column].head(5).tolist()
+    for sample_id in sample_ids:
+        db_record = session.query(model_class).filter(
+            getattr(model_class, id_column) == sample_id
+        ).first()
+        
+        if not db_record:
+            raise ValueError(f"Sample record {sample_id} not found in database")
+        
+        # Compare key fields
+        csv_row = csv_df[csv_df[id_column] == sample_id].iloc[0]
+        if db_record.name != csv_row['name']:
+            raise ValueError(f"Data mismatch for {sample_id}")
+    
+    print(f"✓ Verified {db_count} records match CSV data")
+```
+
+## Rollback Script
+```python
+def rollback_migration(backup_dir):
+    """Restore CSV files from backup."""
+    print(f"Rolling back migration from {backup_dir}")
+    
+    csv_files = ['tasks.csv', 'task_instances.csv', 'emotions.csv']
+    for csv_file in csv_files:
+        backup_path = os.path.join(backup_dir, csv_file)
+        if os.path.exists(backup_path):
+            dst = os.path.join('data', csv_file)
+            shutil.copy2(backup_path, dst)
+            print(f"Restored {csv_file}")
+    
+    print("Rollback complete")
+```
