@@ -131,6 +131,10 @@ This system goes beyond a simple to-do list by incorporating psychological and b
 
 ## Installation
 
+**👋 New to this? Start here:** [Install_instructions.txt](Install_instructions.txt) - Simple step-by-step guide for non-technical users
+
+---
+
 ### Prerequisites
 
 - Python 3.8 or higher
@@ -168,6 +172,8 @@ This system goes beyond a simple to-do list by incorporating psychological and b
 ---
 
 ## Docker Installation (Recommended for Non-Technical Users)
+
+> **📖 For detailed step-by-step instructions, see [Install_instructions.txt](Install_instructions.txt)**
 
 If you're not comfortable with Python setup, you can use Docker instead. Docker packages everything needed to run the app.
 

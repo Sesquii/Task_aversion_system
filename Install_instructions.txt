@@ -1,0 +1,80 @@
+# Quick Installation Guide
+
+## For Non-Technical Users (Using Docker)
+
+Don't know Python? No problem! Follow these simple steps:
+
+### Step 1: Install Docker Desktop
+
+1. Go to: https://www.docker.com/products/docker-desktop/
+2. Download Docker Desktop for Windows (or Mac if you're on a Mac)
+3. Install it (just click "Next" through the installer)
+4. **Restart your computer** when it asks
+5. Start Docker Desktop (look for the whale icon in your system tray)
+
+### Step 2: Download the App
+
+**Option A: From a Release (Recommended)**
+1. Go to the [Releases page](https://github.com/Sesquii/Task_aversion_system/releases) on GitHub
+2. Click on the latest release (e.g., "v0.1.0")
+3. Scroll down and click "Source code (zip)" to download
+4. Extract the ZIP file to your Desktop (or wherever you want)
+5. Open the extracted folder
+
+**Option B: From the Main Repository**
+1. Click the green "Code" button on GitHub
+2. Click "Download ZIP"
+3. Extract the ZIP file to your Desktop (or wherever you want)
+4. Open the folder `Task_aversion_system`
+
+### Step 3: Run the App
+
+1. In the `Task_aversion_system` folder, **hold Shift and right-click** in an empty area
+2. Select "Open PowerShell window here" (or "Open Terminal here" on Mac)
+3. Type this command (without quotes) and press Enter :
+   ```
+   docker-compose up
+   ```
+4. Wait a minute or two (it will download things the first time)
+5. When you see "Application startup complete" or similar, open your web browser
+6. Go to: **http://localhost:8080**
+
+That's it! The app is now running.
+
+### To Stop the App
+
+- Press `Ctrl+C` in the terminal window
+- Or close the terminal window
+
+### To Start It Again Later
+
+1. Open the `Task_aversion_system` folder
+2. Open PowerShell/Terminal in that folder (Shift+Right-click → "Open PowerShell window here")
+3. Type: `docker-compose up`
+4. Go to http://localhost:8080 in your browser
+
+---
+
+## Troubleshooting
+
+**"docker-compose: command not found"**
+- Make sure Docker Desktop is running (check for the whale icon)
+- Try restarting Docker Desktop
+
+**"Port 8080 is already in use"**
+- Something else is using port 8080
+- Close that other program, or edit `docker-compose.yml` and change `8080:8080` to `8081:8080`, then use http://localhost:8081 instead
+
+**"Cannot connect to Docker daemon"**
+- Docker Desktop isn't running - start it from your Start menu
+
+**The app shows an error page**
+- Make sure Docker Desktop is running
+- Try stopping (Ctrl+C) and starting again: `docker-compose up`
+
+---
+
+## Questions?
+
+Check the main README.md for more detailed information, or open an issue on GitHub.
+
