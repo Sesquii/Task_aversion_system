@@ -270,6 +270,7 @@ def build_analytics_page():
         _render_attribute_box()
 
     _render_trends_section()
+    _render_stress_metrics_section()
     _render_task_rankings()
     _render_stress_efficiency_leaderboard()
     _render_metric_comparison()
@@ -407,6 +408,246 @@ def _render_trends_section():
         update_chart()
 
 
+def _render_stress_metrics_section():
+    """Render stress dimension metrics with bar charts and line graphs."""
+    ui.separator().classes("my-4")
+    with ui.card().classes("p-4 w-full"):
+        ui.label("Stress Metrics").classes("text-xl font-bold mb-2")
+        ui.label("Separate visualization of cognitive, emotional, and physical stress dimensions").classes(
+            "text-sm text-gray-500 mb-3"
+        )
+        
+        # Helper function to calculate daily average
+        def calc_daily_avg(daily_list):
+            if not daily_list:
+                return 0.0
+            values = [item['value'] for item in daily_list if item.get('value') is not None]
+            return sum(values) / len(values) if values else 0.0
+        
+        # Get stress dimension data
+        stress_data = analytics_service.get_stress_dimension_data()
+        
+        # Calculate daily averages (overall, not just 7-day)
+        cognitive_daily_avg = calc_daily_avg(stress_data.get('cognitive', {}).get('daily', []))
+        emotional_daily_avg = calc_daily_avg(stress_data.get('emotional', {}).get('daily', []))
+        physical_daily_avg = calc_daily_avg(stress_data.get('physical', {}).get('daily', []))
+        
+        # Combined comparison chart - Totals, 7-day avg, and daily avg
+        with ui.card().classes("p-3 w-full mb-4"):
+            ui.label("Stress Comparison: Totals, 7-Day Average, and Daily Average").classes("font-bold text-md mb-2")
+            if not stress_data or all(v['total'] == 0.0 and v['avg_7d'] == 0.0 for v in stress_data.values()):
+                ui.label("No data yet").classes("text-xs text-gray-500")
+            else:
+                # Prepare data for grouped bar chart
+                comparison_rows = []
+                for dim_name, dim_key in [('Cognitive', 'cognitive'), ('Emotional', 'emotional'), ('Physical', 'physical')]:
+                    comparison_rows.append({
+                        'Dimension': dim_name,
+                        'Metric': 'Total',
+                        'Value': stress_data[dim_key]['total']
+                    })
+                    comparison_rows.append({
+                        'Dimension': dim_name,
+                        'Metric': '7-Day Average',
+                        'Value': stress_data[dim_key]['avg_7d']
+                    })
+                    comparison_rows.append({
+                        'Dimension': dim_name,
+                        'Metric': 'Daily Average',
+                        'Value': calc_daily_avg(stress_data[dim_key].get('daily', []))
+                    })
+                
+                comparison_df = pd.DataFrame(comparison_rows)
+                fig = px.bar(
+                    comparison_df,
+                    x='Dimension',
+                    y='Value',
+                    color='Metric',
+                    barmode='group',
+                    color_discrete_map={
+                        'Total': '#34495e',
+                        '7-Day Average': '#9b59b6',
+                        'Daily Average': '#f39c12'
+                    },
+                    title="Stress Metrics Comparison"
+                )
+                fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+                ui.plotly(fig)
+        
+        # Separate bar charts for each metric type
+        with ui.row().classes("gap-4 flex-wrap mb-4"):
+            # Comparison bar chart - Totals
+            with ui.card().classes("p-3 flex-1 min-w-[300px]"):
+                ui.label("Total Stress by Dimension").classes("font-bold text-md mb-2")
+                if not stress_data or all(v['total'] == 0.0 for v in stress_data.values()):
+                    ui.label("No data yet").classes("text-xs text-gray-500")
+                else:
+                    comparison_df = pd.DataFrame({
+                        'Dimension': ['Cognitive', 'Emotional', 'Physical'],
+                        'Total': [
+                            stress_data['cognitive']['total'],
+                            stress_data['emotional']['total'],
+                            stress_data['physical']['total']
+                        ]
+                    })
+                    fig = px.bar(
+                        comparison_df,
+                        x='Dimension',
+                        y='Total',
+                        color='Dimension',
+                        color_discrete_map={
+                            'Cognitive': '#3498db',
+                            'Emotional': '#e74c3c',
+                            'Physical': '#2ecc71'
+                        },
+                        title="Total Stress Accumulated"
+                    )
+                    fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+                    ui.plotly(fig)
+            
+            # Comparison bar chart - 7-day average
+            with ui.card().classes("p-3 flex-1 min-w-[300px]"):
+                ui.label("7-Day Average by Dimension").classes("font-bold text-md mb-2")
+                if not stress_data or all(v['avg_7d'] == 0.0 for v in stress_data.values()):
+                    ui.label("No data yet").classes("text-xs text-gray-500")
+                else:
+                    avg_7d_df = pd.DataFrame({
+                        'Dimension': ['Cognitive', 'Emotional', 'Physical'],
+                        '7-Day Average': [
+                            stress_data['cognitive']['avg_7d'],
+                            stress_data['emotional']['avg_7d'],
+                            stress_data['physical']['avg_7d']
+                        ]
+                    })
+                    fig = px.bar(
+                        avg_7d_df,
+                        x='Dimension',
+                        y='7-Day Average',
+                        color='Dimension',
+                        color_discrete_map={
+                            'Cognitive': '#3498db',
+                            'Emotional': '#e74c3c',
+                            'Physical': '#2ecc71'
+                        },
+                        title="7-Day Average Stress"
+                    )
+                    fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+                    ui.plotly(fig)
+            
+            # Comparison bar chart - Daily average
+            with ui.card().classes("p-3 flex-1 min-w-[300px]"):
+                ui.label("Daily Average by Dimension").classes("font-bold text-md mb-2")
+                if cognitive_daily_avg == 0.0 and emotional_daily_avg == 0.0 and physical_daily_avg == 0.0:
+                    ui.label("No data yet").classes("text-xs text-gray-500")
+                else:
+                    daily_avg_df = pd.DataFrame({
+                        'Dimension': ['Cognitive', 'Emotional', 'Physical'],
+                        'Daily Average': [
+                            cognitive_daily_avg,
+                            emotional_daily_avg,
+                            physical_daily_avg
+                        ]
+                    })
+                    fig = px.bar(
+                        daily_avg_df,
+                        x='Dimension',
+                        y='Daily Average',
+                        color='Dimension',
+                        color_discrete_map={
+                            'Cognitive': '#3498db',
+                            'Emotional': '#e74c3c',
+                            'Physical': '#2ecc71'
+                        },
+                        title="Daily Average Stress"
+                    )
+                    fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+                    ui.plotly(fig)
+        
+        # Line graphs showing values over time
+        with ui.card().classes("p-3 w-full mt-4"):
+            ui.label("Stress Dimensions Over Time").classes("font-bold text-md mb-2")
+            
+            # Prepare data for time series
+            cognitive_daily = stress_data.get('cognitive', {}).get('daily', [])
+            emotional_daily = stress_data.get('emotional', {}).get('daily', [])
+            physical_daily = stress_data.get('physical', {}).get('daily', [])
+            
+            if not cognitive_daily and not emotional_daily and not physical_daily:
+                ui.label("No time series data yet. Complete some tasks to see trends.").classes("text-xs text-gray-500")
+            else:
+                # Combine all daily data into a single dataframe
+                time_series_rows = []
+                
+                for item in cognitive_daily:
+                    time_series_rows.append({
+                        'date': item['date'],
+                        'value': item['value'],
+                        'dimension': 'Cognitive'
+                    })
+                
+                for item in emotional_daily:
+                    time_series_rows.append({
+                        'date': item['date'],
+                        'value': item['value'],
+                        'dimension': 'Emotional'
+                    })
+                
+                for item in physical_daily:
+                    time_series_rows.append({
+                        'date': item['date'],
+                        'value': item['value'],
+                        'dimension': 'Physical'
+                    })
+                
+                if time_series_rows:
+                    ts_df = pd.DataFrame(time_series_rows)
+                    ts_df['date'] = pd.to_datetime(ts_df['date'])
+                    ts_df = ts_df.sort_values('date')
+                    
+                    fig = px.line(
+                        ts_df,
+                        x='date',
+                        y='value',
+                        color='dimension',
+                        markers=True,
+                        color_discrete_map={
+                            'Cognitive': '#3498db',
+                            'Emotional': '#e74c3c',
+                            'Physical': '#2ecc71'
+                        },
+                        title="Daily Average Stress by Dimension"
+                    )
+                    fig.update_layout(
+                        margin=dict(l=20, r=20, t=40, b=20),
+                        legend_title_text="Dimension",
+                        xaxis_title="Date",
+                        yaxis_title="Stress Level"
+                    )
+                    ui.plotly(fig)
+                else:
+                    ui.label("No time series data available").classes("text-xs text-gray-500")
+        
+        # Summary statistics
+        with ui.row().classes("gap-4 flex-wrap mt-4"):
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Cognitive Stress").classes("text-xs text-gray-500 font-semibold")
+                ui.label(f"Total: {stress_data['cognitive']['total']:.1f}").classes("text-sm")
+                ui.label(f"7-Day Avg: {stress_data['cognitive']['avg_7d']:.1f}").classes("text-sm")
+                ui.label(f"Daily Avg: {cognitive_daily_avg:.1f}").classes("text-sm")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Emotional Stress").classes("text-xs text-gray-500 font-semibold")
+                ui.label(f"Total: {stress_data['emotional']['total']:.1f}").classes("text-sm")
+                ui.label(f"7-Day Avg: {stress_data['emotional']['avg_7d']:.1f}").classes("text-sm")
+                ui.label(f"Daily Avg: {emotional_daily_avg:.1f}").classes("text-sm")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Physical Stress").classes("text-xs text-gray-500 font-semibold")
+                ui.label(f"Total: {stress_data['physical']['total']:.1f}").classes("text-sm")
+                ui.label(f"7-Day Avg: {stress_data['physical']['avg_7d']:.1f}").classes("text-sm")
+                ui.label(f"Daily Avg: {physical_daily_avg:.1f}").classes("text-sm")
+
+
 def _render_metric_comparison():
     """Render a flexible metric comparison tool with scatter plots."""
     ui.separator().classes("my-4")
@@ -470,13 +711,22 @@ def _render_metric_comparison():
                 'y': scatter['y']
             })
             
+            # Check if statsmodels is available for trendline
+            use_trendline = False
+            if show_trendline.value:
+                try:
+                    import statsmodels.api as sm  # noqa: F401
+                    use_trendline = True
+                except ImportError:
+                    pass  # statsmodels not available, skip trendline
+            
             fig = px.scatter(
                 scatter_df,
                 x='x',
                 y='y',
                 labels={'x': label_x, 'y': label_y},
                 title=f"{label_x} vs {label_y}",
-                trendline='ols' if show_trendline.value else None,
+                trendline='ols' if use_trendline else None,
             )
             fig.update_layout(
                 margin=dict(l=20, r=20, t=40, b=20),

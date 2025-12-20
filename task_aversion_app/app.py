@@ -13,7 +13,7 @@ from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handlin
 # import submodules without rebinding the nicegui `ui` object
 from ui import survey_page  # registers /survey
 from ui import settings_page  # registers /settings
-from ui import data_guide_page  # registers /data-guide
+# from ui import data_guide_page  # registers /data-guide - TODO: Re-enable when data guide is updated for local setup
 from ui import composite_score_page  # registers /composite-score
 
 

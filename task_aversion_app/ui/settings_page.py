@@ -6,8 +6,8 @@ def settings_page():
     def go_survey():
         ui.navigate.to("/survey")
     
-    def go_data_guide():
-        ui.navigate.to("/data-guide")
+    # def go_data_guide():
+    #     ui.navigate.to("/data-guide")
 
     def go_composite_score():
         ui.navigate.to("/composite-score")
@@ -22,5 +22,4 @@ def settings_page():
         ui.label("View your overall performance score and customize component weights.").classes("text-sm text-gray-600 mt-2")
         ui.separator()
         ui.label("Data & Troubleshooting").classes("text-lg font-semibold")
-        ui.button("📖 Data Troubleshooting & Info Guide", on_click=go_data_guide).classes("bg-blue-500 text-white")
-        ui.label("Learn how your data is stored, how to recover it, and how to transfer it between devices.").classes("text-sm text-gray-600 mt-2")
+        ui.markdown("- **Data Guide**: Currently missing - documentation for local setup, data backup, and troubleshooting is planned but not yet implemented").classes("text-sm text-gray-600 mt-2")

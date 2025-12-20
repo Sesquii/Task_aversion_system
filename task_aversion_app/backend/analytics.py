@@ -4237,6 +4237,89 @@ class Analytics:
             trends[key] = data
         return trends
 
+    def get_stress_dimension_data(self) -> Dict[str, Dict[str, float]]:
+        """
+        Calculate stress dimension values for cognitive, emotional, and physical stress.
+        Returns dictionary with totals, 7-day averages, and daily values for each dimension.
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'cognitive': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
+                'emotional': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
+                'physical': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
+            }
+        
+        # Convert to numeric and calculate dimensions
+        completed['mental_energy_numeric'] = pd.to_numeric(completed['mental_energy_needed'], errors='coerce').fillna(50.0)
+        completed['task_difficulty_numeric'] = pd.to_numeric(completed['task_difficulty'], errors='coerce').fillna(50.0)
+        completed['emotional_load_numeric'] = pd.to_numeric(completed['emotional_load'], errors='coerce').fillna(0.0)
+        completed['physical_load_numeric'] = pd.to_numeric(completed['physical_load'], errors='coerce').fillna(0.0)
+        
+        # Calculate stress dimensions
+        # Cognitive = (mental_energy * 0.5 + task_difficulty * 0.5)
+        completed['cognitive_stress'] = (completed['mental_energy_numeric'] * 0.5 + completed['task_difficulty_numeric'] * 0.5)
+        completed['emotional_stress'] = completed['emotional_load_numeric']
+        completed['physical_stress'] = completed['physical_load_numeric']
+        
+        # Parse dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()]
+        
+        if completed.empty:
+            return {
+                'cognitive': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
+                'emotional': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
+                'physical': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
+            }
+        
+        # Calculate totals
+        cognitive_total = float(completed['cognitive_stress'].sum())
+        emotional_total = float(completed['emotional_stress'].sum())
+        physical_total = float(completed['physical_stress'].sum())
+        
+        # Calculate 7-day average
+        cutoff_7d = datetime.now() - timedelta(days=7)
+        recent_7d = completed[completed['completed_at_dt'] >= cutoff_7d]
+        
+        cognitive_avg_7d = float(recent_7d['cognitive_stress'].mean()) if not recent_7d.empty else 0.0
+        emotional_avg_7d = float(recent_7d['emotional_stress'].mean()) if not recent_7d.empty else 0.0
+        physical_avg_7d = float(recent_7d['physical_stress'].mean()) if not recent_7d.empty else 0.0
+        
+        # Calculate daily values
+        completed['date'] = completed['completed_at_dt'].dt.date
+        daily_cognitive = completed.groupby('date')['cognitive_stress'].mean().reset_index()
+        daily_emotional = completed.groupby('date')['emotional_stress'].mean().reset_index()
+        daily_physical = completed.groupby('date')['physical_stress'].mean().reset_index()
+        
+        daily_cognitive = daily_cognitive.sort_values('date')
+        daily_emotional = daily_emotional.sort_values('date')
+        daily_physical = daily_physical.sort_values('date')
+        
+        cognitive_daily = [{'date': str(row['date']), 'value': float(row['cognitive_stress'])} for _, row in daily_cognitive.iterrows()]
+        emotional_daily = [{'date': str(row['date']), 'value': float(row['emotional_stress'])} for _, row in daily_emotional.iterrows()]
+        physical_daily = [{'date': str(row['date']), 'value': float(row['physical_stress'])} for _, row in daily_physical.iterrows()]
+        
+        return {
+            'cognitive': {
+                'total': cognitive_total,
+                'avg_7d': cognitive_avg_7d,
+                'daily': cognitive_daily,
+            },
+            'emotional': {
+                'total': emotional_total,
+                'avg_7d': emotional_avg_7d,
+                'daily': emotional_daily,
+            },
+            'physical': {
+                'total': physical_total,
+                'avg_7d': physical_avg_7d,
+                'daily': physical_daily,
+            },
+        }
+
     def calculate_correlation(self, attribute_x: str, attribute_y: str, method: str = 'pearson') -> Dict[str, any]:
         """Calculate correlation between two attributes with metadata for tooltips."""
         df = self._load_instances()
