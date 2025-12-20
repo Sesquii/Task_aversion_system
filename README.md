@@ -131,6 +131,10 @@ This system goes beyond a simple to-do list by incorporating psychological and b
 
 ## Installation
 
+**👋 New to this? Start here:** [Install_instructions.txt](Install_instructions.txt) - Simple step-by-step guide for non-technical users
+
+---
+
 ### Prerequisites
 
 - Python 3.8 or higher
@@ -140,7 +144,7 @@ This system goes beyond a simple to-do list by incorporating psychological and b
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/Sesquii/Task_aversion_system.git
    cd Task_aversion_system
    ```
 
@@ -169,6 +173,8 @@ This system goes beyond a simple to-do list by incorporating psychological and b
 
 ## Docker Installation (Recommended for Non-Technical Users)
 
+> **📖 For detailed step-by-step instructions, see [Install_instructions.txt](Install_instructions.txt)**
+
 If you're not comfortable with Python setup, you can use Docker instead. Docker packages everything needed to run the app.
 
 ### Prerequisites
@@ -179,7 +185,7 @@ If you're not comfortable with Python setup, you can use Docker instead. Docker 
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/Sesquii/Task_aversion_system.git
    cd Task_aversion_system
    ```
 
@@ -212,9 +218,16 @@ volumes:
 If you want to use a specific release version:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Sesquii/Task_aversion_system.git
 cd Task_aversion_system
-git checkout v0.1.0  # Replace with actual tag
+git checkout release/docker-v0.1.0  # Use the docker release branch
+docker-compose up
+```
+
+Alternatively, you can directly clone the release branch:
+```bash
+git clone -b release/docker-v0.1.0 https://github.com/Sesquii/Task_aversion_system.git
+cd Task_aversion_system
 docker-compose up
 ```
 
