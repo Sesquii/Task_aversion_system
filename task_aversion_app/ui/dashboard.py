@@ -1391,7 +1391,7 @@ def build_dashboard(task_manager):
             with ui.column().classes("dashboard-column column-middle gap-2"):
                 # Top half: Active Tasks in 2 nested columns
                 with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;").props('id="tas-active-tasks" data-tooltip-id="active_tasks"'):
-                    ui.label("Active Initialized Tasks").classes("text-lg font-bold mb-2")
+                    ui.label("Initialized Tasks").classes("text-lg font-bold mb-2")
                     ui.separator()
                     
                     active = im.list_active_instances()
