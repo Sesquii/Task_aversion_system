@@ -432,48 +432,6 @@ def _render_stress_metrics_section():
         emotional_daily_avg = calc_daily_avg(stress_data.get('emotional', {}).get('daily', []))
         physical_daily_avg = calc_daily_avg(stress_data.get('physical', {}).get('daily', []))
         
-        # Combined comparison chart - Totals, 7-day avg, and daily avg
-        with ui.card().classes("p-3 w-full mb-4"):
-            ui.label("Stress Comparison: Totals, 7-Day Average, and Daily Average").classes("font-bold text-md mb-2")
-            if not stress_data or all(v['total'] == 0.0 and v['avg_7d'] == 0.0 for v in stress_data.values()):
-                ui.label("No data yet").classes("text-xs text-gray-500")
-            else:
-                # Prepare data for grouped bar chart
-                comparison_rows = []
-                for dim_name, dim_key in [('Cognitive', 'cognitive'), ('Emotional', 'emotional'), ('Physical', 'physical')]:
-                    comparison_rows.append({
-                        'Dimension': dim_name,
-                        'Metric': 'Total',
-                        'Value': stress_data[dim_key]['total']
-                    })
-                    comparison_rows.append({
-                        'Dimension': dim_name,
-                        'Metric': '7-Day Average',
-                        'Value': stress_data[dim_key]['avg_7d']
-                    })
-                    comparison_rows.append({
-                        'Dimension': dim_name,
-                        'Metric': 'Daily Average',
-                        'Value': calc_daily_avg(stress_data[dim_key].get('daily', []))
-                    })
-                
-                comparison_df = pd.DataFrame(comparison_rows)
-                fig = px.bar(
-                    comparison_df,
-                    x='Dimension',
-                    y='Value',
-                    color='Metric',
-                    barmode='group',
-                    color_discrete_map={
-                        'Total': '#34495e',
-                        '7-Day Average': '#9b59b6',
-                        'Daily Average': '#f39c12'
-                    },
-                    title="Stress Metrics Comparison"
-                )
-                fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
-                ui.plotly(fig)
-        
         # Separate bar charts for each metric type
         with ui.row().classes("gap-4 flex-wrap mb-4"):
             # Comparison bar chart - Totals
