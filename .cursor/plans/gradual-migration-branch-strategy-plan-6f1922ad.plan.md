@@ -1,4 +1,12 @@
-<!-- 6f1922ad-b6d0-4bb6-ba3e-c99b99e5ffa0 33d5f163-1a73-429b-80cf-9ee64d35ab5d -->
+---
+name: Migration Preparation & Research Plan
+overview: ""
+todos:
+  - id: 824aec1d-facf-478f-b53b-b0e64a065e08
+    content: Research AI chatbot costs and integration complexity. Create docs/ai_chatbot_analysis.md with findings and recommendation (defer until core app stable)
+    status: pending
+---
+
 # Migration Preparation & Research Plan
 
 ## Overview
@@ -618,21 +626,3 @@ Week 1: Local PostgreSQL Setup
 - **Iterative:** Each research task informs the next. Don't need to do everything at once.
 - **Learning focus:** The goal is understanding, not speed. Take time to learn properly.
 - **Anxiety management:** Small steps reduce anxiety. Week 1 experiment is just local testing, no production risk.
-
-### To-dos
-
-- [ ] Verify .gitignore protects data files: run `git status` and confirm no CSV files appear. If data files are tracked, remove from git with `git rm --cached` while keeping local files.
-- [ ] Create backup of task_aversion_app/data/ directory before creating branches
-- [ ] Create dev branch from main: `git checkout -b dev`. Verify data files are not included in branch.
-- [ ] Study PostgreSQL basics: installation, database creation, connection strings. Review SQLAlchemy ORM patterns and session management.
-- [ ] Create backend/database.py with SQLAlchemy models (Task, TaskInstance, Emotion, User, SurveyResponse) using PostgreSQL-compatible types
-- [ ] Create backend/migrate_csv_to_db.py to migrate CSV data to database with verification and rollback capability
-- [ ] Update task_manager.py, instance_manager.py, emotion_manager.py to support both CSV (default) and database (via DATABASE_URL env var) backends
-- [ ] Create app_minimal.py with core features only (create, initialize, complete, cancel tasks + basic dashboard). Add build_dashboard_minimal() to dashboard.py
-- [ ] Create .env.example with DATABASE_URL, ENVIRONMENT, and feature flags. Update app.py to load environment variables
-- [ ] Test database migration locally with SQLite first, then PostgreSQL. Verify all CRUD operations work correctly
-- [ ] Create deploy/nginx.conf, deploy/systemd/task-aversion.service, deploy/setup.sh for VPS deployment
-- [ ] Update requirements.txt with sqlalchemy, python-dotenv, psycopg2-binary, gunicorn (or uvicorn)
-- [ ] Create docs/migration_guide.md with PostgreSQL and SQLAlchemy learning resources, and docs/migration_decisions.md documenting rationale
-- [ ] Deploy minimal app to VPS: install PostgreSQL, run migration, configure nginx, set up systemd service, test core features online
-- [ ] Research AI chatbot costs and integration complexity. Create docs/ai_chatbot_analysis.md with findings and recommendation (defer until core app stable)
