@@ -1,0 +1,180 @@
+---
+description: Git merge direction safety rules to prevent merge mistakes
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Git Merge Direction Safety Rules
+
+## Critical: Always Verify Merge Direction
+
+**NEVER merge without first checking which branch you're on and which branch you're merging.**
+
+## The Golden Rule: Merge Direction
+
+```
+✅ CORRECT:
+- Be ON: main (or feature branch) ← TARGET branch
+- Merge FROM: dev (or migration branch) ← SOURCE branch
+- Command: git checkout main; git merge dev
+
+❌ WRONG:
+- Be ON: dev (or migration branch) ← SOURCE branch
+- Merge FROM: main ← TARGET branch
+- Command: git checkout dev; git merge main (DON'T DO THIS)
+```
+
+## Before Every Merge: Check These
+
+1. **Check current branch:**
+   ```bash
+   git branch
+   # Look for * indicating current branch
+   ```
+
+2. **Verify you're on the TARGET branch:**
+   - ✅ `main` - target for migration merges
+   - ✅ `feature/your-feature` - target for merging migration work
+   - ❌ `dev` - source branch, don't merge FROM here
+   - ❌ `feature/database-migration` - source branch, don't merge FROM here
+
+3. **Verify merge direction:**
+   - ✅ `git merge dev` (when on main) - correct
+   - ✅ `git merge practice/migration-stub` (when on feature branch) - correct
+   - ❌ `git merge main` (when on dev) - wrong direction!
+
+## Standard Merge Workflow
+
+### Merging Migration Work (dev → main)
+
+```bash
+# 1. Switch to TARGET branch
+git checkout main
+
+# 2. Verify you're on target
+git branch
+# Should show: * main
+
+# 3. Merge FROM source branch
+git merge dev
+
+# 4. Test after merge
+python task_aversion_app/app.py
+```
+
+### Merging Practice Branches
+
+```bash
+# 1. Switch to TARGET branch (feature branch)
+git checkout practice/feature-ui-tweak
+
+# 2. Verify you're on target
+git branch
+# Should show: * practice/feature-ui-tweak
+
+# 3. Merge FROM source branch (migration branch)
+git merge practice/migration-stub
+
+# 4. Test after merge
+python task_aversion_app/app.py
+```
+
+## If AI Assistant is About to Merge
+
+**BEFORE executing any merge command, AI must:**
+
+1. ✅ Check current branch with `git branch` or `git status`
+2. ✅ Confirm which branch is the TARGET (where you want changes to go)
+3. ✅ Confirm which branch is the SOURCE (where changes are coming from)
+4. ✅ Verify merge direction: SOURCE → TARGET
+5. ✅ Ensure user is on TARGET branch before merging
+
+**AI must NOT:**
+- ❌ Execute merge without checking current branch
+- ❌ Merge in wrong direction (TARGET → SOURCE)
+- ❌ Assume user is on correct branch
+
+## Visual Safety Check
+
+```
+Current Branch Check:
+  git status
+  git branch
+
+Should show:
+  On branch main              ← TARGET (correct)
+  or
+  On branch feature/xxx       ← TARGET (correct)
+  
+NOT:
+  On branch dev               ← SOURCE (wrong!)
+  On branch migration-xxx     ← SOURCE (wrong!)
+```
+
+## Merge Direction Examples
+
+### ✅ Correct Examples
+
+```bash
+# Example 1: Merging migration work into main
+git checkout main
+git merge dev
+# ✅ Correct: dev → main
+
+# Example 2: Merging migration stub into feature
+git checkout practice/feature-ui-tweak
+git merge practice/migration-stub
+# ✅ Correct: migration-stub → feature-ui-tweak
+```
+
+### ❌ Wrong Examples
+
+```bash
+# Example 1: Backwards merge
+git checkout dev
+git merge main
+# ❌ WRONG: main → dev (reversed!)
+
+# Example 2: Wrong branch
+git checkout practice/migration-stub
+git merge practice/feature-ui-tweak
+# ❌ WRONG: Should be feature → migration, not migration → feature
+```
+
+## Emergency: Merged in Wrong Direction?
+
+If you accidentally merged in wrong direction:
+
+```bash
+# Undo the merge (if not pushed yet)
+git reset --hard HEAD~1
+
+# Or if already committed:
+# Check git log, find merge commit, reset to before it
+git log --oneline --graph -5
+git reset --hard <commit-before-merge>
+```
+
+## Safety Reminder for User
+
+**Before merging, always ask yourself:**
+1. "Which branch am I on?" (check with `git branch`)
+2. "Is this the branch I want changes to GO TO?" (target)
+3. "Am I merging FROM the branch that HAS the changes?" (source)
+4. "Does the direction make sense?" (source → target)
+
+## Quick Reference
+
+```
+TARGET branches (merge TO these):
+- main
+- feature/your-feature
+- practice/your-feature
+
+SOURCE branches (merge FROM these):
+- dev
+- feature/database-migration
+- practice/migration-stub
+
+Rule: Always be ON target, merge FROM source
+```
