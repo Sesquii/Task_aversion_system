@@ -451,6 +451,15 @@ class Analytics:
                                      play_penalty_threshold: float = 2.0) -> float:
         """Calculate productivity score based on completion percentage vs time ratio.
         
+        Penalty Calibration:
+        - Play penalty: -0.003x per percentage (max -0.3x for 100% completion = -30 score)
+        - Idle penalty: Applied via tracking consistency multiplier (0.0 to 1.0)
+          - 50% idle time: ~0.63x multiplier (37% reduction)
+          - 75% idle time: ~0.39x multiplier (61% reduction)
+          - 100% idle time: 0.0x multiplier (100% reduction)
+        - Play penalty is calibrated to be less severe than idle penalty
+        - Sleep up to target (8 hours) is excluded from idle time calculation
+        
         Args:
             row: Task instance row with actual_dict, predicted_dict, task_type, completed_at
             self_care_tasks_per_day: Dictionary mapping date strings to count of self care tasks completed that day
@@ -562,14 +571,16 @@ class Analytics:
                     apply_penalty = play_time_today > 0
                 
                 if apply_penalty:
-                    # Productivity penalty from play: -0.01x multiplier per percentage of time completed compared to estimated time
+                    # Productivity penalty from play: -0.003x multiplier per percentage of time completed compared to estimated time
                     # Percentage = (time_actual / time_estimate) * 100
                     # This creates a negative score (penalty) for play tasks
+                    # Calibrated to be less severe than idle penalty: play penalty maxes out at -0.3x for 100% completion,
+                    # while idle penalty can reduce productivity by up to 100% (multiplier 0.0) when all time is untracked
                     if time_estimate > 0:
                         time_percentage = (time_actual / time_estimate) * 100.0
                     else:
                         time_percentage = 100.0
-                    multiplier = -0.01 * time_percentage
+                    multiplier = -0.003 * time_percentage
                     # Base score is completion percentage
                     base_score = completion_pct
                     score = base_score * multiplier
