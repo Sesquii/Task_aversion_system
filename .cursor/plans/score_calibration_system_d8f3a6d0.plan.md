@@ -1,9 +1,3 @@
----
-name: Score Calibration System
-overview: Create a comprehensive human-in-the-loop iterative calibration system for all scores and metrics, with decision matrices for each subsystem and a unified weights architecture compatible with future universal weights.
-todos: []
----
-
 # Score Calibration System - Comprehensive Plan
 
 ## Overview
@@ -18,61 +12,61 @@ This plan establishes a systematic, human-in-the-loop iterative process for cali
 
 1. **Productivity Score** (`calculate_productivity_score`)
 
-   - Location: `backend/analytics.py:449-610`
-   - Current weights/multipliers:
-     - Work: 3.0x to 5.0x (smooth transition based on completion_time_ratio)
-     - Self-care: multiplier = number of self-care tasks per day
-     - Play: -0.003x per percentage (penalty when play > 2x work)
-     - Weekly bonus/penalty: -0.01x per percentage above/below weekly average
-     - Burnout penalty: exponential decay when work > 8 hours with no play
+- Location: `backend/analytics.py:449-610`
+- Current weights/multipliers:
+    - Work: 3.0x to 5.0x (smooth transition based on completion_time_ratio)
+    - Self-care: multiplier = number of self-care tasks per day
+    - Play: -0.003x per percentage (penalty when play > 2x work)
+    - Weekly bonus/penalty: -0.01x per percentage above/below weekly average
+    - Burnout penalty: exponential decay when work > 8 hours with no play
 
 2. **Grit Score** (`calculate_grit_score`)
 
-   - Location: `backend/analytics.py:612-680`
-   - Current weights/multipliers:
-     - Persistence multiplier: 1.0 + (completion_count - 1) * 0.1 (max 2.0x)
-     - Time bonus: 1.0 + (time_ratio - 1.0) * 0.5 (when taking longer)
+- Location: `backend/analytics.py:612-680`
+- Current weights/multipliers:
+    - Persistence multiplier: 1.0 + (completion_count - 1) * 0.1 (max 2.0x)
+    - Time bonus: 1.0 + (time_ratio - 1.0) * 0.5 (when taking longer)
 
 3. **Life Balance Score** (`get_life_balance`)
 
-   - Location: `backend/analytics.py:1489-1595`
-   - Current formula: `50.0 + ((work_play_ratio - 0.5) * 100.0)`
-   - No explicit weights (simple linear transformation)
+- Location: `backend/analytics.py:1489-1595`
+- Current formula: `50.0 + ((work_play_ratio - 0.5) * 100.0)`
+- No explicit weights (simple linear transformation)
 
 4. **Composite Productivity Score** (`calculate_composite_productivity_score`)
 
-   - Location: `backend/analytics.py:2061-2080`
-   - Current weights: 40% efficiency, 40% volume, 20% consistency
+- Location: `backend/analytics.py:2061-2080`
+- Current weights: 40% efficiency, 40% volume, 20% consistency
 
 5. **Overall Improvement Ratio** (`calculate_overall_improvement_ratio`)
 
-   - Location: `backend/analytics.py:126-231`
-   - Current weights: 30% self-care, 40% relief, 30% performance balance
+- Location: `backend/analytics.py:126-231`
+- Current weights: 30% self-care, 40% relief, 30% performance balance
 
 6. **Aversion Multiplier System**
 
-   - Location: `backend/analytics.py:24-423`
-   - Difficulty bonus weights: 70% aversion, 30% load
-   - Improvement multiplier: exponential decay with k=30
-   - Combined: max(difficulty, improvement) + 0.1 bonus if both > 0.3
+- Location: `backend/analytics.py:24-423`
+- Difficulty bonus weights: 70% aversion, 30% load
+- Improvement multiplier: exponential decay with k=30
+- Combined: max(difficulty, improvement) + 0.1 bonus if both > 0.3
 
 7. **Composite Score** (`calculate_composite_score`)
 
-   - Location: `backend/analytics.py:1979-2059`
-   - Currently uses equal weights (1.0) by default
-   - Supports custom weights per component
+- Location: `backend/analytics.py:1979-2059`
+- Currently uses equal weights (1.0) by default
+- Supports custom weights per component
 
 8. **Time Tracking Consistency Score** (`calculate_time_tracking_consistency_score`)
 
-   - Location: `backend/analytics.py:1790-1977`
-   - Exponential formula: `100 × (1 - exp(-tracking_coverage × 2.0))`
-   - No explicit weights
+- Location: `backend/analytics.py:1790-1977`
+- Exponential formula: `100 × (1 - exp(-tracking_coverage × 2.0))`
+- No explicit weights
 
 9. **Work Volume Score** (`get_daily_work_volume_metrics`)
 
-   - Location: `backend/analytics.py:1597-1788`
-   - Target: 6 hours/day (360 minutes)
-   - Score: `100 × (1 - exp(-avg_work_time / 180))`
+- Location: `backend/analytics.py:1597-1788`
+- Target: 6 hours/day (360 minutes)
+- Score: `100 × (1 - exp(-avg_work_time / 180))`
 
 10. **Obstacles Score** (`calculate_obstacles_scores`)
 
@@ -103,9 +97,7 @@ This plan establishes a systematic, human-in-the-loop iterative process for cali
 
 ### 2.1 Decision Matrix Template
 
-For each score subsystem, create a decision matrix with:
-
-**Dimensions:**
+For each score subsystem, create a decision matrix with:**Dimensions:**
 
 1. **Purpose**: What does this score measure?
 2. **Scale**: What is the output range?
@@ -129,9 +121,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 1: Productivity Score
 
-**Analysis Document**: `docs/score_calibration/productivity_score_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/productivity_score_analysis.md`**Key Questions:**
 
 - Should work multiplier (3.0x-5.0x) be configurable?
 - Is play penalty (-0.003x) appropriately calibrated vs idle penalty?
@@ -142,11 +132,11 @@ For each score subsystem, create a decision matrix with:
 
 1. Create test scenarios:
 
-   - High efficiency work (ratio > 1.5)
-   - Low efficiency work (ratio < 1.0)
-   - Balanced work/play day
-   - Excessive play day (play > 2x work)
-   - Burnout scenario (8+ hours work, no play)
+- High efficiency work (ratio > 1.5)
+- Low efficiency work (ratio < 1.0)
+- Balanced work/play day
+- Excessive play day (play > 2x work)
+- Burnout scenario (8+ hours work, no play)
 
 2. Set expected score ranges for each scenario
 3. Adjust weights to match expectations
@@ -167,9 +157,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 2: Grit Score
 
-**Analysis Document**: `docs/score_calibration/grit_score_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/grit_score_analysis.md`**Key Questions:**
 
 - Is persistence multiplier growth rate (0.1 per completion) appropriate?
 - Should time bonus rate (0.5) be configurable?
@@ -183,9 +171,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 3: Life Balance Score
 
-**Analysis Document**: `docs/score_calibration/life_balance_score_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/life_balance_score_analysis.md`**Key Questions:**
 
 - Should self-care be included in balance calculation?
 - Is linear transformation (50 + (ratio - 0.5) * 100) appropriate?
@@ -200,9 +186,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 4: Composite Productivity Score
 
-**Analysis Document**: `docs/score_calibration/composite_productivity_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/composite_productivity_analysis.md`**Key Questions:**
 
 - Are current weights (40/40/20) optimal?
 - Should weights be user-configurable?
@@ -217,9 +201,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 5: Overall Improvement Ratio
 
-**Analysis Document**: `docs/score_calibration/improvement_ratio_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/improvement_ratio_analysis.md`**Key Questions:**
 
 - Are weights (30/40/30) appropriate?
 - Should exponential decay constant (k=40) be adjustable?
@@ -235,9 +217,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 6: Aversion Multiplier System
 
-**Analysis Document**: `docs/score_calibration/aversion_multiplier_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/aversion_multiplier_analysis.md`**Key Questions:**
 
 - Is 70/30 split (aversion/load) optimal?
 - Should exponential decay constants be configurable?
@@ -254,9 +234,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 7: Composite Score
 
-**Analysis Document**: `docs/score_calibration/composite_score_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/composite_score_analysis.md`**Key Questions:**
 
 - What should default weights be for each component?
 - Should weights be context-dependent (e.g., different for different user goals)?
@@ -270,9 +248,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 8: Time Tracking Consistency Score
 
-**Analysis Document**: `docs/score_calibration/tracking_consistency_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/tracking_consistency_analysis.md`**Key Questions:**
 
 - Is exponential decay constant (2.0) appropriate?
 - Should sleep cap (8 hours) be configurable?
@@ -285,9 +261,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 9: Work Volume Score
 
-**Analysis Document**: `docs/score_calibration/work_volume_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/work_volume_analysis.md`**Key Questions:**
 
 - Is target (6 hours/day) appropriate for all users?
 - Should exponential decay constant (180) be adjustable?
@@ -300,9 +274,7 @@ For each score subsystem, create a decision matrix with:
 
 #### Score 10: Obstacles Score
 
-**Analysis Document**: `docs/score_calibration/obstacles_score_analysis.md`
-
-**Key Questions:**
+**Analysis Document**: `docs/score_calibration/obstacles_score_analysis.md`**Key Questions:**
 
 - Which formula variant should be primary?
 - How should spike amount and relief be weighted?
@@ -340,11 +312,11 @@ SCORE_WEIGHTS_CONFIG = {
 }
 ```
 
+
+
 ### 3.2 Weight Naming Convention
 
-**Naming Pattern**: `{score_name}_{parameter_name}`
-
-**Examples:**
+**Naming Pattern**: `{score_name}_{parameter_name}`**Examples:**
 
 - `productivity_work_multiplier_min` (not `work_multiplier_min`)
 - `grit_persistence_growth_rate` (not `persistence_growth_rate`)
@@ -354,9 +326,7 @@ SCORE_WEIGHTS_CONFIG = {
 
 ### 3.3 Weight Storage
 
-**Location**: `backend/user_state.py` (extend existing `get_score_weights`/`set_score_weights`)
-
-**Structure**:
+**Location**: `backend/user_state.py` (extend existing `get_score_weights`/`set_score_weights`)**Structure**:
 
 ```python
 {
@@ -366,6 +336,8 @@ SCORE_WEIGHTS_CONFIG = {
     # ... per-score weights
 }
 ```
+
+
 
 ### 3.4 Weight Validation
 
@@ -409,20 +381,20 @@ Create validation functions:
 
 - Location: `ui/score_calibration_page.py`
 - Features:
-  - View all current weights
-  - Adjust weights with sliders
-  - See real-time score calculations
-  - Test with sample scenarios
-  - Save/load weight configurations
+- View all current weights
+- Adjust weights with sliders
+- See real-time score calculations
+- Test with sample scenarios
+- Save/load weight configurations
 
 **Tool 2: Calibration Analysis Scripts**
 
 - Location: `scripts/calibrate_scores.py`
 - Features:
-  - Run test scenarios
-  - Generate calibration reports
-  - Compare weight configurations
-  - Export calibration data
+- Run test scenarios
+- Generate calibration reports
+- Compare weight configurations
+- Export calibration data
 
 **Tool 3: Weight Comparison Tool**
 
@@ -444,7 +416,7 @@ Create validation functions:
 
 ### 5.1 File Structure
 
-```
+```javascript
 task_aversion_app/
 ├── backend/
 │   ├── score_weights.py          # NEW: Unified weight configuration
@@ -469,6 +441,8 @@ task_aversion_app/
         ├── work_volume_analysis.md
         └── obstacles_score_analysis.md
 ```
+
+
 
 ### 5.2 Implementation Order
 
@@ -500,35 +474,13 @@ UNIVERSAL_WEIGHTS = {
 }
 ```
 
+
+
 ## Phase 6: Decision Matrix Template
 
 ### 6.1 Standard Decision Matrix
 
-For each score, complete this matrix:
-
-| Dimension | Value | Rationale |
-
-|-----------|-------|-----------|
-
-| **Purpose** | | |
-
-| **Scale** | | |
-
-| **Input Factors** | | |
-
-| **Current Weights** | | |
-
-| **Calibration Criteria** | | |
-
-| **Sensitivity** | | |
-
-| **Literature Support** | | |
-
-| **User Expectations** | | |
-
-| **Proposed Weights** | | |
-
-| **Validation Method** | | |
+For each score, complete this matrix:| Dimension | Value | Rationale ||-----------|-------|-----------|| **Purpose** | | || **Scale** | | || **Input Factors** | | || **Current Weights** | | || **Calibration Criteria** | | || **Sensitivity** | | || **Literature Support** | | || **User Expectations** | | || **Proposed Weights** | | || **Validation Method** | | |
 
 ### 6.2 Calibration Criteria Framework
 
@@ -560,22 +512,22 @@ For each score, complete this matrix:
 
 1. **High Priority** (Core scores):
 
-   - Productivity Score
-   - Composite Score
-   - Life Balance Score
+- Productivity Score
+- Composite Score
+- Life Balance Score
 
 2. **Medium Priority** (Supporting scores):
 
-   - Grit Score
-   - Composite Productivity Score
-   - Aversion Multiplier System
+- Grit Score
+- Composite Productivity Score
+- Aversion Multiplier System
 
 3. **Lower Priority** (Specialized scores):
 
-   - Overall Improvement Ratio
-   - Time Tracking Consistency
-   - Work Volume Score
-   - Obstacles Score
+- Overall Improvement Ratio
+- Time Tracking Consistency
+- Work Volume Score
+- Obstacles Score
 
 ## Phase 8: Success Criteria
 
@@ -603,4 +555,3 @@ For each score, complete this matrix:
 2. Create `backend/score_weights.py` with initial structure
 3. Begin with Productivity Score analysis (highest priority)
 4. Set up calibration dashboard framework
-5. Schedule iterative calibration sessions

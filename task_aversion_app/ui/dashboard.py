@@ -1365,45 +1365,34 @@ def build_dashboard(task_manager):
                     ).classes("w-full mb-2")
                     print(f"[Dashboard] Search input created: {search_input}")
                     
-                    def handle_template_search(e):
-                        """Handle search input changes."""
-                        print(f"[Dashboard] handle_template_search() called with event: {e}")
-                        print(f"[Dashboard] Event type: {type(e)}")
-                        if hasattr(e, 'args'):
-                            print(f"[Dashboard] Event args: {repr(e.args)}, type: {type(e.args)}")
-                        
-                        # Extract value from event
-                        value = None
-                        if hasattr(e, 'args'):
-                            # Handle case where args is directly a string (most common for input events)
-                            if isinstance(e.args, str):
-                                value = e.args
-                                print(f"[Dashboard] Extracted string value directly from args: {repr(value)}")
-                            elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                                value = e.args[0]
-                                print(f"[Dashboard] Extracted value from list/tuple args: {repr(value)}")
-                            elif isinstance(e.args, dict):
-                                value = e.args.get('value') or e.args.get('label')
-                                print(f"[Dashboard] Extracted value from dict args: {repr(value)}")
-                        elif hasattr(e, 'value'):
-                            value = e.value
-                            print(f"[Dashboard] Extracted value from event.value: {repr(value)}")
-                        else:
-                            # Try to get value directly from input
-                            try:
-                                value = search_input.value
-                                print(f"[Dashboard] Extracted value from search_input.value: {repr(value)}")
-                            except Exception as ex:
-                                print(f"[Dashboard] Could not get value from input: {ex}")
-                        
-                        print(f"[Dashboard] Final extracted search value: {repr(value)}")
-                        search_query = str(value).strip() if value else None
-                        if search_query == '':
-                            search_query = None
-                        print(f"[Dashboard] Calling refresh_templates with search_query='{search_query}'")
-                        refresh_templates(search_query=search_query)
+                    # Debounce timer for template search input
+                    template_search_debounce_timer = None
                     
-                    # Bind the on_change event properly using NiceGUI pattern
+                    def handle_template_search(e):
+                        """Handle search input changes with debouncing."""
+                        nonlocal template_search_debounce_timer
+                        
+                        # Cancel existing timer if any
+                        if template_search_debounce_timer is not None:
+                            template_search_debounce_timer.deactivate()
+                        
+                        # Create a debounced function that will execute after user stops typing
+                        def apply_template_search():
+                            """Apply the template search filter after debounce delay."""
+                            try:
+                                current_value = search_input.value
+                                search_query = str(current_value).strip() if current_value else None
+                                if search_query == '':
+                                    search_query = None
+                                print(f"[Dashboard] Calling refresh_templates with search_query='{search_query}'")
+                                refresh_templates(search_query=search_query)
+                            except Exception as ex:
+                                print(f"[Dashboard] Error in debounced template search: {ex}")
+                        
+                        # Create a timer that will execute after 300ms of no typing
+                        template_search_debounce_timer = ui.timer(0.3, apply_template_search, once=True)
+                    
+                    # Use debounced 'update:model-value' event to prevent refresh on every keystroke
                     search_input.on('update:model-value', handle_template_search)
                     print("[Dashboard] Search input event handler attached")
                     
@@ -1733,8 +1722,18 @@ def build_recommendations_section():
         # Store selected metrics based on search
         selected_metrics_state = default_metrics.copy()
         
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
         def handle_metric_search(e):
-            """Handle metric search input changes."""
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
             value = None
             if hasattr(e, 'args'):
                 if isinstance(e.args, str):
@@ -1751,25 +1750,36 @@ def build_recommendations_section():
                 except Exception:
                     pass
             
-            search_query = str(value).strip().lower() if value else None
-            if search_query == '':
-                search_query = None
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    print(f"[Dashboard] Metric search: '{search_query}' -> {len(selected_metrics_state)} metrics selected: {selected_metrics_state}")
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
+                except Exception as ex:
+                    print(f"[Dashboard] Error in debounced search: {ex}")
             
-            # Filter metrics based on search
-            if search_query:
-                filtered_metrics = [
-                    label for label in metric_labels
-                    if search_query in label.lower()
-                ]
-                # If search matches nothing, show all metrics (better UX than showing nothing)
-                selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-            else:
-                # Empty search shows default metrics
-                selected_metrics_state[:] = default_metrics
-            
-            print(f"[Dashboard] Metric search: '{search_query}' -> {len(selected_metrics_state)} metrics selected: {selected_metrics_state}")
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
         
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
         metric_search_input.on('update:model-value', handle_metric_search)
         
         # Filters row
