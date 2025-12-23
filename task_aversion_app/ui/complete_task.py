@@ -2,9 +2,11 @@
 from nicegui import ui
 from fastapi import Request
 from backend.instance_manager import InstanceManager
+from backend.user_state import UserStateManager
 import json
 
 im = InstanceManager()
+user_state = UserStateManager()
 
 def complete_task_page(task_manager, emotion_manager):
 
@@ -257,7 +259,7 @@ def complete_task_page(task_manager, emotion_manager):
                 pass
 
         # ----- Emotion Tracking -----
-        ui.label("Emotional State After Completion").classes("text-lg font-semibold mt-4")
+        ui.label("Current Emotional State").classes("text-lg font-semibold mt-4")
         
         # Load initial emotion values from predicted data (from initialization)
         initial_emotion_values = predicted_data.get('emotion_values', {})
@@ -277,6 +279,10 @@ def complete_task_page(task_manager, emotion_manager):
                     initial_emotion_values = {emotion: 50 for emotion in old_emotions}
                 else:
                     initial_emotion_values = {}
+        
+        # If no initial emotions from this task, load persistent emotions
+        if not initial_emotion_values:
+            initial_emotion_values = user_state.get_persistent_emotions()
         
         # Load actual emotion values if they exist (for editing)
         actual_emotion_values = current_actual_data.get('emotion_values', {})
@@ -442,23 +448,32 @@ def complete_task_page(task_manager, emotion_manager):
                 return
 
             # Collect emotion values from sliders
+            # Check all emotions that have sliders (even if not in all_emotions)
+            # This ensures we capture emotions that were in persistent state but removed from input
             # Filter out emotions with 0 values (0 means emotion is not present/not being tracked)
             # This keeps the data clean: if an emotion was initialized but set to 0 on completion,
             # it means the emotion is no longer present and won't clutter the data.
             # When loading, initialized emotions are still shown so users can see the full picture.
             emotion_values = {}
+            # Check all emotions that have sliders (including ones that might have been removed from input)
+            for emotion in emotion_sliders.keys():
+                value = int(emotion_sliders[emotion].value)
+                # Only store non-zero values (0 means emotion is not present and should be removed)
+                if value > 0:
+                    emotion_values[emotion] = value
+            
+            # Also include emotions in all_emotions that don't have sliders yet (new emotions)
             for emotion in all_emotions:
-                if emotion in emotion_sliders:
-                    value = int(emotion_sliders[emotion].value)
-                    # Only store non-zero values (0 means emotion is not present)
-                    if value > 0:
-                        emotion_values[emotion] = value
-                else:
+                if emotion not in emotion_sliders:
                     # Fallback to default if slider doesn't exist
                     default_val = get_emotion_default_value(emotion)
                     # Only store if > 0
                     if default_val > 0:
                         emotion_values[emotion] = default_val
+            
+            # Save emotions to persistent state so they carry over to other tasks
+            # Setting to 0 removes the emotion from persistent state
+            user_state.set_persistent_emotions(emotion_values)
 
             # Get completion percentage, defaulting to 100 if not provided
             completion_value = completion_pct.value if completion_pct.value is not None else 100

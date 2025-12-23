@@ -4,8 +4,10 @@ import json
 
 from fastapi import Request
 from backend.instance_manager import InstanceManager
+from backend.user_state import UserStateManager
 
 im = InstanceManager()
+user_state = UserStateManager()
 
 
 def initialize_task_page(task_manager, emotion_manager):
@@ -216,9 +218,9 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
-            ui.label("Emotional Context").classes("text-lg font-semibold")
+            ui.label("Current Emotional State").classes("text-lg font-semibold")
 
-            # Load existing emotion values from predicted data
+            # Load existing emotion values from predicted data (task-specific)
             emotion_values_dict = predicted_data.get('emotion_values', {})
             if isinstance(emotion_values_dict, str):
                 try:
@@ -236,6 +238,10 @@ def initialize_task_page(task_manager, emotion_manager):
                         emotion_values_dict = {emotion: 50 for emotion in old_emotions}
                     else:
                         emotion_values_dict = {}
+            
+            # If no task-specific emotions exist, load persistent emotions
+            if not emotion_values_dict:
+                emotion_values_dict = user_state.get_persistent_emotions()
 
             # Single text input for emotions (comma-separated or one at a time)
             existing_emotions = list(emotion_values_dict.keys()) if emotion_values_dict else []
@@ -340,20 +346,29 @@ def initialize_task_page(task_manager, emotion_manager):
                     estimate_val = 0
 
                 # Collect emotion values from sliders
+                # Check all emotions that have sliders (even if not in emotion_list)
+                # This ensures we capture emotions that were in persistent state but removed from input
                 # Filter out emotions with 0 values (0 means emotion is not present/not being tracked)
                 # This keeps the data clean: if an emotion is set to 0, it's effectively removed from tracking
                 # The emotions list is still stored separately for backward compatibility
                 emotion_values = {}
+                # Check all emotions that have sliders (including ones that might have been removed from input)
+                for emotion in emotion_sliders.keys():
+                    value = int(emotion_sliders[emotion].value)
+                    # Only store non-zero values (0 means emotion is not present and should be removed)
+                    if value > 0:
+                        emotion_values[emotion] = value
+                
+                # Also include emotions in emotion_list that don't have sliders yet (new emotions)
                 for emotion in emotion_list:
-                    if emotion in emotion_sliders:
-                        value = int(emotion_sliders[emotion].value)
-                        # Only store non-zero values (0 means emotion is not present)
-                        if value > 0:
-                            emotion_values[emotion] = value
-                    else:
+                    if emotion not in emotion_sliders:
                         # If slider doesn't exist, use default 50 (but only if > 0)
                         # This shouldn't happen in normal flow, but handle it gracefully
                         emotion_values[emotion] = 50
+                
+                # Save emotions to persistent state so they carry over to other tasks
+                # Setting to 0 removes the emotion from persistent state
+                user_state.set_persistent_emotions(emotion_values)
 
                 # Determine if this is the first time doing the task
                 # Check if there are any other initialized instances for this task

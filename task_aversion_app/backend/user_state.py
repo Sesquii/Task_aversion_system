@@ -139,6 +139,45 @@ class UserStateManager:
         weights_json = json.dumps(weights)
         return self.update_preference(user_id, "composite_score_weights", weights_json)
 
+    def get_persistent_emotions(self, user_id: str = "default") -> Dict[str, int]:
+        """Get persistent emotion values that persist across tasks.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Dict of emotion -> value (0-100)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        emotion_json = prefs.get("persistent_emotion_values", "")
+        if not emotion_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(emotion_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_persistent_emotions(self, emotion_values: Dict[str, int], user_id: str = "default") -> Dict[str, Any]:
+        """Set persistent emotion values that persist across tasks.
+        
+        Args:
+            emotion_values: Dict of emotion -> value (0-100)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Filter out zero values to keep data clean
+        filtered = {k: v for k, v in emotion_values.items() if v > 0}
+        emotion_json = json.dumps(filtered)
+        return self.update_preference(user_id, "persistent_emotion_values", emotion_json)
+
     # -----------------------------
     # JavaScript helpers
     # -----------------------------
