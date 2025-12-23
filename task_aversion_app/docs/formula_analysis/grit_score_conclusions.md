@@ -5,20 +5,15 @@
 - Keep the current analysis file (now in this folder) as reference.
 
 ## Persistence Scaling (requested changes)
-- Two-stage curve: square-root-like up to 25× completions, then logarithmic afterward.
-- Target anchors (approximate):
-  - 2× ≈ 1.015x
-  - 10× ≈ 1.2x
-  - 25× ≈ 1.5x
-  - 50× ≈ 2.0x
-  - 100× ≈ 5.0x (but see familiarity decay below)
-- After very high repetitions (e.g., 100×+), introduce a **familiarity decay** so routine/habit does not keep inflating grit. Option: taper/decline after 100×, and strongly downweight beyond 1000×.
+- Implemented two-stage growth (power ~sqrt to log-like):
+  - Approx anchors: 2× ≈ 1.02x, 10× ≈ 1.22x, 25× ≈ 1.6x, 50× ≈ 2.6x, 100× ≈ 4.1x (before decay)
+- Familiarity decay after 100×: multiplier tapers via decay factor (100→1.0, 300→~0.5, 500→~0.33, 1000→~0.18), capped at 5.0 overall to prevent runaway.
 
 ## Time Bonus Expectations
-- Tie time bonus to completion count and task difficulty.
-- After ~50 completions, time bonus should become negligible; early runs should get most of the time-based grit credit (especially the first completion when it takes 2× longer but finishes 100% despite adversity/negative affect).
-- Time bonus should weight difficulty over time; harder tasks get more credit for taking longer.
-- Consider capping and/or diminishing returns on extreme overruns so it can’t dominate.
+- Difficulty-weighted time bonus with diminishing returns and cap (~3.0x raw):
+  - 1–2× overrun: up to 1.5x; beyond 2× grows slowly (0.2 per extra excess), capped.
+  - Weighted by task difficulty: easy tasks get less lift, hard tasks get full lift.
+  - Fades after repetitions: fade factor ~1.0 at 10 completions, ~0.5 at 50, ~0.31 at 90 → negligible after many repeats.
 
 ## Pop-up / Self-report Idea
 - If actual time > ~2× estimate, show a prompt like:
@@ -36,8 +31,8 @@
 - Needs a dedicated design pass before coding.
 
 ## Implementation Notes (for future work)
-- Design the hybrid sqrt→log curve to hit the anchors; it can be approximate rather than exact.
-- Add familiarity decay after 100× (taper or downweight multiplier; possibly separate component).
-- Rework time bonus to depend on completion count + difficulty; apply diminishing returns and a cap.
+- Implemented hybrid growth and decay as above.
+- Time bonus now depends on difficulty, has diminishing returns and cap, and fades with repetition.
+- Passion factor added: grit = persistence_score × passion_factor (relief vs emotional load, modest range 0.5–1.5, slightly damped if not fully completed).
 - Add the overrun pop-up flow and the survey-correlation rule(s) once UI patterns are chosen (multiple choice + optional free text).
 

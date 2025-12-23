@@ -610,29 +610,15 @@ class Analytics:
             return 0.0
     
     def calculate_grit_score(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
-        """Calculate grit score that rewards taking longer on tasks you're persistent with.
+        """Calculate grit score with:
+        - Persistence component (sqrt→log growth, familiarity decay after very high counts)
+        - Time bonus that weights difficulty, uses diminishing returns, and fades after many repetitions
+        - Passion factor (relief vs emotional load) multiplied with persistence score
         
-        Grit score rewards persistence (doing the same task multiple times) and taking longer
-        on those persistent tasks. This is separate from productivity score, which rewards efficiency.
-        
-        Formula:
-        - Base score = completion percentage
-        - Persistence multiplier = min(2.0, 1.0 + (completion_count - 1) * 0.1)
-          - 1 completion: 1.0x (no bonus)
-          - 2 completions: 1.1x (10% bonus)
-          - 3 completions: 1.2x (20% bonus)
-          - ... up to 2.0x max (11+ completions)
-        - Time bonus = rewards taking longer than estimated (opposite of productivity)
-          - If time_actual > time_estimate: bonus = 1.0 + (time_ratio - 1.0) * 0.5
-          - If time_actual <= time_estimate: bonus = 1.0 (no bonus for efficiency)
-        
-        Args:
-            row: Task instance row with actual_dict, predicted_dict, task_id
-            task_completion_counts: Dictionary mapping task_id to count of completed instances
-            
         Returns:
-            Grit score (0-200+ range, higher = more grit/persistence)
+            Grit score (higher = more grit/persistence with passion), 0 on error.
         """
+        import math
         try:
             actual_dict = row.get('actual_dict', {})
             predicted_dict = row.get('predicted_dict', {})
@@ -641,38 +627,63 @@ class Analytics:
             if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
                 return 0.0
             
-            # Get completion percentage and time data
             completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
             time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
             time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
             
-            # Base score is completion percentage
-            base_score = completion_pct
+            # --- Persistence multiplier: sqrt→log growth with familiarity decay ---
+            # Raw growth: power curve to approximate anchors (2x~1.02, 10x~1.22, 25x~1.6, 50x~2.6, 100x~4.1)
+            raw_multiplier = 1.0 + 0.02 * max(0, completion_count - 1) ** 1.13
+            # Familiarity decay after 100+ completions: taper as it becomes routine
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)  # 300→0.5, 500→0.33, 1000→~0.18
+            else:
+                decay = 1.0
+            persistence_multiplier = max(1.0, min(5.0, raw_multiplier * decay))
             
-            # Calculate persistence multiplier based on how many times this task has been completed
-            completion_count = task_completion_counts.get(task_id, 1)
-            # Persistence bonus: 10% per additional completion beyond first, max 2.0x
-            persistence_multiplier = min(2.0, 1.0 + (completion_count - 1) * 0.1)
-            
-            # Calculate time bonus (rewards taking longer, opposite of productivity)
+            # --- Time bonus: difficulty-weighted, diminishing returns, fades after many reps ---
+            time_bonus = 1.0
             if time_estimate > 0 and time_actual > 0:
                 time_ratio = time_actual / time_estimate
                 if time_ratio > 1.0:
-                    # Taking longer than estimated: bonus = 1.0 + (excess_time * 0.5)
-                    # Example: 2x longer = 1.0 + (1.0 * 0.5) = 1.5x bonus
-                    time_bonus = 1.0 + ((time_ratio - 1.0) * 0.5)
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.5)  # up to 1.5x at 2x longer
+                    else:
+                        base_time_bonus = 1.5 + ((excess - 1.0) * 0.2)  # diminishing beyond 2x
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    # Difficulty weighting (harder tasks get more credit)
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    # Fade time bonus after many repetitions (negligible after ~50)
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)  # 10→1.0, 50→0.5, 90→~0.31
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
                 else:
-                    # Taking less time: no bonus (efficiency is rewarded in productivity, not grit)
                     time_bonus = 1.0
-            else:
-                time_bonus = 1.0
             
-            # Final score = base * persistence * time_bonus
-            score = base_score * persistence_multiplier * time_bonus
+            # --- Passion factor: relief vs emotional load (balanced, modest range) ---
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm  # positive if relief outweighs emotional load
+            passion_factor = 1.0 + passion_delta * 0.5  # modest weighting
+            # If not fully completed, dampen passion a bit
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
             
-            return score
+            # Base persistence score (before passion factor)
+            persistence_score = completion_pct * persistence_multiplier * time_bonus
+            grit_score = persistence_score * passion_factor
+            
+            return float(grit_score)
         
-        except (KeyError, TypeError, ValueError, AttributeError) as e:
+        except (KeyError, TypeError, ValueError, AttributeError):
             return 0.0
     
     @staticmethod
