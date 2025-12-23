@@ -1,0 +1,270 @@
+# Analytics Emotional Correlation Requirements
+
+## Mandatory Emotional Correlation Pass
+
+**CRITICAL RULE**: Every time analytics code is modified (new scores, formula changes, weight adjustments, new metrics), a **mandatory emotional correlation pass** must be performed before finalizing the change.
+
+## What Triggers This Rule
+
+Any change to:
+- `backend/analytics.py` (new methods, formula modifications, score calculations)
+- Score weights or multipliers
+- New metrics or KPIs
+- Composite score components
+- Recommendation algorithms
+- Any file that calculates or aggregates task performance metrics
+
+## Required Correlation Analysis Steps
+
+### Step 1: Extract Emotion Data
+
+Before implementing or modifying analytics, extract emotion data from task instances:
+
+```python
+# Pattern for extracting emotions from task instances
+def extract_emotion_data(df):
+    """Extract emotion values from predicted/actual JSON columns."""
+    emotion_data = []
+    for idx, row in df.iterrows():
+        predicted = json.loads(row.get('predicted', '{}') or '{}')
+        actual = json.loads(row.get('actual', '{}') or '{}')
+        
+        # Get emotion_values from both predicted and actual
+        pred_emotions = predicted.get('emotion_values', {})
+        if isinstance(pred_emotions, str):
+            pred_emotions = json.loads(pred_emotions)
+        
+        actual_emotions = actual.get('emotion_values', {})
+        if isinstance(actual_emotions, str):
+            actual_emotions = json.loads(actual_emotions)
+        
+        # Also check legacy 'emotions' list field
+        if not pred_emotions and 'emotions' in predicted:
+            pred_emotions = {e: 50 for e in predicted['emotions'] if e}
+        
+        emotion_data.append({
+            'instance_id': row.get('instance_id'),
+            'predicted_emotions': pred_emotions,
+            'actual_emotions': actual_emotions,
+            'relief_score': row.get('relief_score'),
+            'completion_percent': extract_completion(row),
+            'duration_minutes': row.get('duration_minutes'),
+            'cognitive_load': row.get('cognitive_load'),
+            'emotional_load': row.get('emotional_load'),
+            # ... other metrics
+        })
+    return pd.DataFrame(emotion_data)
+```
+
+### Step 2: Define Correlation Hypotheses
+
+For each analytics change, document expected correlations. Common patterns to explore:
+
+#### High-Positive Emotions (Focused, Determined, Excited, Productive)
+**Hypothesis**: High positive emotions (80-100) correlate with:
+- ✅ Higher completion percentages (often >100% over-completion)
+- ✅ Longer task duration (more time invested)
+- ✅ Higher work output per task
+- ✅ Better quality outcomes (higher relief scores)
+- ✅ Lower procrastination (faster start times)
+- ✅ Higher cognitive engagement (cognitive_load may increase but efficiency improves)
+
+**Inferred Pattern**: 
+- `emotion_value >= 80` (Focused/Determined) → expect `completion_percent >= 100`, `duration_ratio > 1.0`, `relief_score > avg`
+
+#### High-Negative Emotions (Stressed, Anxious, Dread, Overwhelmed)
+**Hypothesis**: High negative emotions (80-100) correlate with:
+- ⚠️ Variable completion (may rush or avoid)
+- ⚠️ Higher emotional_load scores
+- ⚠️ Longer delays (procrastination)
+- ⚠️ Lower efficiency (time_actual > time_estimate)
+- ⚠️ Lower relief scores (less satisfaction)
+
+**Inferred Pattern**:
+- `emotion_value >= 80` (Stressed/Anxious) → expect `delay_minutes > avg`, `emotional_load > avg`, `relief_score < avg`
+
+#### Neutral/Low Emotions (Neutral, Calm, Relaxed)
+**Hypothesis**: Neutral emotions (0-30) correlate with:
+- 📊 Baseline performance
+- 📊 Predictable completion rates
+- 📊 Standard time estimates
+- 📊 Moderate relief scores
+
+#### Emotional State Transitions
+**Hypothesis**: Changes from predicted → actual emotions correlate with:
+- 📈 Negative → Positive: Higher completion, better outcomes
+- 📉 Positive → Negative: Lower completion, worse outcomes
+- ➡️ Stable emotions: Predictable performance
+
+### Step 3: Calculate Correlation Metrics
+
+For each new score/formula, calculate correlations with emotions:
+
+```python
+def analyze_emotion_correlations(emotion_df, score_column):
+    """Calculate correlations between emotions and a score/metric."""
+    correlations = {}
+    
+    # Get all unique emotions
+    all_emotions = set()
+    for emotions_dict in emotion_df['predicted_emotions']:
+        all_emotions.update(emotions_dict.keys())
+    for emotions_dict in emotion_df['actual_emotions']:
+        all_emotions.update(emotions_dict.keys())
+    
+    for emotion in all_emotions:
+        # Extract emotion values for this emotion
+        emotion_values = []
+        scores = []
+        
+        for idx, row in emotion_df.iterrows():
+            # Check predicted emotions
+            pred_val = row['predicted_emotions'].get(emotion, 0)
+            # Check actual emotions
+            actual_val = row['actual_emotions'].get(emotion, 0)
+            # Use max or average
+            emotion_val = max(pred_val, actual_val) if pred_val or actual_val else None
+            
+            if emotion_val is not None and emotion_val > 0:
+                emotion_values.append(emotion_val)
+                scores.append(row[score_column])
+        
+        if len(emotion_values) >= 3:  # Minimum sample size
+            corr_coef, p_value = stats.pearsonr(emotion_values, scores)
+            correlations[emotion] = {
+                'correlation': corr_coef,
+                'p_value': p_value,
+                'sample_size': len(emotion_values),
+                'mean_emotion': np.mean(emotion_values),
+                'mean_score': np.mean(scores)
+            }
+    
+    return correlations
+```
+
+### Step 4: Test Against Actual Data
+
+After implementing analytics change:
+
+1. **Run correlation analysis** on existing task instances
+2. **Compare results** to hypotheses
+3. **Document findings**:
+   - Which correlations are confirmed?
+   - Which correlations are unexpected?
+   - Are there emotion-specific patterns that should influence the formula?
+
+### Step 5: Consider Emotional Optimization
+
+Based on correlation findings, consider:
+
+#### Should the formula account for emotional state?
+- **Example**: If "Focused" (80+) correlates with 120% completion, should productivity score reward this?
+- **Example**: If "Stressed" (80+) correlates with longer delays, should procrastination score account for this?
+
+#### Should emotions be used as inputs?
+- **Example**: Use predicted emotions to adjust expected completion
+- **Example**: Use actual emotions to weight relief scores
+
+#### Should emotional patterns inform recommendations?
+- **Example**: Recommend tasks that historically improve emotional state
+- **Example**: Avoid recommending high-load tasks when negative emotions are high
+
+## Implementation Checklist
+
+For every analytics change, verify:
+
+- [ ] Emotion data extraction code is present/updated
+- [ ] Correlation hypotheses are documented
+- [ ] Correlation analysis is run on sample data
+- [ ] Results are compared to hypotheses
+- [ ] Unexpected correlations are investigated
+- [ ] Formula/weights are adjusted if emotional patterns suggest optimization
+- [ ] Documentation includes emotional correlation findings
+
+## Example: Adding a New Score
+
+```python
+# BEFORE finalizing new score calculation:
+
+# 1. Extract emotions
+emotion_df = extract_emotion_data(task_instances_df)
+
+# 2. Calculate new score
+task_instances_df['new_score'] = calculate_new_score(...)
+
+# 3. Merge emotion data
+analysis_df = task_instances_df.merge(emotion_df, on='instance_id')
+
+# 4. Run correlations
+correlations = analyze_emotion_correlations(analysis_df, 'new_score')
+
+# 5. Review findings
+for emotion, stats in correlations.items():
+    if abs(stats['correlation']) > 0.3 and stats['p_value'] < 0.05:
+        print(f"Significant correlation: {emotion} ↔ new_score: {stats['correlation']:.2f}")
+        # Consider: Should new_score account for this emotion?
+
+# 6. Adjust formula if needed based on emotional patterns
+# 7. Document findings in code comments or analytics docs
+```
+
+## Specific Correlations to Always Check
+
+### Core Metrics
+- **Completion %** vs emotions (especially Focused, Determined, Stressed)
+- **Duration ratio** (actual/estimated) vs emotions
+- **Relief score** vs emotions
+- **Procrastination score** vs emotions (especially negative emotions)
+- **Proactive score** vs emotions (especially positive emotions)
+
+### Load Metrics
+- **Cognitive load** vs emotions (Focused may increase cognitive but improve efficiency)
+- **Emotional load** vs emotions (obvious correlation, but check magnitude)
+- **Net load** vs emotions
+
+### Composite Scores
+- **Productivity score** vs emotions
+- **Grit score** vs emotions
+- **Composite score** vs emotions
+
+### Behavioral Metrics
+- **Delay minutes** vs emotions
+- **Time tracking consistency** vs emotions
+- **Work volume** vs emotions
+
+## Documentation Requirements
+
+When adding/modifying analytics:
+
+1. **Add docstring** noting emotional correlations tested
+2. **Include correlation findings** in method documentation
+3. **Note any emotion-based adjustments** made to formulas
+4. **Document unexpected patterns** for future investigation
+
+Example:
+```python
+def calculate_new_score(self, row):
+    """Calculate new performance score.
+    
+    Emotional Correlations Tested:
+    - Focused (80+): Strong positive correlation (r=0.65, p<0.01)
+      → Formula adjusted to reward high completion when Focused
+    - Stressed (80+): Moderate negative correlation (r=-0.42, p<0.05)
+      → Formula includes stress penalty factor
+    
+    See: .cursor/rules/analytics-emotional-correlations.mdc
+    """
+    # Implementation...
+```
+
+## Future: Automated Correlation Testing
+
+As the system evolves, consider:
+- Automated correlation tests that run on analytics changes
+- Correlation dashboard showing emotion-score relationships
+- Predictive models using emotions to forecast performance
+- Emotion-aware recommendation engine
+
+## Key Principle
+
+**Emotions are not just data points—they are predictors and modifiers of performance.** Every analytics change should explore how emotions interact with the new metrics, and formulas should be optimized based on these relationships.

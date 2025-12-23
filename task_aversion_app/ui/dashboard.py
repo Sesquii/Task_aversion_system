@@ -1436,6 +1436,11 @@ def build_dashboard(task_manager):
                                         if initialized_at:
                                             ui.label(f"Init: {initialized_at}").classes("text-xs text-gray-500")
                                         
+                                        # Show initialization description if available
+                                        init_description = predicted_data.get('description', '')
+                                        if init_description and init_description.strip():
+                                            ui.label(init_description.strip()).classes("text-xs text-gray-700 mt-1 italic").style("max-width: 100%; word-wrap: break-word;")
+                                        
                                         with ui.row().classes("gap-1 mt-1"):
                                             ui.button("Start",
                                                       on_click=lambda i=inst['instance_id']: start_instance(i)
@@ -1488,6 +1493,11 @@ def build_dashboard(task_manager):
                             initialized_at = current_task.get('initialized_at', '')
                             if initialized_at:
                                 ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mb-2")
+                            
+                            # Show initialization description if available
+                            init_description = predicted_data.get('description', '')
+                            if init_description and init_description.strip():
+                                ui.label(init_description.strip()).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
                             
                             with ui.row().classes("gap-2 mt-2"):
                                 ui.button("Complete",
