@@ -169,6 +169,37 @@ class InstanceManager:
         self._save()
         return instance_id
 
+    def pause_instance(self, instance_id: str, reason: Optional[str] = None):
+        """Pause an active instance and move it back to initialized state."""
+        import json
+        self._reload()
+        matches = self.df.index[self.df['instance_id'] == instance_id]
+        if len(matches) == 0:
+            raise ValueError(f"Instance {instance_id} not found")
+
+        idx = matches[0]
+        # Reset timing/status so task returns to initialized state
+        self.df.at[idx, 'started_at'] = ''
+        self.df.at[idx, 'status'] = 'initialized'
+        self.df.at[idx, 'is_completed'] = 'False'
+        self.df.at[idx, 'completed_at'] = ''
+        self.df.at[idx, 'cancelled_at'] = ''
+        self.df.at[idx, 'procrastination_score'] = ''
+        self.df.at[idx, 'proactive_score'] = ''
+
+        # Persist pause reason in actual payload without losing existing data
+        actual_str = self.df.at[idx, 'actual'] or '{}'
+        try:
+            actual_data = json.loads(actual_str) if actual_str else {}
+        except json.JSONDecodeError:
+            actual_data = {}
+        if reason:
+            actual_data['pause_reason'] = reason
+        actual_data['paused'] = True
+        self.df.at[idx, 'actual'] = json.dumps(actual_data)
+
+        self._save()
+
     def list_active_instances(self):
         self._reload()
         status_series = self.df['status'].str.lower()

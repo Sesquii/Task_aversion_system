@@ -99,6 +99,32 @@ def go_cancel(instance_id):
     ui.navigate.to(f'/cancel_task?instance_id={instance_id}')
 
 
+def open_pause_dialog(instance_id):
+    """Show dialog to pause an instance with optional reason."""
+    with ui.dialog() as dialog, ui.card().classes("w-96"):
+        ui.label("Pause task").classes("text-lg font-bold mb-2")
+        reason_input = ui.textarea(
+            label="Reason (optional)",
+            placeholder="Why are you pausing this task?"
+        ).classes("w-full")
+
+        def submit_pause():
+            reason_text = (reason_input.value or "").strip()
+            try:
+                im.pause_instance(instance_id, reason_text if reason_text else None)
+                ui.notify("Task paused and moved back to initialized", color='info')
+                dialog.close()
+                ui.navigate.reload()
+            except Exception as exc:
+                ui.notify(str(exc), color='negative')
+
+        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+            ui.button("Cancel", color="warning", on_click=dialog.close)
+            ui.button("Pause", color="primary", on_click=submit_pause)
+
+    dialog.open()
+
+
 def format_elapsed_time(minutes):
     """Format elapsed time in minutes as HH:MM or M min."""
     if minutes < 60:
@@ -1503,6 +1529,10 @@ def build_dashboard(task_manager):
                                 ui.button("Complete",
                                           on_click=lambda i=instance_id: go_complete(i)
                                           ).classes("bg-green-500")
+                                ui.button("Pause",
+                                          color="primary",
+                                          on_click=lambda i=instance_id: open_pause_dialog(i)
+                                          )
                                 ui.button("Cancel",
                                           color="warning",
                                           on_click=lambda i=instance_id: go_cancel(i)
