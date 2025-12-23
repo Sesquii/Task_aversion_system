@@ -13,6 +13,7 @@ from scipy import stats
 
 from .task_schema import TASK_ATTRIBUTES, attribute_defaults
 from .gap_detector import GapDetector
+from .user_state import UserStateManager
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
@@ -448,7 +449,9 @@ class Analytics:
     
     def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0, 
                                      work_play_time_per_day: Optional[Dict[str, Dict[str, float]]] = None,
-                                     play_penalty_threshold: float = 2.0) -> float:
+                                     play_penalty_threshold: float = 2.0,
+                                     productivity_settings: Optional[Dict[str, any]] = None,
+                                     weekly_work_summary: Optional[Dict[str, float]] = None) -> float:
         """Calculate productivity score based on completion percentage vs time ratio.
         
         Penalty Calibration:
@@ -509,6 +512,20 @@ class Analytics:
                 except (ValueError, TypeError, AttributeError):
                     pass
             
+            # Load productivity settings (fallback to defaults)
+            settings = productivity_settings or self.productivity_settings or {}
+            weekly_curve = settings.get('weekly_curve', 'flattened_square')
+            weekly_curve_strength = float(settings.get('weekly_curve_strength', 1.0) or 1.0)
+            weekly_burnout_threshold_hours = float(settings.get('weekly_burnout_threshold_hours', 42.0) or 42.0)
+            daily_burnout_cap_multiplier = float(settings.get('daily_burnout_cap_multiplier', 2.0) or 2.0)
+
+            # Weekly work summary (for burnout logic)
+            weekly_total_work = 0.0
+            days_count = 0
+            if weekly_work_summary:
+                weekly_total_work = float(weekly_work_summary.get('total_work_time_minutes', 0.0) or 0.0)
+                days_count = int(weekly_work_summary.get('days_count', 0) or 0)
+
             # Apply multipliers based on task type
             if task_type_lower == 'work':
                 # Work: Smooth multiplier transition from 3x to 5x based on completion_time_ratio
@@ -523,25 +540,19 @@ class Analytics:
                     smooth_factor = (completion_time_ratio - 1.0) / 0.5  # 0.0 to 1.0
                     multiplier = 3.0 + (2.0 * smooth_factor)
                 
-                # Apply diminishing returns penalty if working too much without play
-                # This models burnout: productivity still increases but at a diminishing rate
-                # Use exponential decay: penalty = 1.0 - (1.0 - exp(-work_time / burn_threshold))
-                # When play_time = 0 and work_time is high, apply penalty
-                if play_time_today == 0 and work_time_today > 0:
-                    # Burnout threshold: 8 hours (480 minutes) of work with no play
-                    # Penalty increases as work time exceeds threshold
-                    burn_threshold = 480.0  # 8 hours in minutes
-                    if work_time_today > burn_threshold:
-                        # Calculate diminishing returns: exponential decay
-                        # More work = more penalty, but penalty approaches 1.0 (max 100% reduction)
-                        excess_work = work_time_today - burn_threshold
-                        # Penalty factor: 0.0 (no penalty) to 1.0 (max penalty)
-                        # Using exponential decay: penalty = 1 - exp(-excess_work / scale)
-                        # Scale of 240 means penalty reaches ~63% at 240 min excess (4 hours)
-                        penalty_factor = 1.0 - math.exp(-excess_work / 240.0)
-                        # Apply penalty: reduce multiplier by penalty_factor
-                        # e.g., if multiplier is 3.0 and penalty_factor is 0.5, new multiplier = 3.0 * (1 - 0.5) = 1.5
-                        multiplier = multiplier * (1.0 - penalty_factor * 0.5)  # Max 50% reduction
+                # Burnout penalty (weekly-first with daily cap)
+                # Only apply when weekly total exceeds threshold AND today's work > daily cap
+                if weekly_total_work > 0:
+                    weekly_threshold_minutes = weekly_burnout_threshold_hours * 60.0
+                    days_count = max(days_count, len(work_play_time_per_day or {}) or 1)
+                    daily_avg_work = weekly_total_work / float(max(1, days_count))
+                    daily_cap = daily_avg_work * daily_burnout_cap_multiplier
+
+                    if (weekly_total_work > weekly_threshold_minutes) and (work_time_today > daily_cap):
+                        excess_week = weekly_total_work - weekly_threshold_minutes
+                        # Exponential decay on weekly excess; capped to 50% reduction
+                        penalty_factor = 1.0 - math.exp(-excess_week / 300.0)
+                        multiplier = multiplier * (1.0 - penalty_factor * 0.5)
                 
                 # Base score is completion percentage
                 base_score = completion_pct
@@ -594,14 +605,19 @@ class Analytics:
                 score = completion_pct
             
             # Apply weekly average bonus/penalty
-            # FIXED: Taking longer should reduce score, not increase it
-            # -0.01x penalty per percentage above weekly average, +0.01x bonus per percentage below
+            # Supports linear (legacy) or flattened square response curves
             if weekly_avg_time > 0 and time_actual > 0:
                 # Calculate percentage difference from weekly average
                 time_percentage_diff = ((time_actual - weekly_avg_time) / weekly_avg_time) * 100.0
-                # Apply bonus/penalty multiplier: -0.01x per percentage above (penalty), +0.01x per percentage below (bonus)
-                # Reversed sign: taking longer = negative diff = penalty, taking less = positive diff = bonus
-                weekly_bonus_multiplier = 1.0 - (0.01 * time_percentage_diff)
+
+                if weekly_curve == 'flattened_square':
+                    # Softer square response; large deviations grow faster but scaled down
+                    effect = math.copysign((abs(time_percentage_diff) ** 2) / 100.0, time_percentage_diff)
+                    weekly_bonus_multiplier = 1.0 - (0.01 * weekly_curve_strength * effect)
+                else:
+                    # Linear response (legacy)
+                    weekly_bonus_multiplier = 1.0 - (0.01 * weekly_curve_strength * time_percentage_diff)
+
                 score = score * weekly_bonus_multiplier
             
             return score
@@ -960,6 +976,24 @@ class Analytics:
     def __init__(self):
         self.instances_file = os.path.join(DATA_DIR, 'task_instances.csv')
         self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
+        # Load user-level productivity settings (defaults to shared user)
+        self.user_state = UserStateManager()
+        self.default_user_id = "default_user"
+        self.productivity_settings = self._load_productivity_settings()
+
+    def _load_productivity_settings(self) -> Dict[str, any]:
+        """Load persisted productivity settings or use sensible defaults."""
+        defaults = {
+            "weekly_curve": "flattened_square",  # linear | flattened_square
+            "weekly_curve_strength": 1.0,
+            "weekly_burnout_threshold_hours": 42.0,  # 6h/day baseline
+            "daily_burnout_cap_multiplier": 2.0,
+        }
+        try:
+            stored = self.user_state.get_productivity_settings(self.default_user_id) or {}
+            return {**defaults, **stored}
+        except Exception:
+            return defaults
 
     # ------------------------------------------------------------------
     # Data loading helpers
@@ -2757,6 +2791,17 @@ class Analytics:
                         'work_time': float(work_time),
                         'play_time': float(play_time)
                     }
+
+        weekly_work_summary = {}
+        if work_play_time_per_day:
+            total_work_time = sum(day.get('work_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+            total_play_time = sum(day.get('play_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+            days_count = len(work_play_time_per_day)
+            weekly_work_summary = {
+                'total_work_time_minutes': float(total_work_time),
+                'total_play_time_minutes': float(total_play_time),
+                'days_count': int(days_count),
+            }
         
         # Calculate weekly average productivity time for bonus/penalty calculation
         # Get all completed tasks with actual time
@@ -2804,7 +2849,14 @@ class Analytics:
                 completed['predicted_dict'] = pd.Series([{}] * len(completed))
         
         completed['productivity_score'] = completed.apply(
-            lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
+            lambda row: self.calculate_productivity_score(
+                row,
+                self_care_tasks_per_day,
+                weekly_avg_time,
+                work_play_time_per_day,
+                productivity_settings=self.productivity_settings,
+                weekly_work_summary=weekly_work_summary
+            ),
             axis=1
         )
         
@@ -4091,6 +4143,16 @@ class Analytics:
                             'work_time': float(work_time),
                             'play_time': float(play_time)
                         }
+
+            weekly_work_summary = {}
+            if work_play_time_per_day:
+                total_work_time = sum(day.get('work_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                total_play_time = sum(day.get('play_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                weekly_work_summary = {
+                    'total_work_time_minutes': float(total_work_time),
+                    'total_play_time_minutes': float(total_play_time),
+                    'days_count': int(len(work_play_time_per_day)),
+                }
             
             # Calculate weekly average time
             def _get_actual_time_for_avg(row):
@@ -4109,7 +4171,14 @@ class Analytics:
             
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
+                lambda row: self.calculate_productivity_score(
+                    row,
+                    self_care_tasks_per_day,
+                    weekly_avg_time,
+                    work_play_time_per_day,
+                    productivity_settings=self.productivity_settings,
+                    weekly_work_summary=weekly_work_summary
+                ),
                 axis=1
             )
         elif attribute_key == 'grit_score':
@@ -4526,6 +4595,16 @@ class Analytics:
                             'work_time': float(work_time),
                             'play_time': float(play_time)
                         }
+
+            weekly_work_summary = {}
+            if work_play_time_per_day:
+                total_work_time = sum(day.get('work_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                total_play_time = sum(day.get('play_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                weekly_work_summary = {
+                    'total_work_time_minutes': float(total_work_time),
+                    'total_play_time_minutes': float(total_play_time),
+                    'days_count': int(len(work_play_time_per_day)),
+                }
             
             # Calculate weekly average time
             def _get_actual_time_for_avg(row):
@@ -4543,7 +4622,14 @@ class Analytics:
             
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
+                lambda row: self.calculate_productivity_score(
+                    row,
+                    self_care_tasks_per_day,
+                    weekly_avg_time,
+                    work_play_time_per_day,
+                    productivity_settings=self.productivity_settings,
+                    weekly_work_summary=weekly_work_summary
+                ),
                 axis=1
             )
         

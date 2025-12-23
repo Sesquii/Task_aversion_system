@@ -139,6 +139,31 @@ class UserStateManager:
         weights_json = json.dumps(weights)
         return self.update_preference(user_id, "composite_score_weights", weights_json)
 
+    # -----------------------------
+    # Productivity score preferences
+    # -----------------------------
+    def get_productivity_settings(self, user_id: str) -> Dict[str, Any]:
+        """Get productivity scoring settings (curve + burnout thresholds)."""
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+
+        settings_json = prefs.get("productivity_settings", "")
+        if not settings_json:
+            return {}
+
+        try:
+            import json
+            return json.loads(settings_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_productivity_settings(self, user_id: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist productivity scoring settings."""
+        import json
+        settings_json = json.dumps(settings)
+        return self.update_preference(user_id, "productivity_settings", settings_json)
+
     def get_persistent_emotions(self, user_id: str = "default") -> Dict[str, int]:
         """Get persistent emotion values that persist across tasks.
         
