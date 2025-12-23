@@ -1,0 +1,36 @@
+# Popup System Guidelines (Project Rule)
+
+## Purpose
+- Ensure popups are adaptive, respectful, and high-value.
+- Use progressive depth: first occurrence is brief/encouraging; repeats can go deeper.
+- Track per-trigger counts and apply cooldowns to avoid fatigue.
+
+## Trigger/Flow Requirements
+- Evaluate triggers across time, completion, affect, behavior, survey correlations, and data quality (see `docs/features/popups/popup_rules.md` for catalog).
+- One popup max per task completion; daily cap (configurable). After hitting cap, show a single notice with link to Settings and current cap value.
+- Each popup must include a “Helpful?” toggle with optional comment for tuning.
+- If context is thin, skip rather than ask multiple questions; prefer one high-value prompt.
+
+## Escalation & Milestones
+- Maintain per-trigger counters per user (and optionally per task).
+- Tiers:
+  - Tier 0 (first): brief, encouraging, low intrusiveness.
+  - Tier 1–2 (repeats): allow one deeper/personal follow-up (e.g., shame/confusion/distraction) or tailored suggestion.
+  - Tier 3+ (habitual): may surface strengths/milestones (e.g., “you’re consistently great at X; can that help here?”) but still only one focused prompt.
+- Positive triggers fire only on milestones (e.g., 5th/10th/25th/50th) to avoid spam.
+
+## Tone Adjustments (examples)
+- Extreme overrun: acknowledge success first; avoid “break down the task” if already completed; offer prevention ideas optionally.
+- Rushing/quality check: ask at most one relevant question; skip if data is weak.
+- Repeated cancellations: include option “I didn’t label/setup the task correctly.”
+
+## Survey-Aware Personalization
+- If survey flags procrastination, perfectionism, anxiety, etc., adapt wording; keep it brief.
+- 3.3 emotional spike trigger is disabled per current preference.
+
+## Data Handling
+- Store: trigger id, user id, task id (optional), occurrence count, last-shown timestamp, cooldown data, response value(s), free text (optional), helpful flag.
+- Enforce per-trigger cooldowns (e.g., 24h) and global caps; never stack multiple popups on one completion event.
+
+## Scoring Interaction
+- Popups may exist without immediate scoring effects. When applicable (e.g., grit/time overrun), responses can modulate scoring, but scoring is not required to show the popup.
