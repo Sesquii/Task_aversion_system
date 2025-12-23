@@ -36,6 +36,10 @@ def register_analytics_page():
     @ui.page('/analytics')
     def analytics_dashboard():
         build_analytics_page()
+    
+    @ui.page('/analytics/emotional-flow')
+    def emotional_flow_page():
+        build_emotional_flow_page()
 
 
 def build_analytics_page():
@@ -44,6 +48,14 @@ def build_analytics_page():
     ui.label("Explore how task qualities evolve and prototype recommendation filters.").classes(
         "text-gray-500 mb-4"
     )
+    
+    # Analytics Module Navigation
+    with ui.card().classes("p-4 mb-4 bg-blue-50 border border-blue-200"):
+        ui.label("Analytics Modules").classes("text-lg font-semibold mb-2")
+        ui.label("Explore specialized analytics views for different aspects of your task data.").classes("text-sm text-gray-600 mb-3")
+        with ui.row().classes("gap-3 flex-wrap"):
+            ui.button("📊 Emotional Flow", on_click=lambda: ui.navigate.to('/analytics/emotional-flow')).classes("bg-purple-500 text-white")
+            ui.label("Track emotion changes and patterns").classes("text-xs text-gray-500 self-center")
 
     metrics = analytics_service.get_dashboard_metrics()
     relief_summary = analytics_service.get_relief_summary()
@@ -1196,4 +1208,334 @@ def _render_stress_efficiency_leaderboard():
                     ui.label(f"{task['avg_relief']:.1f}").classes("w-20 text-right")
                     ui.label(f"{task['avg_stress']:.1f}").classes("w-20 text-right")
                     ui.label(str(task['count'])).classes("w-16 text-right")
+
+
+def build_emotional_flow_page():
+    """Emotional Flow Analytics - tracks emotion changes and patterns."""
+    ui.add_head_html("<style>.analytics-grid { gap: 1rem; }</style>")
+    
+    # Navigation
+    with ui.row().classes("gap-2 mb-4"):
+        ui.button("← Back to Analytics", on_click=lambda: ui.navigate.to('/analytics')).props("outlined")
+        ui.label("Emotional Flow Analytics").classes("text-2xl font-bold")
+    
+    ui.label("Track how your emotions change from task start to completion, and discover patterns in your emotional responses.").classes(
+        "text-gray-500 mb-4"
+    )
+    
+    # Get emotional flow data
+    flow_data = analytics_service.get_emotional_flow_data()
+    
+    # Summary metrics
+    with ui.row().classes("gap-3 flex-wrap mb-4"):
+        for title, value in [
+            ("Avg Emotional Load", f"{flow_data.get('avg_emotional_load', 0):.1f}"),
+            ("Avg Relief", f"{flow_data.get('avg_relief', 0):.1f}"),
+            ("Emotional Spikes", flow_data.get('spike_count', 0)),
+            ("Emotion-Relief Ratio", f"{flow_data.get('emotion_relief_ratio', 0):.2f}"),
+        ]:
+            with ui.card().classes("p-3 min-w-[150px]"):
+                ui.label(title).classes("text-xs text-gray-500")
+                ui.label(value).classes("text-xl font-bold")
+    
+    # Emotion transition chart (initialization → completion)
+    _render_emotion_transitions(flow_data)
+    
+    # Emotional load vs relief scatter
+    _render_emotional_load_vs_relief(flow_data)
+    
+    # Expected vs actual emotional load
+    _render_expected_vs_actual_emotional(flow_data)
+    
+    # Emotion trends over time
+    _render_emotion_trends(flow_data)
+    
+    # Emotional spikes analysis
+    _render_emotional_spikes(flow_data)
+    
+    # Emotion correlations
+    _render_emotion_correlations(flow_data)
+
+
+def _render_emotion_transitions(flow_data):
+    """Show how emotions change from initialization to completion."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotion Transitions").classes("text-xl font-bold mb-2")
+        ui.label("How your emotions change from task start to completion").classes("text-sm text-gray-500 mb-3")
+        
+        transitions = flow_data.get('transitions', [])
+        if not transitions:
+            ui.label("No emotion transition data yet. Complete tasks with emotion tracking to see patterns.").classes("text-xs text-gray-500")
+            return
+        
+        # Create transition visualization
+        # Group by emotion and show average initial vs final values
+        emotion_data = {}
+        for trans in transitions:
+            emotion = trans.get('emotion')
+            if not emotion:
+                continue
+            if emotion not in emotion_data:
+                emotion_data[emotion] = {'initial': [], 'final': []}
+            
+            initial = trans.get('initial_value')
+            final = trans.get('final_value')
+            if initial is not None:
+                emotion_data[emotion]['initial'].append(initial)
+            if final is not None:
+                emotion_data[emotion]['final'].append(final)
+        
+        # Calculate averages
+        transition_df_data = []
+        for emotion, values in emotion_data.items():
+            avg_initial = sum(values['initial']) / len(values['initial']) if values['initial'] else 0
+            avg_final = sum(values['final']) / len(values['final']) if values['final'] else 0
+            transition_df_data.append({
+                'emotion': emotion,
+                'initial': avg_initial,
+                'final': avg_final,
+                'change': avg_final - avg_initial
+            })
+        
+        if transition_df_data:
+            df = pd.DataFrame(transition_df_data)
+            df = df.sort_values('change', ascending=False)
+            
+            # Bar chart showing initial vs final
+            import plotly.graph_objects as go
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=df['emotion'],
+                y=df['initial'],
+                name='Initial (Start)',
+                marker_color='#3498db'
+            ))
+            fig.add_trace(go.Bar(
+                x=df['emotion'],
+                y=df['final'],
+                name='Final (Completion)',
+                marker_color='#e74c3c'
+            ))
+            fig.update_layout(
+                title="Average Emotion Intensity: Start vs Completion",
+                xaxis_title="Emotion",
+                yaxis_title="Intensity (0-100)",
+                barmode='group',
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            ui.plotly(fig)
+            
+            # Show change summary
+            with ui.row().classes("gap-3 flex-wrap mt-3"):
+                increased = df[df['change'] > 5]
+                decreased = df[df['change'] < -5]
+                
+                if not increased.empty:
+                    with ui.card().classes("p-3 bg-red-50 border border-red-200"):
+                        ui.label("Emotions That Increased").classes("text-xs font-semibold text-red-700 mb-1")
+                        for _, row in increased.iterrows():
+                            ui.label(f"{row['emotion']}: +{row['change']:.1f}").classes("text-xs text-red-600")
+                
+                if not decreased.empty:
+                    with ui.card().classes("p-3 bg-green-50 border border-green-200"):
+                        ui.label("Emotions That Decreased").classes("text-xs font-semibold text-green-700 mb-1")
+                        for _, row in decreased.iterrows():
+                            ui.label(f"{row['emotion']}: {row['change']:.1f}").classes("text-xs text-green-600")
+
+
+def _render_emotional_load_vs_relief(flow_data):
+    """Scatter plot of emotional load vs relief."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotional Load vs Relief").classes("text-xl font-bold mb-2")
+        ui.label("How emotional intensity relates to relief after completion").classes("text-sm text-gray-500 mb-3")
+        
+        scatter_data = flow_data.get('load_relief_scatter', {})
+        if not scatter_data or not scatter_data.get('x'):
+            ui.label("No data yet. Complete tasks to see emotional load vs relief patterns.").classes("text-xs text-gray-500")
+            return
+        
+        df = pd.DataFrame({
+            'emotional_load': scatter_data['x'],
+            'relief': scatter_data['y'],
+            'task_name': scatter_data.get('task_names', [])
+        })
+        
+        fig = px.scatter(
+            df,
+            x='emotional_load',
+            y='relief',
+            hover_data=['task_name'],
+            labels={'emotional_load': 'Emotional Load (0-100)', 'relief': 'Relief (0-100)'},
+            title="Emotional Load vs Relief"
+        )
+        fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        ui.plotly(fig)
+        
+        # Add interpretation
+        with ui.card().classes("p-3 mt-3 bg-blue-50"):
+            ui.label("Interpretation").classes("text-xs font-semibold text-blue-700 mb-1")
+            ui.label("• High emotional load + High relief = Meaningful accomplishment despite difficulty").classes("text-xs text-blue-600")
+            ui.label("• High emotional load + Low relief = Tasks that were stressful but not rewarding").classes("text-xs text-blue-600")
+            ui.label("• Low emotional load + High relief = Easy wins that feel good").classes("text-xs text-blue-600")
+
+
+def _render_expected_vs_actual_emotional(flow_data):
+    """Compare expected vs actual emotional load."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Expected vs Actual Emotional Load").classes("text-xl font-bold mb-2")
+        ui.label("How well you predict emotional intensity").classes("text-sm text-gray-500 mb-3")
+        
+        comparison_data = flow_data.get('expected_actual_comparison', {})
+        if not comparison_data or not comparison_data.get('expected'):
+            ui.label("No comparison data yet.").classes("text-xs text-gray-500")
+            return
+        
+        df = pd.DataFrame({
+            'expected': comparison_data['expected'],
+            'actual': comparison_data['actual'],
+            'task_name': comparison_data.get('task_names', [])
+        })
+        
+        # Scatter plot
+        fig = px.scatter(
+            df,
+            x='expected',
+            y='actual',
+            hover_data=['task_name'],
+            labels={'expected': 'Expected Emotional Load', 'actual': 'Actual Emotional Load'},
+            title="Expected vs Actual Emotional Load"
+        )
+        # Add diagonal line (perfect prediction)
+        import plotly.graph_objects as go
+        fig.add_trace(go.Scatter(
+            x=[0, 100],
+            y=[0, 100],
+            mode='lines',
+            name='Perfect Prediction',
+            line=dict(dash='dash', color='gray')
+        ))
+        fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        ui.plotly(fig)
+        
+        # Calculate prediction accuracy
+        if len(df) > 0:
+            df['difference'] = abs(df['actual'] - df['expected'])
+            avg_error = df['difference'].mean()
+            
+            with ui.row().classes("gap-3 mt-3"):
+                with ui.card().classes("p-3"):
+                    ui.label("Average Prediction Error").classes("text-xs text-gray-500")
+                    ui.label(f"{avg_error:.1f} points").classes("text-lg font-bold")
+                
+                spikes = len(df[df['actual'] > df['expected'] + 30])
+                with ui.card().classes("p-3"):
+                    ui.label("Unexpected Emotional Spikes").classes("text-xs text-gray-500")
+                    ui.label(f"{spikes} tasks").classes("text-lg font-bold")
+
+
+def _render_emotion_trends(flow_data):
+    """Time series of specific emotions."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotion Trends Over Time").classes("text-xl font-bold mb-2")
+        ui.label("Track how specific emotions evolve across tasks").classes("text-sm text-gray-500 mb-3")
+        
+        trends = flow_data.get('emotion_trends', {})
+        if not trends:
+            ui.label("No emotion trend data yet.").classes("text-xs text-gray-500")
+            return
+        
+        # Get available emotions
+        available_emotions = list(trends.keys())
+        if not available_emotions:
+            ui.label("No emotion data available.").classes("text-xs text-gray-500")
+            return
+        
+        # Emotion selector
+        emotion_select = ui.select(
+            options={emotion: emotion.title() for emotion in available_emotions},
+            value=available_emotions[0] if available_emotions else None,
+            label="Select Emotion"
+        ).props("dense outlined").classes("mb-3")
+        
+        chart_area = ui.column().classes("mt-3")
+        
+        def update_trend_chart():
+            chart_area.clear()
+            selected = emotion_select.value
+            if not selected or selected not in trends:
+                return
+            
+            trend_data = trends[selected]
+            dates = trend_data.get('dates', [])
+            values = trend_data.get('values', [])
+            
+            if not dates or not values:
+                with chart_area:
+                    ui.label("No trend data for this emotion.").classes("text-xs text-gray-500")
+                return
+            
+            df = pd.DataFrame({
+                'date': pd.to_datetime(dates),
+                'intensity': values
+            })
+            df = df.sort_values('date')
+            
+            fig = px.line(
+                df,
+                x='date',
+                y='intensity',
+                markers=True,
+                labels={'intensity': 'Intensity (0-100)', 'date': 'Date'},
+                title=f"{selected.title()} Over Time"
+            )
+            fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+            with chart_area:
+                ui.plotly(fig)
+        
+        emotion_select.on('update:model-value', lambda e: update_trend_chart())
+        update_trend_chart()
+
+
+def _render_emotional_spikes(flow_data):
+    """Show tasks with unexpected emotional spikes."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotional Spikes").classes("text-xl font-bold mb-2")
+        ui.label("Tasks where emotional load was unexpectedly high").classes("text-sm text-gray-500 mb-3")
+        
+        spikes = flow_data.get('spikes', [])
+        if not spikes:
+            ui.label("No emotional spikes detected yet.").classes("text-xs text-gray-500")
+            return
+        
+        # Show top spikes
+        with ui.column().classes("gap-2"):
+            for spike in spikes[:10]:  # Top 10
+                with ui.card().classes("p-3 border-l-4 border-red-400"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label(spike.get('task_name', 'Unknown Task')).classes("font-semibold")
+                        ui.label(f"Expected: {spike.get('expected', 0):.0f}").classes("text-xs text-gray-500")
+                        ui.label(f"Actual: {spike.get('actual', 0):.0f}").classes("text-xs text-red-600 font-bold")
+                        ui.label(f"Spike: +{spike.get('spike_amount', 0):.0f}").classes("text-xs text-red-700")
+                    if spike.get('completed_at'):
+                        ui.label(f"Completed: {spike['completed_at']}").classes("text-xs text-gray-400")
+
+
+def _render_emotion_correlations(flow_data):
+    """Show how emotions correlate with other metrics."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotion Correlations").classes("text-xl font-bold mb-2")
+        ui.label("How emotions relate to relief, difficulty, and other metrics").classes("text-sm text-gray-500 mb-3")
+        
+        correlations = flow_data.get('correlations', {})
+        if not correlations:
+            ui.label("No correlation data yet. More data needed for meaningful correlations.").classes("text-xs text-gray-500")
+            return
+        
+        # Display correlation info
+        with ui.row().classes("gap-3 flex-wrap"):
+            for emotion, corr_data in correlations.items():
+                with ui.card().classes("p-3 min-w-[200px]"):
+                    ui.label(emotion.title()).classes("text-sm font-semibold mb-2")
+                    for metric, value in corr_data.items():
+                        ui.label(f"{metric}: {value:.2f}").classes("text-xs")
 

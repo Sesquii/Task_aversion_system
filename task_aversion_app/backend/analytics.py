@@ -4664,6 +4664,227 @@ class Analytics:
             result['time_data'] = time_data
         return result
 
+    def get_emotional_flow_data(self) -> Dict[str, any]:
+        """Get comprehensive emotional flow data for analytics.
+        
+        Returns:
+            Dictionary containing:
+            - avg_emotional_load: Average emotional load across all tasks
+            - avg_relief: Average relief score
+            - spike_count: Number of emotional spikes detected
+            - emotion_relief_ratio: Ratio of relief to emotional load
+            - transitions: List of emotion transitions (initial -> final)
+            - load_relief_scatter: Data for emotional load vs relief scatter plot
+            - expected_actual_comparison: Expected vs actual emotional load data
+            - emotion_trends: Time series data for each emotion
+            - spikes: List of tasks with emotional spikes
+            - correlations: Correlation data for emotions with other metrics
+        """
+        df = self._load_instances()
+        if df.empty:
+            return {
+                'avg_emotional_load': 0,
+                'avg_relief': 0,
+                'spike_count': 0,
+                'emotion_relief_ratio': 0,
+                'transitions': [],
+                'load_relief_scatter': {},
+                'expected_actual_comparison': {},
+                'emotion_trends': {},
+                'spikes': [],
+                'correlations': {}
+            }
+        
+        # Filter to completed instances only
+        completed = df[df['status'] == 'completed'].copy()
+        if completed.empty:
+            return {
+                'avg_emotional_load': 0,
+                'avg_relief': 0,
+                'spike_count': 0,
+                'emotion_relief_ratio': 0,
+                'transitions': [],
+                'load_relief_scatter': {},
+                'expected_actual_comparison': {},
+                'emotion_trends': {},
+                'spikes': [],
+                'correlations': {}
+            }
+        
+        # Extract emotion data
+        transitions = []
+        load_relief_x = []
+        load_relief_y = []
+        load_relief_tasks = []
+        expected_actual_expected = []
+        expected_actual_actual = []
+        expected_actual_tasks = []
+        emotion_trends = {}
+        spikes = []
+        
+        def _parse_json_safe(json_data):
+            """Safely parse JSON, return empty dict on error."""
+            if isinstance(json_data, dict):
+                return json_data
+            if not json_data or not isinstance(json_data, str):
+                return {}
+            try:
+                return json.loads(json_data)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return {}
+        
+        for _, row in completed.iterrows():
+            # Parse JSON data
+            predicted_dict = _parse_json_safe(row.get('predicted_dict', {}))
+            actual_dict = _parse_json_safe(row.get('actual_dict', {}))
+            
+            # Emotion transitions (initial vs final emotion_values)
+            initial_emotions = predicted_dict.get('emotion_values', {})
+            final_emotions = actual_dict.get('emotion_values', {})
+            
+            # Handle string JSON if needed
+            if isinstance(initial_emotions, str):
+                try:
+                    initial_emotions = json.loads(initial_emotions)
+                except (json.JSONDecodeError, TypeError):
+                    initial_emotions = {}
+            if isinstance(final_emotions, str):
+                try:
+                    final_emotions = json.loads(final_emotions)
+                except (json.JSONDecodeError, TypeError):
+                    final_emotions = {}
+            
+            # Ensure dicts
+            if not isinstance(initial_emotions, dict):
+                initial_emotions = {}
+            if not isinstance(final_emotions, dict):
+                final_emotions = {}
+            
+            # Track transitions for each emotion
+            all_emotions = set(list(initial_emotions.keys()) + list(final_emotions.keys()))
+            for emotion in all_emotions:
+                initial_val = initial_emotions.get(emotion) if isinstance(initial_emotions, dict) else None
+                final_val = final_emotions.get(emotion) if isinstance(final_emotions, dict) else None
+                
+                # Convert to numeric if needed
+                try:
+                    if initial_val is not None:
+                        initial_val = float(initial_val)
+                except (ValueError, TypeError):
+                    initial_val = None
+                try:
+                    if final_val is not None:
+                        final_val = float(final_val)
+                except (ValueError, TypeError):
+                    final_val = None
+                
+                if initial_val is not None or final_val is not None:
+                    transitions.append({
+                        'emotion': emotion,
+                        'initial_value': initial_val,
+                        'final_value': final_val,
+                        'task_name': str(row.get('task_name', 'Unknown')),
+                        'completed_at': str(row.get('completed_at', ''))
+                    })
+            
+            # Emotional load vs relief
+            emotional_load = actual_dict.get('actual_emotional')
+            if emotional_load is None:
+                emotional_load = pd.to_numeric(row.get('emotional_load'), errors='coerce')
+            
+            relief = actual_dict.get('actual_relief')
+            if relief is None:
+                relief = pd.to_numeric(row.get('relief_score'), errors='coerce')
+            
+            if emotional_load is not None and not pd.isna(emotional_load) and relief is not None and not pd.isna(relief):
+                load_relief_x.append(float(emotional_load))
+                load_relief_y.append(float(relief))
+                load_relief_tasks.append(str(row.get('task_name', 'Unknown')))
+            
+            # Expected vs actual
+            expected = predicted_dict.get('expected_emotional_load')
+            if expected is None:
+                expected = pd.to_numeric(row.get('emotional_load'), errors='coerce')
+            
+            actual = actual_dict.get('actual_emotional')
+            if actual is None:
+                actual = pd.to_numeric(row.get('emotional_load'), errors='coerce')
+            
+            if expected is not None and not pd.isna(expected) and actual is not None and not pd.isna(actual):
+                expected_actual_expected.append(float(expected))
+                expected_actual_actual.append(float(actual))
+                expected_actual_tasks.append(str(row.get('task_name', 'Unknown')))
+                
+                # Check for spikes (actual > expected + 30)
+                if actual > expected + 30:
+                    spikes.append({
+                        'task_name': str(row.get('task_name', 'Unknown')),
+                        'expected': float(expected),
+                        'actual': float(actual),
+                        'spike_amount': float(actual - expected),
+                        'completed_at': str(row.get('completed_at', ''))
+                    })
+            
+            # Emotion trends (time series)
+            if final_emotions and isinstance(final_emotions, dict):
+                completed_at = row.get('completed_at')
+                if completed_at:
+                    for emotion, value in final_emotions.items():
+                        try:
+                            value_float = float(value)
+                            if emotion not in emotion_trends:
+                                emotion_trends[emotion] = {'dates': [], 'values': []}
+                            emotion_trends[emotion]['dates'].append(str(completed_at))
+                            emotion_trends[emotion]['values'].append(value_float)
+                        except (ValueError, TypeError):
+                            pass
+        
+        # Calculate correlations (simplified - could be enhanced)
+        correlations = {}
+        if transitions:
+            # Group by emotion and calculate basic stats
+            emotion_groups = {}
+            for trans in transitions:
+                emotion = trans['emotion']
+                if emotion not in emotion_groups:
+                    emotion_groups[emotion] = {'final_values': [], 'relief_values': []}
+                if trans['final_value'] is not None:
+                    emotion_groups[emotion]['final_values'].append(trans['final_value'])
+            
+            # Match with relief values for correlation
+            for emotion in emotion_groups.keys():
+                # Simple placeholder correlation - could be enhanced with proper correlation calculation
+                correlations[emotion] = {
+                    'relief': 0.0,  # Placeholder
+                    'difficulty': 0.0  # Placeholder
+                }
+        
+        # Calculate summary metrics
+        avg_emotional_load = sum(expected_actual_actual) / len(expected_actual_actual) if expected_actual_actual else 0
+        avg_relief = sum(load_relief_y) / len(load_relief_y) if load_relief_y else 0
+        emotion_relief_ratio = avg_relief / avg_emotional_load if avg_emotional_load > 0 else 0
+        
+        return {
+            'avg_emotional_load': avg_emotional_load,
+            'avg_relief': avg_relief,
+            'spike_count': len(spikes),
+            'emotion_relief_ratio': emotion_relief_ratio,
+            'transitions': transitions,
+            'load_relief_scatter': {
+                'x': load_relief_x,
+                'y': load_relief_y,
+                'task_names': load_relief_tasks
+            },
+            'expected_actual_comparison': {
+                'expected': expected_actual_expected,
+                'actual': expected_actual_actual,
+                'task_names': expected_actual_tasks
+            },
+            'emotion_trends': emotion_trends,
+            'spikes': sorted(spikes, key=lambda x: x['spike_amount'], reverse=True),
+            'correlations': correlations
+        }
+
     # ------------------------------------------------------------------
     # Priority heuristics (used for legacy views)
     # ------------------------------------------------------------------
