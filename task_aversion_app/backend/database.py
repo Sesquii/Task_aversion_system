@@ -89,6 +89,13 @@ class Task(Base):
     task_type = Column(String, default='Work')  # Work, Self care, etc.
     default_initial_aversion = Column(String, default='')  # Optional default aversion value
     
+    # Routine scheduling fields
+    routine_frequency = Column(String, default='none')  # 'none', 'daily', 'weekly'
+    routine_days_of_week = Column(JSON, default=list)  # List of day numbers (0=Monday, 6=Sunday) for weekly
+    routine_time = Column(String, default='00:00')  # Time in HH:MM format (24-hour)
+    completion_window_hours = Column(Integer, default=None)  # Hours to complete task after initialization without penalty
+    completion_window_days = Column(Integer, default=None)  # Days to complete task after initialization without penalty
+    
     def to_dict(self) -> dict:
         """Convert model instance to dictionary (compatible with CSV format)."""
         return {
@@ -102,7 +109,12 @@ class Task(Base):
             'categories': json.dumps(self.categories) if isinstance(self.categories, list) else (self.categories or '[]'),
             'default_estimate_minutes': str(self.default_estimate_minutes),
             'task_type': self.task_type or 'Work',
-            'default_initial_aversion': self.default_initial_aversion or ''
+            'default_initial_aversion': self.default_initial_aversion or '',
+            'routine_frequency': self.routine_frequency or 'none',
+            'routine_days_of_week': json.dumps(self.routine_days_of_week) if isinstance(self.routine_days_of_week, list) else (self.routine_days_of_week or '[]'),
+            'routine_time': self.routine_time or '00:00',
+            'completion_window_hours': str(self.completion_window_hours) if self.completion_window_hours is not None else '',
+            'completion_window_days': str(self.completion_window_days) if self.completion_window_days is not None else ''
         }
     
     def __repr__(self):

@@ -2,6 +2,7 @@
 from nicegui import ui
 from backend.task_manager import TaskManager
 from backend.emotion_manager import EmotionManager
+from backend.routine_scheduler import start_scheduler
 
 from ui.dashboard import build_dashboard
 from ui.create_task import create_task_page
@@ -66,6 +67,8 @@ def register_pages():
 
 if __name__ in {"__main__", "__mp_main__"}:
     register_pages()
+    # Start routine scheduler
+    start_scheduler()
     import os
     host = os.getenv('NICEGUI_HOST', '127.0.0.1')  # Default to localhost, use env var in Docker
     ui.run(title='Task Aversion System', port=8080, host=host, reload=False)

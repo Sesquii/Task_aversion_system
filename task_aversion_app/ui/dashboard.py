@@ -271,10 +271,35 @@ def edit_template(task):
     current_task_type = task.get('task_type', 'Work')
     current_est = task.get('default_estimate_minutes', 0)
     
+    # Get routine scheduling fields
+    current_routine_frequency = task.get('routine_frequency', 'none') or 'none'
+    current_routine_time = task.get('routine_time', '00:00') or '00:00'
+    current_routine_days_str = task.get('routine_days_of_week', '[]') or '[]'
+    current_completion_window_hours = task.get('completion_window_hours', '') or ''
+    current_completion_window_days = task.get('completion_window_days', '') or ''
+    
     try:
         current_est = int(current_est) if current_est else 0
     except (TypeError, ValueError):
         current_est = 0
+    
+    # Parse routine days
+    try:
+        current_routine_days = json.loads(current_routine_days_str) if isinstance(current_routine_days_str, str) else current_routine_days_str
+        if not isinstance(current_routine_days, list):
+            current_routine_days = []
+    except (json.JSONDecodeError, TypeError):
+        current_routine_days = []
+    
+    try:
+        current_completion_window_hours = int(current_completion_window_hours) if current_completion_window_hours else None
+    except (TypeError, ValueError):
+        current_completion_window_hours = None
+    
+    try:
+        current_completion_window_days = int(current_completion_window_days) if current_completion_window_days else None
+    except (TypeError, ValueError):
+        current_completion_window_days = None
     
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-4'):
         ui.label("Edit Task Template").classes("text-xl font-bold mb-4")
@@ -288,17 +313,112 @@ def edit_template(task):
         ).classes("w-full")
         est_input = ui.number(label='Default estimate minutes', value=current_est).classes("w-full")
         
+        # Routine scheduling section
+        ui.label("Routine Scheduling (Optional)").classes("text-lg font-semibold mt-4")
+        
+        routine_frequency = ui.select(
+            ['none', 'daily', 'weekly'],
+            label='Routine Frequency',
+            value=current_routine_frequency
+        ).classes("w-full")
+        
+        # Day of week selection (for weekly)
+        day_labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        day_checkboxes = {}
+        day_container = ui.column().classes("gap-2")
+        
+        def update_day_visibility():
+            """Show/hide day selection based on frequency"""
+            day_container.set_visibility(routine_frequency.value in ['daily', 'weekly'])
+        
+        routine_frequency.on('update:model-value', lambda: update_day_visibility())
+        
+        with day_container:
+            ui.label("Select days of week (leave all unchecked for daily to run every day):").classes("text-sm")
+            for i, day in enumerate(day_labels):
+                day_checkboxes[i] = ui.checkbox(day, value=(i in current_routine_days))
+        
+        day_container.set_visibility(current_routine_frequency in ['daily', 'weekly'])
+        
+        # Time picker
+        routine_time = ui.input(
+            label='Routine Time (HH:MM, 24-hour format)',
+            value=current_routine_time,
+            placeholder='00:00'
+        ).classes("w-full max-w-xs")
+        
+        # Completion window (hours and days)
+        ui.label("Completion Window (Optional)").classes("text-sm font-semibold")
+        ui.label("Time to complete task after initialization without penalty").classes("text-xs text-gray-500")
+        with ui.row().classes("gap-4"):
+            completion_window_hours = ui.number(
+                label='Hours',
+                value=current_completion_window_hours,
+                placeholder='Hours',
+                min=0
+            ).classes("flex-1")
+            completion_window_days = ui.number(
+                label='Days',
+                value=current_completion_window_days,
+                placeholder='Days',
+                min=0
+            ).classes("flex-1")
+        
         def save_edit():
             if not name_input.value.strip():
                 ui.notify("Task name required", color='negative')
                 return
+
+            # Validate time format
+            time_str = routine_time.value.strip() or '00:00'
+            try:
+                # Basic validation: should be HH:MM format
+                parts = time_str.split(':')
+                if len(parts) != 2:
+                    raise ValueError("Invalid time format")
+                hour = int(parts[0])
+                minute = int(parts[1])
+                if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+                    raise ValueError("Invalid time values")
+                # Normalize format
+                time_str = f"{hour:02d}:{minute:02d}"
+            except (ValueError, IndexError):
+                ui.notify("Invalid time format. Use HH:MM (24-hour format, e.g., 09:30)", color='negative')
+                return
+
+            # Get selected days for daily or weekly routine
+            selected_days = []
+            if routine_frequency.value in ['daily', 'weekly']:
+                selected_days = [i for i, cb in day_checkboxes.items() if cb.value]
+                if routine_frequency.value == 'weekly' and not selected_days:
+                    ui.notify("Please select at least one day for weekly routine", color='negative')
+                    return
+                # For daily, if no days selected, it means every day (empty list)
+                # If days are selected, it means only on those days
+
+            # Get completion window values (None if empty)
+            completion_window_hours_val = None
+            if completion_window_hours.value is not None and completion_window_hours.value > 0:
+                completion_window_hours_val = int(completion_window_hours.value)
+            
+            completion_window_days_val = None
+            if completion_window_days.value is not None and completion_window_days.value > 0:
+                completion_window_days_val = int(completion_window_days.value)
+            
+            # Convert selected_days to JSON string for CSV compatibility
+            selected_days_json = json.dumps(selected_days)
             
             success = tm.update_task(
                 task_id,
                 name=name_input.value.strip(),
                 description=desc_input.value or '',
                 task_type=task_type_select.value,
-                default_estimate_minutes=int(est_input.value or 0)
+                default_estimate_minutes=int(est_input.value or 0),
+                routine_frequency=routine_frequency.value,
+                routine_days_of_week=selected_days_json,
+                routine_time=time_str,
+                completion_window_hours=completion_window_hours_val,
+                completion_window_days=completion_window_days_val
             )
             
             if success:

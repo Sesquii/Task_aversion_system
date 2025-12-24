@@ -50,9 +50,9 @@ class TaskManager:
         os.makedirs(DATA_DIR, exist_ok=True)
         self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
         # task definition fields:
-        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type, default_initial_aversion
+        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days
         if not os.path.exists(self.tasks_file):
-            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion']).to_csv(self.tasks_file, index=False)
+            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days']).to_csv(self.tasks_file, index=False)
         self._reload()
     def _reload(self):
         """Reload data (CSV only)."""
@@ -73,6 +73,17 @@ class TaskManager:
         # ensure default_initial_aversion column exists (optional field, can be empty)
         if 'default_initial_aversion' not in self.df.columns:
             self.df['default_initial_aversion'] = ''
+        # ensure routine scheduling columns exist
+        if 'routine_frequency' not in self.df.columns:
+            self.df['routine_frequency'] = 'none'
+        if 'routine_days_of_week' not in self.df.columns:
+            self.df['routine_days_of_week'] = '[]'
+        if 'routine_time' not in self.df.columns:
+            self.df['routine_time'] = '00:00'
+        if 'completion_window_hours' not in self.df.columns:
+            self.df['completion_window_hours'] = ''
+        if 'completion_window_days' not in self.df.columns:
+            self.df['completion_window_days'] = ''
     
     def _save(self):
         """Save data (CSV only)."""
@@ -158,7 +169,7 @@ class TaskManager:
                 tasks = session.query(self.Task).all()
                 if not tasks:
                     # Return empty DataFrame with expected columns
-                    return pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion'])
+                    return pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days'])
                 # Convert to list of dicts, then to DataFrame
                 task_dicts = [task.to_dict() for task in tasks]
                 return pd.DataFrame(task_dicts)
@@ -167,25 +178,39 @@ class TaskManager:
             self.use_db = False
             return self._get_all_csv()
 
-    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None):
+    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
         """
         Creates a new task definition and returns task_id. Works with both CSV and database.
         
         Args:
             default_initial_aversion: Optional initial aversion value (0-100) to use as default when first initializing this task
+            routine_frequency: 'none', 'daily', or 'weekly'
+            routine_days_of_week: List of day numbers (0=Monday, 6=Sunday) for weekly frequency
+            routine_time: Time in HH:MM format (24-hour), default '00:00'
+            completion_window_hours: Hours to complete task after initialization without penalty
+            completion_window_days: Days to complete task after initialization without penalty
         """
+        if routine_days_of_week is None:
+            routine_days_of_week = []
         if self.use_db:
-            return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion)
+            return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
         else:
-            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion)
+            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
     
-    def _create_task_csv(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None):
+    def _create_task_csv(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
         """CSV-specific create_task."""
         self._reload_csv()
         # simple unique id using timestamp + name fragment
         task_id = f"t{int(datetime.now().timestamp())}"
         # Convert default_initial_aversion to string, or empty string if None
         aversion_str = str(int(default_initial_aversion)) if default_initial_aversion is not None else ''
+        # Convert routine_days_of_week to JSON string
+        if routine_days_of_week is None:
+            routine_days_of_week = []
+        routine_days_str = json.dumps(routine_days_of_week) if isinstance(routine_days_of_week, list) else (routine_days_of_week or '[]')
+        # Convert completion window values to strings or empty
+        completion_window_hours_str = str(int(completion_window_hours)) if completion_window_hours is not None else ''
+        completion_window_days_str = str(int(completion_window_days)) if completion_window_days is not None else ''
         row = {
             'task_id': task_id,
             'name': name,
@@ -197,19 +222,24 @@ class TaskManager:
             'categories': categories,
             'default_estimate_minutes': int(default_estimate_minutes),
             'task_type': task_type,
-            'default_initial_aversion': aversion_str
+            'default_initial_aversion': aversion_str,
+            'routine_frequency': routine_frequency or 'none',
+            'routine_days_of_week': routine_days_str,
+            'routine_time': routine_time or '00:00',
+            'completion_window_hours': completion_window_hours_str,
+            'completion_window_days': completion_window_days_str
         }
-        # Ensure task_type column exists in dataframe
-        if 'task_type' not in self.df.columns:
-            self.df['task_type'] = ''
-        # Ensure default_initial_aversion column exists
-        if 'default_initial_aversion' not in self.df.columns:
-            self.df['default_initial_aversion'] = ''
+        # Ensure all columns exist in dataframe
+        for col in ['task_type', 'default_initial_aversion', 'routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days']:
+            if col not in self.df.columns:
+                self.df[col] = '' if col != 'routine_frequency' else 'none'
+                if col == 'routine_time':
+                    self.df[col] = '00:00'
         self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
         self._save_csv()
         return task_id
     
-    def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None):
+    def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
         """Database-specific create_task."""
         try:
             # Parse categories JSON string
@@ -217,6 +247,17 @@ class TaskManager:
                 categories_list = json.loads(categories) if isinstance(categories, str) else (categories or [])
             except (json.JSONDecodeError, TypeError):
                 categories_list = []
+            
+            # Parse routine_days_of_week
+            if routine_days_of_week is None:
+                routine_days_list = []
+            elif isinstance(routine_days_of_week, str):
+                try:
+                    routine_days_list = json.loads(routine_days_of_week)
+                except (json.JSONDecodeError, TypeError):
+                    routine_days_list = []
+            else:
+                routine_days_list = routine_days_of_week
             
             # Convert default_initial_aversion to string, or empty string if None
             aversion_str = str(int(default_initial_aversion)) if default_initial_aversion is not None else ''
@@ -236,7 +277,12 @@ class TaskManager:
                     categories=categories_list,
                     default_estimate_minutes=int(default_estimate_minutes),
                     task_type=task_type or 'Work',
-                    default_initial_aversion=aversion_str
+                    default_initial_aversion=aversion_str,
+                    routine_frequency=routine_frequency or 'none',
+                    routine_days_of_week=routine_days_list,
+                    routine_time=routine_time or '00:00',
+                    completion_window_hours=completion_window_hours,
+                    completion_window_days=completion_window_days
                 )
                 session.add(task)
                 session.commit()
@@ -244,7 +290,7 @@ class TaskManager:
         except Exception as e:
             print(f"[TaskManager] Database error in create_task: {e}, falling back to CSV")
             self.use_db = False
-            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion)
+            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
 
     def update_task(self, task_id, **kwargs):
         """Update a task. Works with both CSV and database."""
@@ -265,6 +311,12 @@ class TaskManager:
         # Ensure default_initial_aversion column exists
         if 'default_initial_aversion' not in self.df.columns:
             self.df['default_initial_aversion'] = ''
+        # Ensure routine scheduling columns exist
+        for col in ['routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days']:
+            if col not in self.df.columns:
+                self.df[col] = '' if col != 'routine_frequency' else 'none'
+                if col == 'routine_time':
+                    self.df[col] = '00:00'
         for k,v in kwargs.items():
             if k in self.df.columns:
                 self.df.at[idx,k] = v
@@ -290,12 +342,21 @@ class TaskManager:
                                 v = json.loads(v)
                             except (json.JSONDecodeError, TypeError):
                                 v = []
+                        elif k == 'routine_days_of_week' and isinstance(v, str):
+                            try:
+                                v = json.loads(v)
+                            except (json.JSONDecodeError, TypeError):
+                                v = []
                         elif k == 'is_recurring' and isinstance(v, str):
                             v = v.lower() == 'true'
                         elif k == 'version' and isinstance(v, str):
                             v = int(v)
                         elif k == 'default_estimate_minutes' and isinstance(v, str):
                             v = int(v)
+                        elif k == 'completion_window_hours' and isinstance(v, str):
+                            v = int(v) if v.strip() else None
+                        elif k == 'completion_window_days' and isinstance(v, str):
+                            v = int(v) if v.strip() else None
                         setattr(task, k, v)
                 
                 # Bump version
