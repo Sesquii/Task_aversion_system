@@ -218,10 +218,13 @@ Database files on disk
 
 3. **Database Migration Strategy:**
 
-   - **Schema changes:** How to update database structure without losing data
-   - **Alembic:** SQLAlchemy migration tool research
-   - **Rollback:** How to undo bad migrations
-   - **Versioning:** Track database schema versions
+   - **Current Approach:** Piece-by-piece migrations in `SQLite_migration/` folder
+   - **Numbered Scripts:** Each migration is numbered (001, 002, etc.) and can be run independently
+   - **SQLite-First:** All migrations are SQLite-specific for now, will be converted to PostgreSQL later
+   - **Idempotent:** All migrations check if changes already exist before applying
+   - **Rollback:** Manual rollback by reverting database or re-running migration scripts
+   - **Versioning:** Tracked by migration script numbers and `check_migration_status.py`
+   - **Future:** Once all SQLite migrations are complete, review and create unified PostgreSQL migration
 
 4. **Deployment Workflow Design:**
    ```

@@ -91,16 +91,27 @@ This plan migrates the Task Aversion System from CSV-based storage to a cloud-de
 - Add database initialization function
 - Support both SQLite (local/dev) and PostgreSQL (production) via DATABASE_URL env var
 
-### 1.2 Database Migration Script
+### 1.2 Database Migration Strategy
 
-**New File**: `backend/migrate_to_sqlite.py`
+**Current Implementation**: Piece-by-piece migration system in `SQLite_migration/` folder
 
-- Read existing CSV files (tasks.csv, task_instances.csv, emotions.csv)
-- Transform CSV data to SQLAlchemy models
-- Handle JSON columns (predicted, actual, categories)
-- Preserve all existing data
-- Add migration verification (row counts, sample data checks)
-- Create rollback capability (export back to CSV if needed)
+**Migration Scripts**:
+
+- `001_initial_schema.py` - Creates initial database schema (if not already done)
+- `002_add_routine_scheduling_fields.py` - Adds routine scheduling fields to tasks table
+- `check_migration_status.py` - Utility to check which migrations have been applied
+
+**Migration Process**:
+
+1. Run `migrate_csv_to_database.py` for initial CSV → Database migration (one-time)
+2. Run numbered migration scripts in order as new features are added
+3. Each migration is idempotent (safe to run multiple times)
+4. All migrations are SQLite-specific for now
+5. Future: Review all migrations and create unified PostgreSQL migration script
+
+**Migration Folder**: `task_aversion_app/SQLite_migration/`
+
+- See `SQLite_migration/README.md` for detailed instructions
 
 ### 1.3 Update Data Access Layer
 

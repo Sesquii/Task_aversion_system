@@ -49,12 +49,15 @@ This plan adds time-calibrated relief metrics, makes the app distributable onlin
 - Use SQLAlchemy ORM for PostgreSQL compatibility
 - Schema designed to be PostgreSQL-compatible from the start
 
-### 2.2 Create Migration Script
+### 2.2 Database Migration Strategy
 
-- **New File**: `backend/migrate_to_sqlite.py`
-- Migrate existing CSV data to SQLite
-- Preserve all existing data
-- Add migration verification
+**Current Implementation**: Piece-by-piece migration system in `SQLite_migration/` folder
+
+- **Initial Migration**: `migrate_csv_to_database.py` - One-time CSV → Database migration
+- **Schema Updates**: Numbered migration scripts in `SQLite_migration/` folder (001, 002, etc.)
+- **Status Check**: `SQLite_migration/check_migration_status.py` - Verify which migrations are applied
+- **Process**: Run migrations in order as new features require schema changes
+- **Future**: Once all SQLite migrations complete, create unified PostgreSQL migration
 
 ### 2.3 Update Data Access Layer
 
