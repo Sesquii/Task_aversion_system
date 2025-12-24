@@ -10,6 +10,9 @@ This folder contains migration scripts to update your SQLite database schema as 
 
 1. **001_initial_schema.py** - Creates the initial database schema (if not already done)
 2. **002_add_routine_scheduling_fields.py** - Adds routine scheduling fields to tasks table
+3. **003_create_task_instances_table.py** - Creates the task_instances table for storing task execution instances
+4. **004_create_emotions_table.py** - Creates the emotions table for storing available emotions
+5. **005_add_indexes_and_foreign_keys.py** - Adds performance indexes and foreign key constraints to task_instances
 
 ### Utility Scripts
 

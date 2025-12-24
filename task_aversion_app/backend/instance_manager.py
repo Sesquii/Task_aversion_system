@@ -101,13 +101,15 @@ class InstanceManager:
         """
         Save DataFrame to CSV with retry logic to handle file locking issues.
         Common causes: Excel/other programs have file open, OneDrive sync, or concurrent access.
+        
+        Note: We don't reload after saving since the DataFrame is already in memory.
+        Reload only happens when needed (e.g., at initialization or before operations).
         """
         last_error = None
         for attempt in range(max_retries):
             try:
                 self.df.to_csv(self.file, index=False)
-                # Success - reload and break out of retry loop
-                self._reload()
+                # Success - no need to reload since DataFrame is already in memory
                 break
             except PermissionError as e:
                 last_error = e

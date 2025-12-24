@@ -83,6 +83,57 @@ def main():
         print("[INCOMPLETE] Migration 002 needs to be run")
         print("  -> Run: python SQLite_migration/002_add_routine_scheduling_fields.py")
     
+    # Check for task_instances table (Migration 003)
+    print("Migration 003: Task Instances Table")
+    print("-" * 70)
+    
+    if check_table_exists('task_instances'):
+        print("  [OK] task_instances table exists")
+    else:
+        print("  [MISSING] task_instances table does not exist")
+        print("  -> Run: python SQLite_migration/003_create_task_instances_table.py")
+    
+    print()
+    
+    # Check for emotions table (Migration 004)
+    print("Migration 004: Emotions Table")
+    print("-" * 70)
+    
+    if check_table_exists('emotions'):
+        print("  [OK] emotions table exists")
+    else:
+        print("  [MISSING] emotions table does not exist")
+        print("  -> Run: python SQLite_migration/004_create_emotions_table.py")
+    
+    print()
+    
+    # Check for indexes on task_instances (Migration 005)
+    print("Migration 005: Indexes and Foreign Keys")
+    print("-" * 70)
+    
+    if check_table_exists('task_instances'):
+        try:
+            inspector = inspect(engine)
+            indexes = inspector.get_indexes('task_instances')
+            index_names = [idx['name'] for idx in indexes]
+            
+            expected_indexes = [
+                'idx_task_instances_task_status',
+                'idx_task_instances_created_at',
+                'idx_task_instances_is_completed',
+                'idx_task_instances_is_deleted'
+            ]
+            
+            for idx_name in expected_indexes:
+                if idx_name in index_names:
+                    print(f"  [OK] Index '{idx_name}' exists")
+                else:
+                    print(f"  [MISSING] Index '{idx_name}' does not exist")
+        except Exception as e:
+            print(f"  [ERROR] Could not check indexes: {e}")
+    else:
+        print("  [SKIP] task_instances table does not exist (run migration 003 first)")
+    
     print()
     print("=" * 70)
 
