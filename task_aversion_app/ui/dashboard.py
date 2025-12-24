@@ -251,6 +251,7 @@ def refresh_templates(search_query=None):
                     with ui.row().classes("gap-1"):
                         ui.button("INIT", on_click=lambda tid=t['task_id']: init_quick(tid)).props("dense size=sm")
                         ui.button("EDIT", on_click=lambda task=t: edit_template(task)).props("dense size=sm color=blue")
+                        ui.button("COPY", on_click=lambda task=t: copy_template(task)).props("dense size=sm color=green")
                         ui.button("DELETE", on_click=lambda tid=t['task_id']: delete_template(tid)).props("dense size=sm color=red")
     
     print(f"[Dashboard] refresh_templates() completed successfully")
@@ -430,6 +431,207 @@ def edit_template(task):
         
         with ui.row().classes("gap-2 mt-4"):
             ui.button("Save", on_click=save_edit).props("color=primary")
+            ui.button("Cancel", on_click=dialog.close)
+    
+    dialog.open()
+
+
+def copy_template(task):
+    """Open a dialog to copy a task template."""
+    print(f"[Dashboard] copy_template called: {task.get('task_id')}")
+    
+    # Get all current values from the template
+    current_name = task.get('name', '')
+    current_desc = task.get('description', '')
+    current_task_type = task.get('task_type', 'Work')
+    current_est = task.get('default_estimate_minutes', 0)
+    current_type = task.get('type', 'one-time')
+    current_is_recurring = task.get('is_recurring', 'False')
+    current_categories = task.get('categories', '[]')
+    current_default_aversion_str = task.get('default_initial_aversion', '') or ''
+    
+    # Get routine scheduling fields
+    current_routine_frequency = task.get('routine_frequency', 'none') or 'none'
+    current_routine_time = task.get('routine_time', '00:00') or '00:00'
+    current_routine_days_str = task.get('routine_days_of_week', '[]') or '[]'
+    current_completion_window_hours = task.get('completion_window_hours', '') or ''
+    current_completion_window_days = task.get('completion_window_days', '') or ''
+    
+    try:
+        current_est = int(current_est) if current_est else 0
+    except (TypeError, ValueError):
+        current_est = 0
+    
+    # Parse default_initial_aversion
+    current_default_aversion = None
+    if current_default_aversion_str:
+        try:
+            current_default_aversion = int(float(current_default_aversion_str))
+            if current_default_aversion < 0 or current_default_aversion > 100:
+                current_default_aversion = None
+        except (ValueError, TypeError):
+            current_default_aversion = None
+    
+    # Parse is_recurring
+    is_recurring_bool = str(current_is_recurring).lower() in ('true', '1', 'yes')
+    
+    # Parse routine days
+    try:
+        current_routine_days = json.loads(current_routine_days_str) if isinstance(current_routine_days_str, str) else current_routine_days_str
+        if not isinstance(current_routine_days, list):
+            current_routine_days = []
+    except (json.JSONDecodeError, TypeError):
+        current_routine_days = []
+    
+    try:
+        current_completion_window_hours = int(current_completion_window_hours) if current_completion_window_hours else None
+    except (TypeError, ValueError):
+        current_completion_window_hours = None
+    
+    try:
+        current_completion_window_days = int(current_completion_window_days) if current_completion_window_days else None
+    except (TypeError, ValueError):
+        current_completion_window_days = None
+    
+    # Default name with " (Copy)" appended
+    default_copy_name = f"{current_name} (Copy)" if current_name else "New Task (Copy)"
+    
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-4'):
+        ui.label("Copy Task Template").classes("text-xl font-bold mb-4")
+        
+        name_input = ui.input(label="Task Name", value=default_copy_name).classes("w-full")
+        desc_input = ui.textarea(label="Description (optional)", value=current_desc).classes("w-full")
+        task_type_select = ui.select(
+            ['Work', 'Play', 'Self care'], 
+            label='Task Type', 
+            value=current_task_type
+        ).classes("w-full")
+        est_input = ui.number(label='Default estimate minutes', value=current_est).classes("w-full")
+        
+        # Aversion checkbox - checked if original had a default aversion value > 0
+        aversion_checkbox = ui.checkbox("Check if you are averse to starting this task", value=(current_default_aversion is not None and current_default_aversion > 0))
+        
+        # Routine scheduling section
+        ui.label("Routine Scheduling (Optional)").classes("text-lg font-semibold mt-4")
+        
+        routine_frequency = ui.select(
+            ['none', 'daily', 'weekly'],
+            label='Routine Frequency',
+            value=current_routine_frequency
+        ).classes("w-full")
+        
+        # Day of week selection (for weekly)
+        day_labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        day_checkboxes = {}
+        day_container = ui.column().classes("gap-2")
+        
+        def update_day_visibility():
+            """Show/hide day selection based on frequency"""
+            day_container.set_visibility(routine_frequency.value in ['daily', 'weekly'])
+        
+        routine_frequency.on('update:model-value', lambda: update_day_visibility())
+        
+        with day_container:
+            ui.label("Select days of week (leave all unchecked for daily to run every day):").classes("text-sm")
+            for i, day in enumerate(day_labels):
+                day_checkboxes[i] = ui.checkbox(day, value=(i in current_routine_days))
+        
+        day_container.set_visibility(current_routine_frequency in ['daily', 'weekly'])
+        
+        # Time picker
+        routine_time = ui.input(
+            label='Routine Time (HH:MM, 24-hour format)',
+            value=current_routine_time,
+            placeholder='00:00'
+        ).classes("w-full max-w-xs")
+        
+        # Completion window (hours and days)
+        ui.label("Completion Window (Optional)").classes("text-sm font-semibold")
+        ui.label("Time to complete task after initialization without penalty").classes("text-xs text-gray-500")
+        with ui.row().classes("gap-4"):
+            completion_window_hours = ui.number(
+                label='Hours',
+                value=current_completion_window_hours,
+                placeholder='Hours',
+                min=0
+            ).classes("flex-1")
+            completion_window_days = ui.number(
+                label='Days',
+                value=current_completion_window_days,
+                placeholder='Days',
+                min=0
+            ).classes("flex-1")
+        
+        def save_copy():
+            if not name_input.value.strip():
+                ui.notify("Task name required", color='negative')
+                return
+
+            # Validate time format
+            time_str = routine_time.value.strip() or '00:00'
+            try:
+                # Basic validation: should be HH:MM format
+                parts = time_str.split(':')
+                if len(parts) != 2:
+                    raise ValueError("Invalid time format")
+                hour = int(parts[0])
+                minute = int(parts[1])
+                if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+                    raise ValueError("Invalid time values")
+                # Normalize format
+                time_str = f"{hour:02d}:{minute:02d}"
+            except (ValueError, IndexError):
+                ui.notify("Invalid time format. Use HH:MM (24-hour format, e.g., 09:30)", color='negative')
+                return
+
+            # Get default aversion value - if checkbox is checked, set to 50, otherwise 0
+            default_aversion = 50 if aversion_checkbox.value else 0
+
+            # Get selected days for daily or weekly routine
+            selected_days = []
+            if routine_frequency.value in ['daily', 'weekly']:
+                selected_days = [i for i, cb in day_checkboxes.items() if cb.value]
+                if routine_frequency.value == 'weekly' and not selected_days:
+                    ui.notify("Please select at least one day for weekly routine", color='negative')
+                    return
+                # For daily, if no days selected, it means every day (empty list)
+                # If days are selected, it means only on those days
+
+            # Get completion window values (None if empty)
+            completion_window_hours_val = None
+            if completion_window_hours.value is not None and completion_window_hours.value > 0:
+                completion_window_hours_val = int(completion_window_hours.value)
+            
+            completion_window_days_val = None
+            if completion_window_days.value is not None and completion_window_days.value > 0:
+                completion_window_days_val = int(completion_window_days.value)
+            
+            # Create new task with copied data
+            tid = tm.create_task(
+                name_input.value.strip(),
+                description=desc_input.value or '',
+                ttype=current_type,
+                is_recurring=is_recurring_bool,
+                categories=current_categories,
+                default_estimate_minutes=int(est_input.value or 0),
+                task_type=task_type_select.value,
+                default_initial_aversion=default_aversion,
+                routine_frequency=routine_frequency.value,
+                routine_days_of_week=selected_days,
+                routine_time=time_str,
+                completion_window_hours=completion_window_hours_val,
+                completion_window_days=completion_window_days_val
+            )
+            
+            if tid:
+                ui.notify("Task template copied", color='positive')
+                dialog.close()
+                refresh_templates()
+            else:
+                ui.notify("Copy failed", color='negative')
+        
+        with ui.row().classes("gap-2 mt-4"):
+            ui.button("Create Copy", on_click=save_copy).props("color=primary")
             ui.button("Cancel", on_click=dialog.close)
     
     dialog.open()
