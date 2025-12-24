@@ -554,4 +554,3 @@ For each score, complete this matrix:| Dimension | Value | Rationale ||---------
 1. Review and approve this plan
 2. Create `backend/score_weights.py` with initial structure
 3. Begin with Productivity Score analysis (highest priority)
-4. Set up calibration dashboard framework
