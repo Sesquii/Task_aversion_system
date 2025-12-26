@@ -204,6 +204,120 @@ class UserStateManager:
         return self.update_preference(user_id, "persistent_emotion_values", emotion_json)
 
     # -----------------------------
+    # Cancellation categories management
+    # -----------------------------
+    def get_cancellation_categories(self, user_id: str = "default") -> Dict[str, str]:
+        """Get custom cancellation categories for a user.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Dict of category_key -> category_label
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        categories_json = prefs.get("cancellation_categories", "")
+        if not categories_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(categories_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_cancellation_categories(self, categories: Dict[str, str], user_id: str = "default") -> Dict[str, Any]:
+        """Set custom cancellation categories for a user.
+        
+        Args:
+            categories: Dict of category_key -> category_label
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        categories_json = json.dumps(categories)
+        return self.update_preference(user_id, "cancellation_categories", categories_json)
+    
+    def add_cancellation_category(self, category_key: str, category_label: str, user_id: str = "default") -> Dict[str, str]:
+        """Add a new cancellation category.
+        
+        Args:
+            category_key: Unique key for the category (e.g., 'custom_reason_1')
+            category_label: Display label for the category
+            user_id: User ID
+            
+        Returns:
+            Updated categories dict
+        """
+        categories = self.get_cancellation_categories(user_id)
+        categories[category_key] = category_label
+        self.set_cancellation_categories(categories, user_id)
+        return categories
+    
+    def remove_cancellation_category(self, category_key: str, user_id: str = "default") -> Dict[str, str]:
+        """Remove a cancellation category.
+        
+        Args:
+            category_key: Key of the category to remove
+            user_id: User ID
+            
+        Returns:
+            Updated categories dict
+        """
+        categories = self.get_cancellation_categories(user_id)
+        if category_key in categories:
+            del categories[category_key]
+            self.set_cancellation_categories(categories, user_id)
+        return categories
+
+    # -----------------------------
+    # Cancellation penalties management
+    # -----------------------------
+    def get_cancellation_penalties(self, user_id: str = "default") -> Dict[str, float]:
+        """Get cancellation penalty multipliers for each category.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Dict of category_key -> penalty_multiplier (0.0 to 1.0)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        penalties_json = prefs.get("cancellation_penalties", "")
+        if not penalties_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(penalties_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_cancellation_penalties(self, penalties: Dict[str, float], user_id: str = "default") -> Dict[str, Any]:
+        """Set cancellation penalty multipliers for each category.
+        
+        Args:
+            penalties: Dict of category_key -> penalty_multiplier (0.0 to 1.0)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Ensure all values are between 0.0 and 1.0
+        validated_penalties = {k: max(0.0, min(1.0, float(v))) for k, v in penalties.items()}
+        penalties_json = json.dumps(validated_penalties)
+        return self.update_preference(user_id, "cancellation_penalties", penalties_json)
+
+    # -----------------------------
     # JavaScript helpers
     # -----------------------------
     @staticmethod

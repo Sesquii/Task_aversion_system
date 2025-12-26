@@ -474,6 +474,47 @@ class Analytics:
             Productivity score (can be negative for productivity penalty from play tasks)
         """
         try:
+            # Check if task is cancelled and apply cancellation penalty
+            status = str(row.get('status', 'active')).lower()
+            if status == 'cancelled':
+                actual_dict = row.get('actual_dict', {})
+                if not isinstance(actual_dict, dict):
+                    actual_dict = {}
+                
+                # Get cancellation category
+                cancellation_category = actual_dict.get('cancellation_category', 'other')
+                
+                # Get penalty multiplier from user settings
+                user_state = UserStateManager()
+                penalties = user_state.get_cancellation_penalties("default_user")
+                
+                # Default penalties if not configured
+                if not penalties:
+                    default_penalties = {
+                        'development_test': 0.0,
+                        'accidental_initialization': 0.0,
+                        'deferred_to_plan': 0.1,
+                        'did_while_another_active': 0.0,
+                        'failed_to_complete': 1.0,
+                        'other': 0.5
+                    }
+                    penalty_multiplier = default_penalties.get(cancellation_category, 0.5)
+                else:
+                    penalty_multiplier = penalties.get(cancellation_category, 0.5)
+                
+                # Get estimated time for the task
+                predicted_dict = row.get('predicted_dict', {})
+                if not isinstance(predicted_dict, dict):
+                    predicted_dict = {}
+                time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+                
+                # Calculate penalty: negative score based on estimated time and penalty multiplier
+                # Base penalty is the estimated time (in minutes), scaled by penalty multiplier
+                # Convert to score units (divide by 10 to get reasonable scale)
+                penalty_score = -(time_estimate / 10.0) * penalty_multiplier
+                
+                return penalty_score
+            
             actual_dict = row.get('actual_dict', {})
             predicted_dict = row.get('predicted_dict', {})
             task_type = row.get('task_type', 'Work')
@@ -1026,6 +1067,191 @@ class Analytics:
         return df_filtered
     
     def _load_instances(self) -> pd.DataFrame:
+        # Check if database is being used
+        use_db = bool(os.getenv('DATABASE_URL'))
+        
+        if use_db:
+            # Load from database
+            try:
+                from backend.database import get_session, TaskInstance
+                session = get_session()
+                try:
+                    instances = session.query(TaskInstance).all()
+                    if not instances:
+                        return pd.DataFrame()
+                    
+                    # Convert to list of dicts
+                    data = [instance.to_dict() for instance in instances]
+                    
+                    # Convert to DataFrame
+                    df = pd.DataFrame(data).fillna('')
+                    
+                    # Ensure all required columns exist
+                    attr_defaults = attribute_defaults()
+                    def _ensure_column(col: str, default):
+                        if col not in df.columns:
+                            df[col] = default
+                    
+                    for attr, default in attr_defaults.items():
+                        _ensure_column(attr, default)
+                    _ensure_column('status', 'active')
+                    
+                    # Apply gap filtering
+                    df = self._apply_gap_filtering(df)
+                    
+                    # Process JSON fields (same as CSV path)
+                    def _safe_json(cell: str) -> Dict:
+                        if isinstance(cell, dict):
+                            return cell
+                        cell = cell or '{}'
+                        try:
+                            return json.loads(cell)
+                        except Exception:
+                            return {}
+                    
+                    df['predicted_dict'] = df['predicted'].apply(_safe_json) if 'predicted' in df.columns else {}
+                    df['actual_dict'] = df['actual'].apply(_safe_json) if 'actual' in df.columns else {}
+                    
+                    # Fill attribute columns from JSON payloads if CSV column empty (same logic as CSV path)
+                    for attr in TASK_ATTRIBUTES:
+                        column = attr.key
+                        df[column] = df[column].replace('', pd.NA)
+                        df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get(column)))
+                        df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get(column)))
+                        # Special handling for relief_score
+                        if column == 'relief_score':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_relief')))
+                        # Handle cognitive load components
+                        if column == 'mental_energy_needed':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_mental_energy') or r.get('actual_cognitive')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_mental_energy') or r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+                        if column == 'task_difficulty':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_difficulty') or r.get('actual_cognitive')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_difficulty') or r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+                        if column == 'emotional_load':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_emotional')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_emotional_load') or r.get('expected_emotional')))
+                        if column == 'duration_minutes':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('time_actual_minutes')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('time_estimate_minutes')))
+                        df[column] = df[column].fillna(attr.default)
+                        if attr.dtype == 'numeric':
+                            df[column] = pd.to_numeric(df[column], errors='coerce')
+                            df[column] = df[column].fillna(attr.default)
+                    
+                    # Handle physical_load
+                    if 'physical_load' not in df.columns:
+                        df['physical_load'] = pd.NA
+                    df['physical_load'] = df['physical_load'].replace('', pd.NA)
+                    df['physical_load'] = df['physical_load'].fillna(df['actual_dict'].apply(lambda r: r.get('actual_physical')))
+                    df['physical_load'] = df['physical_load'].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_physical_load')))
+                    df['physical_load'] = pd.to_numeric(df['physical_load'], errors='coerce')
+                    df['physical_load'] = df['physical_load'].fillna(0.0)
+                    
+                    # Extract expected_aversion from JSON
+                    df['expected_aversion'] = df['predicted_dict'].apply(lambda r: r.get('expected_aversion') if isinstance(r, dict) else None)
+                    df['expected_aversion'] = pd.to_numeric(df['expected_aversion'], errors='coerce')
+                    df['expected_aversion'] = df['expected_aversion'].fillna(0.0)  # Default to 0 if missing
+                    
+                    # Calculate derived columns (same as CSV path below)
+                    # Extract and normalize cognitive load components
+                    if 'mental_energy_needed' not in df.columns:
+                        df['mental_energy_needed'] = pd.NA
+                    if 'task_difficulty' not in df.columns:
+                        df['task_difficulty'] = pd.NA
+                    
+                    df['mental_energy_needed'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
+                    df['task_difficulty'] = pd.to_numeric(df['task_difficulty'], errors='coerce')
+                    
+                    # Scale from 0-10 to 0-100 if needed (backward compatibility)
+                    mental_energy_mask = (df['mental_energy_needed'] >= 0) & (df['mental_energy_needed'] <= 10) & (df['mental_energy_needed'].notna())
+                    df.loc[mental_energy_mask, 'mental_energy_needed'] = df.loc[mental_energy_mask, 'mental_energy_needed'] * 10.0
+                    
+                    difficulty_mask = (df['task_difficulty'] >= 0) & (df['task_difficulty'] <= 10) & (df['task_difficulty'].notna())
+                    df.loc[difficulty_mask, 'task_difficulty'] = df.loc[difficulty_mask, 'task_difficulty'] * 10.0
+                    
+                    df['mental_energy_needed'] = df['mental_energy_needed'].fillna(50.0)
+                    df['task_difficulty'] = df['task_difficulty'].fillna(50.0)
+                    
+                    # Calculate stress_level
+                    df['relief_score_numeric'] = pd.to_numeric(df['relief_score'], errors='coerce').fillna(0.0)
+                    df['mental_energy_numeric'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce').fillna(50.0)
+                    df['task_difficulty_numeric'] = pd.to_numeric(df['task_difficulty'], errors='coerce').fillna(50.0)
+                    df['emotional_load_numeric'] = pd.to_numeric(df['emotional_load'], errors='coerce').fillna(0.0)
+                    df['physical_load_numeric'] = pd.to_numeric(df['physical_load'], errors='coerce').fillna(0.0)
+                    df['expected_aversion_numeric'] = pd.to_numeric(df['expected_aversion'], errors='coerce').fillna(0.0)
+                    
+                    df['stress_level'] = (
+                        (df['mental_energy_numeric'] * 0.5 + 
+                         df['task_difficulty_numeric'] * 0.5 + 
+                         df['emotional_load_numeric'] + 
+                         df['physical_load_numeric'] + 
+                         df['expected_aversion_numeric'] * 2.0) / 5.0
+                    )
+                    
+                    # Calculate net_wellbeing
+                    df['net_wellbeing'] = df['relief_score_numeric'] - df['stress_level']
+                    
+                    # Calculate net_wellbeing_normalized
+                    df['net_wellbeing_normalized'] = 50.0 + (df['net_wellbeing'] / 2.0)
+                    
+                    # Calculate stress_efficiency
+                    stress_safe = pd.to_numeric(df['stress_level'], errors='coerce')
+                    stress_safe = stress_safe.mask(stress_safe <= 0, np.nan)
+                    relief_safe = pd.to_numeric(df['relief_score_numeric'], errors='coerce')
+                    df['stress_efficiency'] = (relief_safe / stress_safe).round(4)
+                    
+                    df['stress_efficiency_raw'] = df['stress_efficiency']
+                    se_valid = df['stress_efficiency'].dropna()
+                    if not se_valid.empty:
+                        se_min = se_valid.min()
+                        se_max = se_valid.max()
+                        if pd.notna(se_min) and pd.notna(se_max):
+                            if se_max > se_min:
+                                df['stress_efficiency'] = ((df['stress_efficiency'] - se_min) / (se_max - se_min)) * 100.0
+                            else:
+                                df['stress_efficiency'] = 100.0
+                        df['stress_efficiency'] = df['stress_efficiency'].round(2)
+                    
+                    # Calculate behavioral_score (simplified version - full version is in CSV path)
+                    def _calculate_behavioral_score(row):
+                        try:
+                            behavioral = row.get('behavioral_score')
+                            if behavioral and str(behavioral).strip():
+                                return pd.to_numeric(behavioral, errors='coerce')
+                            return pd.NA
+                        except (KeyError, TypeError, ValueError):
+                            return pd.NA
+                    
+                    df['behavioral_score'] = df.apply(_calculate_behavioral_score, axis=1)
+                    
+                    # Handle cognitive_load backward compatibility
+                    if 'cognitive_load' in df.columns:
+                        cognitive_numeric = pd.to_numeric(df['cognitive_load'], errors='coerce')
+                        cognitive_scaled = cognitive_numeric.copy()
+                        scale_mask = (cognitive_numeric >= 0) & (cognitive_numeric <= 10) & (cognitive_numeric.notna())
+                        cognitive_scaled.loc[scale_mask] = cognitive_numeric.loc[scale_mask] * 10.0
+                        
+                        if 'mental_energy_needed' in df.columns:
+                            mental_numeric = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
+                            missing_mental = mental_numeric.isna() | (mental_numeric == 0)
+                            has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
+                            df.loc[has_cognitive & missing_mental, 'mental_energy_needed'] = cognitive_scaled.loc[has_cognitive & missing_mental]
+                        
+                        if 'task_difficulty' in df.columns:
+                            difficulty_numeric = pd.to_numeric(df['task_difficulty'], errors='coerce')
+                            missing_difficulty = difficulty_numeric.isna() | (difficulty_numeric == 0)
+                            has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
+                            df.loc[has_cognitive & missing_difficulty, 'task_difficulty'] = cognitive_scaled.loc[has_cognitive & missing_difficulty]
+                    
+                    return df
+                finally:
+                    session.close()
+            except Exception as e:
+                print(f"[Analytics] Error loading instances from database: {e}, falling back to CSV")
+                # Fall through to CSV loading
+        
+        # CSV fallback
         if not os.path.exists(self.instances_file):
             return pd.DataFrame()
 
@@ -2176,6 +2402,25 @@ class Analytics:
         avg_self_care = float(counts.get('avg_daily_self_care_tasks', 0.0))
         scores['self_care_frequency'] = min(100.0, avg_self_care * 20.0)  # 5 tasks = 100 score
         
+        # Execution score (average of recent completed instances)
+        try:
+            from .instance_manager import InstanceManager
+            instance_manager = InstanceManager()
+            recent_instances = instance_manager.list_recent_completed(limit=100)
+            execution_scores = []
+            
+            for instance in recent_instances:
+                execution_score = self.calculate_execution_score(instance)
+                if execution_score is not None:
+                    execution_scores.append(execution_score)
+            
+            avg_execution_score = sum(execution_scores) / len(execution_scores) if execution_scores else 50.0
+            scores['execution_score'] = avg_execution_score
+        except Exception as e:
+            # If execution score calculation fails, use neutral score
+            print(f"[Analytics] Error calculating execution score: {e}")
+            scores['execution_score'] = 50.0
+        
         return scores
 
     def get_tracking_consistency_multiplier(self, days: int = 7) -> float:
@@ -2193,6 +2438,173 @@ class Analytics:
         tracking_data = self.calculate_time_tracking_consistency_score(days=days)
         score = tracking_data.get('tracking_consistency_score', 0.0)
         return max(0.0, min(1.0, score / 100.0))
+
+    def calculate_execution_score(
+        self,
+        row: Union[pd.Series, Dict],
+        task_completion_counts: Optional[Dict[str, int]] = None
+    ) -> float:
+        """Calculate execution score (0-100) for efficient execution of difficult tasks.
+        
+        Combines four component factors:
+        1. Difficulty factor: High aversion + high load
+        2. Speed factor: Fast execution relative to estimate
+        3. Start speed factor: Fast start after initialization (procrastination resistance)
+        4. Completion factor: Full completion (100% or close)
+        
+        Formula: execution_score = base_score * (1.0 + difficulty_factor) * 
+                                   (0.5 + speed_factor * 0.5) * 
+                                   (0.5 + start_speed_factor * 0.5) * 
+                                   completion_factor
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual),
+                 initialized_at, started_at, completed_at
+            task_completion_counts: Optional dict for task completion counts (for difficulty)
+        
+        Returns:
+            Execution score (0-100), higher = better execution
+        """
+        import math
+        
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+            initialized_at = row.get('initialized_at')
+            started_at = row.get('started_at')
+            completed_at = row.get('completed_at')
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+            initialized_at = row.get('initialized_at')
+            started_at = row.get('started_at')
+            completed_at = row.get('completed_at')
+        
+        # 1. Difficulty Factor (reuse existing calculate_difficulty_bonus)
+        current_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion')
+        stress_level = actual_dict.get('stress_level')
+        mental_energy = predicted_dict.get('mental_energy_needed') or predicted_dict.get('cognitive_load')
+        task_difficulty = predicted_dict.get('task_difficulty')
+        
+        difficulty_factor = self.calculate_difficulty_bonus(
+            current_aversion=current_aversion,
+            stress_level=stress_level,
+            mental_energy=mental_energy,
+            task_difficulty=task_difficulty
+        )
+        # Already returns 0.0-1.0, use directly
+        
+        # 2. Speed Factor (execution efficiency)
+        time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+        time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or 
+                             predicted_dict.get('estimate', 0) or 0)
+        
+        if time_estimate > 0 and time_actual > 0:
+            time_ratio = time_actual / time_estimate
+            
+            if time_ratio <= 0.5:
+                # Very fast: 2x speed or faster → max bonus
+                speed_factor = 1.0
+            elif time_ratio <= 1.0:
+                # Fast: completed within estimate → linear bonus
+                # 0.5 → 1.0, 1.0 → 0.5
+                speed_factor = 1.0 - (time_ratio - 0.5) * 1.0
+            else:
+                # Slow: exceeded estimate → diminishing penalty
+                # 1.0 → 0.5, 2.0 → 0.25, 3.0 → 0.125
+                speed_factor = 0.5 * (1.0 / time_ratio)
+        else:
+            speed_factor = 0.5  # Neutral if no time data
+        
+        # 3. Start Speed Factor (procrastination resistance)
+        start_speed_factor = 0.5  # Default neutral
+        
+        if initialized_at and completed_at:
+            try:
+                # Parse datetime if needed
+                if isinstance(initialized_at, str):
+                    init_time = pd.to_datetime(initialized_at)
+                else:
+                    init_time = initialized_at
+                
+                if isinstance(completed_at, str):
+                    complete_time = pd.to_datetime(completed_at)
+                else:
+                    complete_time = completed_at
+                
+                if started_at:
+                    if isinstance(started_at, str):
+                        start_time = pd.to_datetime(started_at)
+                    else:
+                        start_time = started_at
+                    start_delay_minutes = (start_time - init_time).total_seconds() / 60.0
+                else:
+                    # No start time: use completion time as proxy
+                    start_delay_minutes = (complete_time - init_time).total_seconds() / 60.0
+                
+                # Normalize: fast start = high score
+                if start_delay_minutes <= 5:
+                    start_speed_factor = 1.0
+                elif start_delay_minutes <= 30:
+                    # Linear: 5 min → 1.0, 30 min → 0.8
+                    start_speed_factor = 1.0 - ((start_delay_minutes - 5) / 25.0) * 0.2
+                elif start_delay_minutes <= 120:
+                    # Linear: 30 min → 0.8, 120 min → 0.5
+                    start_speed_factor = 0.8 - ((start_delay_minutes - 30) / 90.0) * 0.3
+                else:
+                    # Exponential decay: 120 min → 0.5, 480 min → ~0.125
+                    excess = start_delay_minutes - 120
+                    start_speed_factor = 0.5 * math.exp(-excess / 240.0)
+            except (ValueError, TypeError, AttributeError) as e:
+                # Neutral on error
+                start_speed_factor = 0.5
+        
+        # 4. Completion Factor (quality of completion)
+        completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+        
+        if completion_pct >= 100.0:
+            completion_factor = 1.0
+        elif completion_pct >= 90.0:
+            # Near-complete: slight penalty
+            completion_factor = 0.9 + (completion_pct - 90.0) / 10.0 * 0.1
+        elif completion_pct >= 50.0:
+            # Partial: moderate penalty
+            completion_factor = 0.5 + (completion_pct - 50.0) / 40.0 * 0.4
+        else:
+            # Low completion: significant penalty
+            completion_factor = completion_pct / 50.0 * 0.5
+        
+        # Combined Formula
+        # Base score: 50 points (neutral)
+        base_score = 50.0
+        
+        # Apply factors multiplicatively (all must be high for high score)
+        execution_score = base_score * (
+            (1.0 + difficulty_factor) *      # 1.0-2.0 range (difficulty boost)
+            (0.5 + speed_factor * 0.5) *     # 0.5-1.0 range (speed boost)
+            (0.5 + start_speed_factor * 0.5) *  # 0.5-1.0 range (start speed boost)
+            completion_factor                # 0.0-1.0 range (completion quality)
+        )
+        
+        # Normalize to 0-100 range
+        execution_score = max(0.0, min(100.0, execution_score))
+        
+        return execution_score
 
     def get_relief_summary(self) -> Dict[str, any]:
         """Calculate relief points, productivity time, and relief statistics."""

@@ -317,8 +317,6 @@ Index('idx_emotions_task_id', Emotion.task_id),
 Index('idx_emotions_created_at', Emotion.created_at),
 ```
 
-
-
 ### Query Optimization Patterns
 
 **Use SQL Aggregation:**
@@ -345,8 +343,6 @@ instances = session.query(TaskInstance).filter(
 ).all()
 ```
 
-
-
 ## Testing Strategy
 
 ### Unit Tests
@@ -367,8 +363,6 @@ def test_analytics_queries_with_database():
     # Verify results match CSV version
     # Test performance
 ```
-
-
 
 ### Integration Tests
 

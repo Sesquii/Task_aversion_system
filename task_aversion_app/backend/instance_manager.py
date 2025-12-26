@@ -498,6 +498,41 @@ class InstanceManager:
             self.use_db = False
             return self._list_active_instances_csv()
 
+    def list_cancelled_instances(self):
+        """List all cancelled task instances. Works with both CSV and database."""
+        if self.use_db:
+            return self._list_cancelled_instances_db()
+        else:
+            return self._list_cancelled_instances_csv()
+    
+    def _list_cancelled_instances_csv(self):
+        """CSV-specific list_cancelled_instances."""
+        self._reload()
+        status_series = self.df['status'].str.lower()
+        df = self.df[
+            (status_series == 'cancelled') & (self.df['is_deleted'] != 'True')
+        ]
+        # Sort by cancelled_at descending (most recent first)
+        if 'cancelled_at' in df.columns:
+            df = df.sort_values('cancelled_at', ascending=False, na_position='last')
+        return df.to_dict(orient='records')
+    
+    def _list_cancelled_instances_db(self):
+        """Database-specific list_cancelled_instances."""
+        try:
+            with self.db_session() as session:
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.status == 'cancelled',
+                    self.TaskInstance.is_deleted == False
+                ).order_by(self.TaskInstance.cancelled_at.desc()).all()
+                return [instance.to_dict() for instance in instances]
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in list_cancelled_instances and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in list_cancelled_instances: {e}, falling back to CSV")
+            self.use_db = False
+            return self._list_cancelled_instances_csv()
+
     def get_instance(self, instance_id):
         """Get a task instance by ID. Works with both CSV and database."""
         if self.use_db:
@@ -781,6 +816,67 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in cancel_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._cancel_instance_csv(instance_id, actual)
+
+    def update_cancelled_instance(self, instance_id, cancellation_data: dict):
+        """Update cancellation data for an already-cancelled instance. Works with both CSV and database."""
+        if self.use_db:
+            return self._update_cancelled_instance_db(instance_id, cancellation_data)
+        else:
+            return self._update_cancelled_instance_csv(instance_id, cancellation_data)
+    
+    def _update_cancelled_instance_csv(self, instance_id, cancellation_data: dict):
+        """CSV-specific update_cancelled_instance."""
+        import json
+        self._reload()
+        matches = self.df.index[self.df['instance_id'] == instance_id]
+        if len(matches) == 0:
+            raise ValueError(f"Instance {instance_id} not found")
+        idx = matches[0]
+        
+        # Verify it's cancelled
+        if self.df.at[idx, 'status'] != 'cancelled':
+            raise ValueError(f"Instance {instance_id} is not cancelled")
+        
+        # Get existing actual data and merge with new cancellation data
+        existing_actual_str = self.df.at[idx, 'actual'] or '{}'
+        try:
+            existing_actual = json.loads(existing_actual_str) if existing_actual_str else {}
+        except:
+            existing_actual = {}
+        
+        # Merge cancellation data (preserve cancelled flag)
+        updated_actual = {**existing_actual, **cancellation_data}
+        updated_actual['cancelled'] = True
+        
+        self.df.at[idx, 'actual'] = json.dumps(updated_actual)
+        self._save()
+    
+    def _update_cancelled_instance_db(self, instance_id, cancellation_data: dict):
+        """Database-specific update_cancelled_instance."""
+        try:
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found")
+                
+                if instance.status != 'cancelled':
+                    raise ValueError(f"Instance {instance_id} is not cancelled")
+                
+                # Merge cancellation data with existing actual data
+                existing_actual = instance.actual or {}
+                updated_actual = {**existing_actual, **cancellation_data}
+                updated_actual['cancelled'] = True
+                
+                instance.actual = updated_actual
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in update_cancelled_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in update_cancelled_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._update_cancelled_instance_csv(instance_id, cancellation_data)
 
     def add_prediction_to_instance(self, instance_id, predicted: dict):
         """Add prediction data to an instance. Works with both CSV and database."""

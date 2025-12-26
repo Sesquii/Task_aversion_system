@@ -375,7 +375,8 @@ def initialize_task_page(task_manager, emotion_manager):
                 is_first_time = initial_aversion is None
                 
                 # Get aversion value: always use slider value (slider is now always shown)
-                current_aversion = int(aversion_slider.value)
+                # Ensure it's at least 0 (or 1 if using 1-100 scale - but we use 0-100, so 0 is fine)
+                current_aversion = max(0, int(aversion_slider.value or 0))
                 
                 # If this is the first time, set initial_aversion; otherwise use expected_aversion
                 predicted_payload = {
@@ -390,7 +391,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or '',
-                    "expected_aversion": current_aversion,  # Current aversion value
+                    "expected_aversion": current_aversion,  # Current aversion value (always saved, minimum 0)
                     # Backward compatibility: also include old cognitive_load field
                     "expected_cognitive_load": (mental_energy.value + task_difficulty.value) / 2,
                 }

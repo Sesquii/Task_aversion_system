@@ -56,6 +56,32 @@ def build_analytics_page():
         with ui.row().classes("gap-3 flex-wrap"):
             ui.button("📊 Emotional Flow", on_click=lambda: ui.navigate.to('/analytics/emotional-flow')).classes("bg-purple-500 text-white")
             ui.label("Track emotion changes and patterns").classes("text-xs text-gray-500 self-center")
+            ui.button("📋 Cancelled Tasks", on_click=lambda: ui.navigate.to('/cancelled-tasks')).classes("bg-orange-500 text-white")
+            ui.label("View cancelled task patterns and statistics").classes("text-xs text-gray-500 self-center")
+            ui.button("📈 Composite Score", on_click=lambda: ui.navigate.to('/composite-score')).classes("bg-indigo-500 text-white")
+            ui.label("View overall performance score").classes("text-xs text-gray-500 self-center")
+    
+    # Composite Score Summary
+    from backend.user_state import UserStateManager
+    user_state = UserStateManager()
+    DEFAULT_USER_ID = "default_user"
+    
+    current_weights = user_state.get_score_weights(DEFAULT_USER_ID) or {}
+    all_scores = analytics_service.get_all_scores_for_composite(days=7)
+    composite_result = analytics_service.calculate_composite_score(
+        components=all_scores,
+        weights=current_weights,
+        normalize_components=True
+    )
+    
+    with ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200"):
+        with ui.row().classes("items-center gap-4 w-full"):
+            ui.label("Composite Score").classes("text-lg font-semibold")
+            with ui.card().classes("p-3 bg-white border-2 border-indigo-300"):
+                ui.label(f"{composite_result['composite_score']:.1f}").classes("text-3xl font-bold text-indigo-700")
+                ui.label("/ 100").classes("text-sm text-indigo-600")
+            ui.button("View Details", on_click=lambda: ui.navigate.to('/composite-score')).classes("bg-indigo-500 text-white")
+            ui.button("Configure Weights", on_click=lambda: ui.navigate.to('/settings')).classes("bg-gray-500 text-white")
 
     metrics = analytics_service.get_dashboard_metrics()
     relief_summary = analytics_service.get_relief_summary()

@@ -495,4 +495,3 @@ def test_missing_data():
 ## Notes
 
 - Execution score will be included in score calibration plan later
-- Can be used as multiplier for productivity score (optional future enhancement)

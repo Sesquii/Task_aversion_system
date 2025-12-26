@@ -10,10 +10,14 @@ from ui.initialize_task import initialize_task_page
 from ui.complete_task import complete_task_page
 from ui.cancel_task import cancel_task_page
 from ui.analytics_page import register_analytics_page
+from ui.analytics_glossary import register_analytics_glossary
 from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handling
 # import submodules without rebinding the nicegui `ui` object
 from ui import survey_page  # registers /survey
 from ui import settings_page  # registers /settings
+from ui import cancelled_tasks_page  # registers /cancelled-tasks
+from ui import composite_score_weights_page  # registers /settings/composite-score-weights
+from ui import cancellation_penalties_page  # registers /settings/cancellation-penalties
 # from ui import data_guide_page  # registers /data-guide - TODO: Re-enable when data guide is updated for local setup
 from ui import composite_score_page  # registers /composite-score
 
@@ -63,13 +67,26 @@ def register_pages():
     complete_task_page(task_manager, emotion_manager)
     cancel_task_page(task_manager, emotion_manager)
     register_analytics_page()
+    register_analytics_glossary()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
     register_pages()
+    
+    # Set up static file serving for graphic aids
+    import os
+    from fastapi.staticfiles import StaticFiles
+    from nicegui import app
+    
+    assets_dir = os.path.join(os.path.dirname(__file__), 'assets')
+    graphic_aids_dir = os.path.join(assets_dir, 'graphic_aids')
+    os.makedirs(graphic_aids_dir, exist_ok=True)
+    
+    # Mount static files directory using FastAPI
+    app.mount('/static/graphic_aids', StaticFiles(directory=graphic_aids_dir), name='graphic_aids')
+    
     # Start routine scheduler
     start_scheduler()
-    import os
     host = os.getenv('NICEGUI_HOST', '127.0.0.1')  # Default to localhost, use env var in Docker
     ui.run(title='Task Aversion System', port=8080, host=host, reload=False)
 

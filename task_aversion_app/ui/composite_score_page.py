@@ -20,6 +20,7 @@ COMPONENT_LABELS = {
     'weekly_relief_score': 'Weekly Relief',
     'completion_rate': 'Completion Rate',
     'self_care_frequency': 'Self-Care Frequency',
+    'execution_score': 'Execution Score',
 }
 
 # Default weights (equal weights)
@@ -35,6 +36,7 @@ DEFAULT_WEIGHTS = {
     'weekly_relief_score': 1.0,
     'completion_rate': 1.0,
     'self_care_frequency': 1.0,
+    'execution_score': 1.0,
 }
 
 
@@ -145,63 +147,11 @@ def composite_score_page():
             "Higher tracking consistency means more of your day is logged."
         ).classes("text-sm text-gray-600")
     
-    # Weight customization section
+    # Link to settings for weight configuration
     with ui.card().classes("w-full max-w-4xl p-6 mb-4"):
-        ui.label("Customize Component Weights").classes("text-xl font-semibold mb-2")
-        ui.label(
-            "Adjust the importance of each component in your composite score. "
-            "Weights are automatically normalized to sum to 1.0."
-        ).classes("text-sm text-gray-600 mb-4")
-        
-        weight_inputs = {}
-        
-        with ui.grid(columns=2).classes("gap-4 w-full"):
-            for component_name, score_value in all_scores.items():
-                label = COMPONENT_LABELS.get(component_name, component_name)
-                current_weight = current_weights.get(component_name, 1.0)
-                
-                with ui.card().classes("p-3"):
-                    ui.label(label).classes("text-sm font-medium mb-1")
-                    ui.label(f"Current Score: {score_value:.1f}").classes("text-xs text-gray-500 mb-2")
-                    
-                    weight_input = ui.number(
-                        label="Weight",
-                        value=float(current_weight),
-                        min=0.0,
-                        max=10.0,
-                        step=0.1,
-                        precision=1
-                    ).classes("w-full")
-                    weight_inputs[component_name] = weight_input
-        
-        def save_weights():
-            """Save updated weights."""
-            new_weights = {
-                name: float(input.value) if input.value is not None else 1.0
-                for name, input in weight_inputs.items()
-            }
-            
-            # Remove zero weights
-            new_weights = {k: v for k, v in new_weights.items() if v > 0}
-            
-            if not new_weights:
-                ui.notify("At least one weight must be greater than 0", color='warning')
-                return
-            
-            user_state.set_score_weights(user_id, new_weights)
-            ui.notify("Weights saved! Refresh to see updated composite score.", color='positive')
-        
-        def reset_weights():
-            """Reset weights to defaults."""
-            for component_name, input_widget in weight_inputs.items():
-                default_weight = DEFAULT_WEIGHTS.get(component_name, 1.0)
-                input_widget.value = default_weight
-            ui.notify("Weights reset to defaults. Click 'Save Weights' to apply.", color='info')
-        
-        with ui.row().classes("gap-2 mt-4"):
-            ui.button("Save Weights", on_click=save_weights).classes("bg-blue-500 text-white")
-            ui.button("Reset to Defaults", on_click=reset_weights).classes("bg-gray-500 text-white")
-            ui.button("Refresh Scores", on_click=lambda: ui.navigate.reload()).classes("bg-green-500 text-white")
+        ui.label("Configure Weights").classes("text-lg font-semibold mb-2")
+        ui.label("To customize component weights, go to Settings.").classes("text-sm text-gray-600 mb-2")
+        ui.button("Go to Settings", on_click=lambda: ui.navigate.to("/settings")).classes("bg-blue-500 text-white")
     
     # Integration info
     with ui.card().classes("w-full max-w-4xl p-6"):
