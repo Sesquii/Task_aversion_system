@@ -662,15 +662,17 @@ def format_colored_tooltip(predicted_data, task_id):
     # Calculate average time estimate from previous instances
     avg_time_estimate = None
     if task_id:
-        im._reload()
-        initialized = im.df[
-            (im.df['task_id'] == task_id) & 
-            (im.df['initialized_at'].astype(str).str.strip() != '')
-        ].copy()
-        if not initialized.empty:
+        # Get all instances for this task (including completed)
+        all_instances = im.get_instances_by_task_id(task_id, include_completed=True)
+        # Filter to only initialized instances
+        initialized = [
+            inst for inst in all_instances
+            if inst.get('initialized_at') and str(inst.get('initialized_at', '')).strip() != ''
+        ]
+        if initialized:
             time_values = []
-            for idx in initialized.index:
-                predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
+            for inst in initialized:
+                predicted_str = str(inst.get('predicted', '{}') or '{}').strip()
                 if predicted_str and predicted_str != '{}':
                     try:
                         pred_dict = json.loads(predicted_str)

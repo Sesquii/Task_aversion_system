@@ -9,6 +9,45 @@ import time
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 class InstanceManager:
     def __init__(self):
+        # Feature flag: Use database if DATABASE_URL is set, otherwise use CSV
+        self.use_db = bool(os.getenv('DATABASE_URL'))
+        # Strict mode: If DISABLE_CSV_FALLBACK is set, fail instead of falling back to CSV
+        self.strict_mode = bool(os.getenv('DISABLE_CSV_FALLBACK', '').lower() in ('1', 'true', 'yes'))
+        
+        if self.use_db:
+            # Database backend
+            try:
+                from backend.database import get_session, TaskInstance, init_db
+                self.db_session = get_session
+                self.TaskInstance = TaskInstance
+                # Initialize database if tables don't exist
+                init_db()
+                print("[InstanceManager] Using database backend")
+                # Phase 1: Also initialize CSV for methods not yet migrated
+                # Methods will still use CSV until Phase 2+ migration
+                self._init_csv()
+                print("[InstanceManager] CSV backend also initialized (methods not yet migrated)")
+            except Exception as e:
+                if self.strict_mode:
+                    raise RuntimeError(
+                        f"Database initialization failed and CSV fallback is disabled: {e}\n"
+                        "Set DISABLE_CSV_FALLBACK=false or unset DATABASE_URL to allow CSV fallback."
+                    ) from e
+                print(f"[InstanceManager] Database initialization failed: {e}, falling back to CSV")
+                self.use_db = False
+                self._init_csv()
+        else:
+            # CSV backend (default)
+            if self.strict_mode:
+                raise RuntimeError(
+                    "CSV backend is disabled (DISABLE_CSV_FALLBACK is set) but DATABASE_URL is not set.\n"
+                    "Please set DATABASE_URL to use the database backend, or unset DISABLE_CSV_FALLBACK."
+                )
+            self._init_csv()
+            print("[InstanceManager] Using CSV backend")
+    
+    def _init_csv(self):
+        """Initialize CSV backend."""
         os.makedirs(DATA_DIR, exist_ok=True)
         self.file = os.path.join(DATA_DIR, 'task_instances.csv')
         # fields: instance_id, task_id, task_name, task_version, created_at, initialized_at, started_at, completed_at,
@@ -22,6 +61,11 @@ class InstanceManager:
         self._reload()
 
     def _reload(self, max_retries=5, initial_delay=0.1):
+        """Reload data (CSV only)."""
+        if not self.use_db:
+            self._reload_csv(max_retries, initial_delay)
+    
+    def _reload_csv(self, max_retries=5, initial_delay=0.1):
         """
         Reload CSV file with retry logic to handle file locking issues.
         Common causes: Excel/other programs have file open, OneDrive sync, or concurrent access.
@@ -98,6 +142,11 @@ class InstanceManager:
             self.df['status'] = self.df['status'].fillna(fallback)
 
     def _save(self, max_retries=5, initial_delay=0.1):
+        """Save data (CSV only)."""
+        if not self.use_db:
+            self._save_csv(max_retries, initial_delay)
+    
+    def _save_csv(self, max_retries=5, initial_delay=0.1):
         """
         Save DataFrame to CSV with retry logic to handle file locking issues.
         Common causes: Excel/other programs have file open, OneDrive sync, or concurrent access.
@@ -135,7 +184,97 @@ class InstanceManager:
                 print(f"[InstanceManager] ERROR writing to {self.file}: {e}")
                 raise
 
+    # ============================================================================
+    # Helper Methods for CSV/Database Conversion
+    # ============================================================================
+    
+    def _csv_to_db_datetime(self, csv_str):
+        """Parse CSV datetime string to datetime object."""
+        if not csv_str or csv_str.strip() == '':
+            return None
+        try:
+            return datetime.strptime(csv_str.strip(), "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return None
+    
+    def _db_to_csv_datetime(self, dt):
+        """Format datetime object to CSV string format."""
+        return dt.strftime("%Y-%m-%d %H:%M") if dt else ''
+    
+    def _parse_json_field(self, json_str):
+        """Safe JSON parsing with fallback to empty dict."""
+        if not json_str or json_str.strip() == '':
+            return {}
+        try:
+            parsed = json.loads(json_str)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def _csv_to_db_dict(self, row_dict):
+        """Convert CSV row dict to database-compatible dict."""
+        db_dict = row_dict.copy()
+        
+        # Convert datetime strings to datetime objects
+        for field in ['created_at', 'initialized_at', 'started_at', 'completed_at', 'cancelled_at']:
+            if field in db_dict:
+                db_dict[field] = self._csv_to_db_datetime(db_dict[field])
+        
+        # Parse JSON fields
+        if 'predicted' in db_dict:
+            db_dict['predicted'] = self._parse_json_field(db_dict['predicted'])
+        if 'actual' in db_dict:
+            db_dict['actual'] = self._parse_json_field(db_dict['actual'])
+        
+        # Convert numeric fields (empty strings to None)
+        for field in ['procrastination_score', 'proactive_score', 'behavioral_score', 'net_relief',
+                      'duration_minutes', 'delay_minutes', 'relief_score', 'cognitive_load',
+                      'mental_energy_needed', 'task_difficulty', 'emotional_load', 'environmental_effect']:
+            if field in db_dict:
+                val = db_dict[field]
+                if not val or str(val).strip() == '':
+                    db_dict[field] = None
+                else:
+                    try:
+                        db_dict[field] = float(val)
+                    except (ValueError, TypeError):
+                        db_dict[field] = None
+        
+        # Convert boolean fields
+        for field in ['is_completed', 'is_deleted']:
+            if field in db_dict:
+                db_dict[field] = str(db_dict.get(field, 'False')).lower() == 'true'
+        
+        # Convert task_version to int
+        if 'task_version' in db_dict:
+            try:
+                db_dict['task_version'] = int(db_dict['task_version']) if db_dict['task_version'] else 1
+            except (ValueError, TypeError):
+                db_dict['task_version'] = 1
+        
+        # skills_improved stays as string (or can be converted to list if needed)
+        # For now, keep as string to match CSV format
+        
+        return db_dict
+    
+    def _csv_to_db_float(self, csv_str):
+        """Convert CSV string to float, returning None for empty values."""
+        if not csv_str or csv_str.strip() == '':
+            return None
+        try:
+            return float(csv_str)
+        except (ValueError, TypeError):
+            return None
+
     def create_instance(self, task_id, task_name, task_version=1, predicted: dict = None):
+        """Create a new task instance. Works with both CSV and database."""
+        if self.use_db:
+            return self._create_instance_db(task_id, task_name, task_version, predicted)
+        else:
+            return self._create_instance_csv(task_id, task_name, task_version, predicted)
+    
+    def _create_instance_csv(self, task_id, task_name, task_version=1, predicted: dict = None):
+        """CSV-specific create_instance."""
         self._reload()
         instance_id = f"i{int(datetime.now().timestamp())}"
         row = {
@@ -170,6 +309,52 @@ class InstanceManager:
         self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
         self._save()
         return instance_id
+    
+    def _create_instance_db(self, task_id, task_name, task_version=1, predicted: dict = None):
+        """Database-specific create_instance."""
+        try:
+            instance_id = f"i{int(datetime.now().timestamp())}"
+            created_at = datetime.now()
+            
+            with self.db_session() as session:
+                instance = self.TaskInstance(
+                    instance_id=instance_id,
+                    task_id=task_id,
+                    task_name=task_name,
+                    task_version=int(task_version) if task_version else 1,
+                    created_at=created_at,
+                    initialized_at=None,
+                    started_at=None,
+                    completed_at=None,
+                    cancelled_at=None,
+                    predicted=predicted or {},
+                    actual={},
+                    procrastination_score=None,
+                    proactive_score=None,
+                    behavioral_score=None,
+                    net_relief=None,
+                    is_completed=False,
+                    is_deleted=False,
+                    status='active',
+                    duration_minutes=None,
+                    delay_minutes=None,
+                    relief_score=None,
+                    cognitive_load=None,
+                    mental_energy_needed=None,
+                    task_difficulty=None,
+                    emotional_load=None,
+                    environmental_effect=None,
+                    skills_improved=''
+                )
+                session.add(instance)
+                session.commit()
+                return instance_id
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in create_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in create_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._create_instance_csv(task_id, task_name, task_version, predicted)
 
     def pause_instance(self, instance_id: str, reason: Optional[str] = None):
         """Pause an active instance and move it back to initialized state."""
@@ -203,6 +388,47 @@ class InstanceManager:
         self._save()
 
     def list_active_instances(self):
+        """List active task instances. Works with both CSV and database."""
+        if self.use_db:
+            return self._list_active_instances_db()
+        else:
+            return self._list_active_instances_csv()
+    
+    def get_instances_by_task_id(self, task_id: str, include_completed: bool = False):
+        """Get all instances for a specific task_id. Works with both CSV and database."""
+        if self.use_db:
+            return self._get_instances_by_task_id_db(task_id, include_completed)
+        else:
+            return self._get_instances_by_task_id_csv(task_id, include_completed)
+    
+    def _get_instances_by_task_id_csv(self, task_id: str, include_completed: bool = False):
+        """CSV-specific get_instances_by_task_id."""
+        self._reload()
+        df = self.df[self.df['task_id'] == task_id]
+        if not include_completed:
+            df = df[df['is_completed'] != 'True']
+        return df.to_dict(orient='records')
+    
+    def _get_instances_by_task_id_db(self, task_id: str, include_completed: bool = False):
+        """Database-specific get_instances_by_task_id."""
+        try:
+            with self.db_session() as session:
+                query = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id
+                )
+                if not include_completed:
+                    query = query.filter(self.TaskInstance.is_completed == False)
+                instances = query.all()
+                return [instance.to_dict() for instance in instances]
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_instances_by_task_id and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_instances_by_task_id: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_instances_by_task_id_csv(task_id, include_completed)
+    
+    def _list_active_instances_csv(self):
+        """CSV-specific list_active_instances."""
         self._reload()
         status_series = self.df['status'].str.lower()
         df = self.df[
@@ -211,20 +437,86 @@ class InstanceManager:
             (~status_series.isin(['completed', 'cancelled']))
         ]
         return df.to_dict(orient='records')
+    
+    def _list_active_instances_db(self):
+        """Database-specific list_active_instances."""
+        try:
+            with self.db_session() as session:
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.is_completed == False,
+                    self.TaskInstance.is_deleted == False,
+                    ~self.TaskInstance.status.in_(['completed', 'cancelled'])
+                ).all()
+                return [instance.to_dict() for instance in instances]
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in list_active_instances and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in list_active_instances: {e}, falling back to CSV")
+            self.use_db = False
+            return self._list_active_instances_csv()
 
     def get_instance(self, instance_id):
+        """Get a task instance by ID. Works with both CSV and database."""
+        if self.use_db:
+            return self._get_instance_db(instance_id)
+        else:
+            return self._get_instance_csv(instance_id)
+    
+    def _get_instance_csv(self, instance_id):
+        """CSV-specific get_instance."""
         self._reload()
         rows = self.df[self.df['instance_id'] == instance_id]
         if rows.empty:
             return None
         row = rows.iloc[0].to_dict()
         return row
+    
+    def _get_instance_db(self, instance_id):
+        """Database-specific get_instance."""
+        try:
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                return instance.to_dict() if instance else None
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_instance_csv(instance_id)
 
     def start_instance(self, instance_id):
+        """Start a task instance. Works with both CSV and database."""
+        if self.use_db:
+            return self._start_instance_db(instance_id)
+        else:
+            return self._start_instance_csv(instance_id)
+    
+    def _start_instance_csv(self, instance_id):
+        """CSV-specific start_instance."""
         self._reload()
         idx = self.df.index[self.df['instance_id']==instance_id][0]
         self.df.at[idx,'started_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
         self._save()
+    
+    def _start_instance_db(self, instance_id):
+        """Database-specific start_instance."""
+        try:
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found")
+                instance.started_at = datetime.now()
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in start_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in start_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._start_instance_csv(instance_id)
 
     def complete_instance(self, instance_id, actual: dict):
         import json, math
@@ -298,6 +590,14 @@ class InstanceManager:
         self._save()
 
     def cancel_instance(self, instance_id, actual: dict):
+        """Cancel a task instance. Works with both CSV and database."""
+        if self.use_db:
+            return self._cancel_instance_db(instance_id, actual)
+        else:
+            return self._cancel_instance_csv(instance_id, actual)
+    
+    def _cancel_instance_csv(self, instance_id, actual: dict):
+        """CSV-specific cancel_instance."""
         import json
         self._reload()
         matches = self.df.index[self.df['instance_id'] == instance_id]
@@ -313,8 +613,45 @@ class InstanceManager:
         self.df.at[idx, 'proactive_score'] = ''
         self._update_attributes_from_payload(idx, actual or {})
         self._save()
+    
+    def _cancel_instance_db(self, instance_id, actual: dict):
+        """Database-specific cancel_instance."""
+        try:
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found")
+                
+                instance.actual = actual or {}
+                instance.cancelled_at = datetime.now()
+                instance.status = 'cancelled'
+                instance.is_completed = True
+                instance.completed_at = None
+                instance.procrastination_score = None
+                instance.proactive_score = None
+                
+                # Extract attributes from payload
+                self._update_attributes_from_payload_db(instance, actual or {})
+                
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in cancel_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in cancel_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._cancel_instance_csv(instance_id, actual)
 
     def add_prediction_to_instance(self, instance_id, predicted: dict):
+        """Add prediction data to an instance. Works with both CSV and database."""
+        if self.use_db:
+            return self._add_prediction_to_instance_db(instance_id, predicted)
+        else:
+            return self._add_prediction_to_instance_csv(instance_id, predicted)
+    
+    def _add_prediction_to_instance_csv(self, instance_id, predicted: dict):
+        """CSV-specific add_prediction_to_instance."""
         import json
         self._reload()
         idx = self.df.index[self.df['instance_id'] == instance_id][0]
@@ -325,6 +662,34 @@ class InstanceManager:
         # Extract predicted values to columns (only if columns are empty)
         self._update_attributes_from_payload(idx, predicted)
         self._save()
+    
+    def _add_prediction_to_instance_db(self, instance_id, predicted: dict):
+        """Database-specific add_prediction_to_instance."""
+        try:
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found")
+                
+                # Update predicted JSON
+                instance.predicted = predicted or {}
+                
+                # Always set initialized_at when prediction is added (initialization happens)
+                if not instance.initialized_at:
+                    instance.initialized_at = datetime.now()
+                
+                # Extract predicted values to columns (only if columns are empty)
+                self._update_attributes_from_payload_db(instance, predicted)
+                
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in add_prediction_to_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in add_prediction_to_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._add_prediction_to_instance_csv(instance_id, predicted)
 
     def ensure_instance_for_task(self, task_id, task_name, predicted: dict = None):
         # create an instance and return id
@@ -333,6 +698,14 @@ class InstanceManager:
 
 
     def delete_instance(self, instance_id):
+        """Delete a task instance. Works with both CSV and database."""
+        if self.use_db:
+            return self._delete_instance_db(instance_id)
+        else:
+            return self._delete_instance_csv(instance_id)
+    
+    def _delete_instance_csv(self, instance_id):
+        """CSV-specific delete_instance."""
         print(f"[InstanceManager] delete_instance called with: {instance_id}")
         self._reload()
         before = len(self.df)
@@ -343,9 +716,32 @@ class InstanceManager:
         self._save()
         print("[InstanceManager] Instance deleted.")
         return True
+    
+    def _delete_instance_db(self, instance_id):
+        """Database-specific delete_instance."""
+        try:
+            print(f"[InstanceManager] delete_instance called with: {instance_id}")
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    print("[InstanceManager] No matching instance to delete.")
+                    return False
+                
+                session.delete(instance)
+                session.commit()
+                print("[InstanceManager] Instance deleted.")
+                return True
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in delete_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in delete_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._delete_instance_csv(instance_id)
 
     def _update_attributes_from_payload(self, idx, payload: dict):
-        """Persist wellbeing attributes if caller provided them.
+        """Persist wellbeing attributes if caller provided them (CSV version).
         Maps both direct keys and common aliases from JSON payloads."""
         if not isinstance(payload, dict):
             return
@@ -399,9 +795,66 @@ class InstanceManager:
                     current_value = self.df.at[idx, csv_column]
                     if current_value == '' or pd.isna(current_value):
                         self.df.at[idx, csv_column] = value
+    
+    def _update_attributes_from_payload_db(self, instance, payload: dict):
+        """Persist wellbeing attributes if caller provided them (Database version).
+        Maps both direct keys and common aliases from JSON payloads."""
+        if not isinstance(payload, dict):
+            return
+        
+        # Mapping from payload keys to database column names
+        attribute_mappings = {
+            'duration_minutes': ['duration_minutes', 'time_actual_minutes', 'actual_time'],
+            'relief_score': ['relief_score', 'actual_relief'],
+            'mental_energy_needed': ['mental_energy_needed', 'actual_mental_energy'],
+            'task_difficulty': ['task_difficulty', 'actual_difficulty'],
+            'emotional_load': ['emotional_load', 'actual_emotional'],
+            'environmental_effect': ['environmental_effect', 'environmental_fit'],
+            'skills_improved': ['skills_improved'],
+            'behavioral_score': ['behavioral_score'],
+            'net_relief': ['net_relief'],
+        }
+        
+        # Extract values using mappings
+        for db_column, possible_keys in attribute_mappings.items():
+            value = None
+            # Try each possible key in order
+            for key in possible_keys:
+                if key in payload:
+                    val = payload[key]
+                    if val is not None:
+                        if isinstance(val, (int, float)) or (val != ''):
+                            value = val
+                            break
+            
+            # Only update if we found a value and the column is currently empty/None
+            if value is not None:
+                if isinstance(value, (int, float)) or (value != ''):
+                    current_value = getattr(instance, db_column, None)
+                    if current_value is None or (isinstance(current_value, str) and current_value.strip() == ''):
+                        # Convert to appropriate type
+                        if db_column == 'skills_improved':
+                            # Keep as string
+                            setattr(instance, db_column, str(value))
+                        elif db_column in ['duration_minutes', 'delay_minutes', 'relief_score', 'cognitive_load',
+                                          'mental_energy_needed', 'task_difficulty', 'emotional_load',
+                                          'environmental_effect', 'behavioral_score', 'net_relief']:
+                            # Convert to float
+                            try:
+                                setattr(instance, db_column, float(value))
+                            except (ValueError, TypeError):
+                                pass
 
 
     def list_recent_completed(self, limit=20):
+        """List recently completed instances. Works with both CSV and database."""
+        if self.use_db:
+            return self._list_recent_completed_db(limit)
+        else:
+            return self._list_recent_completed_csv(limit)
+    
+    def _list_recent_completed_csv(self, limit=20):
+        """CSV-specific list_recent_completed."""
         print(f"[InstanceManager] list_recent_completed called (limit={limit})")
         self._reload()
         df = self.df[self.df['completed_at'].astype(str).str.strip() != '']
@@ -409,6 +862,24 @@ class InstanceManager:
             return []
         df = df.sort_values("completed_at", ascending=False)
         return df.head(limit).to_dict(orient="records")
+    
+    def _list_recent_completed_db(self, limit=20):
+        """Database-specific list_recent_completed."""
+        try:
+            print(f"[InstanceManager] list_recent_completed called (limit={limit})")
+            with self.db_session() as session:
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.completed_at.isnot(None)
+                ).order_by(
+                    self.TaskInstance.completed_at.desc()
+                ).limit(limit).all()
+                return [instance.to_dict() for instance in instances]
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in list_recent_completed and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in list_recent_completed: {e}, falling back to CSV")
+            self.use_db = False
+            return self._list_recent_completed_csv(limit)
     
     def backfill_attributes_from_json(self):
         """Backfill empty attribute columns from JSON data in predicted/actual columns.
@@ -502,6 +973,13 @@ class InstanceManager:
         Returns a dict with keys: expected_relief, expected_mental_energy, expected_difficulty,
         expected_physical_load, expected_emotional_load, motivation, expected_aversion.
         Values are scaled to 0-100 range."""
+        if self.use_db:
+            return self._get_previous_task_averages_db(task_id)
+        else:
+            return self._get_previous_task_averages_csv(task_id)
+    
+    def _get_previous_task_averages_csv(self, task_id: str) -> dict:
+        """CSV-specific get_previous_task_averages."""
         import json
         self._reload()
         
@@ -587,6 +1065,95 @@ class InstanceManager:
             result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
         
         return result
+    
+    def _get_previous_task_averages_db(self, task_id: str) -> dict:
+        """Database-specific get_previous_task_averages."""
+        try:
+            import json
+            with self.db_session() as session:
+                # Get all initialized instances for this task (completed or not)
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id,
+                    self.TaskInstance.initialized_at.isnot(None)
+                ).all()
+                
+                if not instances:
+                    return {}
+                
+                # Extract values from predicted JSON
+                relief_values = []
+                mental_energy_values = []
+                difficulty_values = []
+                cognitive_values = []  # Keep for backward compatibility
+                physical_values = []
+                emotional_values = []
+                motivation_values = []
+                aversion_values = []
+                
+                for instance in instances:
+                    predicted = instance.predicted or {}
+                    if isinstance(predicted, dict):
+                        # Extract values, handling both 0-10 and 0-100 scales
+                        for key, value_list in [
+                            ('expected_relief', relief_values),
+                            ('expected_mental_energy', mental_energy_values),
+                            ('expected_difficulty', difficulty_values),
+                            ('expected_cognitive_load', cognitive_values),  # Backward compatibility
+                            ('expected_physical_load', physical_values),
+                            ('expected_emotional_load', emotional_values),
+                            ('motivation', motivation_values),
+                            ('expected_aversion', aversion_values)
+                        ]:
+                            val = predicted.get(key)
+                            if val is not None:
+                                try:
+                                    num_val = float(val)
+                                    # Scale from 0-10 to 0-100 if value is <= 10
+                                    if num_val <= 10 and num_val >= 0:
+                                        num_val = num_val * 10
+                                    value_list.append(num_val)
+                                except (ValueError, TypeError):
+                                    pass
+                        
+                        # Backward compatibility: if old cognitive_load exists but new fields don't, use it for both
+                        if 'expected_mental_energy' not in predicted and 'expected_difficulty' not in predicted:
+                            old_cog = predicted.get('expected_cognitive_load')
+                            if old_cog is not None:
+                                try:
+                                    num_val = float(old_cog)
+                                    if num_val <= 10 and num_val >= 0:
+                                        num_val = num_val * 10
+                                    # Use old cognitive_load for both new fields
+                                    mental_energy_values.append(num_val)
+                                    difficulty_values.append(num_val)
+                                except (ValueError, TypeError):
+                                    pass
+                
+                result = {}
+                if relief_values:
+                    result['expected_relief'] = round(sum(relief_values) / len(relief_values))
+                if mental_energy_values:
+                    result['expected_mental_energy'] = round(sum(mental_energy_values) / len(mental_energy_values))
+                if difficulty_values:
+                    result['expected_difficulty'] = round(sum(difficulty_values) / len(difficulty_values))
+                if cognitive_values:
+                    result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))  # Backward compatibility
+                if physical_values:
+                    result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
+                if emotional_values:
+                    result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
+                if motivation_values:
+                    result['motivation'] = round(sum(motivation_values) / len(motivation_values))
+                if aversion_values:
+                    result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
+                
+                return result
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_previous_task_averages and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_previous_task_averages: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_previous_task_averages_csv(task_id)
 
     def get_previous_actual_averages(self, task_id: str) -> dict:
         """Get average values from previous completed instances of the same task.

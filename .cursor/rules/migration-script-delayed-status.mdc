@@ -1,0 +1,181 @@
+# Migration Script Status Printing Rules
+
+## Problem
+During database migrations and app initialization, terminal output gets flooded with booting messages, making it impossible to see important status information unless you time it perfectly.
+
+## Solution: Delayed Status Printing
+
+For migration scripts, test scripts, and monitoring tools, **print status information after a delay** rather than immediately during initialization.
+
+## Pattern: Wait Then Print
+
+### ✅ GOOD: Delayed Status Check
+
+```python
+# Wait for app to initialize
+import time
+print("[INFO] Waiting 10 seconds for app to initialize...")
+time.sleep(10)
+
+# Now check and print status
+print("[STATUS] Database backend initialized: True")
+print("[STATUS] InstanceManager using: database")
+```
+
+### ❌ BAD: Immediate Status Check
+
+```python
+# This gets lost in boot messages
+print("[STATUS] Database backend initialized: True")
+# App is still initializing, status may be wrong
+```
+
+## Implementation Patterns
+
+### Pattern 1: Monitoring Script with Periodic Checks
+
+```python
+import time
+
+# Initial wait for app to start
+print("[INFO] Waiting 10 seconds for app to initialize...")
+time.sleep(10)
+
+# Periodic checks every N seconds
+check_interval = 10  # seconds
+max_checks = 60
+
+for i in range(max_checks):
+    timestamp = time.strftime("%H:%M:%S")
+    print(f"[{timestamp}] Check #{i+1} - Checking status...")
+    
+    # Check status
+    status = check_database_status()
+    print(f"[{timestamp}] [STATUS] {status}")
+    
+    # Wait before next check
+    if i < max_checks - 1:
+        print(f"[{timestamp}] Next check in {check_interval} seconds...")
+        time.sleep(check_interval)
+```
+
+### Pattern 2: One-Time Delayed Check
+
+```python
+import time
+
+def check_status_after_delay(delay_seconds=5):
+    """Check status after waiting for initialization."""
+    print(f"[INFO] Waiting {delay_seconds} seconds for initialization...")
+    time.sleep(delay_seconds)
+    
+    # Now check status
+    status = get_status()
+    print(f"[STATUS] {status}")
+    return status
+```
+
+### Pattern 3: Background Monitor Thread
+
+```python
+import threading
+import time
+
+def monitor_status(interval=10):
+    """Monitor status in background thread."""
+    while True:
+        time.sleep(interval)
+        timestamp = time.strftime("%H:%M:%S")
+        status = check_status()
+        print(f"[{timestamp}] [MONITOR] {status}")
+
+# Start monitoring in background
+monitor_thread = threading.Thread(target=monitor_status, daemon=True)
+monitor_thread.start()
+```
+
+## PowerShell/Batch Scripts
+
+### PowerShell Pattern
+
+```powershell
+Write-Host "[INFO] Waiting 10 seconds for app to initialize..." -ForegroundColor Gray
+Start-Sleep -Seconds 10
+
+$checkCount = 0
+while ($checkCount -lt 60) {
+    $timestamp = Get-Date -Format "HH:mm:ss"
+    Write-Host "[$timestamp] Check #$checkCount - Checking status..." -ForegroundColor Cyan
+    
+    # Check status
+    $status = Check-Status
+    Write-Host "[$timestamp] [STATUS] $status" -ForegroundColor Green
+    
+    # Wait before next check
+    Start-Sleep -Seconds 10
+    $checkCount++
+}
+```
+
+### Batch Script Pattern
+
+```batch
+echo [INFO] Waiting 10 seconds for app to initialize...
+timeout /t 10 /nobreak >nul
+
+set checkCount=0
+:loop
+set /a checkCount+=1
+for /f "tokens=1-2 delims=: " %%a in ('time /t') do set timestamp=%%a:%%b
+
+echo [%timestamp%] Check #%checkCount% - Checking status...
+
+REM Check status here
+
+if %checkCount% lss 60 (
+    timeout /t 10 /nobreak >nul
+    goto loop
+)
+```
+
+## Recommended Delays
+
+- **Initial wait:** 10 seconds (allows app to fully initialize, avoids terminal flooding)
+- **Check interval:** 10 seconds (frequent enough to catch changes, not too spammy)
+- **Max checks:** 60 checks = 10 minutes of monitoring (adjust based on needs)
+
+## Status Message Format
+
+Use consistent formatting for easy scanning:
+
+```
+[TIMESTAMP] [LEVEL] Message
+```
+
+Examples:
+- `[14:30:15] [INFO] Waiting for initialization...`
+- `[14:30:20] [STATUS] Database backend: initialized`
+- `[14:30:20] [NOTE] Phase 1: Methods still use CSV (expected)`
+- `[14:30:30] [ERROR] Database connection failed`
+
+## When to Use
+
+Use delayed status printing for:
+- ✅ Migration test scripts
+- ✅ Database usage monitoring
+- ✅ App initialization verification
+- ✅ Background service status checks
+- ✅ Long-running process monitoring
+
+Don't use for:
+- ❌ Immediate error reporting (print immediately)
+- ❌ User input prompts (print immediately)
+- ❌ Critical failures (print immediately)
+
+## Summary
+
+1. **Wait 5-10 seconds** after app starts before checking status
+2. **Check periodically** (every 10 seconds) rather than once
+3. **Use clear timestamps** and status levels
+4. **Format consistently** for easy scanning
+5. **Print immediately** only for errors or critical issues

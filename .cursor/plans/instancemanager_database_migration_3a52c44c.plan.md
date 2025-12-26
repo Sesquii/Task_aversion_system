@@ -71,8 +71,6 @@ class InstanceManager:
             return self._some_method_csv(...)
 ```
 
-
-
 ## Implementation Steps
 
 ### Phase 1: Core Infrastructure
@@ -246,8 +244,6 @@ def _db_to_csv_datetime(self, dt):
     return dt.strftime("%Y-%m-%d %H:%M") if dt else ''
 ```
 
-
-
 ### JSON Field Handling
 
 CSV stores JSON as strings: `'{"expected_relief": 5, ...}'`Database stores JSON as dict (SQLAlchemy JSON type)Conversion pattern:
@@ -263,8 +259,6 @@ def _parse_json_field(self, json_str):
         return {}
 ```
 
-
-
 ### Numeric Field Handling
 
 CSV stores numbers as strings: `"5.5"` or `""` (empty)Database stores as `Float` or `Integer`, `None` for emptyConversion pattern:
@@ -279,8 +273,6 @@ def _csv_to_db_float(self, csv_str):
         return None
 ```
 
-
-
 ### Boolean Field Handling
 
 CSV stores as strings: `"True"` or `"False"`Database stores as booleanConversion:
@@ -288,8 +280,6 @@ CSV stores as strings: `"True"` or `"False"`Database stores as booleanConversion
 ```python
 is_completed = str(row.get('is_completed', 'False')).lower() == 'true'
 ```
-
-
 
 ## Files to Modify
 
