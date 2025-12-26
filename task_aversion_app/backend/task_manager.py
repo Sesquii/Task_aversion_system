@@ -181,6 +181,8 @@ class TaskManager:
                 task_dicts = [task.to_dict() for task in tasks]
                 return pd.DataFrame(task_dicts)
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_all and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in get_all: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
