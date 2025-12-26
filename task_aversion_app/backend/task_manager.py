@@ -298,6 +298,8 @@ class TaskManager:
                 session.commit()
                 return task_id
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in create_task and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in create_task: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
@@ -377,6 +379,8 @@ class TaskManager:
                 session.commit()
                 return True
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in update_task and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in update_task: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
@@ -402,6 +406,8 @@ class TaskManager:
                 task = session.query(self.Task).filter(self.Task.name == name).first()
                 return task.to_dict() if task else None
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in find_by_name and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in find_by_name: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
@@ -448,6 +454,8 @@ class TaskManager:
                 print("[TaskManager] Task deleted successfully.")
                 return True
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in delete_by_id and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in delete_by_id: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
