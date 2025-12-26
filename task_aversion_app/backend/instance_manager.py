@@ -23,10 +23,9 @@ class InstanceManager:
                 # Initialize database if tables don't exist
                 init_db()
                 print("[InstanceManager] Using database backend")
-                # Phase 1: Also initialize CSV for methods not yet migrated
-                # Methods will still use CSV until Phase 2+ migration
+                # Also initialize CSV for backward compatibility and fallback
                 self._init_csv()
-                print("[InstanceManager] CSV backend also initialized (methods not yet migrated)")
+                print("[InstanceManager] CSV backend also initialized (for backward compatibility)")
             except Exception as e:
                 if self.strict_mode:
                     raise RuntimeError(
@@ -357,7 +356,14 @@ class InstanceManager:
             return self._create_instance_csv(task_id, task_name, task_version, predicted)
 
     def pause_instance(self, instance_id: str, reason: Optional[str] = None):
-        """Pause an active instance and move it back to initialized state."""
+        """Pause an active instance and move it back to initialized state. Works with both CSV and database."""
+        if self.use_db:
+            return self._pause_instance_db(instance_id, reason)
+        else:
+            return self._pause_instance_csv(instance_id, reason)
+    
+    def _pause_instance_csv(self, instance_id: str, reason: Optional[str] = None):
+        """CSV-specific pause_instance."""
         import json
         self._reload()
         matches = self.df.index[self.df['instance_id'] == instance_id]
@@ -386,6 +392,43 @@ class InstanceManager:
         self.df.at[idx, 'actual'] = json.dumps(actual_data)
 
         self._save()
+    
+    def _pause_instance_db(self, instance_id: str, reason: Optional[str] = None):
+        """Database-specific pause_instance."""
+        try:
+            import json
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found")
+                
+                # Reset timing/status so task returns to initialized state
+                instance.started_at = None
+                instance.status = 'initialized'
+                instance.is_completed = False
+                instance.completed_at = None
+                instance.cancelled_at = None
+                instance.procrastination_score = None
+                instance.proactive_score = None
+                
+                # Persist pause reason in actual payload without losing existing data
+                actual_data = instance.actual or {}
+                if not isinstance(actual_data, dict):
+                    actual_data = {}
+                if reason:
+                    actual_data['pause_reason'] = reason
+                actual_data['paused'] = True
+                instance.actual = actual_data
+                
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in pause_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in pause_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._pause_instance_csv(instance_id, reason)
 
     def list_active_instances(self):
         """List active task instances. Works with both CSV and database."""
@@ -979,7 +1022,14 @@ class InstanceManager:
     
     def backfill_attributes_from_json(self):
         """Backfill empty attribute columns from JSON data in predicted/actual columns.
-        This is a migration method to fix existing data."""
+        This is a migration method to fix existing data. Works with both CSV and database."""
+        if self.use_db:
+            return self._backfill_attributes_from_json_db()
+        else:
+            return self._backfill_attributes_from_json_csv()
+    
+    def _backfill_attributes_from_json_csv(self):
+        """CSV-specific backfill_attributes_from_json."""
         import json
         self._reload()
         updated_count = 0
@@ -1063,6 +1113,103 @@ class InstanceManager:
             print(f"[InstanceManager] No instances needed backfilling (all attributes already populated or no JSON data found)")
         
         return updated_count
+    
+    def _backfill_attributes_from_json_db(self):
+        """Database-specific backfill_attributes_from_json."""
+        try:
+            import json
+            updated_count = 0
+            
+            # Helper to check if value is empty
+            def is_empty(val):
+                if val is None:
+                    return True
+                if isinstance(val, str) and val.strip() == '':
+                    return True
+                return False
+            
+            with self.db_session() as session:
+                # Get all instances
+                instances = session.query(self.TaskInstance).all()
+                
+                for instance in instances:
+                    row_updated = False
+                    
+                    # Try to extract from actual JSON first (most accurate)
+                    actual = instance.actual or {}
+                    if isinstance(actual, dict) and actual:
+                        # Update attributes from actual data only
+                        # relief_score should ONLY come from actual_relief, never from expected_relief
+                        mappings = {
+                            'duration_minutes': ['time_actual_minutes', 'actual_time', 'duration_minutes'],
+                            'relief_score': ['actual_relief', 'relief_score'],  # Only actual values
+                            'cognitive_load': ['actual_cognitive', 'cognitive_load'],
+                            'emotional_load': ['actual_emotional', 'emotional_load'],
+                        }
+                        for db_column, possible_keys in mappings.items():
+                            current_value = getattr(instance, db_column, None)
+                            if is_empty(current_value):
+                                for key in possible_keys:
+                                    if key in actual:
+                                        val = actual[key]
+                                        if not is_empty(val):
+                                            # Convert to appropriate type
+                                            try:
+                                                if db_column in ['duration_minutes', 'relief_score', 'cognitive_load', 'emotional_load']:
+                                                    setattr(instance, db_column, float(val))
+                                                else:
+                                                    setattr(instance, db_column, val)
+                                                row_updated = True
+                                                break
+                                            except (ValueError, TypeError):
+                                                pass
+                    
+                    # If still empty, try predicted JSON
+                    predicted = instance.predicted or {}
+                    if isinstance(predicted, dict) and predicted:
+                        # IMPORTANT: Do NOT write expected values to database columns that should contain actual values
+                        # expected_relief should stay in predicted JSON only, not in relief_score column
+                        # Only backfill if the column is empty AND we don't have actual data
+                        mappings = {
+                            'duration_minutes': ['time_estimate_minutes', 'estimate', 'duration_minutes'],
+                            # DO NOT map expected_relief to relief_score - relief_score is for actual values only
+                            'cognitive_load': ['expected_cognitive_load', 'expected_cognitive', 'cognitive_load'],
+                            'emotional_load': ['expected_emotional_load', 'expected_emotional', 'emotional_load'],
+                        }
+                        for db_column, possible_keys in mappings.items():
+                            current_value = getattr(instance, db_column, None)
+                            if is_empty(current_value):
+                                for key in possible_keys:
+                                    if key in predicted:
+                                        val = predicted[key]
+                                        if not is_empty(val):
+                                            # Convert to appropriate type
+                                            try:
+                                                if db_column in ['duration_minutes', 'cognitive_load', 'emotional_load']:
+                                                    setattr(instance, db_column, float(val))
+                                                else:
+                                                    setattr(instance, db_column, val)
+                                                row_updated = True
+                                                break
+                                            except (ValueError, TypeError):
+                                                pass
+                    
+                    if row_updated:
+                        updated_count += 1
+                
+                if updated_count > 0:
+                    session.commit()
+                    print(f"[InstanceManager] Backfilled {updated_count} instances with missing attributes")
+                else:
+                    print(f"[InstanceManager] No instances needed backfilling (all attributes already populated or no JSON data found)")
+                
+                return updated_count
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in backfill_attributes_from_json and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in backfill_attributes_from_json: {e}, falling back to CSV")
+            self.use_db = False
+            return self._backfill_attributes_from_json_csv()
 
     def get_previous_task_averages(self, task_id: str) -> dict:
         """Get average values from previous initialized instances of the same task.
@@ -1256,6 +1403,13 @@ class InstanceManager:
         Returns a dict with keys: actual_relief, actual_cognitive, 
         actual_emotional, actual_physical.
         Values are scaled to 0-100 range."""
+        if self.use_db:
+            return self._get_previous_actual_averages_db(task_id)
+        else:
+            return self._get_previous_actual_averages_csv(task_id)
+    
+    def _get_previous_actual_averages_csv(self, task_id: str) -> dict:
+        """CSV-specific get_previous_actual_averages."""
         import json
         self._reload()
         
@@ -1311,6 +1465,64 @@ class InstanceManager:
             result['actual_emotional'] = round(sum(emotional_values) / len(emotional_values))
         
         return result
+    
+    def _get_previous_actual_averages_db(self, task_id: str) -> dict:
+        """Database-specific get_previous_actual_averages."""
+        try:
+            with self.db_session() as session:
+                # Get all completed instances for this task
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id,
+                    self.TaskInstance.completed_at.isnot(None)
+                ).all()
+                
+                if not instances:
+                    return {}
+                
+                # Extract values from actual JSON
+                relief_values = []
+                cognitive_values = []
+                physical_values = []
+                emotional_values = []
+                
+                for instance in instances:
+                    actual = instance.actual or {}
+                    if isinstance(actual, dict):
+                        # Extract values, handling both 0-10 and 0-100 scales
+                        for key, value_list in [
+                            ('actual_relief', relief_values),
+                            ('actual_cognitive', cognitive_values),
+                            ('actual_physical', physical_values),
+                            ('actual_emotional', emotional_values)
+                        ]:
+                            val = actual.get(key)
+                            if val is not None:
+                                try:
+                                    num_val = float(val)
+                                    # Scale from 0-10 to 0-100 if value is <= 10
+                                    if num_val <= 10 and num_val >= 0:
+                                        num_val = num_val * 10
+                                    value_list.append(num_val)
+                                except (ValueError, TypeError):
+                                    pass
+                
+                result = {}
+                if relief_values:
+                    result['actual_relief'] = round(sum(relief_values) / len(relief_values))
+                if cognitive_values:
+                    result['actual_cognitive'] = round(sum(cognitive_values) / len(cognitive_values))
+                if physical_values:
+                    result['actual_physical'] = round(sum(physical_values) / len(physical_values))
+                if emotional_values:
+                    result['actual_emotional'] = round(sum(emotional_values) / len(emotional_values))
+                
+                return result
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_previous_actual_averages and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_previous_actual_averages: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_previous_actual_averages_csv(task_id)
 
     def get_initial_aversion(self, task_id: str) -> Optional[float]:
         """Get the initial aversion value for a task (from the first initialized instance).
@@ -1458,6 +1670,13 @@ class InstanceManager:
         """Get average aversion from previous initialized instances of the same task.
         Returns None if no previous instances exist.
         Values are scaled to 0-100 range."""
+        if self.use_db:
+            return self._get_previous_aversion_average_db(task_id)
+        else:
+            return self._get_previous_aversion_average_csv(task_id)
+    
+    def _get_previous_aversion_average_csv(self, task_id: str) -> Optional[float]:
+        """CSV-specific get_previous_aversion_average."""
         import json
         self._reload()
         
@@ -1494,11 +1713,57 @@ class InstanceManager:
         if aversion_values:
             return round(sum(aversion_values) / len(aversion_values))
         return None
+    
+    def _get_previous_aversion_average_db(self, task_id: str) -> Optional[float]:
+        """Database-specific get_previous_aversion_average."""
+        try:
+            with self.db_session() as session:
+                # Get all initialized instances for this task (completed or not)
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id,
+                    self.TaskInstance.initialized_at.isnot(None)
+                ).all()
+                
+                if not instances:
+                    return None
+                
+                aversion_values = []
+                
+                for instance in instances:
+                    predicted = instance.predicted or {}
+                    if isinstance(predicted, dict):
+                        val = predicted.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                aversion_values.append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                
+                if aversion_values:
+                    return round(sum(aversion_values) / len(aversion_values))
+                return None
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_previous_aversion_average and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_previous_aversion_average: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_previous_aversion_average_csv(task_id)
 
     def get_baseline_aversion_robust(self, task_id: str) -> Optional[float]:
         """Get robust baseline aversion using median (less sensitive to outliers).
         Returns None if no previous instances exist.
         Values are scaled to 0-100 range."""
+        if self.use_db:
+            return self._get_baseline_aversion_robust_db(task_id)
+        else:
+            return self._get_baseline_aversion_robust_csv(task_id)
+    
+    def _get_baseline_aversion_robust_csv(self, task_id: str) -> Optional[float]:
+        """CSV-specific get_baseline_aversion_robust."""
         import json
         import numpy as np
         try:
@@ -1544,11 +1809,61 @@ class InstanceManager:
         baseline = float(np.median(aversion_values))
         return round(baseline)
     
+    def _get_baseline_aversion_robust_db(self, task_id: str) -> Optional[float]:
+        """Database-specific get_baseline_aversion_robust."""
+        try:
+            import numpy as np
+            with self.db_session() as session:
+                # Get all initialized instances for this task (completed or not)
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id,
+                    self.TaskInstance.initialized_at.isnot(None)
+                ).all()
+                
+                if not instances:
+                    return None
+                
+                aversion_values = []
+                
+                for instance in instances:
+                    predicted = instance.predicted or {}
+                    if isinstance(predicted, dict):
+                        val = predicted.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                aversion_values.append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                
+                if not aversion_values:
+                    return None
+                
+                # Use median for robust baseline (less sensitive to outliers)
+                baseline = float(np.median(aversion_values))
+                return round(baseline)
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_baseline_aversion_robust and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_baseline_aversion_robust: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_baseline_aversion_robust_csv(task_id)
+    
     def get_baseline_aversion_sensitive(self, task_id: str) -> Optional[float]:
         """Get sensitive baseline aversion using trimmed mean (more sensitive to trends).
         Excludes outliers using IQR method, then calculates mean of remaining values.
         Returns None if no previous instances exist.
         Values are scaled to 0-100 range."""
+        if self.use_db:
+            return self._get_baseline_aversion_sensitive_db(task_id)
+        else:
+            return self._get_baseline_aversion_sensitive_csv(task_id)
+    
+    def _get_baseline_aversion_sensitive_csv(self, task_id: str) -> Optional[float]:
+        """CSV-specific get_baseline_aversion_sensitive."""
         import json
         import numpy as np
         try:
@@ -1613,6 +1928,69 @@ class InstanceManager:
         # Calculate trimmed mean
         baseline = float(np.mean(filtered_values))
         return round(baseline)
+    
+    def _get_baseline_aversion_sensitive_db(self, task_id: str) -> Optional[float]:
+        """Database-specific get_baseline_aversion_sensitive."""
+        try:
+            import numpy as np
+            with self.db_session() as session:
+                # Get all initialized instances for this task (completed or not)
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id,
+                    self.TaskInstance.initialized_at.isnot(None)
+                ).all()
+                
+                if not instances:
+                    return None
+                
+                aversion_values = []
+                
+                for instance in instances:
+                    predicted = instance.predicted or {}
+                    if isinstance(predicted, dict):
+                        val = predicted.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                aversion_values.append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                
+                if not aversion_values:
+                    return None
+                
+                # If only 1-2 values, just use mean
+                if len(aversion_values) <= 2:
+                    baseline = float(np.mean(aversion_values))
+                    return round(baseline)
+                
+                # Use IQR method to exclude outliers
+                q1 = np.percentile(aversion_values, 25)
+                q3 = np.percentile(aversion_values, 75)
+                iqr = q3 - q1
+                
+                # Filter out outliers (values outside Q1 - 1.5*IQR to Q3 + 1.5*IQR)
+                lower_bound = q1 - 1.5 * iqr
+                upper_bound = q3 + 1.5 * iqr
+                
+                filtered_values = [v for v in aversion_values if lower_bound <= v <= upper_bound]
+                
+                # If filtering removed all values, use original values
+                if not filtered_values:
+                    filtered_values = aversion_values
+                
+                # Calculate trimmed mean
+                baseline = float(np.mean(filtered_values))
+                return round(baseline)
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_baseline_aversion_sensitive and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_baseline_aversion_sensitive: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_baseline_aversion_sensitive_csv(task_id)
 
     def scale_values_10_to_100(self):
         """Scale existing values from 0-10 range to 0-100 range.

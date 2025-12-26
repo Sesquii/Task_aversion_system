@@ -12,17 +12,17 @@ todos:
       - phase1_infrastructure
   - id: phase3_queries
     content: "Phase 3: Migrate query methods (list_active_instances, list_recent_completed, pause_instance)"
-    status: pending
+    status: completed
     dependencies:
       - phase2_crud
   - id: phase4_analytics
     content: "Phase 4: Migrate analytics/statistics methods (get_previous_task_averages, get_previous_actual_averages, get_initial_aversion, has_completed_task, get_previous_aversion_average, get_baseline_aversion_*)"
-    status: pending
+    status: completed
     dependencies:
       - phase3_queries
   - id: phase5_utilities
     content: "Phase 5: Migrate utility methods (backfill_attributes_from_json, update _update_attributes_from_payload)"
-    status: pending
+    status: completed
     dependencies:
       - phase4_analytics
   - id: phase6_migration_script
@@ -70,6 +70,8 @@ class InstanceManager:
         else:
             return self._some_method_csv(...)
 ```
+
+
 
 ## Implementation Steps
 
@@ -131,18 +133,18 @@ Migrate these high-frequency methods first (used in task completion/initializati
 
 ### Phase 3: Query Methods
 
-10. **`list_active_instances()`** → Split into CSV and DB versions
+10. **`list_active_instances()`** → ✅ **COMPLETED** (migrated in Phase 2)
 
     - Database: Query with filters: `is_completed=False`, `is_deleted=False`, `status NOT IN ('completed', 'cancelled')`
     - Return list of dicts (use `to_dict()`)
 
-11. **`list_recent_completed()`** → Split into CSV and DB versions
+11. **`list_recent_completed()`** → ✅ **COMPLETED** (migrated in Phase 2)
 
     - Database: Query where `completed_at IS NOT NULL`, order by `completed_at DESC`, limit
     - Use database index on `completed_at` for performance
 
-12. **`ensure_instance_for_task()`** → Already calls `create_instance()`, no changes needed
-13. **`pause_instance()`** → Split into CSV and DB versions
+12. **`ensure_instance_for_task()`** → ✅ Already calls `create_instance()`, no changes needed
+13. **`pause_instance()`** → ✅ **COMPLETED**
 
     - Database: Update status, clear started_at, update actual JSON with reason
 
@@ -156,7 +158,7 @@ These methods do complex filtering and aggregation - database will be much faste
     - Parse predicted JSON from database JSON field
     - Aggregate values in Python (or use SQL aggregation if possible)
 
-15. **`get_previous_actual_averages()`** → Split into CSV and DB versions
+15. **`get_previous_actual_averages()`** → ✅ **COMPLETED**
 
     - Database: Query by task_id, filter by completed_at IS NOT NULL
     - Parse actual JSON from database JSON field
@@ -171,30 +173,31 @@ These methods do complex filtering and aggregation - database will be much faste
 
     - Database: Simple count query: `WHERE task_id=X AND (is_completed=True OR completed_at IS NOT NULL OR status='completed')`
 
-18. **`get_previous_aversion_average()`** → Split into CSV and DB versions
+18. **`get_previous_aversion_average()`** → ✅ **COMPLETED**
 
-    - Database: Query completed instances, extract aversion from predicted JSON
+    - Database: Query initialized instances, extract aversion from predicted JSON, calculate mean
 
-19. **`get_baseline_aversion_robust()`** → Split into CSV and DB versions
+19. **`get_baseline_aversion_robust()`** → ✅ **COMPLETED**
 
-    - Database: Complex query with multiple filters
-    - Aggregate aversion values
+    - Database: Query initialized instances, extract aversion from predicted JSON
+    - Use numpy median for robust baseline (less sensitive to outliers)
 
-20. **`get_baseline_aversion_sensitive()`** → Split into CSV and DB versions
+20. **`get_baseline_aversion_sensitive()`** → ✅ **COMPLETED**
 
-    - Database: Similar to robust but different filtering logic
+    - Database: Query initialized instances, extract aversion from predicted JSON
+    - Use IQR method to exclude outliers, then calculate trimmed mean
 
 ### Phase 5: Utility Methods
 
-21. **`backfill_attributes_from_json()`** → Split into CSV and DB versions
+21. **`backfill_attributes_from_json()`** → ✅ **COMPLETED**
 
     - Database: Query all instances, parse JSON fields, update extracted columns
-    - Use batch update for performance
+    - Batch update with session.commit() for performance
 
-22. **`_update_attributes_from_payload()`** → Keep as shared helper
+22. **`_update_attributes_from_payload()`** → ✅ **COMPLETED**
 
     - Works with both CSV (pandas DataFrame) and database (TaskInstance object)
-    - May need slight modification to handle both data structures
+    - `_update_attributes_from_payload_db()` already exists and handles database objects
 
 ### Phase 6: Data Migration Script
 
@@ -244,6 +247,8 @@ def _db_to_csv_datetime(self, dt):
     return dt.strftime("%Y-%m-%d %H:%M") if dt else ''
 ```
 
+
+
 ### JSON Field Handling
 
 CSV stores JSON as strings: `'{"expected_relief": 5, ...}'`Database stores JSON as dict (SQLAlchemy JSON type)Conversion pattern:
@@ -259,6 +264,8 @@ def _parse_json_field(self, json_str):
         return {}
 ```
 
+
+
 ### Numeric Field Handling
 
 CSV stores numbers as strings: `"5.5"` or `""` (empty)Database stores as `Float` or `Integer`, `None` for emptyConversion pattern:
@@ -273,6 +280,8 @@ def _csv_to_db_float(self, csv_str):
         return None
 ```
 
+
+
 ### Boolean Field Handling
 
 CSV stores as strings: `"True"` or `"False"`Database stores as booleanConversion:
@@ -280,6 +289,8 @@ CSV stores as strings: `"True"` or `"False"`Database stores as booleanConversion
 ```python
 is_completed = str(row.get('is_completed', 'False')).lower() == 'true'
 ```
+
+
 
 ## Files to Modify
 
@@ -323,4 +334,3 @@ is_completed = str(row.get('is_completed', 'False')).lower() == 'true'
 
 - All InstanceManager methods work with database backend
 - Performance improvement: < 100ms for typical operations (vs 5-10s currently)
-- No breaking changes to existing UI or analytics code
