@@ -133,9 +133,34 @@ def test_phase2_methods():
         traceback.print_exc()
     print()
     
-    # Test 7: cancel_instance (create a new instance to cancel)
-    print("[TEST 7] Testing cancel_instance()...")
+    # Test 7: complete_instance
+    print("[TEST 7] Testing complete_instance()...")
     try:
+        # Use the instance we already created and started
+        im.complete_instance(instance_id, {
+            'time_actual_minutes': 40,
+            'actual_relief': 55,
+            'actual_difficulty': 25
+        })
+        completed = im.get_instance(instance_id)
+        assert completed['is_completed'] == 'True', "Should mark as completed"
+        assert completed['status'] == 'completed', "Should set status to completed"
+        assert completed['completed_at'] != '', "Should set completed_at"
+        assert completed.get('duration_minutes') != '', "Should calculate duration"
+        print(f"[PASS] complete_instance() completed instance")
+        test_results.append(("complete_instance", True))
+    except Exception as e:
+        print(f"[FAIL] complete_instance() failed: {e}")
+        test_results.append(("complete_instance", False))
+        import traceback
+        traceback.print_exc()
+    print()
+    
+    # Test 8: cancel_instance (create a new instance to cancel)
+    print("[TEST 8] Testing cancel_instance()...")
+    try:
+        import time
+        time.sleep(0.1)  # Small delay to ensure unique instance_id
         cancel_id = im.create_instance('t1234567891', 'Cancel Test', 1)
         im.cancel_instance(cancel_id, {'reason': 'test cancellation'})
         cancelled = im.get_instance(cancel_id)
@@ -151,9 +176,27 @@ def test_phase2_methods():
         traceback.print_exc()
     print()
     
-    # Test 8: delete_instance
-    print("[TEST 8] Testing delete_instance()...")
+    # Test 9: list_recent_completed (should now include our completed instance)
+    print("[TEST 9] Testing list_recent_completed()...")
     try:
+        completed = im.list_recent_completed(limit=10)
+        assert isinstance(completed, list), "Should return list"
+        assert len(completed) > 0, "Should have at least one completed instance"
+        assert any(i['instance_id'] == instance_id for i in completed), "Should include our completed instance"
+        print(f"[PASS] list_recent_completed() returned {len(completed)} completed instance(s)")
+        test_results.append(("list_recent_completed", True))
+    except Exception as e:
+        print(f"[FAIL] list_recent_completed() failed: {e}")
+        test_results.append(("list_recent_completed", False))
+        import traceback
+        traceback.print_exc()
+    print()
+    
+    # Test 10: delete_instance (create a separate instance for deletion)
+    print("[TEST 10] Testing delete_instance()...")
+    try:
+        import time
+        time.sleep(0.1)  # Small delay to ensure unique instance_id
         delete_id = im.create_instance('t1234567892', 'Delete Test', 1)
         result = im.delete_instance(delete_id)
         assert result == True, "Should return True on success"
@@ -164,20 +207,6 @@ def test_phase2_methods():
     except Exception as e:
         print(f"[FAIL] delete_instance() failed: {e}")
         test_results.append(("delete_instance", False))
-        import traceback
-        traceback.print_exc()
-    print()
-    
-    # Test 9: list_recent_completed (will be empty, but should work)
-    print("[TEST 9] Testing list_recent_completed()...")
-    try:
-        completed = im.list_recent_completed(limit=10)
-        assert isinstance(completed, list), "Should return list"
-        print(f"[PASS] list_recent_completed() returned {len(completed)} completed instance(s)")
-        test_results.append(("list_recent_completed", True))
-    except Exception as e:
-        print(f"[FAIL] list_recent_completed() failed: {e}")
-        test_results.append(("list_recent_completed", False))
         import traceback
         traceback.print_exc()
     print()

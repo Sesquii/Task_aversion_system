@@ -4,10 +4,10 @@ overview: Migrate InstanceManager from CSV-only to dual backend (CSV/database) f
 todos:
   - id: phase1_infrastructure
     content: "Phase 1: Add database initialization, use_db flag, and helper methods (datetime, JSON parsing)"
-    status: pending
+    status: completed
   - id: phase2_crud
     content: "Phase 2: Migrate core CRUD methods (create_instance, get_instance, complete_instance, add_prediction, start_instance, cancel_instance, delete_instance)"
-    status: pending
+    status: completed
     dependencies:
       - phase1_infrastructure
   - id: phase3_queries
@@ -150,7 +150,7 @@ Migrate these high-frequency methods first (used in task completion/initializati
 
 These methods do complex filtering and aggregation - database will be much faster:
 
-14. **`get_previous_task_averages()`** → Split into CSV and DB versions
+14. **`get_previous_task_averages()`** → ✅ **COMPLETED** (already had DB version)
 
     - Database: Query by task_id, filter by initialized_at IS NOT NULL
     - Parse predicted JSON from database JSON field
@@ -162,14 +162,14 @@ These methods do complex filtering and aggregation - database will be much faste
     - Parse actual JSON from database JSON field
     - Aggregate values
 
-16. **`get_initial_aversion()`** → Split into CSV and DB versions
+16. **`get_initial_aversion()`** → ✅ **COMPLETED** (migrated to fix initialize page)
 
-    - Database: Query most recent completed instance for task_id
-    - Extract expected_aversion from predicted JSON
+    - Database: Query first initialized instance for task_id, ordered by initialized_at
+    - Extract initial_aversion from predicted JSON
 
-17. **`has_completed_task()`** → Split into CSV and DB versions
+17. **`has_completed_task()`** → ✅ **COMPLETED** (migrated to fix initialize page)
 
-    - Database: Simple count query: `WHERE task_id=X AND is_completed=True`
+    - Database: Simple count query: `WHERE task_id=X AND (is_completed=True OR completed_at IS NOT NULL OR status='completed')`
 
 18. **`get_previous_aversion_average()`** → Split into CSV and DB versions
 

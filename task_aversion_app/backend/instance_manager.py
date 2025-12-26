@@ -519,6 +519,14 @@ class InstanceManager:
             return self._start_instance_csv(instance_id)
 
     def complete_instance(self, instance_id, actual: dict):
+        """Complete a task instance. Works with both CSV and database."""
+        if self.use_db:
+            return self._complete_instance_db(instance_id, actual)
+        else:
+            return self._complete_instance_csv(instance_id, actual)
+    
+    def _complete_instance_csv(self, instance_id, actual: dict):
+        """CSV-specific complete_instance."""
         import json, math
         self._reload()
         idx = self.df.index[self.df['instance_id']==instance_id][0]
@@ -588,6 +596,94 @@ class InstanceManager:
         
         self._update_attributes_from_payload(idx, actual)
         self._save()
+    
+    def _complete_instance_db(self, instance_id, actual: dict):
+        """Database-specific complete_instance."""
+        try:
+            import json
+            import math
+            
+            completed_at = datetime.now()
+            
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found")
+                
+                # Set actual JSON
+                instance.actual = actual or {}
+                instance.completed_at = completed_at
+                instance.is_completed = True
+                instance.status = 'completed'
+                instance.cancelled_at = None
+                
+                # Calculate duration and delay
+                try:
+                    initialized_at = instance.initialized_at
+                    started_at = instance.started_at
+                    
+                    # Get duration from actual dict, or calculate from start time
+                    duration_minutes = actual.get('time_actual_minutes') if actual else None
+                    if duration_minutes is None or duration_minutes == '':
+                        # If start button was used, calculate duration from start to completion
+                        if started_at:
+                            duration_minutes = (completed_at - started_at).total_seconds() / 60.0
+                        else:
+                            # Default to expected duration
+                            predicted = instance.predicted or {}
+                            duration_minutes = float(predicted.get('time_estimate_minutes') or predicted.get('estimate') or 0)
+                    
+                    # Store duration
+                    if duration_minutes is not None and duration_minutes != '':
+                        instance.duration_minutes = float(duration_minutes)
+                        # Also update in actual dict if not already set
+                        if actual and ('time_actual_minutes' not in actual or actual.get('time_actual_minutes') == ''):
+                            actual['time_actual_minutes'] = duration_minutes
+                            instance.actual = actual
+                    
+                    # Calculate delay: time from initialization to start (if started) or to completion minus duration (if not started)
+                    if initialized_at:
+                        if started_at:
+                            # Delay = start time - initialization time
+                            delay_minutes = (started_at - initialized_at).total_seconds() / 60.0
+                        else:
+                            # Delay = completion time - duration - initialization time
+                            if duration_minutes:
+                                delay_minutes = (completed_at - initialized_at).total_seconds() / 60.0 - float(duration_minutes)
+                            else:
+                                delay_minutes = (completed_at - initialized_at).total_seconds() / 60.0
+                        instance.delay_minutes = round(delay_minutes, 2)
+                except Exception as e:
+                    print(f"[InstanceManager] Error calculating duration/delay: {e}")
+                
+                # Compute simple procrastination/proactive metrics
+                try:
+                    created = instance.created_at
+                    started = instance.started_at if instance.started_at else (instance.initialized_at if instance.initialized_at else created)
+                    predicted = instance.predicted or {}
+                    estimate = float(predicted.get('time_estimate_minutes') or predicted.get('estimate') or 0) or 1.0
+                    delay = (started - created).total_seconds() / 60.0
+                    procrast = delay / max(estimate, 1.0)
+                    proactive = max(0.0, 1.0 - (delay / max(estimate*2.0,1.0)))
+                    instance.procrastination_score = round(min(procrast, 10.0), 3)
+                    instance.proactive_score = round(min(max(proactive*10.0,0.0), 10.0), 3)
+                except Exception as e:
+                    print(f"[InstanceManager] Error calculating procrastination/proactive scores: {e}")
+                    instance.procrastination_score = None
+                    instance.proactive_score = None
+                
+                # Extract attributes from payload
+                self._update_attributes_from_payload_db(instance, actual or {})
+                
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in complete_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in complete_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._complete_instance_csv(instance_id, actual)
 
     def cancel_instance(self, instance_id, actual: dict):
         """Cancel a task instance. Works with both CSV and database."""
@@ -1220,6 +1316,13 @@ class InstanceManager:
         """Get the initial aversion value for a task (from the first initialized instance).
         Returns None if this is the first time doing the task.
         Values are scaled to 0-100 range."""
+        if self.use_db:
+            return self._get_initial_aversion_db(task_id)
+        else:
+            return self._get_initial_aversion_csv(task_id)
+    
+    def _get_initial_aversion_csv(self, task_id: str) -> Optional[float]:
+        """CSV-specific get_initial_aversion."""
         import json
         self._reload()
         
@@ -1257,9 +1360,53 @@ class InstanceManager:
                 pass
         
         return None
+    
+    def _get_initial_aversion_db(self, task_id: str) -> Optional[float]:
+        """Database-specific get_initial_aversion."""
+        try:
+            import json
+            with self.db_session() as session:
+                # Get all initialized instances for this task, sorted by initialized_at
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id,
+                    self.TaskInstance.initialized_at.isnot(None)
+                ).order_by(self.TaskInstance.initialized_at.asc()).all()
+                
+                if not instances:
+                    return None
+                
+                # Get the first instance's predicted data
+                first_instance = instances[0]
+                predicted = first_instance.predicted or {}
+                if isinstance(predicted, dict):
+                    initial_aversion = predicted.get('initial_aversion')
+                    if initial_aversion is not None:
+                        try:
+                            num_val = float(initial_aversion)
+                            # Scale from 0-10 to 0-100 if value is <= 10
+                            if num_val <= 10 and num_val >= 0:
+                                num_val = num_val * 10
+                            return round(num_val)
+                        except (ValueError, TypeError):
+                            pass
+            
+            return None
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_initial_aversion and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in get_initial_aversion: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_initial_aversion_csv(task_id)
 
     def has_completed_task(self, task_id: str) -> bool:
         """Check if this task has been completed at least once."""
+        if self.use_db:
+            return self._has_completed_task_db(task_id)
+        else:
+            return self._has_completed_task_csv(task_id)
+    
+    def _has_completed_task_csv(self, task_id: str) -> bool:
+        """CSV-specific has_completed_task."""
         self._reload()
         if not task_id:
             return False
@@ -1282,6 +1429,30 @@ class InstanceManager:
         has_completed = (is_completed_check | completed_at_check | status_check).any()
         
         return bool(has_completed)
+    
+    def _has_completed_task_db(self, task_id: str) -> bool:
+        """Database-specific has_completed_task."""
+        try:
+            if not task_id:
+                return False
+            
+            with self.db_session() as session:
+                # Check if any instance has is_completed=True, completed_at set, or status='completed'
+                count = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id == task_id
+                ).filter(
+                    (self.TaskInstance.is_completed == True) |
+                    (self.TaskInstance.completed_at.isnot(None)) |
+                    (self.TaskInstance.status == 'completed')
+                ).count()
+                
+                return count > 0
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in has_completed_task and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in has_completed_task: {e}, falling back to CSV")
+            self.use_db = False
+            return self._has_completed_task_csv(task_id)
 
     def get_previous_aversion_average(self, task_id: str) -> Optional[float]:
         """Get average aversion from previous initialized instances of the same task.
