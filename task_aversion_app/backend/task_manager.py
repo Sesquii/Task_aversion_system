@@ -59,6 +59,11 @@ class TaskManager:
         if not self.use_db:
             self._reload_csv()
     
+    def _ensure_csv_initialized(self):
+        """Ensure CSV backend is initialized. Called before fallback to CSV methods."""
+        if not hasattr(self, 'tasks_file') or not hasattr(self, 'df'):
+            self._init_csv()
+    
     def _reload_csv(self):
         """CSV-specific reload."""
         self.df = pd.read_csv(self.tasks_file, dtype=str).fillna('')
@@ -119,6 +124,7 @@ class TaskManager:
                 raise RuntimeError(f"Database error in get_task and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in get_task: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._get_task_csv(task_id)
 
     def list_tasks(self) -> List[str]:
@@ -144,6 +150,7 @@ class TaskManager:
                 raise RuntimeError(f"Database error in list_tasks and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in list_tasks: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._list_tasks_csv()
 
     def save_initialization_entry(self, entry):
@@ -176,6 +183,7 @@ class TaskManager:
         except Exception as e:
             print(f"[TaskManager] Database error in get_all: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._get_all_csv()
 
     def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
@@ -290,6 +298,7 @@ class TaskManager:
         except Exception as e:
             print(f"[TaskManager] Database error in create_task: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
 
     def update_task(self, task_id, **kwargs):
@@ -368,6 +377,7 @@ class TaskManager:
         except Exception as e:
             print(f"[TaskManager] Database error in update_task: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._update_task_csv(task_id, **kwargs)
 
     def find_by_name(self, name):
@@ -392,6 +402,7 @@ class TaskManager:
         except Exception as e:
             print(f"[TaskManager] Database error in find_by_name: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._find_by_name_csv(name)
 
     def ensure_task_exists(self, name):
@@ -437,6 +448,7 @@ class TaskManager:
         except Exception as e:
             print(f"[TaskManager] Database error in delete_by_id: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._delete_by_id_csv(task_id)
 
 
