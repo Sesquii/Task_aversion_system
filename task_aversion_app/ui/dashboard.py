@@ -101,18 +101,39 @@ def go_cancel(instance_id):
 
 
 def open_pause_dialog(instance_id):
-    """Show dialog to pause an instance with optional reason."""
+    """Show dialog to pause an instance with optional reason and completion percentage."""
     with ui.dialog() as dialog, ui.card().classes("w-96"):
         ui.label("Pause task").classes("text-lg font-bold mb-2")
         reason_input = ui.textarea(
             label="Reason (optional)",
             placeholder="Why are you pausing this task?"
         ).classes("w-full")
+        
+        completion_input = ui.number(
+            label="Completion percentage",
+            value=0,
+            min=0,
+            max=100,
+            step=1,
+            format="%.0f"
+        ).classes("w-full")
 
         def submit_pause():
             reason_text = (reason_input.value or "").strip()
+            completion_pct = completion_input.value
+            if completion_pct is None:
+                completion_pct = 0
             try:
-                im.pause_instance(instance_id, reason_text if reason_text else None)
+                completion_pct = float(completion_pct)
+                if completion_pct < 0:
+                    completion_pct = 0
+                elif completion_pct > 100:
+                    completion_pct = 100
+            except (ValueError, TypeError):
+                completion_pct = 0
+            
+            try:
+                im.pause_instance(instance_id, reason_text if reason_text else None, completion_pct)
                 ui.notify("Task paused and moved back to initialized", color='info')
                 dialog.close()
                 ui.navigate.reload()
@@ -1795,13 +1816,21 @@ def build_dashboard(task_manager):
                                     tooltip_id = f"tooltip-{inst['instance_id']}"
                                     instance_id = inst['instance_id']
                                     
-                                    # Check if this task has pause notes (for indicator)
+                                    # Check if this task has pause notes and completion percentage
                                     actual_str = inst.get("actual") or "{}"
                                     has_pause_notes = False
+                                    completion_pct = None
                                     try:
                                         actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
                                         pause_reason = actual_data.get('pause_reason', '')
                                         has_pause_notes = bool(pause_reason and pause_reason.strip())
+                                        # Get completion percentage if available
+                                        completion_pct = actual_data.get('pause_completion_percentage')
+                                        if completion_pct is not None:
+                                            try:
+                                                completion_pct = float(completion_pct)
+                                            except (ValueError, TypeError):
+                                                completion_pct = None
                                     except (json.JSONDecodeError, TypeError):
                                         pass
                                     
@@ -1812,6 +1841,10 @@ def build_dashboard(task_manager):
                                             if has_pause_notes:
                                                 ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip("This task was paused - see notes when you start it")
                                         ui.label(f"{time_estimate} min").classes("text-xs text-gray-600")
+                                        
+                                        # Show completion percentage if task was paused
+                                        if completion_pct is not None:
+                                            ui.label(f"Progress: {int(completion_pct)}%").classes("text-xs font-semibold text-blue-600")
                                         
                                         initialized_at = inst.get('initialized_at', '')
                                         if initialized_at:

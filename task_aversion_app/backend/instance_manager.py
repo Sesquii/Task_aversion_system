@@ -368,14 +368,20 @@ class InstanceManager:
             self.use_db = False
             return self._create_instance_csv(task_id, task_name, task_version, predicted)
 
-    def pause_instance(self, instance_id: str, reason: Optional[str] = None):
-        """Pause an active instance and move it back to initialized state. Works with both CSV and database."""
+    def pause_instance(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
+        """Pause an active instance and move it back to initialized state. Works with both CSV and database.
+        
+        Args:
+            instance_id: The instance ID to pause
+            reason: Optional reason for pausing
+            completion_percentage: Completion percentage (0-100) when pausing
+        """
         if self.use_db:
-            return self._pause_instance_db(instance_id, reason)
+            return self._pause_instance_db(instance_id, reason, completion_percentage)
         else:
-            return self._pause_instance_csv(instance_id, reason)
+            return self._pause_instance_csv(instance_id, reason, completion_percentage)
     
-    def _pause_instance_csv(self, instance_id: str, reason: Optional[str] = None):
+    def _pause_instance_csv(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
         """CSV-specific pause_instance."""
         import json
         self._reload()
@@ -415,6 +421,15 @@ class InstanceManager:
         total_time_spent = existing_time + time_spent_before_pause
         actual_data['time_spent_before_pause'] = total_time_spent
         
+        # Store completion percentage (ensure it's between 0 and 100)
+        if not isinstance(completion_percentage, (int, float)):
+            try:
+                completion_percentage = float(completion_percentage)
+            except (ValueError, TypeError):
+                completion_percentage = 0.0
+        completion_percentage = max(0.0, min(100.0, float(completion_percentage)))
+        actual_data['pause_completion_percentage'] = completion_percentage
+        
         # Reset timing/status so task returns to initialized state
         self.df.at[idx, 'started_at'] = ''
         self.df.at[idx, 'status'] = 'initialized'
@@ -432,7 +447,7 @@ class InstanceManager:
 
         self._save()
     
-    def _pause_instance_db(self, instance_id: str, reason: Optional[str] = None):
+    def _pause_instance_db(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
         """Database-specific pause_instance."""
         try:
             import json
@@ -468,6 +483,15 @@ class InstanceManager:
                 total_time_spent = existing_time + time_spent_before_pause
                 actual_data['time_spent_before_pause'] = total_time_spent
                 
+                # Store completion percentage (ensure it's between 0 and 100)
+                if not isinstance(completion_percentage, (int, float)):
+                    try:
+                        completion_percentage = float(completion_percentage)
+                    except (ValueError, TypeError):
+                        completion_percentage = 0.0
+                completion_percentage = max(0.0, min(100.0, float(completion_percentage)))
+                actual_data['pause_completion_percentage'] = completion_percentage
+                
                 # Reset timing/status so task returns to initialized state
                 instance.started_at = None
                 instance.status = 'initialized'
@@ -489,7 +513,7 @@ class InstanceManager:
                 raise RuntimeError(f"Database error in pause_instance and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in pause_instance: {e}, falling back to CSV")
             self.use_db = False
-            return self._pause_instance_csv(instance_id, reason)
+            return self._pause_instance_csv(instance_id, reason, completion_percentage)
 
     def list_active_instances(self):
         """List active task instances. Works with both CSV and database."""
