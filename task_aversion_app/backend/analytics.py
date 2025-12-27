@@ -1067,8 +1067,19 @@ class Analytics:
         return df_filtered
     
     def _load_instances(self) -> pd.DataFrame:
-        # Check if database is being used
-        use_db = bool(os.getenv('DATABASE_URL'))
+        # Default to database (SQLite) unless USE_CSV is explicitly set
+        use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
+        
+        if use_csv:
+            # CSV backend (explicitly requested)
+            use_db = False
+        else:
+            # Database backend (default)
+            # Ensure DATABASE_URL is set to default SQLite if not already set
+            if not os.getenv('DATABASE_URL'):
+                # Use the same default as database.py
+                os.environ['DATABASE_URL'] = 'sqlite:///data/task_aversion.db'
+            use_db = True
         
         if use_db:
             # Load from database

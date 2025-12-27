@@ -1,10 +1,8 @@
-# PowerShell script to start the app with CSV backend only (default)
+# PowerShell script to start the app with CSV backend only
 # Use this to test that Phase 1 changes don't break existing CSV functionality
 
-# Ensure DATABASE_URL is not set (use CSV backend)
-if ($env:DATABASE_URL) {
-    Remove-Item Env:\DATABASE_URL
-}
+# Set USE_CSV to explicitly request CSV backend (database is now default)
+$env:USE_CSV = "1"
 
 # Ensure DISABLE_CSV_FALLBACK is not set
 if ($env:DISABLE_CSV_FALLBACK) {
@@ -12,8 +10,8 @@ if ($env:DISABLE_CSV_FALLBACK) {
 }
 
 # Print confirmation
-Write-Host "Starting app with CSV backend (default mode)..." -ForegroundColor Green
-Write-Host "DATABASE_URL = (not set - using CSV)" -ForegroundColor Cyan
+Write-Host "Starting app with CSV backend (explicitly requested)..." -ForegroundColor Green
+Write-Host "USE_CSV = 1 (using CSV backend)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Phase 1: Testing CSV backend with new infrastructure..." -ForegroundColor Magenta
 Write-Host "         All methods use CSV backend as expected." -ForegroundColor Gray

@@ -9,8 +9,21 @@ import time
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 class InstanceManager:
     def __init__(self):
-        # Feature flag: Use database if DATABASE_URL is set, otherwise use CSV
-        self.use_db = bool(os.getenv('DATABASE_URL'))
+        # Default to database (SQLite) unless USE_CSV is explicitly set
+        # Check if CSV is explicitly requested
+        use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
+        
+        if use_csv:
+            # CSV backend (explicitly requested)
+            self.use_db = False
+        else:
+            # Database backend (default)
+            # Ensure DATABASE_URL is set to default SQLite if not already set
+            if not os.getenv('DATABASE_URL'):
+                # Use the same default as database.py
+                os.environ['DATABASE_URL'] = 'sqlite:///data/task_aversion.db'
+            self.use_db = True
+        
         # Strict mode: If DISABLE_CSV_FALLBACK is set, fail instead of falling back to CSV
         self.strict_mode = bool(os.getenv('DISABLE_CSV_FALLBACK', '').lower() in ('1', 'true', 'yes'))
         
@@ -36,11 +49,11 @@ class InstanceManager:
                 self.use_db = False
                 self._init_csv()
         else:
-            # CSV backend (default)
+            # CSV backend (explicitly requested via USE_CSV)
             if self.strict_mode:
                 raise RuntimeError(
-                    "CSV backend is disabled (DISABLE_CSV_FALLBACK is set) but DATABASE_URL is not set.\n"
-                    "Please set DATABASE_URL to use the database backend, or unset DISABLE_CSV_FALLBACK."
+                    "CSV backend is disabled (DISABLE_CSV_FALLBACK is set) but USE_CSV is set.\n"
+                    "Please unset USE_CSV to use the database backend, or unset DISABLE_CSV_FALLBACK."
                 )
             self._init_csv()
             print("[InstanceManager] Using CSV backend")
