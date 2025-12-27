@@ -24,6 +24,7 @@ from ui import productivity_goals_experimental  # registers /experimental/produc
 from ui import productivity_module  # registers /productivity-module
 from ui import experimental_landing  # registers /experimental
 from ui.formula_baseline_charts import register_formula_baseline_charts  # registers /experimental/formula-baseline-charts
+from ui import formula_control_system  # registers /experimental/formula-control-system/productivity-score
 
 
 task_manager = TaskManager()

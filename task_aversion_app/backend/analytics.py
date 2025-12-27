@@ -725,7 +725,7 @@ class Analytics:
             
             # --- Persistence multiplier: sqrt→log growth with familiarity decay ---
             # Raw growth: power curve to approximate anchors (2x~1.02, 10x~1.22, 25x~1.6, 50x~2.6, 100x~4.1)
-            raw_multiplier = 1.0 + 0.02 * max(0, completion_count - 1) ** 1.13
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
             # Familiarity decay after 100+ completions: taper as it becomes routine
             if completion_count > 100:
                 decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)  # 300→0.5, 500→0.33, 1000→~0.18
@@ -740,9 +740,9 @@ class Analytics:
                 if time_ratio > 1.0:
                     excess = time_ratio - 1.0
                     if excess <= 1.0:
-                        base_time_bonus = 1.0 + (excess * 0.5)  # up to 1.5x at 2x longer
+                        base_time_bonus = 1.0 + (excess * 0.8)  # up to 1.8x at 2x longer
                     else:
-                        base_time_bonus = 1.5 + ((excess - 1.0) * 0.2)  # diminishing beyond 2x
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)  # diminishing beyond 2x
                     base_time_bonus = min(3.0, base_time_bonus)
                     
                     # Difficulty weighting (harder tasks get more credit)
@@ -1060,7 +1060,7 @@ class Analytics:
         """Load persisted productivity settings or use sensible defaults."""
         defaults = {
             "weekly_curve": "flattened_square",  # linear | flattened_square
-            "weekly_curve_strength": 1.0,
+            "weekly_curve_strength": 1.5,  # Increased from 1.0 to provide stronger efficiency bonuses
             "weekly_burnout_threshold_hours": 42.0,  # 6h/day baseline
             "daily_burnout_cap_multiplier": 2.0,
         }

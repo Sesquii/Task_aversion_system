@@ -46,18 +46,19 @@ def experimental_landing_page():
                     on_click=lambda: ui.navigate.to("/experimental/formula-baseline-charts")
                 ).classes("bg-blue-500 text-white ml-4")
         
-        # Formula Baseline Charts
+        # Formula Control System
         with ui.card().classes("p-4 mb-4 border border-gray-300"):
             with ui.row().classes("w-full items-center justify-between"):
                 with ui.column().classes("flex-1 gap-2"):
-                    ui.label("Formula Baseline Charts").classes("text-lg font-semibold")
+                    ui.label("Formula Control System").classes("text-lg font-semibold")
                     ui.label(
-                        "Theoretical charts for refining formulas. Each score system has 6 charts per variable "
-                        "plus correlation charts for weight calibration. Add notes to track your analysis."
+                        "Universal formula control system for adjusting formula parameters dynamically. "
+                        "Each formula has its own page with adjustable parameters, real-time Plotly visualizations, "
+                        "parameter comparison, and CSV persistence. Settings are automatically synced for immediate use in calculations."
                     ).classes("text-sm text-gray-700")
                 ui.button(
                     "Open",
-                    on_click=lambda: ui.navigate.to("/experimental/formula-baseline-charts")
+                    on_click=lambda: ui.navigate.to("/experimental/formula-control-system")
                 ).classes("bg-blue-500 text-white ml-4")
         
         # Placeholder for future experimental systems

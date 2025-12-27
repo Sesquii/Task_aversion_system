@@ -23,7 +23,7 @@ def productivity_goals_experimental_page():
     ui.label("This is an experimental feature for tracking weekly productivity hours vs goals.").classes("text-gray-600 mb-6")
     
     # Goal Settings Card
-    with ui.card().classes("w-full max-w-4xl p-4 mb-4"):
+    with ui.card().classes("w-full max-w-7xl p-4 mb-4"):
         ui.label("Goal Settings").classes("text-xl font-semibold mb-4")
         
         # Load current settings
@@ -82,7 +82,7 @@ def productivity_goals_experimental_page():
         ui.button("Auto-Estimate Starting Hours (First Day × 10)", on_click=estimate_starting).classes("mt-2")
     
     # Current Week Comparison
-    with ui.card().classes("w-full max-w-4xl p-4 mb-4"):
+    with ui.card().classes("w-full max-w-7xl p-4 mb-4"):
         ui.label("Current Week Performance").classes("text-xl font-semibold mb-4")
         
         comparison = tracker.compare_to_goal(DEFAULT_USER_ID)
@@ -169,7 +169,7 @@ def productivity_goals_experimental_page():
     tracker.get_or_record_current_week(DEFAULT_USER_ID)
     
     # Historical Trends Section
-    with ui.card().classes("w-full max-w-4xl p-4 mb-4"):
+    with ui.card().classes("w-full max-w-7xl p-4 mb-4"):
         ui.label("Historical Trends").classes("text-xl font-semibold mb-4")
         
         # Get historical data (last 12 weeks)
@@ -229,7 +229,12 @@ def productivity_goals_experimental_page():
                     yaxis_title="Hours",
                     hovermode='x unified',
                     height=300,
-                    showlegend=True
+                    showlegend=True,
+                    font=dict(size=10),
+                    title_font=dict(size=12),
+                    xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                    yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                    legend=dict(font=dict(size=9))
                 )
                 
                 ui.plotly(fig_hours).classes("w-full mb-6")
@@ -292,6 +297,11 @@ def productivity_goals_experimental_page():
                         fig.update_layout(
                             title="Weekly Productivity Points",
                             yaxis_title="Points",
+                            font=dict(size=10),
+                            title_font=dict(size=12),
+                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            legend=dict(font=dict(size=9))
                         )
                         
                     elif view == 'score':
@@ -307,6 +317,11 @@ def productivity_goals_experimental_page():
                         fig.update_layout(
                             title="Weekly Productivity Score",
                             yaxis_title="Score",
+                            font=dict(size=10),
+                            title_font=dict(size=12),
+                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            legend=dict(font=dict(size=9))
                         )
                         
                     elif view == 'hours':
@@ -331,6 +346,11 @@ def productivity_goals_experimental_page():
                         fig.update_layout(
                             title="Weekly Productivity Hours",
                             yaxis_title="Hours",
+                            font=dict(size=10),
+                            title_font=dict(size=12),
+                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            legend=dict(font=dict(size=9))
                         )
                         
                     elif view == 'normalized':
@@ -390,6 +410,11 @@ def productivity_goals_experimental_page():
                         fig.update_layout(
                             title="All Metrics Normalized to Goal/Average",
                             yaxis_title="Ratio (1.0 = Goal/Average)",
+                            font=dict(size=10),
+                            title_font=dict(size=12),
+                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                            legend=dict(font=dict(size=9))
                         )
                     
                     # Common layout settings
@@ -398,7 +423,12 @@ def productivity_goals_experimental_page():
                         hovermode='x unified',
                         height=350,
                         showlegend=True,
-                        margin=dict(l=60, r=20, t=50, b=40)
+                        margin=dict(l=60, r=20, t=50, b=40),
+                        font=dict(size=10),
+                        title_font=dict(size=12),
+                        xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                        yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                        legend=dict(font=dict(size=9))
                     )
                     
                     with chart_area:
@@ -415,7 +445,7 @@ def productivity_goals_experimental_page():
             ui.label("No historical data yet. Historical tracking will begin after you complete tasks this week.").classes("text-gray-500")
     
     # Information Card
-    with ui.card().classes("w-full max-w-4xl p-4 mb-4 bg-blue-50"):
+    with ui.card().classes("w-full max-w-7xl p-4 mb-4 bg-blue-50"):
         ui.label("How It Works").classes("text-lg font-semibold mb-2")
         ui.label(
             "• Goal Hours Per Week: Your target for weekly productive time (Work + Self Care tasks)\n"
