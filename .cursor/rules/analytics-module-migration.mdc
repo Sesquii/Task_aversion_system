@@ -287,6 +287,410 @@ execution_score = max(0.0, min(100.0, execution_score))  # Clamp to range
 - **Formula Review:** `docs/formula_review_analysis.md`
 - **Implementation:** `backend/analytics.py`
 
+## Graphic Aid Generation Guidelines
+
+### Core Principle: Theoretical-Data Pairing
+
+**CRITICAL:** Every theoretical chart must have a matching data-driven chart with:
+- **Same axes and ranges** (use identical xlim/ylim)
+- **Same variable parameters** (same input ranges, same calculation methods)
+- **Overlay theoretical curve** on data-driven chart for comparison
+- **Equivalent visualization style** (same plot types, colors, annotations)
+
+### Component Factor Visualizations
+
+For each component factor in a module, generate **1-2 pairs** of charts:
+
+#### Pair Structure
+1. **Theoretical Chart** (`{module}_{component}.py`):
+   - Shows how the formula works with example data
+   - Demonstrates formula behavior across parameter ranges
+   - Includes annotations explaining key thresholds/regions
+   - Saved to: `assets/graphic_aids/{module}_{component}.png`
+
+2. **Data-Driven Chart** (`generate_data_driven.py`):
+   - Shows actual user data plotted with same axes/ranges as theoretical
+   - Overlays theoretical curve for comparison
+   - Uses identical calculation methods and parameter ranges
+   - Saved to: `assets/graphic_aids/{module}_{component}_data.png`
+
+#### Chart Types Per Component (1-2 pairs recommended)
+
+**Primary Pair (Required):**
+- Main formula visualization (input variable vs output factor)
+- Example: Time ratio vs speed factor, Efficiency ratio vs multiplier
+
+**Secondary Pair (Optional, if useful):**
+- Distribution/histogram of the factor values
+- Correlation with related variables
+- Example: Distribution of speed factors, Efficiency vs completion percentage
+
+#### Implementation Pattern
+
+```python
+# Theoretical generator (generate_all.py)
+def generate_{component}_image(output_path=None):
+    """Generate {component} visualization image."""
+    # Use standard parameter ranges
+    x_range = np.linspace(min_val, max_val, 200)  # Standard range
+    y_values = [calculate_formula(x) for x in x_range]
+    
+    # Plot with specific axes limits
+    axes.plot(x_range, y_values, ...)
+    axes.set_xlim(min_val, max_val)  # Fixed limits
+    axes.set_ylim(y_min, y_max)  # Fixed limits
+
+# Data-driven generator (generate_data_driven.py)
+def generate_{component}_data_image(output_path=None):
+    """Generate {component} visualization with actual user data."""
+    # Extract data from instances
+    x_data = []
+    y_data = []
+    for instance in instances:
+        x_val = extract_x_from_instance(instance)
+        y_val = calculate_formula(x_val)  # Same formula as theoretical
+        x_data.append(x_val)
+        y_data.append(y_val)
+    
+    # Plot with SAME axes limits as theoretical
+    axes.scatter(x_data, y_data, ...)
+    # Overlay theoretical curve
+    x_theoretical = np.linspace(min_val, max_val, 200)  # SAME range
+    y_theoretical = [calculate_formula(x) for x in x_theoretical]
+    axes.plot(x_theoretical, y_theoretical, 'r--', label='Theoretical')
+    axes.set_xlim(min_val, max_val)  # SAME limits as theoretical
+    axes.set_ylim(y_min, y_max)  # SAME limits as theoretical
+```
+
+### Whole Formula Visualizations
+
+For each complete module, generate **additional charts** showing overall score behavior:
+
+#### Required Whole Formula Charts
+
+1. **Score Over Time**
+   - X-axis: Date/time of task completion
+   - Y-axis: Calculated score value
+   - Shows: Trend line, moving average, score distribution over time
+   - File: `{module}_score_over_time_data.png`
+
+2. **Score Variance Analysis**
+   - X-axis: Time period (days/weeks)
+   - Y-axis: Variance/standard deviation of scores
+   - Shows: How consistent scores are over time
+   - File: `{module}_score_variance_data.png`
+
+3. **Emotion Correlation Analysis**
+   - X-axis: Score value
+   - Y-axis: Emotion metric (stress, relief, etc.)
+   - Shows: Correlation between score spikes and emotional states
+   - Highlights: Top correlations, emotion patterns at high/low scores
+   - File: `{module}_emotion_correlation_data.png`
+
+4. **Composite Score Weight Visualization**
+   - Shows: How this module's score contributes to composite score
+   - Displays: Weight percentage, contribution over time
+   - File: `{module}_composite_weight_data.png` (if applicable)
+
+5. **Points Over Time** (Future - when points system implemented)
+   - X-axis: Date/time
+   - Y-axis: Points accumulated
+   - Shows: Cumulative points, points per task
+   - File: `{module}_points_over_time_data.png`
+
+#### Optional Whole Formula Charts
+
+6. **Component Contribution Analysis**
+   - Shows: How each component factor contributes to final score
+   - Visualization: Stacked area chart or component breakdown
+   - File: `{module}_component_contribution_data.png`
+
+7. **Score Distribution**
+   - Histogram of all calculated scores
+   - Shows: Mean, median, percentiles
+   - File: `{module}_score_distribution_data.png`
+
+### Interactive Formula Component Diagram
+
+**Future Enhancement:** Create interactive diagram showing:
+- Formula structure with all components
+- Tooltips on each variable showing:
+  - Description if variable is composite (links to sub-components)
+  - Meaning if variable is specifically defined
+  - Current value range from user's data
+- Visual flow: Inputs → Components → Final Score
+
+**Implementation Note:** This may require web-based visualization (D3.js, Plotly, etc.)
+
+### Whole Formula Chart Implementation Pattern
+
+```python
+def generate_{module}_score_over_time_image(output_path=None):
+    """Generate score over time visualization."""
+    instances, analytics = get_user_instances()
+    if not instances:
+        return None
+    
+    # Extract scores and dates
+    scores = []
+    dates = []
+    for instance in instances:
+        try:
+            score = calculate_{module}_score(instance, ...)  # Use actual calculation method
+            completed_at = instance.get('completed_at')
+            if completed_at:
+                date = pd.to_datetime(completed_at).date()
+                scores.append(score)
+                dates.append(date)
+        except:
+            continue
+    
+    # Create visualization
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Plot 1: Score over time with trend
+    axes[0].scatter(dates, scores, alpha=0.6, s=30)
+    # Add moving average
+    if len(scores) > 7:
+        window = min(7, len(scores) // 4)
+        moving_avg = pd.Series(scores).rolling(window=window).mean()
+        axes[0].plot(dates, moving_avg, 'r-', linewidth=2, label=f'{window}-point moving average')
+    axes[0].set_xlabel('Date')
+    axes[0].set_ylabel('Score')
+    axes[0].set_title('Score Over Time')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+    
+    # Plot 2: Distribution
+    axes[1].hist(scores, bins=20, alpha=0.7, edgecolor='black')
+    axes[1].axvline(x=np.mean(scores), color='red', linestyle='--', label=f'Mean: {np.mean(scores):.1f}')
+    axes[1].set_xlabel('Score')
+    axes[1].set_ylabel('Frequency')
+    axes[1].set_title('Score Distribution')
+    axes[1].legend()
+    
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    return output_path
+```
+
+### Chart Generation Workflow
+
+When creating graphic aids for a new module:
+
+1. **Identify Components:**
+   - List all component factors in the formula
+   - Identify input variables for each component
+   - Determine parameter ranges for each variable
+
+2. **Create Theoretical Charts (1-2 per component):**
+   - Main formula visualization (input vs output)
+   - Optional: Distribution or correlation chart
+   - Use standard parameter ranges
+   - Save to `{module}_{component}.png`
+
+3. **Create Data-Driven Charts (matching theoretical):**
+   - Extract data from user instances
+   - Use SAME parameter ranges and calculation methods
+   - Overlay theoretical curve
+   - Save to `{module}_{component}_data.png`
+
+4. **Create Whole Formula Charts:**
+   - Score over time
+   - Score variance analysis
+   - Emotion correlation (if emotion data available)
+   - Composite weight (if applicable)
+   - Points over time (when points system exists)
+
+5. **Register All Generators:**
+   - Add to `generate_all.py` (theoretical)
+   - Add to `generate_data_driven.py` (data-driven + whole formula)
+
+6. **Update Analytics Glossary:**
+   - Add `graphic_script` references for components
+   - Ensure UI can display both theoretical and data-driven charts
+
+### Standard Parameter Ranges
+
+Use these consistent ranges across all modules for comparable visualizations:
+
+```python
+STANDARD_RANGES = {
+    # Time-based ratios
+    'time_ratio': (0.1, 3.0),  # actual_time / estimated_time
+    'efficiency_ratio': (0.5, 2.5),  # (completion * estimate) / (100 * actual)
+    'play_work_ratio': (0, 5.0),  # play_time / work_time
+    
+    # Percentages
+    'completion_pct': (0, 100),
+    'time_diff_percent': (-100, 100),  # deviation from weekly average
+    
+    # Time delays
+    'delay_minutes': (0, 480),  # 0 to 8 hours
+    'start_delay_minutes': (0, 480),
+    
+    # Difficulty metrics
+    'aversion': (0, 100),
+    'cognitive_load': (0, 100),
+    'stress_level': (0, 100),
+    'combined_difficulty': (0, 100),  # weighted combination
+    
+    # Work metrics
+    'excess_hours': (0, 20),  # burnout excess above threshold
+    'weekly_work_hours': (0, 60),
+    
+    # Multipliers
+    'task_multiplier': (0, 6.0),  # work task multiplier range
+    'weekly_multiplier': (0, 2.0),  # weekly bonus/penalty range
+    
+    # Factors (0-1 range)
+    'difficulty_factor': (0, 1.0),
+    'speed_factor': (0, 1.0),
+    'start_speed_factor': (0, 1.0),
+    'completion_factor': (0, 1.0),
+    'burnout_penalty': (0, 0.5),  # capped at 50%
+}
+```
+
+### Data Extraction Patterns
+
+**Always extract data consistently:**
+
+```python
+def extract_{variable}_from_instance(instance):
+    """Extract {variable} from task instance (handles CSV and database formats)."""
+    # Handle both dict and Series formats
+    predicted_raw = instance.get('predicted', '{}') if hasattr(instance, 'get') else (instance.get('predicted', '{}') if 'predicted' in instance else '{}')
+    actual_raw = instance.get('actual', '{}') if hasattr(instance, 'get') else (instance.get('actual', '{}') if 'actual' in instance else '{}')
+    
+    # Parse JSON strings to dicts
+    if isinstance(predicted_raw, str):
+        predicted = json.loads(predicted_raw) if predicted_raw.strip() else {}
+    else:
+        predicted = predicted_raw if isinstance(predicted_raw, dict) else {}
+    
+    if isinstance(actual_raw, str):
+        actual = json.loads(actual_raw) if actual_raw.strip() else {}
+    else:
+        actual = actual_raw if isinstance(actual_raw, dict) else {}
+    
+    # Extract specific variable with fallbacks
+    value = actual.get('{variable}') or predicted.get('{variable}') or default_value
+    return float(value) if value is not None else None
+```
+
+### Emotion Correlation Analysis Pattern
+
+```python
+def generate_{module}_emotion_correlation_image(output_path=None):
+    """Generate emotion correlation analysis for {module} scores."""
+    instances, analytics = get_user_instances()
+    if not instances:
+        return None
+    
+    # Extract scores and emotions
+    scores = []
+    emotions = {
+        'stress': [],
+        'relief': [],
+        'emotional_load': [],
+        'cognitive_load': [],
+    }
+    
+    for instance in instances:
+        try:
+            score = calculate_{module}_score(instance, ...)
+            scores.append(score)
+            
+            # Extract emotions from actual_dict
+            actual = parse_dict_from_instance(instance, 'actual')
+            emotions['stress'].append(actual.get('stress_level'))
+            emotions['relief'].append(actual.get('relief_score'))
+            # ... extract other emotions
+        except:
+            continue
+    
+    # Calculate correlations
+    correlations = {}
+    for emotion_name, emotion_values in emotions.items():
+        if len(emotion_values) == len(scores):
+            valid_pairs = [(s, e) for s, e in zip(scores, emotion_values) if e is not None]
+            if len(valid_pairs) > 10:  # Minimum data points
+                s_vals, e_vals = zip(*valid_pairs)
+                corr = np.corrcoef(s_vals, e_vals)[0, 1]
+                correlations[emotion_name] = corr
+    
+    # Visualize top correlations
+    # ... create visualization
+```
+
+### Module Enhancement Checklist
+
+When enhancing a module with graphic aids:
+
+- [ ] Identify all component factors
+- [ ] Create 1-2 theoretical charts per component (using standard ranges)
+- [ ] Create matching data-driven charts (same axes/ranges, overlay theoretical)
+- [ ] Create whole formula charts:
+  - [ ] Score over time
+  - [ ] Score variance analysis
+  - [ ] Emotion correlation (if data available)
+  - [ ] Composite weight visualization (if applicable)
+- [ ] Register all generators in `generate_all.py` and `generate_data_driven.py`
+- [ ] Update analytics glossary with `graphic_script` references
+- [ ] Test with insufficient data (should return None gracefully)
+- [ ] Verify axes match between theoretical and data-driven charts
+
+### Registration Requirements
+
+All generators must be registered in:
+
+1. **`generate_all.py`**:
+   - Add to `GRAPHIC_AID_GENERATORS` dictionary
+   - Format: `'{module}_{component}.py': generate_{component}_image`
+
+2. **`generate_data_driven.py`**:
+   - Add to `DATA_DRIVEN_GENERATORS` dictionary
+   - Format: `'{module}_{component}_data.png': generate_{component}_data_image`
+   - Also register whole formula charts: `'{module}_score_over_time_data.png': generate_{module}_score_over_time_image`
+
+### Chart Naming Conventions
+
+- **Theoretical:** `{module}_{component}.png`
+- **Data-driven component:** `{module}_{component}_data.png`
+- **Whole formula:** `{module}_{metric}_data.png` (e.g., `execution_score_over_time_data.png`)
+
+### Parameter Standardization
+
+**Always use consistent parameter ranges across theoretical and data-driven:**
+
+```python
+# Standard ranges for common variables
+STANDARD_RANGES = {
+    'time_ratio': (0.1, 3.0),  # actual/estimate
+    'efficiency_ratio': (0.5, 2.5),  # completion/time
+    'completion_pct': (0, 100),
+    'delay_minutes': (0, 480),  # 0 to 8 hours
+    'aversion': (0, 100),
+    'load': (0, 100),
+    'time_diff_percent': (-100, 100),  # weekly average difference
+    'excess_hours': (0, 20),  # burnout excess
+}
+```
+
+### Best Practices for Graphic Aids
+
+1. ✅ **Match axes exactly** between theoretical and data-driven
+2. ✅ **Overlay theoretical curve** on data-driven scatter plots
+3. ✅ **Use same calculation functions** in both generators
+4. ✅ **Include distribution charts** when useful (histograms)
+5. ✅ **Add annotations** explaining key thresholds and regions
+6. ✅ **Handle missing data gracefully** (skip invalid points, don't crash)
+7. ✅ **Generate multiple chart types** per component (1-2 pairs)
+8. ✅ **Create whole formula charts** for score trends and correlations
+9. ✅ **Use consistent color schemes** (green for good, red for penalty, etc.)
+10. ✅ **Include theoretical reference** in data-driven charts for comparison
+
 ## Testing Requirements
 
 ### Factor Calculation Tests
@@ -305,3 +709,10 @@ execution_score = max(0.0, min(100.0, execution_score))  # Clamp to range
 - Test database format handling
 - Test JSON parsing errors
 - Test timestamp parsing errors
+
+### Graphic Aid Generation Tests
+- Verify theoretical and data-driven charts use same axes/ranges
+- Verify theoretical curve overlays correctly on data-driven charts
+- Test with insufficient data (should return None gracefully)
+- Verify all generators are registered in both dictionaries
+- Test whole formula chart generation (score over time, variance, etc.)

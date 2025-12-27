@@ -54,20 +54,6 @@ ANALYTICS_MODULES = {
             'Complements grit score (which rewards persistence, not speed)'
         ]
     },
-    'productivity_score': {
-        'title': 'Productivity Score',
-        'description': 'Measures work task efficiency based on completion time ratio. Fast completion gets high multipliers (up to 5.0x).',
-        'icon': 'speed',
-        'color': 'green',
-        'components': [],
-        'formula': 'productivity_score = base_points * multiplier(time_ratio)',
-        'range': '0 - 100+',
-        'use_cases': [
-            'Rewards fast task completion',
-            'Applies to work tasks only',
-            'Multiplier based on completion time ratio'
-        ]
-    },
     'grit_score': {
         'title': 'Grit Score',
         'description': 'Rewards persistence and taking on difficult tasks. Includes difficulty bonus and time bonus (for tasks taking longer than estimated).',

@@ -1,56 +1,80 @@
-feat(analytics): version execution module formulas as v1.0 and add migration framework
+refactor(analytics): refine graphic aid generation rules and remove productivity module
 
-Version the execution score module formulas and create comprehensive documentation
-and migration framework for analytics module development.
+Refine analytics module migration rules with comprehensive graphic aid generation
+guidelines, then remove productivity score module implementations to prepare for
+regeneration using the improved framework.
 
 Changes:
-- Version execution module formulas as v1.0 with complete documentation
-- Create analytics skill framework guide for developers
-- Add cursor rules for analytics module migration patterns
-- Display version badges in analytics glossary UI
-- Add version constant and docstring updates to analytics.py
+- Significantly expand analytics-module-migration.mdc rule with graphic aid guidelines
+- Remove productivity score module implementations (graphic aids, generators, glossary entry)
+- Keep core productivity score calculation method intact for regeneration
 
-Files created:
-- docs/execution_module_v1.0.md
-  * Complete formula documentation for execution score v1.0
-  * All four component factors (difficulty, speed, start speed, completion)
-  * Formula examples and use cases
-  * Version history tracking
+Rule Enhancements:
+- Add core principle: theoretical-data pairing with matching axes/ranges
+- Define component factor visualization patterns (1-2 pairs per component)
+- Specify whole formula chart requirements:
+  * Score over time with moving average
+  * Score variance analysis
+  * Emotion correlation analysis
+  * Composite weight visualization
+  * Points over time (future)
+  * Component contribution analysis (optional)
+  * Score distribution (optional)
+- Add standard parameter ranges for consistent visualizations
+- Provide data extraction patterns for CSV/database compatibility
+- Include emotion correlation analysis implementation pattern
+- Add module enhancement checklist for systematic graphic aid creation
+- Document chart generation workflow and best practices
 
-- docs/analytics_skill_framework.md
-  * Developer guide for working with analytics module
-  * Formula design patterns (exponential decay, piecewise, multiplicative)
-  * Data handling patterns (CSV vs database, missing data)
-  * Migration patterns and testing guidelines
-  * Common pitfalls and solutions
-
-- .cursor/rules/analytics-module-migration.mdc
-  * Cursor rules for analytics module development
-  * Versioning requirements and patterns
-  * Formula design guidelines
-  * Migration and testing patterns
-
-- .cursor/rules/commit-messages.mdc
-  * Rules for writing commit messages
-  * Guidelines for when to commit vs just write message
+Files removed:
+- task_aversion_app/scripts/graphic_aids/productivity_score_efficiency_factor.py
+- task_aversion_app/scripts/graphic_aids/productivity_score_task_type_multiplier.py
+- task_aversion_app/scripts/graphic_aids/productivity_score_burnout_penalty.py
+- task_aversion_app/scripts/graphic_aids/productivity_score_weekly_bonus.py
+- task_aversion_app/docs/productivity_module_v0.9.md
 
 Files modified:
-- task_aversion_app/backend/analytics.py
-  * Add EXECUTION_SCORE_VERSION = '1.0' constant
-  * Update calculate_execution_score() docstring with version info
-  * Reference to execution_module_v1.0.md documentation
+- .cursor/rules/analytics-module-migration.mdc
+  * Add comprehensive "Graphic Aid Generation Guidelines" section
+  * Define theoretical-data pairing requirements
+  * Specify component factor visualization patterns (1-2 pairs)
+  * Document whole formula chart requirements
+  * Add standard parameter ranges dictionary
+  * Provide data extraction patterns
+  * Include emotion correlation analysis pattern
+  * Add module enhancement checklist
+  * Document chart generation workflow
+
+- task_aversion_app/scripts/graphic_aids/generate_all.py
+  * Remove productivity score generator functions (4 functions)
+  * Remove productivity score entries from GRAPHIC_AID_GENERATORS
+
+- task_aversion_app/scripts/graphic_aids/generate_data_driven.py
+  * Remove productivity score data-driven generator functions (4 functions)
+  * Remove productivity score entries from DATA_DRIVEN_GENERATORS
 
 - task_aversion_app/ui/analytics_glossary.py
-  * Add 'version': '1.0' to execution_score module definition
-  * Add 'version': '1.0' to all four component definitions
-  * Display version badges in module header, formula section, and component cards
-  * Visual version indicators throughout glossary UI
+  * Remove productivity_score module definition and all components
+
+- task_aversion_app/backend/analytics.py
+  * Remove PRODUCTIVITY_SCORE_VERSION constant
+  * Remove version/docstring info from calculate_productivity_score() method
+  * Keep core calculate_productivity_score() method intact
 
 Purpose:
-This change establishes versioning for analytics formulas, making it clear which
-version of formulas are in use. The documentation and framework support future
-migrations and formula changes while maintaining backward compatibility.
+This change refines the graphic aid generation framework based on lessons learned
+from the initial productivity score module implementation. The enhanced rules now
+provide clear guidelines for:
 
-The version badges in the UI ensure users and developers can see which formula
-version is being used, and the comprehensive documentation provides a reference
-for understanding and modifying the execution score calculations.
+1. Creating matching theoretical and data-driven charts with identical parameters
+2. Generating 1-2 chart pairs per component factor
+3. Creating comprehensive whole formula charts for score trends and correlations
+4. Using consistent parameter ranges across all modules
+5. Handling data extraction from both CSV and database formats
+
+The productivity score module has been removed to allow regeneration using the
+improved framework, ensuring better alignment between theoretical and data-driven
+visualizations and more comprehensive whole formula analysis.
+
+The rule enhancements will guide future module development and ensure consistent,
+high-quality graphic aids across all analytics modules.
