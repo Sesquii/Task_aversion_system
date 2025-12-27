@@ -384,6 +384,37 @@ class InstanceManager:
             raise ValueError(f"Instance {instance_id} not found")
 
         idx = matches[0]
+        
+        # Calculate elapsed time before resetting started_at
+        time_spent_before_pause = 0.0
+        started_at_str = self.df.at[idx, 'started_at']
+        if started_at_str and str(started_at_str).strip():
+            try:
+                started_at = self._csv_to_db_datetime(started_at_str)
+                if started_at:
+                    now = datetime.now()
+                    elapsed_seconds = (now - started_at).total_seconds()
+                    time_spent_before_pause = elapsed_seconds / 60.0  # Convert to minutes
+            except Exception as e:
+                print(f"[InstanceManager] Error calculating elapsed time on pause: {e}")
+        
+        # Get existing actual data to preserve time_spent_before_pause if resuming after multiple pauses
+        actual_str = self.df.at[idx, 'actual'] or '{}'
+        try:
+            actual_data = json.loads(actual_str) if actual_str else {}
+        except json.JSONDecodeError:
+            actual_data = {}
+        
+        # Accumulate time spent (in case task was paused and resumed multiple times)
+        existing_time = actual_data.get('time_spent_before_pause', 0.0)
+        if not isinstance(existing_time, (int, float)):
+            try:
+                existing_time = float(existing_time)
+            except (ValueError, TypeError):
+                existing_time = 0.0
+        total_time_spent = existing_time + time_spent_before_pause
+        actual_data['time_spent_before_pause'] = total_time_spent
+        
         # Reset timing/status so task returns to initialized state
         self.df.at[idx, 'started_at'] = ''
         self.df.at[idx, 'status'] = 'initialized'
@@ -393,12 +424,7 @@ class InstanceManager:
         self.df.at[idx, 'procrastination_score'] = ''
         self.df.at[idx, 'proactive_score'] = ''
 
-        # Persist pause reason in actual payload without losing existing data
-        actual_str = self.df.at[idx, 'actual'] or '{}'
-        try:
-            actual_data = json.loads(actual_str) if actual_str else {}
-        except json.JSONDecodeError:
-            actual_data = {}
+        # Persist pause reason in actual payload
         if reason:
             actual_data['pause_reason'] = reason
         actual_data['paused'] = True
@@ -417,6 +443,31 @@ class InstanceManager:
                 if not instance:
                     raise ValueError(f"Instance {instance_id} not found")
                 
+                # Calculate elapsed time before resetting started_at
+                time_spent_before_pause = 0.0
+                if instance.started_at:
+                    try:
+                        now = datetime.now()
+                        elapsed_seconds = (now - instance.started_at).total_seconds()
+                        time_spent_before_pause = elapsed_seconds / 60.0  # Convert to minutes
+                    except Exception as e:
+                        print(f"[InstanceManager] Error calculating elapsed time on pause: {e}")
+                
+                # Get existing actual data to preserve time_spent_before_pause if resuming after multiple pauses
+                actual_data = instance.actual or {}
+                if not isinstance(actual_data, dict):
+                    actual_data = {}
+                
+                # Accumulate time spent (in case task was paused and resumed multiple times)
+                existing_time = actual_data.get('time_spent_before_pause', 0.0)
+                if not isinstance(existing_time, (int, float)):
+                    try:
+                        existing_time = float(existing_time)
+                    except (ValueError, TypeError):
+                        existing_time = 0.0
+                total_time_spent = existing_time + time_spent_before_pause
+                actual_data['time_spent_before_pause'] = total_time_spent
+                
                 # Reset timing/status so task returns to initialized state
                 instance.started_at = None
                 instance.status = 'initialized'
@@ -426,10 +477,7 @@ class InstanceManager:
                 instance.procrastination_score = None
                 instance.proactive_score = None
                 
-                # Persist pause reason in actual payload without losing existing data
-                actual_data = instance.actual or {}
-                if not isinstance(actual_data, dict):
-                    actual_data = {}
+                # Persist pause reason in actual payload
                 if reason:
                     actual_data['pause_reason'] = reason
                 actual_data['paused'] = True
@@ -641,11 +689,30 @@ class InstanceManager:
             if duration_minutes is None or duration_minutes == '':
                 # If start button was used, calculate duration from start to completion
                 if started_at:
-                    duration_minutes = (completed_at - started_at).total_seconds() / 60.0
+                    current_session_minutes = (completed_at - started_at).total_seconds() / 60.0
+                    # Add time spent before pause (if task was paused and resumed)
+                    time_spent_before_pause = actual.get('time_spent_before_pause', 0.0)
+                    if not isinstance(time_spent_before_pause, (int, float)):
+                        try:
+                            time_spent_before_pause = float(time_spent_before_pause)
+                        except (ValueError, TypeError):
+                            time_spent_before_pause = 0.0
+                    duration_minutes = current_session_minutes + time_spent_before_pause
                 else:
-                    # Default to expected duration
-                    predicted = json.loads(self.df.at[idx,'predicted'] or "{}")
-                    duration_minutes = float(predicted.get('time_estimate_minutes') or predicted.get('estimate') or 0)
+                    # Check if there's time_spent_before_pause even if not currently started
+                    time_spent_before_pause = actual.get('time_spent_before_pause', 0.0)
+                    if not isinstance(time_spent_before_pause, (int, float)):
+                        try:
+                            time_spent_before_pause = float(time_spent_before_pause)
+                        except (ValueError, TypeError):
+                            time_spent_before_pause = 0.0
+                    
+                    if time_spent_before_pause > 0:
+                        duration_minutes = time_spent_before_pause
+                    else:
+                        # Default to expected duration
+                        predicted = json.loads(self.df.at[idx,'predicted'] or "{}")
+                        duration_minutes = float(predicted.get('time_estimate_minutes') or predicted.get('estimate') or 0)
             
             # Store duration
             if duration_minutes is not None and duration_minutes != '':
@@ -720,11 +787,30 @@ class InstanceManager:
                     if duration_minutes is None or duration_minutes == '':
                         # If start button was used, calculate duration from start to completion
                         if started_at:
-                            duration_minutes = (completed_at - started_at).total_seconds() / 60.0
+                            current_session_minutes = (completed_at - started_at).total_seconds() / 60.0
+                            # Add time spent before pause (if task was paused and resumed)
+                            time_spent_before_pause = actual.get('time_spent_before_pause', 0.0) if actual else 0.0
+                            if not isinstance(time_spent_before_pause, (int, float)):
+                                try:
+                                    time_spent_before_pause = float(time_spent_before_pause)
+                                except (ValueError, TypeError):
+                                    time_spent_before_pause = 0.0
+                            duration_minutes = current_session_minutes + time_spent_before_pause
                         else:
-                            # Default to expected duration
-                            predicted = instance.predicted or {}
-                            duration_minutes = float(predicted.get('time_estimate_minutes') or predicted.get('estimate') or 0)
+                            # Check if there's time_spent_before_pause even if not currently started
+                            time_spent_before_pause = actual.get('time_spent_before_pause', 0.0) if actual else 0.0
+                            if not isinstance(time_spent_before_pause, (int, float)):
+                                try:
+                                    time_spent_before_pause = float(time_spent_before_pause)
+                                except (ValueError, TypeError):
+                                    time_spent_before_pause = 0.0
+                            
+                            if time_spent_before_pause > 0:
+                                duration_minutes = time_spent_before_pause
+                            else:
+                                # Default to expected duration
+                                predicted = instance.predicted or {}
+                                duration_minutes = float(predicted.get('time_estimate_minutes') or predicted.get('estimate') or 0)
                     
                     # Store duration
                     if duration_minutes is not None and duration_minutes != '':

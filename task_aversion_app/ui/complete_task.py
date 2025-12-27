@@ -408,24 +408,47 @@ def complete_task_page(task_manager, emotion_manager):
         default_duration = 0
         if instance:
             started_at = instance.get('started_at', '')
+            time_spent_before_pause = 0.0
+            
+            # Get time spent before pause (if task was paused and resumed)
+            actual_str = instance.get('actual', '{}')
+            if actual_str:
+                try:
+                    if isinstance(actual_str, str):
+                        actual_data = json.loads(actual_str) if actual_str else {}
+                    else:
+                        actual_data = actual_str if isinstance(actual_str, dict) else {}
+                    
+                    time_before = actual_data.get('time_spent_before_pause', 0.0)
+                    if isinstance(time_before, (int, float)):
+                        time_spent_before_pause = float(time_before)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+            
             if started_at:
-                # Calculate duration from start time to now
+                # Calculate duration from start time to now, plus any time from previous sessions
                 from datetime import datetime
                 import pandas as pd
                 try:
                     started = pd.to_datetime(started_at)
                     now = datetime.now()
-                    default_duration = (now - started).total_seconds() / 60.0
+                    current_session_minutes = (now - started).total_seconds() / 60.0
+                    default_duration = current_session_minutes + time_spent_before_pause
                 except Exception:
-                    pass
+                    # If we can't calculate current session, use time_spent_before_pause if available
+                    default_duration = time_spent_before_pause
             else:
-                # Default to expected duration from predicted data
-                predicted_raw = instance.get('predicted') or '{}'
-                try:
-                    predicted_data = json.loads(predicted_raw) if predicted_raw else {}
-                    default_duration = float(predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0)
-                except (ValueError, TypeError, json.JSONDecodeError):
-                    pass
+                # Task not currently started, use time_spent_before_pause if available
+                if time_spent_before_pause > 0:
+                    default_duration = time_spent_before_pause
+                else:
+                    # Default to expected duration from predicted data
+                    predicted_raw = instance.get('predicted') or '{}'
+                    try:
+                        predicted_data = json.loads(predicted_raw) if predicted_raw else {}
+                        default_duration = float(predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0)
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        pass
 
         ui.label("Actual Time (minutes)").classes("text-lg font-semibold")
         actual_time = ui.number(value=int(default_duration) if default_duration > 0 else 0)

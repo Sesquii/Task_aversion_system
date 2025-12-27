@@ -147,10 +147,31 @@ def update_ongoing_timer(instance_id, timer_element):
     try:
         from datetime import datetime
         import pandas as pd
+        import json
+        
         started_at = pd.to_datetime(instance['started_at'])
         now = datetime.now()
-        elapsed_minutes = (now - started_at).total_seconds() / 60.0
-        elapsed_str = format_elapsed_time(elapsed_minutes)
+        current_elapsed_minutes = (now - started_at).total_seconds() / 60.0
+        
+        # Get time spent before pause (if task was paused and resumed)
+        time_spent_before_pause = 0.0
+        actual_str = instance.get('actual', '{}')
+        if actual_str:
+            try:
+                if isinstance(actual_str, str):
+                    actual_data = json.loads(actual_str) if actual_str else {}
+                else:
+                    actual_data = actual_str if isinstance(actual_str, dict) else {}
+                
+                time_before = actual_data.get('time_spent_before_pause', 0.0)
+                if isinstance(time_before, (int, float)):
+                    time_spent_before_pause = float(time_before)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+        
+        # Total elapsed time = current session + time from previous sessions
+        total_elapsed_minutes = current_elapsed_minutes + time_spent_before_pause
+        elapsed_str = format_elapsed_time(total_elapsed_minutes)
         
         # Update the element text
         if timer_element:
