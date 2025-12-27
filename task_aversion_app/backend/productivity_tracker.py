@@ -681,4 +681,161 @@ class ProductivityTracker:
         
         # Record current week if not found
         return self.record_weekly_snapshot(user_id, current_week_start)
+    
+    def calculate_baseline_productivity_score(
+        self,
+        completion_pct: float,
+        task_type: str,
+        time_actual_minutes: float = 0.0,
+        time_estimate_minutes: float = 0.0,
+        self_care_tasks_today: int = 1
+    ) -> Dict[str, Any]:
+        """Calculate baseline productivity score (prioritizes baseline formula).
+        
+        This is the core formula without optional enhancements:
+        score = completion_pct × task_type_multiplier
+        
+        Args:
+            completion_pct: Completion percentage (0-100)
+            task_type: Task type ('work', 'self_care', 'play', etc.)
+            time_actual_minutes: Actual time taken in minutes
+            time_estimate_minutes: Estimated time in minutes
+            self_care_tasks_today: Number of self care tasks completed today (for self care multiplier)
+            
+        Returns:
+            Dict with:
+            - baseline_score (float): Calculated baseline score
+            - multiplier (float): Task type multiplier used
+            - completion_time_ratio (float): Ratio used for work task multiplier calculation
+            - formula_breakdown (str): Human-readable formula breakdown
+        """
+        # Calculate completion/time ratio
+        if time_estimate_minutes > 0 and time_actual_minutes > 0:
+            completion_time_ratio = (completion_pct * time_estimate_minutes) / (100.0 * time_actual_minutes)
+        else:
+            completion_time_ratio = 1.0
+        
+        # Normalize task type
+        task_type_lower = str(task_type).strip().lower()
+        
+        # Calculate multiplier based on task type
+        if task_type_lower == 'work':
+            # Work: 3.0x to 5.0x based on completion/time ratio
+            if completion_time_ratio <= 1.0:
+                multiplier = 3.0
+            elif completion_time_ratio >= 1.5:
+                multiplier = 5.0
+            else:
+                # Smooth transition between 1.0 and 1.5
+                smooth_factor = (completion_time_ratio - 1.0) / 0.5
+                multiplier = 3.0 + (2.0 * smooth_factor)
+            baseline_score = completion_pct * multiplier
+            formula_breakdown = f"Work task: {completion_pct:.0f}% × {multiplier:.2f}x (ratio: {completion_time_ratio:.2f}) = {baseline_score:.2f}"
+        
+        elif task_type_lower in ['self care', 'selfcare', 'self-care']:
+            # Self care: multiplier = number of self care tasks today
+            multiplier = float(self_care_tasks_today)
+            baseline_score = completion_pct * multiplier
+            formula_breakdown = f"Self care task: {completion_pct:.0f}% × {multiplier:.1f}x (tasks today: {self_care_tasks_today}) = {baseline_score:.2f}"
+        
+        elif task_type_lower == 'play':
+            # Play: neutral (no multiplier in baseline)
+            multiplier = 1.0
+            baseline_score = completion_pct * multiplier
+            formula_breakdown = f"Play task: {completion_pct:.0f}% × {multiplier:.1f}x (neutral) = {baseline_score:.2f}"
+        
+        else:
+            # Default: no multiplier
+            multiplier = 1.0
+            baseline_score = completion_pct * multiplier
+            formula_breakdown = f"Default task: {completion_pct:.0f}% × {multiplier:.1f}x = {baseline_score:.2f}"
+        
+        return {
+            'baseline_score': round(baseline_score, 2),
+            'multiplier': round(multiplier, 2),
+            'completion_time_ratio': round(completion_time_ratio, 2),
+            'formula_breakdown': formula_breakdown
+        }
+    
+    def calculate_productivity_score_with_enhancements(
+        self,
+        baseline_score: float,
+        weekly_avg_time_minutes: Optional[float] = None,
+        time_actual_minutes: Optional[float] = None,
+        weekly_curve: str = 'flattened_square',
+        weekly_curve_strength: float = 1.0,
+        goal_hours_per_week: Optional[float] = None,
+        weekly_productive_hours: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Apply optional enhancements to baseline productivity score.
+        
+        Args:
+            baseline_score: Baseline score from calculate_baseline_productivity_score
+            weekly_avg_time_minutes: Optional weekly average time for bonus/penalty
+            time_actual_minutes: Optional actual time for comparison
+            weekly_curve: Curve type ('linear' or 'flattened_square')
+            weekly_curve_strength: Strength of weekly adjustment (0.0-2.0)
+            goal_hours_per_week: Optional goal hours for goal-based adjustment
+            weekly_productive_hours: Optional actual hours for goal comparison
+            
+        Returns:
+            Dict with:
+            - final_score (float): Score after enhancements
+            - baseline_score (float): Original baseline score
+            - enhancements_applied (List[str]): List of enhancements applied
+            - enhancement_details (Dict): Details of each enhancement
+        """
+        import math
+        
+        final_score = baseline_score
+        enhancements_applied = []
+        enhancement_details = {}
+        
+        # Weekly average bonus/penalty
+        if weekly_avg_time_minutes is not None and weekly_avg_time_minutes > 0 and time_actual_minutes is not None and time_actual_minutes > 0:
+            time_percentage_diff = ((time_actual_minutes - weekly_avg_time_minutes) / weekly_avg_time_minutes) * 100.0
+            
+            if weekly_curve == 'flattened_square':
+                effect = math.copysign((abs(time_percentage_diff) ** 2) / 100.0, time_percentage_diff)
+                weekly_multiplier = 1.0 - (0.01 * weekly_curve_strength * effect)
+            else:
+                # Linear
+                weekly_multiplier = 1.0 - (0.01 * weekly_curve_strength * time_percentage_diff)
+            
+            final_score = final_score * weekly_multiplier
+            enhancements_applied.append('weekly_avg_bonus')
+            enhancement_details['weekly_avg_bonus'] = {
+                'multiplier': round(weekly_multiplier, 3),
+                'percentage_diff': round(time_percentage_diff, 1),
+                'description': f"Weekly avg adjustment: {weekly_multiplier:.3f}x ({time_percentage_diff:+.1f}% deviation)"
+            }
+        
+        # Goal-based adjustment
+        if goal_hours_per_week is not None and goal_hours_per_week > 0 and weekly_productive_hours is not None:
+            goal_achievement_ratio = weekly_productive_hours / goal_hours_per_week
+            
+            if goal_achievement_ratio >= 1.2:
+                goal_multiplier = 1.2
+            elif goal_achievement_ratio >= 1.0:
+                goal_multiplier = 1.0 + (goal_achievement_ratio - 1.0) * 1.0
+            elif goal_achievement_ratio >= 0.8:
+                goal_multiplier = 0.9 + (goal_achievement_ratio - 0.8) * 0.5
+            else:
+                goal_multiplier = 0.8 + (goal_achievement_ratio / 0.8) * 0.1
+                goal_multiplier = max(0.8, goal_multiplier)
+            
+            final_score = final_score * goal_multiplier
+            enhancements_applied.append('goal_adjustment')
+            enhancement_details['goal_adjustment'] = {
+                'multiplier': round(goal_multiplier, 3),
+                'achievement_ratio': round(goal_achievement_ratio, 2),
+                'description': f"Goal adjustment: {goal_multiplier:.3f}x ({goal_achievement_ratio*100:.1f}% of goal)"
+            }
+        
+        return {
+            'final_score': round(final_score, 2),
+            'baseline_score': round(baseline_score, 2),
+            'enhancements_applied': enhancements_applied,
+            'enhancement_details': enhancement_details
+        }
 

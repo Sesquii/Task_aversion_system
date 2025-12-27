@@ -504,12 +504,514 @@ def generate_completion_factor_data_image(output_path=None):
     return output_path
 
 
-# Mapping of data-driven generators
+def generate_baseline_completion_data_image(output_path=None):
+    """Generate baseline completion visualization with actual user data."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_baseline_completion_data.png')
+    
+    instances, analytics = get_user_instances()
+    
+    if not instances:
+        return None
+    
+    # Extract completion and score data
+    completion_percentages = []
+    baseline_scores = []
+    task_types = []
+    
+    for instance in instances:
+        try:
+            # Parse JSON strings
+            predicted_raw = instance.get('predicted', '{}') if hasattr(instance, 'get') else (instance.get('predicted', '{}') if 'predicted' in instance else '{}')
+            actual_raw = instance.get('actual', '{}') if hasattr(instance, 'get') else (instance.get('actual', '{}') if 'actual' in instance else '{}')
+            
+            if isinstance(predicted_raw, str):
+                predicted = json.loads(predicted_raw) if predicted_raw.strip() else {}
+            else:
+                predicted = predicted_raw if isinstance(predicted_raw, dict) else {}
+            
+            if isinstance(actual_raw, str):
+                actual = json.loads(actual_raw) if actual_raw.strip() else {}
+            else:
+                actual = actual_raw if isinstance(actual_raw, dict) else {}
+            
+            completion_pct = float(actual.get('completion_percent', 100) or 100)
+            
+            # Get task type
+            task_type = instance.get('task_type', 'Work') if hasattr(instance, 'get') else (instance.get('task_type', 'Work') if 'task_type' in instance else 'Work')
+            task_type_lower = str(task_type).strip().lower()
+            
+            # Calculate baseline score using same logic as backend
+            time_actual = float(actual.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted.get('time_estimate_minutes', 0) or predicted.get('estimate', 0) or 0)
+            
+            if time_estimate > 0 and time_actual > 0:
+                completion_time_ratio = (completion_pct * time_estimate) / (100.0 * time_actual)
+            else:
+                completion_time_ratio = 1.0
+            
+            if task_type_lower == 'work':
+                if completion_time_ratio <= 1.0:
+                    multiplier = 3.0
+                elif completion_time_ratio >= 1.5:
+                    multiplier = 5.0
+                else:
+                    smooth_factor = (completion_time_ratio - 1.0) / 0.5
+                    multiplier = 3.0 + (2.0 * smooth_factor)
+                baseline_score = completion_pct * multiplier
+            elif task_type_lower in ['self care', 'selfcare', 'self-care']:
+                multiplier = 1.0  # Simplified for demo
+                baseline_score = completion_pct * multiplier
+            else:
+                multiplier = 1.0
+                baseline_score = completion_pct * multiplier
+            
+            completion_percentages.append(completion_pct)
+            baseline_scores.append(baseline_score)
+            task_types.append(task_type_lower)
+        except (ValueError, TypeError, AttributeError):
+            continue
+    
+    if not completion_percentages:
+        return None
+    
+    print(f"[GraphicAids] Generated baseline completion visualization with {len(completion_percentages)} data points")
+    
+    # Create figure with matching axes to theoretical
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # Plot 1: Scatter plot with theoretical curves
+    work_completion = np.linspace(0, 100, 200)
+    work_scores = [cp * 3.0 for cp in work_completion]
+    self_care_scores = [cp * 1.0 for cp in work_completion]
+    play_scores = [cp * 1.0 for cp in work_completion]
+    
+    # Separate data by task type
+    work_data = [(cp, score) for cp, score, tt in zip(completion_percentages, baseline_scores, task_types) if tt == 'work']
+    self_care_data = [(cp, score) for cp, score, tt in zip(completion_percentages, baseline_scores, task_types) if tt in ['self care', 'selfcare', 'self-care']]
+    play_data = [(cp, score) for cp, score, tt in zip(completion_percentages, baseline_scores, task_types) if tt == 'play']
+    
+    axes[0].plot(work_completion, work_scores, 'b--', linewidth=2, alpha=0.5, label='Work Theoretical (×3.0)')
+    axes[0].plot(work_completion, self_care_scores, 'g--', linewidth=2, alpha=0.5, label='Self Care Theoretical (×1.0)')
+    axes[0].plot(work_completion, play_scores, 'orange', linestyle='--', linewidth=2, alpha=0.5, label='Play Theoretical (×1.0)')
+    
+    if work_data:
+        work_cp, work_sc = zip(*work_data)
+        axes[0].scatter(work_cp, work_sc, alpha=0.6, s=50, c='blue', edgecolors='black', linewidth=0.5, label='Work Data')
+    if self_care_data:
+        sc_cp, sc_sc = zip(*self_care_data)
+        axes[0].scatter(sc_cp, sc_sc, alpha=0.6, s=50, c='green', edgecolors='black', linewidth=0.5, label='Self Care Data')
+    if play_data:
+        p_cp, p_sc = zip(*play_data)
+        axes[0].scatter(p_cp, p_sc, alpha=0.6, s=50, c='orange', edgecolors='black', linewidth=0.5, label='Play Data')
+    
+    axes[0].set_xlabel('Completion Percentage (%)', fontsize=11)
+    axes[0].set_ylabel('Baseline Score', fontsize=11)
+    axes[0].set_title('Your Data: Completion % vs Baseline Score', fontsize=12, fontweight='bold')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+    axes[0].set_xlim(0, 100)  # Match theoretical
+    axes[0].set_ylim(0, 350)  # Match theoretical
+    
+    # Plot 2: Distribution of completion percentages
+    axes[1].hist(completion_percentages, bins=20, color='blue', alpha=0.7, edgecolor='black')
+    axes[1].axvline(x=100, color='green', linestyle='--', linewidth=2, label='Full (100%)')
+    axes[1].axvline(x=np.mean(completion_percentages), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(completion_percentages):.1f}%')
+    axes[1].set_xlabel('Completion Percentage (%)', fontsize=11)
+    axes[1].set_ylabel('Frequency', fontsize=11)
+    axes[1].set_title(f'Distribution of Completion Percentages\n({len(completion_percentages)} tasks)', 
+                     fontsize=12, fontweight='bold')
+    axes[1].grid(True, alpha=0.3, axis='y')
+    axes[1].legend()
+    axes[1].set_xlim(0, 100)
+    
+    # Plot 3: Distribution of baseline scores
+    axes[2].hist(baseline_scores, bins=20, color='purple', alpha=0.7, edgecolor='black')
+    axes[2].axvline(x=np.mean(baseline_scores), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(baseline_scores):.1f}')
+    axes[2].set_xlabel('Baseline Score', fontsize=11)
+    axes[2].set_ylabel('Frequency', fontsize=11)
+    axes[2].set_title(f'Distribution of Baseline Scores\n({len(baseline_scores)} tasks)', 
+                     fontsize=12, fontweight='bold')
+    axes[2].grid(True, alpha=0.3, axis='y')
+    axes[2].legend()
+    axes[2].set_xlim(0, 550)  # Match theoretical
+    
+    plt.tight_layout()
+    plt.suptitle('Productivity Score: Baseline Completion - Your Data', fontsize=14, fontweight='bold', y=1.02)
+    
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    return output_path
+
+
+def generate_work_multiplier_data_image(output_path=None):
+    """Generate work multiplier visualization with actual user data."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_work_multiplier_data.png')
+    
+    instances, analytics = get_user_instances()
+    
+    if not instances:
+        return None
+    
+    # Extract work task data
+    completion_time_ratios = []
+    multipliers = []
+    
+    for instance in instances:
+        try:
+            # Parse JSON strings
+            predicted_raw = instance.get('predicted', '{}') if hasattr(instance, 'get') else (instance.get('predicted', '{}') if 'predicted' in instance else '{}')
+            actual_raw = instance.get('actual', '{}') if hasattr(instance, 'get') else (instance.get('actual', '{}') if 'actual' in instance else '{}')
+            
+            if isinstance(predicted_raw, str):
+                predicted = json.loads(predicted_raw) if predicted_raw.strip() else {}
+            else:
+                predicted = predicted_raw if isinstance(predicted_raw, dict) else {}
+            
+            if isinstance(actual_raw, str):
+                actual = json.loads(actual_raw) if actual_raw.strip() else {}
+            else:
+                actual = actual_raw if isinstance(actual_raw, dict) else {}
+            
+            task_type = instance.get('task_type', 'Work') if hasattr(instance, 'get') else (instance.get('task_type', 'Work') if 'task_type' in instance else 'Work')
+            task_type_lower = str(task_type).strip().lower()
+            
+            if task_type_lower != 'work':
+                continue
+            
+            completion_pct = float(actual.get('completion_percent', 100) or 100)
+            time_actual = float(actual.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted.get('time_estimate_minutes', 0) or predicted.get('estimate', 0) or 0)
+            
+            if time_estimate > 0 and time_actual > 0:
+                ratio = (completion_pct * time_estimate) / (100.0 * time_actual)
+                
+                # Calculate multiplier
+                if ratio <= 1.0:
+                    multiplier = 3.0
+                elif ratio >= 1.5:
+                    multiplier = 5.0
+                else:
+                    smooth_factor = (ratio - 1.0) / 0.5
+                    multiplier = 3.0 + (2.0 * smooth_factor)
+                
+                completion_time_ratios.append(ratio)
+                multipliers.append(multiplier)
+        except (ValueError, TypeError, AttributeError):
+            continue
+    
+    if not completion_time_ratios:
+        return None
+    
+    print(f"[GraphicAids] Generated work multiplier visualization with {len(completion_time_ratios)} data points")
+    
+    # Create figure with matching axes
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # Plot 1: Scatter with theoretical curve
+    ratio_range = np.linspace(0.5, 2.0, 200)
+    theoretical_multipliers = []
+    for r in ratio_range:
+        if r <= 1.0:
+            theoretical_multipliers.append(3.0)
+        elif r >= 1.5:
+            theoretical_multipliers.append(5.0)
+        else:
+            smooth_factor = (r - 1.0) / 0.5
+            theoretical_multipliers.append(3.0 + (2.0 * smooth_factor))
+    
+    axes[0].plot(ratio_range, theoretical_multipliers, 'r--', linewidth=2, alpha=0.5, label='Theoretical')
+    axes[0].scatter(completion_time_ratios, multipliers, alpha=0.6, s=50, c='blue', 
+                   edgecolors='black', linewidth=0.5, label='Your Data')
+    axes[0].axvline(x=1.0, color='r', linestyle='--', alpha=0.3)
+    axes[0].axvline(x=1.5, color='orange', linestyle='--', alpha=0.3)
+    axes[0].set_xlabel('Completion/Time Ratio', fontsize=11)
+    axes[0].set_ylabel('Work Multiplier', fontsize=11)
+    axes[0].set_title('Your Data: Ratio vs Work Multiplier', fontsize=12, fontweight='bold')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+    axes[0].set_xlim(0.5, 2.0)  # Match theoretical
+    axes[0].set_ylim(2.5, 5.5)  # Match theoretical
+    
+    # Plot 2: Distribution of ratios
+    axes[1].hist(completion_time_ratios, bins=20, color='green', alpha=0.7, edgecolor='black')
+    axes[1].axvline(x=1.0, color='orange', linestyle='--', linewidth=2, label='Efficient (1.0)')
+    axes[1].axvline(x=np.mean(completion_time_ratios), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(completion_time_ratios):.2f}')
+    axes[1].set_xlabel('Completion/Time Ratio', fontsize=11)
+    axes[1].set_ylabel('Frequency', fontsize=11)
+    axes[1].set_title(f'Distribution of Ratios\n({len(completion_time_ratios)} work tasks)', 
+                     fontsize=12, fontweight='bold')
+    axes[1].grid(True, alpha=0.3, axis='y')
+    axes[1].legend()
+    axes[1].set_xlim(0.5, 2.0)
+    
+    # Plot 3: Distribution of multipliers
+    axes[2].hist(multipliers, bins=20, color='purple', alpha=0.7, edgecolor='black')
+    axes[2].axvline(x=3.0, color='blue', linestyle='--', linewidth=2, label='Base (3.0x)')
+    axes[2].axvline(x=5.0, color='green', linestyle='--', linewidth=2, label='Max (5.0x)')
+    axes[2].axvline(x=np.mean(multipliers), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(multipliers):.2f}x')
+    axes[2].set_xlabel('Work Multiplier', fontsize=11)
+    axes[2].set_ylabel('Frequency', fontsize=11)
+    axes[2].set_title(f'Distribution of Multipliers\n({len(multipliers)} work tasks)', 
+                     fontsize=12, fontweight='bold')
+    axes[2].grid(True, alpha=0.3, axis='y')
+    axes[2].legend()
+    axes[2].set_xlim(2.5, 5.5)
+    
+    plt.tight_layout()
+    plt.suptitle('Productivity Score: Work Multiplier - Your Data', fontsize=14, fontweight='bold', y=1.02)
+    
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    return output_path
+
+
+def calculate_weekly_multiplier(time_percentage_diff, curve_type='flattened_square', strength=1.0):
+    """Calculate weekly average multiplier."""
+    if curve_type == 'flattened_square':
+        effect = math.copysign((abs(time_percentage_diff) ** 2) / 100.0, time_percentage_diff)
+        multiplier = 1.0 - (0.01 * strength * effect)
+    else:  # linear
+        multiplier = 1.0 - (0.01 * strength * time_percentage_diff)
+    return max(0.5, min(1.5, multiplier))
+
+
+def calculate_goal_multiplier(goal_achievement_ratio):
+    """Calculate goal-based multiplier."""
+    if goal_achievement_ratio >= 1.2:
+        return 1.2
+    elif goal_achievement_ratio >= 1.0:
+        return 1.0 + (goal_achievement_ratio - 1.0) * 1.0
+    elif goal_achievement_ratio >= 0.8:
+        return 0.9 + (goal_achievement_ratio - 0.8) * 0.5
+    else:
+        multiplier = 0.8 + (goal_achievement_ratio / 0.8) * 0.1
+        return max(0.8, multiplier)
+
+
+def generate_weekly_avg_bonus_data_image(output_path=None):
+    """Generate weekly average bonus visualization with actual user data."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_weekly_avg_bonus_data.png')
+    
+    instances, analytics = get_user_instances()
+    
+    if not instances:
+        return None
+    
+    # Calculate weekly average from instances
+    time_values = []
+    for instance in instances:
+        try:
+            actual_raw = instance.get('actual', '{}') if hasattr(instance, 'get') else (instance.get('actual', '{}') if 'actual' in instance else '{}')
+            if isinstance(actual_raw, str):
+                actual = json.loads(actual_raw) if actual_raw.strip() else {}
+            else:
+                actual = actual_raw if isinstance(actual_raw, dict) else {}
+            
+            time_actual = float(actual.get('time_actual_minutes', 0) or 0)
+            if time_actual > 0:
+                time_values.append(time_actual)
+        except (ValueError, TypeError, AttributeError):
+            continue
+    
+    if len(time_values) < 3:
+        return None
+    
+    weekly_avg = np.mean(time_values)
+    
+    # Extract deviation data
+    deviations = []
+    multipliers = []
+    
+    for instance in instances:
+        try:
+            actual_raw = instance.get('actual', '{}') if hasattr(instance, 'get') else (instance.get('actual', '{}') if 'actual' in instance else '{}')
+            if isinstance(actual_raw, str):
+                actual = json.loads(actual_raw) if actual_raw.strip() else {}
+            else:
+                actual = actual_raw if isinstance(actual_raw, dict) else {}
+            
+            time_actual = float(actual.get('time_actual_minutes', 0) or 0)
+            if time_actual > 0 and weekly_avg > 0:
+                deviation = ((time_actual - weekly_avg) / weekly_avg) * 100.0
+                multiplier = calculate_weekly_multiplier(deviation, 'flattened_square', 1.0)
+                
+                deviations.append(deviation)
+                multipliers.append(multiplier)
+        except (ValueError, TypeError, AttributeError):
+            continue
+    
+    if not deviations:
+        return None
+    
+    print(f"[GraphicAids] Generated weekly avg bonus visualization with {len(deviations)} data points")
+    
+    # Create figure with matching axes
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # Plot 1: Scatter with theoretical curve
+    deviation_range = np.linspace(-100, 100, 200)
+    theoretical_multipliers = [calculate_weekly_multiplier(d, 'flattened_square', 1.0) for d in deviation_range]
+    
+    axes[0].plot(deviation_range, theoretical_multipliers, 'r--', linewidth=2, alpha=0.5, label='Theoretical')
+    axes[0].scatter(deviations, multipliers, alpha=0.6, s=50, c='blue', 
+                   edgecolors='black', linewidth=0.5, label='Your Data')
+    axes[0].axvline(x=0, color='gray', linestyle='--', alpha=0.3)
+    axes[0].axhline(y=1.0, color='green', linestyle='--', alpha=0.3)
+    axes[0].set_xlabel('Percentage Deviation from Weekly Average (%)', fontsize=11)
+    axes[0].set_ylabel('Weekly Multiplier', fontsize=11)
+    axes[0].set_title('Your Data: Deviation vs Weekly Multiplier', fontsize=12, fontweight='bold')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+    axes[0].set_xlim(-100, 100)  # Match theoretical
+    axes[0].set_ylim(0.5, 1.5)  # Match theoretical
+    
+    # Plot 2: Distribution of deviations
+    axes[1].hist(deviations, bins=20, color='green', alpha=0.7, edgecolor='black')
+    axes[1].axvline(x=0, color='gray', linestyle='--', linewidth=2, label='Average (0%)')
+    axes[1].axvline(x=np.mean(deviations), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(deviations):.1f}%')
+    axes[1].set_xlabel('Percentage Deviation (%)', fontsize=11)
+    axes[1].set_ylabel('Frequency', fontsize=11)
+    axes[1].set_title(f'Distribution of Deviations\n({len(deviations)} tasks)', 
+                     fontsize=12, fontweight='bold')
+    axes[1].grid(True, alpha=0.3, axis='y')
+    axes[1].legend()
+    axes[1].set_xlim(-100, 100)
+    
+    # Plot 3: Distribution of multipliers
+    axes[2].hist(multipliers, bins=20, color='purple', alpha=0.7, edgecolor='black')
+    axes[2].axvline(x=1.0, color='green', linestyle='--', linewidth=2, label='No Change (1.0x)')
+    axes[2].axvline(x=np.mean(multipliers), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(multipliers):.3f}x')
+    axes[2].set_xlabel('Weekly Multiplier', fontsize=11)
+    axes[2].set_ylabel('Frequency', fontsize=11)
+    axes[2].set_title(f'Distribution of Multipliers\n({len(multipliers)} tasks)', 
+                     fontsize=12, fontweight='bold')
+    axes[2].grid(True, alpha=0.3, axis='y')
+    axes[2].legend()
+    axes[2].set_xlim(0.5, 1.5)
+    
+    plt.tight_layout()
+    plt.suptitle('Productivity Score: Weekly Average Bonus - Your Data', fontsize=14, fontweight='bold', y=1.02)
+    
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    return output_path
+
+
+def generate_goal_adjustment_data_image(output_path=None):
+    """Generate goal adjustment visualization with actual user data."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_goal_adjustment_data.png')
+    
+    # Get goal data from user state
+    try:
+        from backend.user_state import UserStateManager
+        from backend.productivity_tracker import ProductivityTracker
+        
+        user_state = UserStateManager()
+        tracker = ProductivityTracker()
+        DEFAULT_USER_ID = "default_user"
+        
+        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        goal_hours = goal_settings.get('goal_hours_per_week', 40.0)
+        
+        # Get weekly history data
+        history = tracker.get_productivity_history(DEFAULT_USER_ID, weeks=12)
+        if not history:
+            return None
+        
+        # Extract goal ratios
+        goal_ratios = []
+        multipliers = []
+        
+        for week_entry in history:
+            if isinstance(week_entry, dict):
+                actual_hours = week_entry.get('actual_hours', 0.0)
+                if goal_hours > 0:
+                    ratio = actual_hours / goal_hours
+                    multiplier = calculate_goal_multiplier(ratio)
+                    goal_ratios.append(ratio)
+                    multipliers.append(multiplier)
+    except Exception as e:
+        print(f"[GraphicAids] Error loading goal data: {e}")
+        return None
+    
+    if not goal_ratios:
+        return None
+    
+    print(f"[GraphicAids] Generated goal adjustment visualization with {len(goal_ratios)} data points")
+    
+    # Create figure with matching axes
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # Plot 1: Scatter with theoretical curve
+    ratio_range = np.linspace(0, 1.5, 300)
+    theoretical_multipliers = [calculate_goal_multiplier(r) for r in ratio_range]
+    
+    axes[0].plot(ratio_range, theoretical_multipliers, 'r--', linewidth=2, alpha=0.5, label='Theoretical')
+    axes[0].scatter(goal_ratios, multipliers, alpha=0.6, s=50, c='blue', 
+                   edgecolors='black', linewidth=0.5, label='Your Data')
+    axes[0].axvline(x=1.0, color='green', linestyle='--', alpha=0.3)
+    axes[0].set_xlabel('Goal Achievement Ratio (actual / goal)', fontsize=11)
+    axes[0].set_ylabel('Goal Multiplier', fontsize=11)
+    axes[0].set_title('Your Data: Goal Ratio vs Multiplier', fontsize=12, fontweight='bold')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+    axes[0].set_xlim(0, 1.5)  # Match theoretical
+    axes[0].set_ylim(0.75, 1.25)  # Match theoretical
+    
+    # Plot 2: Distribution of goal ratios
+    axes[1].hist(goal_ratios, bins=20, color='green', alpha=0.7, edgecolor='black')
+    axes[1].axvline(x=1.0, color='green', linestyle='--', linewidth=2, label='100% Goal')
+    axes[1].axvline(x=np.mean(goal_ratios), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(goal_ratios):.2f}')
+    axes[1].set_xlabel('Goal Achievement Ratio', fontsize=11)
+    axes[1].set_ylabel('Frequency', fontsize=11)
+    axes[1].set_title(f'Distribution of Goal Ratios\n({len(goal_ratios)} weeks)', 
+                     fontsize=12, fontweight='bold')
+    axes[1].grid(True, alpha=0.3, axis='y')
+    axes[1].legend()
+    axes[1].set_xlim(0, 1.5)
+    
+    # Plot 3: Distribution of multipliers
+    axes[2].hist(multipliers, bins=20, color='purple', alpha=0.7, edgecolor='black')
+    axes[2].axvline(x=1.0, color='green', linestyle='--', linewidth=2, label='No Change (1.0x)')
+    axes[2].axvline(x=np.mean(multipliers), color='red', linestyle='--', 
+                   linewidth=2, label=f'Mean: {np.mean(multipliers):.3f}x')
+    axes[2].set_xlabel('Goal Multiplier', fontsize=11)
+    axes[2].set_ylabel('Frequency', fontsize=11)
+    axes[2].set_title(f'Distribution of Multipliers\n({len(multipliers)} weeks)', 
+                     fontsize=12, fontweight='bold')
+    axes[2].grid(True, alpha=0.3, axis='y')
+    axes[2].legend()
+    axes[2].set_xlim(0.75, 1.25)
+    
+    plt.tight_layout()
+    plt.suptitle('Productivity Score: Goal Adjustment - Your Data', fontsize=14, fontweight='bold', y=1.02)
+    
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    return output_path
+
+
+# Mapping of data-driven generators (must be after all function definitions)
 DATA_DRIVEN_GENERATORS = {
     'execution_score_difficulty_factor_data.png': generate_difficulty_factor_data_image,
     'execution_score_speed_factor_data.png': generate_speed_factor_data_image,
     'execution_score_start_speed_factor_data.png': generate_start_speed_factor_data_image,
     'execution_score_completion_factor_data.png': generate_completion_factor_data_image,
+    'productivity_score_baseline_completion_data.png': generate_baseline_completion_data_image,
+    'productivity_score_work_multiplier_data.png': generate_work_multiplier_data_image,
+    'productivity_score_weekly_avg_bonus_data.png': generate_weekly_avg_bonus_data_image,
+    'productivity_score_goal_adjustment_data.png': generate_goal_adjustment_data_image,
 }
 
 

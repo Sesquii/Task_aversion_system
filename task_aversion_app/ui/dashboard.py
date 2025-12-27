@@ -2,6 +2,7 @@
 from nicegui import ui
 import json
 import html
+import os
 import plotly.express as px
 import plotly.graph_objects as go
 from backend.task_manager import TaskManager
@@ -1794,8 +1795,22 @@ def build_dashboard(task_manager):
                                     tooltip_id = f"tooltip-{inst['instance_id']}"
                                     instance_id = inst['instance_id']
                                     
+                                    # Check if this task has pause notes (for indicator)
+                                    actual_str = inst.get("actual") or "{}"
+                                    has_pause_notes = False
+                                    try:
+                                        actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                        pause_reason = actual_data.get('pause_reason', '')
+                                        has_pause_notes = bool(pause_reason and pause_reason.strip())
+                                    except (json.JSONDecodeError, TypeError):
+                                        pass
+                                    
                                     with ui.card().classes("w-full p-2 task-card-hover mb-2").props(f'data-instance-id="{instance_id}"').style("position: relative;"):
-                                        ui.label(inst.get("task_name")).classes("text-sm font-bold")
+                                        with ui.row().classes("w-full items-center gap-2"):
+                                            ui.label(inst.get("task_name")).classes("text-sm font-bold flex-1")
+                                            # Small indicator icon if task has pause notes
+                                            if has_pause_notes:
+                                                ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip("This task was paused - see notes when you start it")
                                         ui.label(f"{time_estimate} min").classes("text-xs text-gray-600")
                                         
                                         initialized_at = inst.get('initialized_at', '')
@@ -1836,6 +1851,15 @@ def build_dashboard(task_manager):
                         except (json.JSONDecodeError, TypeError):
                             predicted_data = {}
                         
+                        # Parse actual data to get pause notes
+                        actual_str = current_task.get("actual") or "{}"
+                        try:
+                            actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                        except (json.JSONDecodeError, TypeError):
+                            actual_data = {}
+                        
+                        pause_reason = actual_data.get('pause_reason', '')
+                        
                         time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
                         try:
                             time_estimate = int(time_estimate)
@@ -1847,36 +1871,90 @@ def build_dashboard(task_manager):
                         tooltip_id = f"tooltip-{current_task['instance_id']}"
                         instance_id = current_task['instance_id']
                         
+                        # Get layout preference from environment variable (default: "full")
+                        layout_mode = os.getenv('INIT_CARD_LAYOUT', 'full').lower()
+                        
                         with ui.card().classes("w-full p-3 task-card-hover").props(f'data-instance-id="{instance_id}"').style("position: relative;"):
-                            ui.label(current_task.get("task_name")).classes("text-xl font-bold mb-2")
-                            ui.label(f"Estimated: {time_estimate} min").classes("text-sm text-gray-600 mb-2")
-                            
-                            started_at = current_task.get('started_at', '')
-                            if started_at:
-                                timer_label = ui.label("").classes("text-lg font-semibold text-blue-600 mb-2")
-                                update_ongoing_timer(instance_id, timer_label)
-                            
-                            initialized_at = current_task.get('initialized_at', '')
-                            if initialized_at:
-                                ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mb-2")
-                            
-                            # Show initialization description if available
-                            init_description = predicted_data.get('description', '')
-                            if init_description and init_description.strip():
-                                ui.label(init_description.strip()).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
-                            
-                            with ui.row().classes("gap-2 mt-2"):
-                                ui.button("Complete",
-                                          on_click=lambda i=instance_id: go_complete(i)
-                                          ).classes("bg-green-500")
-                                ui.button("Pause",
-                                          color="primary",
-                                          on_click=lambda i=instance_id: open_pause_dialog(i)
-                                          )
-                                ui.button("Cancel",
-                                          color="warning",
-                                          on_click=lambda i=instance_id: go_cancel(i)
-                                          )
+                            if layout_mode == 'columns':
+                                # Multi-column layout option
+                                with ui.row().classes("w-full gap-4"):
+                                    # Left column: Main task info
+                                    with ui.column().classes("flex-1 gap-2"):
+                                        ui.label(current_task.get("task_name")).classes("text-xl font-bold mb-2")
+                                        ui.label(f"Estimated: {time_estimate} min").classes("text-sm text-gray-600 mb-2")
+                                        
+                                        started_at = current_task.get('started_at', '')
+                                        if started_at:
+                                            timer_label = ui.label("").classes("text-lg font-semibold text-blue-600 mb-2")
+                                            update_ongoing_timer(instance_id, timer_label)
+                                        
+                                        initialized_at = current_task.get('initialized_at', '')
+                                        if initialized_at:
+                                            ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mb-2")
+                                        
+                                        # Show initialization description if available
+                                        init_description = predicted_data.get('description', '')
+                                        if init_description and init_description.strip():
+                                            ui.label(init_description.strip()).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
+                                    
+                                    # Right column: Pause notes
+                                    with ui.column().classes("flex-1 gap-2"):
+                                        if pause_reason and pause_reason.strip():
+                                            ui.label("Pause Notes:").classes("text-sm font-semibold text-orange-600 mb-1")
+                                            ui.label(pause_reason.strip()).classes("text-sm text-gray-700 mb-2 p-2 bg-orange-50 border border-orange-200 rounded").style("max-width: 100%; word-wrap: break-word;")
+                                        else:
+                                            # Empty space when no pause notes
+                                            ui.label("").classes("text-sm")
+                                
+                                # Action buttons row
+                                with ui.row().classes("gap-2 mt-2 w-full"):
+                                    ui.button("Complete",
+                                              on_click=lambda i=instance_id: go_complete(i)
+                                              ).classes("bg-green-500")
+                                    ui.button("Pause",
+                                              color="primary",
+                                              on_click=lambda i=instance_id: open_pause_dialog(i)
+                                              )
+                                    ui.button("Cancel",
+                                              color="warning",
+                                              on_click=lambda i=instance_id: go_cancel(i)
+                                              )
+                            else:
+                                # Full-width layout option (default)
+                                ui.label(current_task.get("task_name")).classes("text-xl font-bold mb-2")
+                                ui.label(f"Estimated: {time_estimate} min").classes("text-sm text-gray-600 mb-2")
+                                
+                                started_at = current_task.get('started_at', '')
+                                if started_at:
+                                    timer_label = ui.label("").classes("text-lg font-semibold text-blue-600 mb-2")
+                                    update_ongoing_timer(instance_id, timer_label)
+                                
+                                initialized_at = current_task.get('initialized_at', '')
+                                if initialized_at:
+                                    ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mb-2")
+                                
+                                # Show initialization description if available
+                                init_description = predicted_data.get('description', '')
+                                if init_description and init_description.strip():
+                                    ui.label(init_description.strip()).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
+                                
+                                # Show pause notes if available (full width)
+                                if pause_reason and pause_reason.strip():
+                                    ui.label("Pause Notes:").classes("text-sm font-semibold text-orange-600 mb-1 mt-2")
+                                    ui.label(pause_reason.strip()).classes("text-sm text-gray-700 mb-2 p-2 bg-orange-50 border border-orange-200 rounded").style("max-width: 100%; word-wrap: break-word;")
+                                
+                                with ui.row().classes("gap-2 mt-2"):
+                                    ui.button("Complete",
+                                              on_click=lambda i=instance_id: go_complete(i)
+                                              ).classes("bg-green-500")
+                                    ui.button("Pause",
+                                              color="primary",
+                                              on_click=lambda i=instance_id: open_pause_dialog(i)
+                                              )
+                                    ui.button("Cancel",
+                                              color="warning",
+                                              on_click=lambda i=instance_id: go_cancel(i)
+                                              )
                             
                             tooltip_html = f'<div id="{tooltip_id}" class="task-tooltip">{formatted_tooltip}</div>'
                             ui.add_body_html(tooltip_html)

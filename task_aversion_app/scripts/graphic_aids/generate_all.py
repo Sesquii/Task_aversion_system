@@ -335,12 +335,72 @@ def generate_completion_factor_image(output_path=None):
     return output_path
 
 
+def generate_baseline_completion_image(output_path=None):
+    """Generate baseline completion visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_baseline_completion.png')
+    
+    import sys
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_score_baseline_completion.py')
+    spec = importlib.util.spec_from_file_location("productivity_score_baseline_completion", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_baseline_completion_image(output_path)
+
+
+def generate_work_multiplier_image(output_path=None):
+    """Generate work multiplier visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_work_multiplier.png')
+    
+    import sys
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_score_work_multiplier.py')
+    spec = importlib.util.spec_from_file_location("productivity_score_work_multiplier", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_work_multiplier_image(output_path)
+
+
+def generate_weekly_avg_bonus_image(output_path=None):
+    """Generate weekly average bonus visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_weekly_avg_bonus.png')
+    
+    import sys
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_score_weekly_avg_bonus.py')
+    spec = importlib.util.spec_from_file_location("productivity_score_weekly_avg_bonus", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_weekly_avg_bonus_image(output_path)
+
+
+def generate_goal_adjustment_image(output_path=None):
+    """Generate goal adjustment visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_score_goal_adjustment.png')
+    
+    import sys
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_score_goal_adjustment.py')
+    spec = importlib.util.spec_from_file_location("productivity_score_goal_adjustment", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_goal_adjustment_image(output_path)
+
+
 # Mapping of script names to generator functions
 GRAPHIC_AID_GENERATORS = {
     'execution_score_difficulty_factor.py': generate_difficulty_factor_image,
     'execution_score_speed_factor.py': generate_speed_factor_image,
     'execution_score_start_speed_factor.py': generate_start_speed_factor_image,
     'execution_score_completion_factor.py': generate_completion_factor_image,
+    'productivity_score_baseline_completion.py': generate_baseline_completion_image,
+    'productivity_score_work_multiplier.py': generate_work_multiplier_image,
+    'productivity_score_weekly_avg_bonus.py': generate_weekly_avg_bonus_image,
+    'productivity_score_goal_adjustment.py': generate_goal_adjustment_image,
 }
 
 

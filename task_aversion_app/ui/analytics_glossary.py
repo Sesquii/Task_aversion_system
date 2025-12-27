@@ -2,6 +2,7 @@
 from nicegui import ui
 from typing import Dict, List, Optional
 import os
+from ui.plotly_data_charts import PLOTLY_DATA_CHARTS
 
 # Module definitions for the analytics glossary
 ANALYTICS_MODULES = {
@@ -95,6 +96,91 @@ ANALYTICS_MODULES = {
             'Customizable component weights',
             'Includes execution score, productivity, grit, and more'
         ]
+    },
+    'productivity_score': {
+        'title': 'Productivity Score',
+        'version': '1.0',
+        'description': 'Measures productive output based on task completion and type. Prioritizes baseline formula with optional enhancements for weekly averages, goal achievement, and burnout prevention.',
+        'icon': 'trending_up',
+        'color': 'green',
+        'components': [
+            {
+                'name': 'Baseline Formula',
+                'version': '1.0',
+                'description': 'Core productivity calculation: completion percentage multiplied by task type multiplier. This is the foundation that all enhancements build upon.',
+                'formula': 'baseline_score = completion_pct × task_type_multiplier',
+                'range': '0 - 500+ (depends on task type)',
+                'graphic_script': 'productivity_score_baseline_completion.py',
+                'details': {
+                    'completion_pct': 'Percentage of task completed (0-100). Base score multiplier.',
+                    'task_type_multiplier': {
+                        'work': '3.0x-5.0x based on completion/time ratio (efficient = higher multiplier)',
+                        'self_care': 'Multiplier = number of self care tasks completed that day',
+                        'play': '1.0x (neutral) or penalty if play exceeds work by 2x threshold'
+                    }
+                }
+            },
+            {
+                'name': 'Work Task Multiplier',
+                'version': '1.0',
+                'description': 'Work tasks use a multiplier that scales from 3.0x to 5.0x based on completion/time ratio. More efficient completion (higher ratio) = higher multiplier.',
+                'formula': 'If ratio ≤ 1.0: 3.0x | If ratio ≥ 1.5: 5.0x | Else: smooth transition 3.0-5.0x',
+                'range': '3.0x - 5.0x',
+                'graphic_script': 'productivity_score_work_multiplier.py',
+            },
+            {
+                'name': 'Weekly Average Bonus/Penalty',
+                'version': '1.0',
+                'description': 'Optional enhancement that adjusts score based on how task time compares to weekly average. Tasks faster than average get bonus, slower get penalty.',
+                'formula': 'multiplier = 1.0 - (0.01 × strength × effect) where effect depends on curve type',
+                'range': '0.5 - 1.5x (approximate)',
+                'graphic_script': 'productivity_score_weekly_avg_bonus.py',
+                'parameters': {
+                    'weekly_avg_time': 'Average productive time per task this week (minutes)',
+                    'weekly_curve': 'Response curve type: linear or flattened_square',
+                    'weekly_curve_strength': 'Strength of adjustment (0.0-2.0)'
+                }
+            },
+            {
+                'name': 'Goal-Based Adjustment',
+                'version': '1.0',
+                'description': 'Optional enhancement that adjusts score based on weekly goal achievement. Provides bonus for exceeding goals, penalty for falling short.',
+                'formula': 'multiplier = 0.8-1.2 based on goal achievement ratio',
+                'range': '0.8 - 1.2x',
+                'graphic_script': 'productivity_score_goal_adjustment.py',
+                'parameters': {
+                    'goal_hours_per_week': 'Target productive hours per week',
+                    'weekly_productive_hours': 'Actual productive hours completed this week'
+                },
+                'details': {
+                    '100% goal': '1.0x (no change)',
+                    '120%+ goal': '1.2x (20% bonus)',
+                    '80-100% goal': '0.9-1.0x (linear interpolation)',
+                    '<80% goal': '0.8-0.9x (penalty)'
+                }
+            },
+            {
+                'name': 'Burnout Penalty',
+                'version': '1.0',
+                'description': 'Optional enhancement that penalizes excessive work hours. Only applies when weekly total exceeds threshold AND daily work exceeds daily cap.',
+                'formula': 'penalty_factor = 1.0 - exp(-excess_week / 300.0), capped at 50% reduction',
+                'range': '0.5 - 1.0x (penalty reduces score)',
+                'parameters': {
+                    'weekly_burnout_threshold_hours': 'Weekly work hours threshold (default: 42)',
+                    'daily_burnout_cap_multiplier': 'Daily cap = (weekly_total / days) × multiplier (default: 2.0)'
+                }
+            }
+        ],
+        'formula': 'Baseline: score = completion_pct × task_type_multiplier\nWith enhancements: score = baseline × weekly_multiplier × goal_multiplier × burnout_multiplier',
+        'range': '0 - 500+ (can be negative for play penalty)',
+        'use_cases': [
+            'Measures productive output (Work and Self Care tasks)',
+            'Rewards efficient completion (work tasks)',
+            'Encourages self-care consistency (self care tasks)',
+            'Penalizes excessive play time (play tasks)',
+            'Optional enhancements provide context-aware adjustments'
+        ],
+        'interactive_module': '/productivity-module'
     }
 }
 
@@ -200,6 +286,24 @@ def build_module_page(module_id: str):
                             ui.badge(f"v{component['version']}").classes("bg-gray-600 text-white text-xs")
                     ui.label(f"Range: {component['range']}").classes("text-sm text-gray-600 mt-2")
                 
+                # Show details if available
+                if component.get('details'):
+                    with ui.expansion("Details", icon="info").classes("w-full mb-2"):
+                        if isinstance(component['details'], dict):
+                            for key, value in component['details'].items():
+                                if isinstance(value, dict):
+                                    ui.label(f"{key}:").classes("font-semibold text-sm mt-2")
+                                    for sub_key, sub_value in value.items():
+                                        ui.label(f"  • {sub_key}: {sub_value}").classes("text-xs text-gray-600 ml-4")
+                                else:
+                                    ui.label(f"• {key}: {value}").classes("text-xs text-gray-600")
+                
+                # Show parameters if available
+                if component.get('parameters'):
+                    with ui.expansion("Parameters", icon="tune").classes("w-full mb-2"):
+                        for param_name, param_desc in component['parameters'].items():
+                            ui.label(f"• {param_name}: {param_desc}").classes("text-xs text-gray-600")
+                
                 # Graphic aid display - show both theoretical and data-driven
                 if component.get('graphic_script'):
                     script_name = component['graphic_script']
@@ -227,17 +331,49 @@ def build_module_page(module_id: str):
                                 "text-sm text-red-500"
                             )
                     
-                    # Data-driven visualization (your actual data)
+                    # Data-driven visualization (your actual data) - use Plotly for live charts
                     with ui.expansion("Your Data", icon="bar_chart", value=True).classes("w-full"):
-                        if _ensure_data_graphic_image(data_image_name, data_image_path):
-                            ui.image(data_web_path).classes("w-full max-w-4xl")
-                            ui.label(f"Your actual task data for {component['name']}").classes(
-                                "text-sm text-gray-600 mt-2"
-                            )
+                        chart_key = _get_plotly_chart_key(component['name'], script_name)
+                        if chart_key and chart_key in PLOTLY_DATA_CHARTS:
+                            try:
+                                chart_func = PLOTLY_DATA_CHARTS[chart_key]
+                                fig = chart_func()
+                                if fig:
+                                    ui.plotly(fig).classes("w-full")
+                                    ui.label(f"Your actual task data for {component['name']} (live, updates with new data)").classes(
+                                        "text-sm text-gray-600 mt-2"
+                                    )
+                                else:
+                                    ui.label("Insufficient data to generate visualization. Complete more tasks to see your patterns.").classes(
+                                        "text-sm text-gray-500 italic"
+                                    )
+                            except Exception as e:
+                                print(f"[AnalyticsGlossary] Error generating Plotly chart: {e}")
+                                ui.label("Error generating chart. Please try again later.").classes(
+                                    "text-sm text-red-500"
+                                )
                         else:
-                            ui.label("Insufficient data to generate visualization. Complete more tasks to see your patterns.").classes(
-                                "text-sm text-gray-500 italic"
-                            )
+                            # Fallback to PNG if no Plotly chart available
+                            if _ensure_data_graphic_image(data_image_name, data_image_path):
+                                ui.image(data_web_path).classes("w-full max-w-4xl")
+                                ui.label(f"Your actual task data for {component['name']}").classes(
+                                    "text-sm text-gray-600 mt-2"
+                                )
+                            else:
+                                ui.label("Insufficient data to generate visualization. Complete more tasks to see your patterns.").classes(
+                                    "text-sm text-gray-500 italic"
+                                )
+    
+    # Interactive Module Link
+    if module_info.get('interactive_module'):
+        ui.separator().classes("my-6")
+        with ui.card().classes("p-4 bg-blue-50 border-2 border-blue-200"):
+            ui.label("Interactive Module").classes("text-xl font-semibold mb-2")
+            ui.label("Try adjusting parameters and see how they affect the formula in real-time.").classes("text-sm text-gray-700 mb-3")
+            ui.button("Open Interactive Module", 
+                     on_click=lambda: ui.navigate.to(module_info['interactive_module'])).classes(
+                "bg-blue-500 text-white"
+            )
     
     # Use Cases
     if module_info.get('use_cases'):
@@ -248,6 +384,33 @@ def build_module_page(module_id: str):
                     with ui.row().classes("items-start gap-2"):
                         ui.icon("check_circle").classes("text-green-500 mt-1")
                         ui.label(use_case).classes("text-gray-700")
+
+
+def _get_plotly_chart_key(component_name: str, script_name: str) -> Optional[str]:
+    """Get the Plotly chart key for a component."""
+    # Map component names to Plotly chart keys
+    name_mapping = {
+        'Baseline Completion': 'productivity_score_baseline_completion',
+        'Work Multiplier': 'productivity_score_work_multiplier',
+        'Weekly Average Bonus/Penalty': 'productivity_score_weekly_avg_bonus',
+        'Goal-Based Adjustment': 'productivity_score_goal_adjustment',
+    }
+    
+    # Try direct name match first
+    if component_name in name_mapping:
+        return name_mapping[component_name]
+    
+    # Try script name pattern matching
+    if 'baseline_completion' in script_name.lower():
+        return 'productivity_score_baseline_completion'
+    elif 'work_multiplier' in script_name.lower():
+        return 'productivity_score_work_multiplier'
+    elif 'weekly_avg' in script_name.lower() or 'weekly_average' in script_name.lower():
+        return 'productivity_score_weekly_avg_bonus'
+    elif 'goal' in script_name.lower() and 'adjustment' in script_name.lower():
+        return 'productivity_score_goal_adjustment'
+    
+    return None
 
 
 def _ensure_data_graphic_image(image_name: str, image_path: str) -> bool:
