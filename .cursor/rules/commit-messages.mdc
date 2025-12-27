@@ -1,0 +1,81 @@
+---
+description: Rules for writing commit messages - detail changes but never commit/push unless explicitly requested
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Commit Message Rules
+
+## When User Asks to "Write a Commit"
+
+**ALWAYS:**
+1. ✅ Write a detailed commit message describing all changes
+2. ✅ List all files modified/created
+3. ✅ Explain the purpose and context of changes
+4. ✅ Use conventional commit format when appropriate
+
+**NEVER:**
+1. ❌ Actually execute `git commit` or `git push` commands
+2. ❌ Stage files with `git add`
+3. ❌ Create git tags
+4. ❌ Perform any git operations that modify the repository
+
+## Exception: Explicit Push Request
+
+**ONLY commit/push when user explicitly says:**
+- "push the commit"
+- "commit and push"
+- "execute the commit"
+- "run git commit"
+- Or similar explicit instruction to perform the git operation
+
+## Commit Message Format
+
+Use conventional commit format:
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+**Types:**
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `style`: Code style changes (formatting, etc.)
+- `refactor`: Code refactoring
+- `test`: Adding/updating tests
+- `chore`: Maintenance tasks
+
+**Example:**
+```
+feat(analytics): version execution module formulas as v1.0
+
+- Add versioned execution module documentation (v1.0)
+- Create analytics skill framework guide
+- Add cursor rules for analytics module migration
+- Display version badges in analytics glossary UI
+- Add EXECUTION_SCORE_VERSION constant to analytics.py
+- Update execution score docstring with version info
+
+Files created:
+- docs/execution_module_v1.0.md
+- docs/analytics_skill_framework.md
+- .cursor/rules/analytics-module-migration.mdc
+- .cursor/rules/commit-messages.mdc
+
+Files modified:
+- task_aversion_app/backend/analytics.py
+- task_aversion_app/ui/analytics_glossary.py
+```
+
+## Detailed Change Description
+
+When writing commit messages, include:
+1. **Summary line** - What was done (50-72 chars)
+2. **Body** - Why and how (wrap at 72 chars)
+3. **File list** - All files created/modified
+4. **Context** - What problem this solves or feature it adds

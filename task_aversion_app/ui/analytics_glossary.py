@@ -7,12 +7,14 @@ import os
 ANALYTICS_MODULES = {
     'execution_score': {
         'title': 'Execution Score',
+        'version': '1.0',
         'description': 'Rewards efficient execution of difficult tasks by combining difficulty, speed, start speed, and completion quality.',
         'icon': 'rocket_launch',
         'color': 'blue',
         'components': [
             {
                 'name': 'Difficulty Factor',
+                'version': '1.0',
                 'description': 'Measures how difficult the task was (high aversion + high cognitive load). Uses exponential scaling to reward completing challenging tasks.',
                 'formula': 'difficulty_factor = calculate_difficulty_bonus(aversion, stress_level, mental_energy, task_difficulty)',
                 'range': '0.0 - 1.0',
@@ -20,6 +22,7 @@ ANALYTICS_MODULES = {
             },
             {
                 'name': 'Speed Factor',
+                'version': '1.0',
                 'description': 'Measures execution efficiency relative to time estimate. Rewards fast completion (2x speed or faster gets max bonus), penalizes slow completion.',
                 'formula': 'speed_factor = f(time_actual / time_estimate)',
                 'range': '0.0 - 1.0',
@@ -27,6 +30,7 @@ ANALYTICS_MODULES = {
             },
             {
                 'name': 'Start Speed Factor',
+                'version': '1.0',
                 'description': 'Measures procrastination resistance - how quickly you started the task after initialization. Rewards fast starts (within 5 minutes = perfect).',
                 'formula': 'start_speed_factor = f((started_at - initialized_at) / minutes)',
                 'range': '0.0 - 1.0',
@@ -34,6 +38,7 @@ ANALYTICS_MODULES = {
             },
             {
                 'name': 'Completion Factor',
+                'version': '1.0',
                 'description': 'Measures quality of completion. Full completion (100%) gets max score, partial completion gets proportional penalty.',
                 'formula': 'completion_factor = f(completion_percent)',
                 'range': '0.0 - 1.0',
@@ -174,13 +179,18 @@ def build_module_page(module_id: str):
         )
         ui.icon(module_info['icon']).classes(f"text-{module_info['color']}-500 text-3xl")
         ui.label(module_info['title']).classes("text-3xl font-bold")
+        if module_info.get('version'):
+            ui.badge(f"v{module_info['version']}").classes("bg-blue-500 text-white")
     
     # Description
     ui.label(module_info['description']).classes("text-lg text-gray-700 mb-6")
     
     # Formula
     with ui.card().classes("p-4 mb-4 bg-gray-50"):
-        ui.label("Formula").classes("text-lg font-semibold mb-2")
+        with ui.row().classes("items-center gap-2 mb-2"):
+            ui.label("Formula").classes("text-lg font-semibold")
+            if module_info.get('version'):
+                ui.badge(f"v{module_info['version']}").classes("bg-gray-600 text-white text-xs")
         ui.code(module_info['formula']).classes("text-sm")
         ui.label(f"Range: {module_info['range']}").classes("text-sm text-gray-600 mt-2")
     
@@ -192,11 +202,16 @@ def build_module_page(module_id: str):
             with ui.card().classes("p-4 mb-4"):
                 with ui.row().classes("items-center gap-2 mb-2"):
                     ui.label(f"{i}. {component['name']}").classes("text-xl font-semibold")
+                    if component.get('version'):
+                        ui.badge(f"v{component['version']}").classes("bg-blue-500 text-white text-xs")
                 
                 ui.label(component['description']).classes("text-gray-700 mb-2")
                 
                 with ui.expansion("Formula", icon="functions").classes("w-full mb-2"):
-                    ui.code(component['formula']).classes("text-sm")
+                    with ui.row().classes("items-center gap-2 mb-1"):
+                        ui.code(component['formula']).classes("text-sm")
+                        if component.get('version'):
+                            ui.badge(f"v{component['version']}").classes("bg-gray-600 text-white text-xs")
                     ui.label(f"Range: {component['range']}").classes("text-sm text-gray-600 mt-2")
                 
                 # Graphic aid display - show both theoretical and data-driven

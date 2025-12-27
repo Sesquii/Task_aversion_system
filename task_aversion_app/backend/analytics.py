@@ -17,6 +17,9 @@ from .user_state import UserStateManager
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
+# Execution Score Formula Version
+EXECUTION_SCORE_VERSION = '1.0'
+
 
 class Analytics:
     """Central analytics + lightweight recommendation helper."""
@@ -2457,6 +2460,8 @@ class Analytics:
     ) -> float:
         """Calculate execution score (0-100) for efficient execution of difficult tasks.
         
+        **Formula Version: 1.0**
+        
         Combines four component factors:
         1. Difficulty factor: High aversion + high load
         2. Speed factor: Fast execution relative to estimate
@@ -2467,6 +2472,8 @@ class Analytics:
                                    (0.5 + speed_factor * 0.5) * 
                                    (0.5 + start_speed_factor * 0.5) * 
                                    completion_factor
+        
+        See: docs/execution_module_v1.0.md for complete formula documentation.
         
         Args:
             row: Task instance row (pandas Series from CSV or dict from database)
