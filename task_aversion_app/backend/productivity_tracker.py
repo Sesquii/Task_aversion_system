@@ -760,8 +760,9 @@ class ProductivityTracker:
     def calculate_productivity_score_with_enhancements(
         self,
         baseline_score: float,
-        weekly_avg_time_minutes: Optional[float] = None,
+        time_estimate_minutes: Optional[float] = None,
         time_actual_minutes: Optional[float] = None,
+        completion_percentage: Optional[float] = None,
         weekly_curve: str = 'flattened_square',
         weekly_curve_strength: float = 1.0,
         goal_hours_per_week: Optional[float] = None,
@@ -771,10 +772,11 @@ class ProductivityTracker:
         
         Args:
             baseline_score: Baseline score from calculate_baseline_productivity_score
-            weekly_avg_time_minutes: Optional weekly average time for bonus/penalty
-            time_actual_minutes: Optional actual time for comparison
+            time_estimate_minutes: Optional estimated time for the task (for efficiency calculation)
+            time_actual_minutes: Optional actual time taken (for efficiency calculation)
+            completion_percentage: Optional completion percentage (for efficiency calculation)
             weekly_curve: Curve type ('linear' or 'flattened_square')
-            weekly_curve_strength: Strength of weekly adjustment (0.0-2.0)
+            weekly_curve_strength: Strength of efficiency adjustment (0.0-2.0)
             goal_hours_per_week: Optional goal hours for goal-based adjustment
             weekly_productive_hours: Optional actual hours for goal comparison
             
@@ -791,23 +793,35 @@ class ProductivityTracker:
         enhancements_applied = []
         enhancement_details = {}
         
-        # Weekly average bonus/penalty
-        if weekly_avg_time_minutes is not None and weekly_avg_time_minutes > 0 and time_actual_minutes is not None and time_actual_minutes > 0:
-            time_percentage_diff = ((time_actual_minutes - weekly_avg_time_minutes) / weekly_avg_time_minutes) * 100.0
+        # Efficiency bonus/penalty (based on task estimate and completion percentage)
+        # Uses completion_time_ratio which accounts for both completion % and time
+        if time_estimate_minutes is not None and time_estimate_minutes > 0 and time_actual_minutes is not None and time_actual_minutes > 0:
+            completion_pct = completion_percentage or 100.0
+            # Calculate completion_time_ratio
+            completion_time_ratio = (completion_pct * time_estimate_minutes) / (100.0 * time_actual_minutes)
+            efficiency_ratio = completion_time_ratio
+            efficiency_percentage_diff = (efficiency_ratio - 1.0) * 100.0
             
             if weekly_curve == 'flattened_square':
-                effect = math.copysign((abs(time_percentage_diff) ** 2) / 100.0, time_percentage_diff)
-                weekly_multiplier = 1.0 - (0.01 * weekly_curve_strength * effect)
+                # Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                effect = math.copysign((abs(efficiency_percentage_diff) ** 2) / 100.0, efficiency_percentage_diff)
+                efficiency_multiplier = 1.0 - (0.01 * weekly_curve_strength * -effect)
             else:
-                # Linear
-                weekly_multiplier = 1.0 - (0.01 * weekly_curve_strength * time_percentage_diff)
+                # Linear - Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                efficiency_multiplier = 1.0 - (0.01 * weekly_curve_strength * -efficiency_percentage_diff)
             
-            final_score = final_score * weekly_multiplier
-            enhancements_applied.append('weekly_avg_bonus')
-            enhancement_details['weekly_avg_bonus'] = {
-                'multiplier': round(weekly_multiplier, 3),
-                'percentage_diff': round(time_percentage_diff, 1),
-                'description': f"Weekly avg adjustment: {weekly_multiplier:.3f}x ({time_percentage_diff:+.1f}% deviation)"
+            # Cap both penalty and bonus to prevent extreme scores
+            # Penalty: max 50% reduction (min multiplier = 0.5)
+            # Bonus: max 50% increase (max multiplier = 1.5)
+            efficiency_multiplier = max(0.5, min(1.5, efficiency_multiplier))
+            
+            final_score = final_score * efficiency_multiplier
+            enhancements_applied.append('efficiency_bonus')
+            enhancement_details['efficiency_bonus'] = {
+                'multiplier': round(efficiency_multiplier, 3),
+                'efficiency_ratio': round(efficiency_ratio, 3),
+                'completion_time_ratio': round(completion_time_ratio, 3),
+                'description': f"Efficiency adjustment: {efficiency_multiplier:.3f}x (ratio: {efficiency_ratio:.3f}, {efficiency_percentage_diff:+.1f}% from perfect)"
             }
         
         # Goal-based adjustment

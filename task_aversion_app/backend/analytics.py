@@ -20,6 +20,9 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 # Execution Score Formula Version
 EXECUTION_SCORE_VERSION = '1.0'
 
+# Productivity Score Formula Version
+PRODUCTIVITY_SCORE_VERSION = '1.1'
+
 
 class Analytics:
     """Central analytics + lightweight recommendation helper."""
@@ -459,6 +462,13 @@ class Analytics:
                                      weekly_productive_hours: Optional[float] = None) -> float:
         """Calculate productivity score based on completion percentage vs time ratio.
         
+        Version: 1.1 (2025-12-27)
+        - Efficiency multiplier now compares to task's own estimate (not weekly average)
+        - Accounts for completion percentage in efficiency calculation
+        - Penalty capped at 50% reduction to prevent negative scores
+        
+        See docs/productivity_score_v1.1.md for complete version history.
+        
         Penalty Calibration:
         - Play penalty: -0.003x per percentage (max -0.3x for 100% completion = -30 score)
         - Idle penalty: Applied via tracking consistency multiplier (0.0 to 1.0)
@@ -581,13 +591,15 @@ class Analytics:
                 # Work: Smooth multiplier transition from 3x to 5x based on completion_time_ratio
                 # Smooth transition: 3.0 + (2.0 * smooth_factor) where smooth_factor transitions from 0 to 1
                 # Transition happens between ratio 1.0 and 1.5 (smooth over 0.5 range)
-                if completion_time_ratio <= 1.0:
+                # Cap ratio at 1.5 to prevent extreme multipliers from very fast completions
+                capped_ratio = min(completion_time_ratio, 1.5)
+                if capped_ratio <= 1.0:
                     multiplier = 3.0
-                elif completion_time_ratio >= 1.5:
+                elif capped_ratio >= 1.5:
                     multiplier = 5.0
                 else:
                     # Smooth transition between 1.0 and 1.5
-                    smooth_factor = (completion_time_ratio - 1.0) / 0.5  # 0.0 to 1.0
+                    smooth_factor = (capped_ratio - 1.0) / 0.5  # 0.0 to 1.0
                     multiplier = 3.0 + (2.0 * smooth_factor)
                 
                 # Burnout penalty (weekly-first with daily cap)
@@ -654,21 +666,42 @@ class Analytics:
                 # Default: no multiplier
                 score = completion_pct
             
-            # Apply weekly average bonus/penalty
+            # Apply efficiency bonus/penalty based on completion efficiency
+            # Uses completion_time_ratio which accounts for both completion % and time
+            # Ratio = (completion_pct * time_estimate) / (100 * time_actual)
+            # Ratio > 1.0 = efficient (more completion per unit time)
+            # Ratio < 1.0 = inefficient (less completion per unit time)
             # Supports linear (legacy) or flattened square response curves
-            if weekly_avg_time > 0 and time_actual > 0:
-                # Calculate percentage difference from weekly average
-                time_percentage_diff = ((time_actual - weekly_avg_time) / weekly_avg_time) * 100.0
+            # Cap penalty to prevent negative scores (max 50% reduction)
+            if time_estimate > 0 and time_actual > 0:
+                # Calculate efficiency based on completion_time_ratio
+                # Ratio of 1.0 = perfectly efficient (completed as expected)
+                # Ratio > 1.0 = bonus (completed more efficiently)
+                # Ratio < 1.0 = penalty (completed less efficiently)
+                efficiency_ratio = completion_time_ratio
+                
+                # Convert ratio to percentage difference from 1.0 (perfect efficiency)
+                # If ratio = 1.0, diff = 0% (no change)
+                # If ratio = 0.5, diff = -50% (50% penalty)
+                # If ratio = 2.0, diff = +100% (100% bonus)
+                efficiency_percentage_diff = (efficiency_ratio - 1.0) * 100.0
 
                 if weekly_curve == 'flattened_square':
                     # Softer square response; large deviations grow faster but scaled down
-                    effect = math.copysign((abs(time_percentage_diff) ** 2) / 100.0, time_percentage_diff)
-                    weekly_bonus_multiplier = 1.0 - (0.01 * weekly_curve_strength * effect)
+                    # Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                    effect = math.copysign((abs(efficiency_percentage_diff) ** 2) / 100.0, efficiency_percentage_diff)
+                    efficiency_multiplier = 1.0 - (0.01 * weekly_curve_strength * -effect)
                 else:
                     # Linear response (legacy)
-                    weekly_bonus_multiplier = 1.0 - (0.01 * weekly_curve_strength * time_percentage_diff)
+                    # Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                    efficiency_multiplier = 1.0 - (0.01 * weekly_curve_strength * -efficiency_percentage_diff)
+                
+                # Cap both penalty and bonus to prevent extreme scores
+                # Penalty: max 50% reduction (min multiplier = 0.5)
+                # Bonus: max 50% increase (max multiplier = 1.5)
+                efficiency_multiplier = max(0.5, min(1.5, efficiency_multiplier))
 
-                score = score * weekly_bonus_multiplier
+                score = score * efficiency_multiplier
             
             # Apply goal-based adjustment if goal hours and weekly productive hours are provided
             # This provides a bonus/penalty based on weekly goal achievement

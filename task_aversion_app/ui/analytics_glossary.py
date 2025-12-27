@@ -129,14 +129,16 @@ ANALYTICS_MODULES = {
                 'graphic_script': 'productivity_score_work_multiplier.py',
             },
             {
-                'name': 'Weekly Average Bonus/Penalty',
+                'name': 'Efficiency Bonus/Penalty',
                 'version': '1.0',
-                'description': 'Optional enhancement that adjusts score based on how task time compares to weekly average. Tasks faster than average get bonus, slower get penalty.',
-                'formula': 'multiplier = 1.0 - (0.01 × strength × effect) where effect depends on curve type',
-                'range': '0.5 - 1.5x (approximate)',
+                'description': 'Adjusts score based on efficiency: compares actual time and completion percentage to task estimate. Accounts for both time and completion - if you take 2x longer but complete 200%, efficiency ratio = 1.0 (no penalty).',
+                'formula': 'efficiency_ratio = (completion_pct × time_estimate) / (100 × time_actual); multiplier = 1.0 - (0.01 × strength × effect) where effect depends on curve type',
+                'range': '0.5 - 1.5x (approximate, penalty capped at 50% reduction)',
                 'graphic_script': 'productivity_score_weekly_avg_bonus.py',
                 'parameters': {
-                    'weekly_avg_time': 'Average productive time per task this week (minutes)',
+                    'time_estimate': 'Estimated time for the task (minutes)',
+                    'time_actual': 'Actual time taken (minutes)',
+                    'completion_percentage': 'Percentage of task completed (%)',
                     'weekly_curve': 'Response curve type: linear or flattened_square',
                     'weekly_curve_strength': 'Strength of adjustment (0.0-2.0)'
                 }

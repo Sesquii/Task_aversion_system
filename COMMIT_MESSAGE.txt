@@ -1,48 +1,69 @@
-feat(experimental): add productivity hours goal tracking system with configurable charts
+fix(analytics): update productivity score efficiency calculation to v1.1
 
-Add experimental goal-based productivity tracking page as a distinct alternative
-to the analytics page. This system focuses on goal setting, achievement tracking,
-and productivity visualization rather than exploratory data analysis.
+Major improvements to productivity score calculation to fix negative scores
+and prevent extreme values from very fast task completions.
 
-Implementation Approach:
-- Created ProductivityTracker class as a dedicated service for goal tracking,
-  separate from the Analytics service to enable focused goal-oriented workflows
-- Uses weekly snapshot pattern with data stored in UserStateManager rather than
-  real-time calculations, allowing for goal progression tracking over time
-- Implements hybrid initialization approach (auto-estimate from first day data
-  with manual adjustment capability)
-- Goal-based productivity score adjustments integrated into analytics.py to
-  apply bonuses/penalties based on weekly goal achievement
+Changes:
+- Efficiency multiplier now compares actual time to task's own estimate
+  (not weekly average across all tasks)
+- Accounts for completion percentage in efficiency calculation
+  (2x time but 200% completion = no penalty)
+- Fixed sign issue in flattened_square curve calculation
+- Capped efficiency multiplier: 0.5x min (50% penalty), 1.5x max (50% bonus)
+- Capped work multiplier calculation: completion_time_ratio max 1.5
+  (prevents extreme multipliers from very fast completions)
 
-Database Migration:
-- Fixed ProductivityTracker._get_completed_instances() to use database backend
-  by default (matching analytics.py pattern) instead of relying on CSV
-- Ensures experimental page uses actual database data for calculations
-
-UI Features:
-- Configurable productivity metrics chart with 4 view modes:
-  - Productivity Points only
-  - Productivity Score only
-  - Hours (goal vs actual)
-  - All 3 metrics normalized to goal/average (enables cross-metric comparison)
-- Interactive chart updates via dropdown selector (follows analytics page pattern)
-- Current week performance display with goal comparison
-- Productivity points target calculation based on historical score-per-hour averages
-- Basic weekly trends visualization (hours chart remains separate)
-
-Note: Historical tracking data structure is implemented in backend, but full
-integration with automatic weekly snapshots is not yet complete. The system
-can record and display historical data when manually triggered.
-
-Files created:
-- task_aversion_app/backend/productivity_tracker.py
-- task_aversion_app/ui/productivity_goals_experimental.py
-- task_aversion_app/ui/experimental_landing.py
+Impact:
+- Fixes issue where productivity scores were negative despite working hard
+- Prevents extreme scores from tasks completed much faster than estimated
+- More accurate scoring that accounts for both time and completion percentage
+- December 14th anomaly fixed (task with 30min estimate, 1min actual)
 
 Files modified:
-- task_aversion_app/backend/user_state.py (productivity goal settings & history methods)
-- task_aversion_app/backend/analytics.py (goal-based score adjustments)
-- task_aversion_app/app.py (register experimental routes)
-- task_aversion_app/ui/dashboard.py (add experimental systems button)
+- task_aversion_app/backend/analytics.py
+  - Updated calculate_productivity_score() efficiency calculation
+  - Added PRODUCTIVITY_SCORE_VERSION = '1.1' constant
+  - Capped work multiplier calculation at ratio 1.5
+  - Capped efficiency multiplier at 0.5-1.5 range
+  - Fixed flattened_square curve sign issue
 
-Route: /experimental/productivity-hours-goal-tracking-system
+- task_aversion_app/backend/productivity_tracker.py
+  - Updated calculate_productivity_score_with_enhancements()
+  - Changed from weekly_avg_time to time_estimate/completion_percentage
+  - Applied efficiency multiplier caps
+
+- task_aversion_app/ui/formula_control_system.py
+  - Updated visualization to show efficiency based on task estimate
+  - Fixed flattened_square calculation sign
+
+- task_aversion_app/ui/analytics_glossary.py
+  - Updated description from "Weekly Average Bonus/Penalty" to "Efficiency Bonus/Penalty"
+  - Updated parameters to reflect task estimate comparison
+
+- task_aversion_app/scripts/graphic_aids/productivity_score_weekly_avg_bonus.py
+  - Updated to visualize efficiency ratio instead of weekly average deviation
+  - Fixed flattened_square calculation sign
+  - Added example scenarios showing completion percentage effects
+  - Regenerated graphic aid image
+
+- task_aversion_app/ui/cancellation_penalties_page.py
+  - Reverted failed_to_complete penalty to 1.0 (kept original value)
+
+- task_aversion_app/ui/cancelled_tasks_page.py
+  - Reverted failed_to_complete penalty to 1.0 (kept original value)
+
+Files created:
+- task_aversion_app/docs/productivity_score_v1.1.md
+  - Complete version documentation with formula details
+  - Version history and rationale for changes
+
+- task_aversion_app/debug_productivity_scores.py
+  - Diagnostic script to analyze productivity scores per task
+
+- task_aversion_app/analyze_december_14.py
+  - Analysis script for December 14th anomaly investigation
+
+Files updated (documentation):
+- task_aversion_app/docs/formula_review_analysis.md
+  - Updated productivity score section with v1.1 changes
+  - Added version history and documentation link

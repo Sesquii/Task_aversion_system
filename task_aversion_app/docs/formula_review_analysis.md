@@ -147,14 +147,17 @@ The formula has been **completely refactored** into two separate, well-defined c
 ---
 
 ### 2.2 Productivity Score Formula
-**Location:** `analytics.py:210-300`
-
-**Status:** ✅ **FIXED** - All issues addressed
+**Location:** `analytics.py:453-698`  
+**Version:** 1.1 (2025-12-27)  
+**Status:** ✅ **FIXED** - All issues addressed  
+**Documentation:** See `docs/productivity_score_v1.1.md` for complete version history
 
 **Previous Issues (RESOLVED):**
 1. ~~**Play tasks can have negative scores:**~~ → Now documented as "productivity penalty from play" (intentional)
 2. ~~**Abrupt threshold:**~~ → Fixed with smooth transition function
 3. ~~**Weekly bonus calculation BACKWARDS:**~~ → Fixed: now penalizes taking longer, rewards efficiency
+4. ~~**Efficiency compared to weekly average:**~~ → Fixed in v1.1: now compares to task's own estimate
+5. ~~**Didn't account for completion percentage:**~~ → Fixed in v1.1: efficiency uses completion_time_ratio
 
 **Current Implementation:**
 ```python
@@ -173,17 +176,30 @@ else:
 multiplier = -0.01 * time_percentage
 score = base_score * multiplier
 
-# Weekly bonus/penalty: FIXED - now penalizes taking longer
-time_percentage_diff = ((time_actual - weekly_avg_time) / weekly_avg_time) * 100.0
-weekly_bonus_multiplier = 1.0 - (0.01 * time_percentage_diff)  # Reversed sign
+# Efficiency bonus/penalty: Uses completion_time_ratio (accounts for both completion % and time)
+# Compares actual time to task's own estimate, not weekly average
+# Ratio = (completion_pct * time_estimate) / (100 * time_actual)
+# Ratio > 1.0 = efficient (bonus), Ratio < 1.0 = inefficient (penalty, capped at 50% reduction)
+efficiency_ratio = completion_time_ratio
+efficiency_percentage_diff = (efficiency_ratio - 1.0) * 100.0
+efficiency_multiplier = 1.0 - (0.01 * weekly_curve_strength * -efficiency_percentage_diff)
+efficiency_multiplier = max(0.5, efficiency_multiplier)  # Cap penalty at 50% reduction
 ```
 
-**Changes Made:**
-1. ✅ **Fixed weekly bonus:** Now uses `1.0 - (0.01 * time_percentage_diff)` - taking longer reduces score
-2. ✅ **Smooth work multiplier:** Continuous transition from 3.0x to 5.0x between ratio 1.0 and 1.5
-3. ✅ **Clarified play task intent:** Renamed to "productivity penalty from play" in comments
+**Changes Made (v1.1):**
+1. ✅ **Fixed efficiency calculation:** Now compares actual time to task's own estimate (not weekly average)
+2. ✅ **Accounts for completion percentage:** If you take 2x longer but complete 200%, efficiency ratio = 1.0 (no penalty)
+3. ✅ **Capped penalty:** Maximum 50% reduction to prevent negative scores
+4. ✅ **Smooth work multiplier:** Continuous transition from 3.0x to 5.0x between ratio 1.0 and 1.5
+5. ✅ **Clarified play task intent:** Renamed to "productivity penalty from play" in comments
 
-**See Also:** New "Grit Score" (section 2.3) - separate metric that rewards persistence and taking longer
+**Version History:**
+- **v1.1 (2025-12-27):** Fixed efficiency calculation to use task estimate and completion percentage
+- **v1.0 (Previous):** Initial implementation with weekly average comparison
+
+**See Also:**
+- `docs/productivity_score_v1.1.md` - Complete version documentation
+- New "Grit Score" (section 2.3) - separate metric that rewards persistence and taking longer
 
 ---
 

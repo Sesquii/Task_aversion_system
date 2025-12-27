@@ -204,62 +204,84 @@ def generate_productivity_visualizations(settings: Dict[str, Any], comparison_se
     """Generate Plotly visualizations for productivity score formula."""
     figures = []
     
-    # 1. Weekly curve strength effect
-    weekly_avg_times = [30, 45, 60, 75, 90]  # minutes
-    time_actuals = list(range(15, 120, 5))  # minutes
+    # 1. Efficiency multiplier effect (based on completion_time_ratio)
+    # Shows how efficiency changes based on completion % and time vs estimate
+    time_estimates = [20, 30, 45, 60]  # minutes - different task estimates
+    completion_pcts = [50, 75, 100, 150, 200, 300]  # completion percentages
+    time_ratios = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0]  # actual_time / estimate_time
     
     fig1 = go.Figure()
     
-    curve_strength = settings.get('weekly_curve_strength', 1.5)
+    curve_strength = settings.get('weekly_curve_strength', 1.0)
     curve_type = settings.get('weekly_curve', 'flattened_square')
     
-    for weekly_avg in weekly_avg_times:
+    # Show efficiency multiplier for different completion percentages
+    # with a fixed time estimate (e.g., 30 minutes)
+    time_estimate_example = 30
+    for completion_pct in [100, 150, 200]:
         multipliers = []
-        for time_actual in time_actuals:
-            time_percentage_diff = ((time_actual - weekly_avg) / weekly_avg) * 100.0
+        efficiency_ratios = []
+        for time_ratio in time_ratios:
+            time_actual = time_estimate_example * time_ratio
+            # Calculate completion_time_ratio
+            completion_time_ratio = (completion_pct * time_estimate_example) / (100.0 * time_actual)
+            efficiency_ratio = completion_time_ratio
+            efficiency_percentage_diff = (efficiency_ratio - 1.0) * 100.0
+            
             if curve_type == 'flattened_square':
-                effect = math.copysign((abs(time_percentage_diff) ** 2) / 100.0, time_percentage_diff)
+                effect = math.copysign((abs(efficiency_percentage_diff) ** 2) / 100.0, efficiency_percentage_diff)
                 multiplier = 1.0 - (0.01 * curve_strength * effect)
             else:
-                multiplier = 1.0 - (0.01 * curve_strength * time_percentage_diff)
+                multiplier = 1.0 - (0.01 * curve_strength * -efficiency_percentage_diff)
+            
+            multiplier = max(0.5, multiplier)  # Cap penalty at 50%
             multipliers.append(multiplier)
+            efficiency_ratios.append(efficiency_ratio)
         
         fig1.add_trace(go.Scatter(
-            x=time_actuals,
+            x=time_ratios,
             y=multipliers,
             mode='lines',
-            name=f'Weekly Avg: {weekly_avg}min',
+            name=f'{completion_pct}% Completion',
             line=dict(width=2)
         ))
     
     # Add comparison lines if provided
     if comparison_settings:
         for idx, comp_settings in enumerate(comparison_settings):
-            comp_strength = comp_settings.get('weekly_curve_strength', 1.5)
+            comp_strength = comp_settings.get('weekly_curve_strength', 1.0)
             comp_curve = comp_settings.get('weekly_curve', 'flattened_square')
-            for weekly_avg in weekly_avg_times[:1]:  # Just show one line for comparison
-                multipliers = []
-                for time_actual in time_actuals:
-                    time_percentage_diff = ((time_actual - weekly_avg) / weekly_avg) * 100.0
-                    if comp_curve == 'flattened_square':
-                        effect = math.copysign((abs(time_percentage_diff) ** 2) / 100.0, time_percentage_diff)
-                        multiplier = 1.0 - (0.01 * comp_strength * effect)
-                    else:
-                        multiplier = 1.0 - (0.01 * comp_strength * time_percentage_diff)
-                    multipliers.append(multiplier)
+            multipliers = []
+            for time_ratio in time_ratios:
+                time_actual = time_estimate_example * time_ratio
+                completion_time_ratio = (100 * time_estimate_example) / (100.0 * time_actual)
+                efficiency_ratio = completion_time_ratio
+                efficiency_percentage_diff = (efficiency_ratio - 1.0) * 100.0
                 
-                fig1.add_trace(go.Scatter(
-                    x=time_actuals,
-                    y=multipliers,
-                    mode='lines',
-                    name=f'Comparison {idx+1} (avg {weekly_avg}min)',
-                    line=dict(width=2, dash='dash', color='gray')
-                ))
+                if comp_curve == 'flattened_square':
+                    # Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                    effect = math.copysign((abs(efficiency_percentage_diff) ** 2) / 100.0, efficiency_percentage_diff)
+                    multiplier = 1.0 - (0.01 * comp_strength * -effect)
+                else:
+                    # Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                    multiplier = 1.0 - (0.01 * comp_strength * -efficiency_percentage_diff)
+                
+                # Cap both penalty and bonus to prevent extreme scores
+                multiplier = max(0.5, min(1.5, multiplier))
+                multipliers.append(multiplier)
+            
+            fig1.add_trace(go.Scatter(
+                x=time_ratios,
+                y=multipliers,
+                mode='lines',
+                name=f'Comparison {idx+1} (100% completion)',
+                line=dict(width=2, dash='dash', color='gray')
+            ))
     
     fig1.update_layout(
-        title='Weekly Efficiency Bonus/Penalty Multiplier',
-        xaxis_title='Actual Time (minutes)',
-        yaxis_title='Multiplier',
+        title='Efficiency Multiplier (Based on Task Estimate & Completion %)',
+        xaxis_title='Time Ratio (Actual Time / Estimated Time)',
+        yaxis_title='Efficiency Multiplier',
         height=400,
         font=dict(size=10),
         title_font=dict(size=12),
