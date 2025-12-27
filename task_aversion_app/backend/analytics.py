@@ -454,7 +454,9 @@ class Analytics:
                                      work_play_time_per_day: Optional[Dict[str, Dict[str, float]]] = None,
                                      play_penalty_threshold: float = 2.0,
                                      productivity_settings: Optional[Dict[str, any]] = None,
-                                     weekly_work_summary: Optional[Dict[str, float]] = None) -> float:
+                                     weekly_work_summary: Optional[Dict[str, float]] = None,
+                                     goal_hours_per_week: Optional[float] = None,
+                                     weekly_productive_hours: Optional[float] = None) -> float:
         """Calculate productivity score based on completion percentage vs time ratio.
         
         Penalty Calibration:
@@ -472,6 +474,10 @@ class Analytics:
             weekly_avg_time: Weekly average productivity time in minutes (for bonus/penalty calculation)
             work_play_time_per_day: Dictionary mapping date strings to dict with 'work_time' and 'play_time' in minutes
             play_penalty_threshold: Threshold multiplier for play penalty (default 2.0 = play must exceed work by 2x)
+            productivity_settings: Optional productivity settings dict
+            weekly_work_summary: Optional weekly work summary dict
+            goal_hours_per_week: Optional goal hours per week (if provided, applies goal-based adjustment)
+            weekly_productive_hours: Optional weekly productive hours total (required if goal_hours_per_week provided)
             
         Returns:
             Productivity score (can be negative for productivity penalty from play tasks)
@@ -663,6 +669,31 @@ class Analytics:
                     weekly_bonus_multiplier = 1.0 - (0.01 * weekly_curve_strength * time_percentage_diff)
 
                 score = score * weekly_bonus_multiplier
+            
+            # Apply goal-based adjustment if goal hours and weekly productive hours are provided
+            # This provides a bonus/penalty based on weekly goal achievement
+            if goal_hours_per_week is not None and goal_hours_per_week > 0 and weekly_productive_hours is not None:
+                goal_achievement_ratio = weekly_productive_hours / goal_hours_per_week
+                # Modest adjustment: ±20% max based on goal achievement
+                # 100% goal achievement = no change (multiplier = 1.0)
+                # 120%+ = +20% bonus (multiplier = 1.2)
+                # 80-100% = linear interpolation (0.9 to 1.0)
+                # <80% = penalty down to -20% at 0% (multiplier = 0.8 minimum)
+                if goal_achievement_ratio >= 1.2:
+                    goal_multiplier = 1.2  # 20% bonus for exceeding goal significantly
+                elif goal_achievement_ratio >= 1.0:
+                    # Linear: 1.0 -> 1.0, 1.2 -> 1.2
+                    goal_multiplier = 1.0 + (goal_achievement_ratio - 1.0) * 1.0
+                elif goal_achievement_ratio >= 0.8:
+                    # Linear: 0.8 -> 0.9, 1.0 -> 1.0
+                    goal_multiplier = 0.9 + (goal_achievement_ratio - 0.8) * 0.5
+                else:
+                    # Below 80%: linear penalty down to 0.8 at 0%
+                    # Linear: 0.0 -> 0.8, 0.8 -> 0.9
+                    goal_multiplier = 0.8 + (goal_achievement_ratio / 0.8) * 0.1
+                    goal_multiplier = max(0.8, goal_multiplier)  # Cap at 0.8 minimum
+                
+                score = score * goal_multiplier
             
             return score
         
@@ -3255,6 +3286,27 @@ class Analytics:
         else:
             weekly_avg_time = 0.0
         
+        # Get goal hours and weekly productive hours for goal-based adjustment
+        goal_hours_per_week = None
+        weekly_productive_hours = None
+        try:
+            goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+            goal_hours_per_week = goal_settings.get('goal_hours_per_week')
+            if goal_hours_per_week:
+                goal_hours_per_week = float(goal_hours_per_week)
+                # Calculate weekly productive hours (Work + Self Care only)
+                from .productivity_tracker import ProductivityTracker
+                tracker = ProductivityTracker()
+                weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                weekly_productive_hours = weekly_data.get('total_hours', 0.0)
+                if weekly_productive_hours <= 0:
+                    weekly_productive_hours = None
+        except Exception as e:
+            # If goal settings or tracker fails, just continue without goal adjustment
+            print(f"[Analytics] Error getting goal hours: {e}")
+            goal_hours_per_week = None
+            weekly_productive_hours = None
+        
         # Calculate productivity score for all completed tasks
         # Ensure completed has the required columns
         if 'actual_dict' not in completed.columns or 'predicted_dict' not in completed.columns:
@@ -3285,7 +3337,9 @@ class Analytics:
                 weekly_avg_time,
                 work_play_time_per_day,
                 productivity_settings=self.productivity_settings,
-                weekly_work_summary=weekly_work_summary
+                weekly_work_summary=weekly_work_summary,
+                goal_hours_per_week=goal_hours_per_week,
+                weekly_productive_hours=weekly_productive_hours
             ),
             axis=1
         )
@@ -4599,6 +4653,25 @@ class Analytics:
             valid_times = completed[completed['time_actual_for_avg'].notna() & (completed['time_actual_for_avg'] > 0)]
             weekly_avg_time = valid_times['time_actual_for_avg'].mean() if not valid_times.empty else 0.0
             
+            # Get goal hours and weekly productive hours for goal-based adjustment
+            goal_hours_per_week = None
+            weekly_productive_hours = None
+            try:
+                goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+                goal_hours_per_week = goal_settings.get('goal_hours_per_week')
+                if goal_hours_per_week:
+                    goal_hours_per_week = float(goal_hours_per_week)
+                    from .productivity_tracker import ProductivityTracker
+                    tracker = ProductivityTracker()
+                    weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                    weekly_productive_hours = weekly_data.get('total_hours', 0.0)
+                    if weekly_productive_hours <= 0:
+                        weekly_productive_hours = None
+            except Exception as e:
+                print(f"[Analytics] Error getting goal hours: {e}")
+                goal_hours_per_week = None
+                weekly_productive_hours = None
+            
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
                 lambda row: self.calculate_productivity_score(
@@ -4607,7 +4680,9 @@ class Analytics:
                     weekly_avg_time,
                     work_play_time_per_day,
                     productivity_settings=self.productivity_settings,
-                    weekly_work_summary=weekly_work_summary
+                    weekly_work_summary=weekly_work_summary,
+                    goal_hours_per_week=goal_hours_per_week,
+                    weekly_productive_hours=weekly_productive_hours
                 ),
                 axis=1
             )
@@ -5050,6 +5125,25 @@ class Analytics:
             valid_times = completed[completed['time_actual_for_avg'].notna() & (completed['time_actual_for_avg'] > 0)]
             weekly_avg_time = valid_times['time_actual_for_avg'].mean() if not valid_times.empty else 0.0
             
+            # Get goal hours and weekly productive hours for goal-based adjustment
+            goal_hours_per_week = None
+            weekly_productive_hours = None
+            try:
+                goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+                goal_hours_per_week = goal_settings.get('goal_hours_per_week')
+                if goal_hours_per_week:
+                    goal_hours_per_week = float(goal_hours_per_week)
+                    from .productivity_tracker import ProductivityTracker
+                    tracker = ProductivityTracker()
+                    weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                    weekly_productive_hours = weekly_data.get('total_hours', 0.0)
+                    if weekly_productive_hours <= 0:
+                        weekly_productive_hours = None
+            except Exception as e:
+                print(f"[Analytics] Error getting goal hours: {e}")
+                goal_hours_per_week = None
+                weekly_productive_hours = None
+            
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
                 lambda row: self.calculate_productivity_score(
@@ -5058,7 +5152,9 @@ class Analytics:
                     weekly_avg_time,
                     work_play_time_per_day,
                     productivity_settings=self.productivity_settings,
-                    weekly_work_summary=weekly_work_summary
+                    weekly_work_summary=weekly_work_summary,
+                    goal_hours_per_week=goal_hours_per_week,
+                    weekly_productive_hours=weekly_productive_hours
                 ),
                 axis=1
             )

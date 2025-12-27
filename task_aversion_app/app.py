@@ -20,6 +20,8 @@ from ui import composite_score_weights_page  # registers /settings/composite-sco
 from ui import cancellation_penalties_page  # registers /settings/cancellation-penalties
 # from ui import data_guide_page  # registers /data-guide - TODO: Re-enable when data guide is updated for local setup
 from ui import composite_score_page  # registers /composite-score
+from ui import productivity_goals_experimental  # registers /experimental/productivity-hours-goal-tracking-system
+from ui import experimental_landing  # registers /experimental
 
 
 task_manager = TaskManager()

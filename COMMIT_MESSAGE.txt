@@ -1,80 +1,48 @@
-refactor(analytics): refine graphic aid generation rules and remove productivity module
+feat(experimental): add productivity hours goal tracking system with configurable charts
 
-Refine analytics module migration rules with comprehensive graphic aid generation
-guidelines, then remove productivity score module implementations to prepare for
-regeneration using the improved framework.
+Add experimental goal-based productivity tracking page as a distinct alternative
+to the analytics page. This system focuses on goal setting, achievement tracking,
+and productivity visualization rather than exploratory data analysis.
 
-Changes:
-- Significantly expand analytics-module-migration.mdc rule with graphic aid guidelines
-- Remove productivity score module implementations (graphic aids, generators, glossary entry)
-- Keep core productivity score calculation method intact for regeneration
+Implementation Approach:
+- Created ProductivityTracker class as a dedicated service for goal tracking,
+  separate from the Analytics service to enable focused goal-oriented workflows
+- Uses weekly snapshot pattern with data stored in UserStateManager rather than
+  real-time calculations, allowing for goal progression tracking over time
+- Implements hybrid initialization approach (auto-estimate from first day data
+  with manual adjustment capability)
+- Goal-based productivity score adjustments integrated into analytics.py to
+  apply bonuses/penalties based on weekly goal achievement
 
-Rule Enhancements:
-- Add core principle: theoretical-data pairing with matching axes/ranges
-- Define component factor visualization patterns (1-2 pairs per component)
-- Specify whole formula chart requirements:
-  * Score over time with moving average
-  * Score variance analysis
-  * Emotion correlation analysis
-  * Composite weight visualization
-  * Points over time (future)
-  * Component contribution analysis (optional)
-  * Score distribution (optional)
-- Add standard parameter ranges for consistent visualizations
-- Provide data extraction patterns for CSV/database compatibility
-- Include emotion correlation analysis implementation pattern
-- Add module enhancement checklist for systematic graphic aid creation
-- Document chart generation workflow and best practices
+Database Migration:
+- Fixed ProductivityTracker._get_completed_instances() to use database backend
+  by default (matching analytics.py pattern) instead of relying on CSV
+- Ensures experimental page uses actual database data for calculations
 
-Files removed:
-- task_aversion_app/scripts/graphic_aids/productivity_score_efficiency_factor.py
-- task_aversion_app/scripts/graphic_aids/productivity_score_task_type_multiplier.py
-- task_aversion_app/scripts/graphic_aids/productivity_score_burnout_penalty.py
-- task_aversion_app/scripts/graphic_aids/productivity_score_weekly_bonus.py
-- task_aversion_app/docs/productivity_module_v0.9.md
+UI Features:
+- Configurable productivity metrics chart with 4 view modes:
+  - Productivity Points only
+  - Productivity Score only
+  - Hours (goal vs actual)
+  - All 3 metrics normalized to goal/average (enables cross-metric comparison)
+- Interactive chart updates via dropdown selector (follows analytics page pattern)
+- Current week performance display with goal comparison
+- Productivity points target calculation based on historical score-per-hour averages
+- Basic weekly trends visualization (hours chart remains separate)
+
+Note: Historical tracking data structure is implemented in backend, but full
+integration with automatic weekly snapshots is not yet complete. The system
+can record and display historical data when manually triggered.
+
+Files created:
+- task_aversion_app/backend/productivity_tracker.py
+- task_aversion_app/ui/productivity_goals_experimental.py
+- task_aversion_app/ui/experimental_landing.py
 
 Files modified:
-- .cursor/rules/analytics-module-migration.mdc
-  * Add comprehensive "Graphic Aid Generation Guidelines" section
-  * Define theoretical-data pairing requirements
-  * Specify component factor visualization patterns (1-2 pairs)
-  * Document whole formula chart requirements
-  * Add standard parameter ranges dictionary
-  * Provide data extraction patterns
-  * Include emotion correlation analysis pattern
-  * Add module enhancement checklist
-  * Document chart generation workflow
+- task_aversion_app/backend/user_state.py (productivity goal settings & history methods)
+- task_aversion_app/backend/analytics.py (goal-based score adjustments)
+- task_aversion_app/app.py (register experimental routes)
+- task_aversion_app/ui/dashboard.py (add experimental systems button)
 
-- task_aversion_app/scripts/graphic_aids/generate_all.py
-  * Remove productivity score generator functions (4 functions)
-  * Remove productivity score entries from GRAPHIC_AID_GENERATORS
-
-- task_aversion_app/scripts/graphic_aids/generate_data_driven.py
-  * Remove productivity score data-driven generator functions (4 functions)
-  * Remove productivity score entries from DATA_DRIVEN_GENERATORS
-
-- task_aversion_app/ui/analytics_glossary.py
-  * Remove productivity_score module definition and all components
-
-- task_aversion_app/backend/analytics.py
-  * Remove PRODUCTIVITY_SCORE_VERSION constant
-  * Remove version/docstring info from calculate_productivity_score() method
-  * Keep core calculate_productivity_score() method intact
-
-Purpose:
-This change refines the graphic aid generation framework based on lessons learned
-from the initial productivity score module implementation. The enhanced rules now
-provide clear guidelines for:
-
-1. Creating matching theoretical and data-driven charts with identical parameters
-2. Generating 1-2 chart pairs per component factor
-3. Creating comprehensive whole formula charts for score trends and correlations
-4. Using consistent parameter ranges across all modules
-5. Handling data extraction from both CSV and database formats
-
-The productivity score module has been removed to allow regeneration using the
-improved framework, ensuring better alignment between theoretical and data-driven
-visualizations and more comprehensive whole formula analysis.
-
-The rule enhancements will guide future module development and ensure consistent,
-high-quality graphic aids across all analytics modules.
+Route: /experimental/productivity-hours-goal-tracking-system

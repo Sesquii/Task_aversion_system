@@ -1437,6 +1437,9 @@ def build_dashboard(task_manager):
                 ui.button("Analytics",
                           on_click=lambda: ui.navigate.to('/analytics'),
                           icon="bar_chart").classes("text-xl py-3 px-6").props('id="tas-analytics-link" data-tooltip-id="analytics_link"')
+                ui.button("Experimental",
+                          on_click=lambda: ui.navigate.to('/experimental'),
+                          icon="science").classes("text-xl py-3 px-6").props('id="tas-experimental-link" data-tooltip-id="experimental_link"')
                 ui.button("Glossary",
                           on_click=lambda: ui.navigate.to('/analytics/glossary'),
                           icon="menu_book").classes("text-xl py-3 px-6").props('data-tooltip-id="glossary_link"')

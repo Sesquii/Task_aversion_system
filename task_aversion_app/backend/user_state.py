@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 
@@ -163,6 +163,161 @@ class UserStateManager:
         import json
         settings_json = json.dumps(settings)
         return self.update_preference(user_id, "productivity_settings", settings_json)
+    
+    def get_productivity_goal_settings(self, user_id: str) -> Dict[str, Any]:
+        """Get productivity goal tracking settings.
+        
+        Returns:
+            Dict with:
+            - goal_hours_per_week (float, default 40.0)
+            - starting_hours_per_week (float or None)
+            - initialization_method (str or None: 'auto', 'manual', 'hybrid')
+            - auto_estimate_factor (float, default 10.0)
+            - last_adjusted_at (ISO string or None)
+            - auto_adjusted_count (int, default 0)
+            - user_override_flag (bool, default False)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        goal_settings_json = prefs.get("productivity_goal_settings", "")
+        if not goal_settings_json:
+            return {}
+        
+        try:
+            import json
+            settings = json.loads(goal_settings_json)
+            # Ensure defaults
+            if 'goal_hours_per_week' not in settings:
+                settings['goal_hours_per_week'] = 40.0
+            if 'auto_estimate_factor' not in settings:
+                settings['auto_estimate_factor'] = 10.0
+            if 'auto_adjusted_count' not in settings:
+                settings['auto_adjusted_count'] = 0
+            if 'user_override_flag' not in settings:
+                settings['user_override_flag'] = False
+            return settings
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_productivity_goal_settings(self, user_id: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist productivity goal tracking settings.
+        
+        Args:
+            user_id: User ID
+            settings: Dict with goal_hours_per_week, starting_hours_per_week, etc.
+        
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Validate and normalize settings
+        normalized = {}
+        if 'goal_hours_per_week' in settings:
+            normalized['goal_hours_per_week'] = float(settings['goal_hours_per_week'])
+        if 'starting_hours_per_week' in settings:
+            val = settings['starting_hours_per_week']
+            normalized['starting_hours_per_week'] = float(val) if val is not None else None
+        if 'initialization_method' in settings:
+            normalized['initialization_method'] = settings['initialization_method']
+        if 'auto_estimate_factor' in settings:
+            normalized['auto_estimate_factor'] = float(settings['auto_estimate_factor'])
+        if 'last_adjusted_at' in settings:
+            normalized['last_adjusted_at'] = settings['last_adjusted_at']
+        if 'auto_adjusted_count' in settings:
+            normalized['auto_adjusted_count'] = int(settings['auto_adjusted_count'])
+        if 'user_override_flag' in settings:
+            normalized['user_override_flag'] = bool(settings['user_override_flag'])
+        
+        settings_json = json.dumps(normalized)
+        return self.update_preference(user_id, "productivity_goal_settings", settings_json)
+    
+    def get_productivity_history(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get historical productivity tracking data (weekly snapshots).
+        
+        Returns:
+            List of dicts, each containing:
+            - week_start (ISO date string: YYYY-MM-DD)
+            - goal_hours (float)
+            - actual_hours (float)
+            - productivity_score (float)
+            - productivity_points (float)
+            - recorded_at (ISO datetime string)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return []
+        
+        history_json = prefs.get("productivity_history", "")
+        if not history_json:
+            return []
+        
+        try:
+            import json
+            return json.loads(history_json)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    
+    def add_productivity_history_entry(
+        self,
+        user_id: str,
+        week_start: str,
+        goal_hours_per_week: float,
+        actual_hours: float,
+        productivity_score: float,
+        productivity_points: float
+    ) -> Dict[str, Any]:
+        """Add a weekly snapshot to productivity history.
+        
+        Args:
+            user_id: User ID
+            week_start: Week start date as ISO string (YYYY-MM-DD)
+            goal_hours_per_week: Goal hours for this week
+            actual_hours: Actual productive hours for this week
+            productivity_score: Total productivity score for this week
+            productivity_points: Total productivity points for this week
+        
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        from datetime import datetime
+        
+        # Get existing history
+        history = self.get_productivity_history(user_id)
+        
+        # Create new entry
+        new_entry = {
+            'week_start': week_start,
+            'goal_hours_per_week': float(goal_hours_per_week),
+            'actual_hours': float(actual_hours),
+            'productivity_score': float(productivity_score),
+            'productivity_points': float(productivity_points),
+            'recorded_at': datetime.utcnow().isoformat()
+        }
+        
+        # Check if entry for this week already exists, update it if so
+        existing_index = None
+        for i, entry in enumerate(history):
+            if entry.get('week_start') == week_start:
+                existing_index = i
+                break
+        
+        if existing_index is not None:
+            history[existing_index] = new_entry
+        else:
+            history.append(new_entry)
+        
+        # Sort by week_start (oldest first)
+        history.sort(key=lambda x: x.get('week_start', ''))
+        
+        # Keep only last 52 weeks (1 year) to prevent unbounded growth
+        if len(history) > 52:
+            history = history[-52:]
+        
+        history_json = json.dumps(history)
+        return self.update_preference(user_id, "productivity_history", history_json)
 
     def get_persistent_emotions(self, user_id: str = "default") -> Dict[str, int]:
         """Get persistent emotion values that persist across tasks.
