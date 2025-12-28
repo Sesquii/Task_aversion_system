@@ -96,6 +96,9 @@ class Task(Base):
     completion_window_hours = Column(Integer, default=None)  # Hours to complete task after initialization without penalty
     completion_window_days = Column(Integer, default=None)  # Days to complete task after initialization without penalty
     
+    # Shared notes field - notes are shared across all instances of this task template
+    notes = Column(Text, default='')  # Runtime notes (separate from description which is set at task creation)
+    
     def to_dict(self) -> dict:
         """Convert model instance to dictionary (compatible with CSV format)."""
         return {
@@ -114,7 +117,8 @@ class Task(Base):
             'routine_days_of_week': json.dumps(self.routine_days_of_week) if isinstance(self.routine_days_of_week, list) else (self.routine_days_of_week or '[]'),
             'routine_time': self.routine_time or '00:00',
             'completion_window_hours': str(self.completion_window_hours) if self.completion_window_hours is not None else '',
-            'completion_window_days': str(self.completion_window_days) if self.completion_window_days is not None else ''
+            'completion_window_days': str(self.completion_window_days) if self.completion_window_days is not None else '',
+            'notes': self.notes or ''
         }
     
     def __repr__(self):

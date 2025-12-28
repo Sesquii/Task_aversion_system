@@ -312,8 +312,6 @@ SCORE_WEIGHTS_CONFIG = {
 }
 ```
 
-
-
 ### 3.2 Weight Naming Convention
 
 **Naming Pattern**: `{score_name}_{parameter_name}`**Examples:**
@@ -336,8 +334,6 @@ SCORE_WEIGHTS_CONFIG = {
     # ... per-score weights
 }
 ```
-
-
 
 ### 3.4 Weight Validation
 
@@ -442,8 +438,6 @@ task_aversion_app/
         └── obstacles_score_analysis.md
 ```
 
-
-
 ### 5.2 Implementation Order
 
 1. **Phase 1**: Create weight configuration system (`score_weights.py`)
@@ -473,8 +467,6 @@ UNIVERSAL_WEIGHTS = {
     # ...
 }
 ```
-
-
 
 ## Phase 6: Decision Matrix Template
 

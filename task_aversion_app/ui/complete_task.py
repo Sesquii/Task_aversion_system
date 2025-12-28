@@ -21,7 +21,9 @@ def complete_task_page(task_manager, emotion_manager):
 
         params = dict(request.query_params)
         instance_id = params.get("instance_id")
+        edit_mode = params.get("edit", "false").lower() == "true"
         print("[complete_task] instance_id from URL:", instance_id)
+        print("[complete_task] edit_mode:", edit_mode)
 
         # Get instance and predicted values if instance_id is available
         instance = None
@@ -150,6 +152,8 @@ def complete_task_page(task_manager, emotion_manager):
 
         ui.label("Actual Relief").classes("text-lg font-semibold")
         actual_relief = ui.slider(min=0, max=100, step=1, value=default_relief)
+        if edit_mode:
+            actual_relief.disable()
         # Show predicted value from initialization if available
         if 'expected_relief' in predicted_data:
             pred_val = predicted_data.get('expected_relief')
@@ -168,6 +172,8 @@ def complete_task_page(task_manager, emotion_manager):
         ui.label("Mental Energy Needed").classes("text-lg font-semibold")
         ui.label("How much mental effort was required to understand and process this task?").classes("text-xs text-gray-500")
         actual_mental_energy = ui.slider(min=0, max=100, step=1, value=default_mental_energy)
+        if edit_mode:
+            actual_mental_energy.disable()
         # Show predicted value from initialization if available
         if 'expected_mental_energy' in predicted_data:
             pred_val = predicted_data.get('expected_mental_energy')
@@ -197,6 +203,8 @@ def complete_task_page(task_manager, emotion_manager):
         ui.label("Task Difficulty").classes("text-lg font-semibold")
         ui.label("How inherently difficult or complex was this task?").classes("text-xs text-gray-500")
         actual_difficulty = ui.slider(min=0, max=100, step=1, value=default_difficulty)
+        if edit_mode:
+            actual_difficulty.disable()
         # Show predicted value from initialization if available
         if 'expected_difficulty' in predicted_data:
             pred_val = predicted_data.get('expected_difficulty')
@@ -226,6 +234,8 @@ def complete_task_page(task_manager, emotion_manager):
         ui.label("Actual Distress").classes("text-lg font-semibold")
         ui.label("How much stress or emotional activation did you experience?").classes("text-xs text-gray-500")
         actual_emotional = ui.slider(min=0, max=100, step=1, value=default_emotional)
+        if edit_mode:
+            actual_emotional.disable()
         # Show predicted value from initialization if available
         if 'expected_emotional_load' in predicted_data:
             pred_val = predicted_data.get('expected_emotional_load')
@@ -243,6 +253,8 @@ def complete_task_page(task_manager, emotion_manager):
 
         ui.label("Actual Physical Demand").classes("text-lg font-semibold")
         actual_physical = ui.slider(min=0, max=100, step=1, value=default_physical)
+        if edit_mode:
+            actual_physical.disable()
         # Show predicted value from initialization if available
         if 'expected_physical_load' in predicted_data:
             pred_val = predicted_data.get('expected_physical_load')
@@ -343,6 +355,8 @@ def complete_task_page(task_manager, emotion_manager):
                     with ui.row().classes("items-center gap-2 w-full"):
                         ui.label(emotion).classes("text-sm font-medium min-w-[120px]")
                         slider = ui.slider(min=0, max=100, step=1, value=default_value)
+                        if edit_mode:
+                            slider.disable()
                         emotion_sliders[emotion] = slider
                         value_label = ui.label(f"{default_value}").classes("text-sm min-w-[40px]")
                         value_label.bind_text_from(slider, 'value', lambda v: str(v))
@@ -362,13 +376,15 @@ def complete_task_page(task_manager, emotion_manager):
         # Initialize emotion sliders
         update_emotion_sliders()
         
-        # Single input for emotions (comma-separated)
+        # Single input for emotions (comma-separated) - disabled in edit mode
         ui.label("Track emotions by listing them (comma-separated)").classes("text-xs text-gray-500 mt-4")
         emotions_input = ui.input(
             label="Emotions",
             value=", ".join(all_emotions) if all_emotions else "",
             placeholder="e.g., Excitement, Anxiety, Relief"
         )
+        if edit_mode:
+            emotions_input.disable()
 
         def parse_emotions_input():
             raw = emotions_input.value or ''
@@ -389,7 +405,9 @@ def complete_task_page(task_manager, emotion_manager):
             all_emotions = parse_emotions_input()
             update_emotion_sliders()
 
-        ui.button("Update emotions", on_click=apply_emotion_input).classes("mb-4")
+        update_emotions_btn = ui.button("Update emotions", on_click=apply_emotion_input).classes("mb-4")
+        if edit_mode:
+            update_emotions_btn.disable()
 
         ui.label("Completion %").classes("text-lg font-semibold")
         ui.label("Enter percentage completed. Use values > 100% if you completed more work than expected.").classes("text-xs text-gray-500 mb-2")
@@ -453,7 +471,23 @@ def complete_task_page(task_manager, emotion_manager):
         ui.label("Actual Time (minutes)").classes("text-lg font-semibold")
         actual_time = ui.number(value=int(default_duration) if default_duration > 0 else 0)
 
-        notes = ui.textarea(label='Notes (optional)')
+        # Load existing completion notes (instance-specific completion notes, separate from shared instance notes)
+        existing_completion_notes = current_actual_data.get('completion_notes', '') or ''
+        
+        # Also show shared notes if they exist (for reference, not editable here)
+        shared_notes = current_actual_data.get('notes', '') or ''
+        
+        # Show edit mode indicator
+        if edit_mode:
+            ui.label("Edit Mode: Only completion percentage, time, and completion notes can be edited").classes("text-sm text-orange-600 font-semibold mb-2")
+        
+        # Show shared notes if they exist (read-only)
+        if shared_notes and not edit_mode:
+            ui.label("Shared notes from active task:").classes("text-xs text-gray-600 mt-2 mb-1")
+            ui.markdown(shared_notes).classes("text-xs text-gray-700 p-2 bg-gray-50 rounded border mb-2").style("max-height: 150px; overflow-y: auto; white-space: pre-wrap;")
+        
+        notes_label = 'Completion Notes (optional)' + (' - Instance-specific completion notes' if not edit_mode else '')
+        notes = ui.textarea(label=notes_label, value=existing_completion_notes if edit_mode else '')
 
         def submit_completion():
             print("[complete_task] submit clicked")
@@ -502,13 +536,20 @@ def complete_task_page(task_manager, emotion_manager):
             completion_value = completion_pct.value if completion_pct.value is not None else 100
             completion_value = float(completion_value) if completion_value else 100.0
             
-            # Combine notes with over-completion note if provided
-            combined_notes = notes.value or ""
+            # Completion notes are instance-specific (stored separately from task-level notes)
+            # Get existing completion notes
+            existing_completion_notes = current_actual_data.get('completion_notes', '') or ''
+            new_completion_notes = notes.value or "" if not edit_mode else notes.value or ""
+            
+            # Use the new completion notes (no merging needed since they're instance-specific)
+            combined_completion_notes = new_completion_notes
+            
+            # Add over-completion note if provided
             if over_completion_note.value and over_completion_note.value.strip():
-                if combined_notes:
-                    combined_notes += "\n\nOver-completion: " + over_completion_note.value.strip()
+                if combined_completion_notes:
+                    combined_completion_notes += "\n\nOver-completion: " + over_completion_note.value.strip()
                 else:
-                    combined_notes = "Over-completion: " + over_completion_note.value.strip()
+                    combined_completion_notes = "Over-completion: " + over_completion_note.value.strip()
             
             # Safely get slider values with fallbacks
             try:
@@ -540,7 +581,7 @@ def complete_task_page(task_manager, emotion_manager):
                 'actual_physical': physical_val,
                 'completion_percent': int(round(completion_value)),
                 'time_actual_minutes': int(actual_time.value or 0),
-                'notes': combined_notes,
+                'completion_notes': combined_completion_notes,  # Instance-specific completion notes
                 'emotion_values': emotion_values,  # Store actual emotion values
                 # Backward compatibility: also include old cognitive field
                 'actual_cognitive': int((mental_energy_val + difficulty_val) / 2),

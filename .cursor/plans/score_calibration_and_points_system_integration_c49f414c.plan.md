@@ -520,8 +520,6 @@ def calculate_productivity_with_points(self, row, ...):
     }
 ```
 
-
-
 ### Weight Configuration Pattern
 
 ```python
@@ -538,8 +536,6 @@ def get_productivity_weights(user_id: str) -> Dict:
     user_weights = user_state.get_score_weights(user_id)
     return user_weights.get('productivity', PRODUCTIVITY_WEIGHTS)
 ```
-
-
 
 ### Database Schema
 
@@ -570,8 +566,6 @@ class ScoreWeights(Base):
         Index('idx_user_score', 'user_id', 'score_name'),
     )
 ```
-
-
 
 ## Calibration Workflow Per Score
 

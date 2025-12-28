@@ -889,6 +889,27 @@ class InstanceManager:
             self.use_db = False
             return self._complete_instance_csv(instance_id, actual)
 
+    def append_instance_notes(self, instance_id: str, note: str):
+        """Append a note to the task template (shared across all instances). Works with both CSV and database.
+        
+        Args:
+            instance_id: The instance ID (used to get the task_id)
+            note: The note text to append (will be timestamped and separated with '---')
+        """
+        # Get the task_id from the instance
+        instance = self.get_instance(instance_id)
+        if not instance:
+            raise ValueError(f"Instance {instance_id} not found")
+        
+        task_id = instance.get('task_id')
+        if not task_id:
+            raise ValueError(f"Instance {instance_id} has no task_id")
+        
+        # Append note to task template via TaskManager
+        from backend.task_manager import TaskManager
+        task_manager = TaskManager()
+        task_manager.append_task_notes(task_id, note)
+    
     def cancel_instance(self, instance_id, actual: dict):
         """Cancel a task instance. Works with both CSV and database."""
         if self.use_db:
@@ -1295,6 +1316,82 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in list_recent_completed: {e}, falling back to CSV")
             self.use_db = False
             return self._list_recent_completed_csv(limit)
+    
+    def list_recent_tasks(self, limit=20):
+        """List recent tasks (completed or cancelled). Works with both CSV and database."""
+        if self.use_db:
+            return self._list_recent_tasks_db(limit)
+        else:
+            return self._list_recent_tasks_csv(limit)
+    
+    def _list_recent_tasks_csv(self, limit=20):
+        """CSV-specific list_recent_tasks."""
+        print(f"[InstanceManager] list_recent_tasks called (limit={limit})")
+        self._reload()
+        # Get both completed and cancelled tasks
+        completed = self.df[self.df['completed_at'].astype(str).str.strip() != ''].copy()
+        cancelled = self.df[self.df['cancelled_at'].astype(str).str.strip() != ''].copy()
+        
+        # Combine and add a status field
+        if not completed.empty:
+            completed['status'] = 'completed'
+            completed['timestamp'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        if not cancelled.empty:
+            cancelled['status'] = 'cancelled'
+            cancelled['timestamp'] = pd.to_datetime(cancelled['cancelled_at'], errors='coerce')
+        
+        # Combine both dataframes
+        if not completed.empty and not cancelled.empty:
+            combined = pd.concat([completed, cancelled], ignore_index=True)
+        elif not completed.empty:
+            combined = completed
+        elif not cancelled.empty:
+            combined = cancelled
+        else:
+            return []
+        
+        # Sort by timestamp descending
+        combined = combined.sort_values("timestamp", ascending=False, na_position='last')
+        return combined.head(limit).to_dict(orient="records")
+    
+    def _list_recent_tasks_db(self, limit=20):
+        """Database-specific list_recent_tasks."""
+        try:
+            print(f"[InstanceManager] list_recent_tasks called (limit={limit})")
+            with self.db_session() as session:
+                # Get completed instances
+                completed = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.completed_at.isnot(None)
+                ).all()
+                
+                # Get cancelled instances
+                cancelled = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.cancelled_at.isnot(None)
+                ).all()
+                
+                # Combine and add status
+                results = []
+                for instance in completed:
+                    d = instance.to_dict()
+                    d['status'] = 'completed'
+                    d['timestamp'] = instance.completed_at
+                    results.append(d)
+                
+                for instance in cancelled:
+                    d = instance.to_dict()
+                    d['status'] = 'cancelled'
+                    d['timestamp'] = instance.cancelled_at
+                    results.append(d)
+                
+                # Sort by timestamp descending
+                results.sort(key=lambda x: x.get('timestamp') or datetime.min, reverse=True)
+                return results[:limit]
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in list_recent_tasks and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in list_recent_tasks: {e}, falling back to CSV")
+            self.use_db = False
+            return self._list_recent_tasks_csv(limit)
     
     def backfill_attributes_from_json(self):
         """Backfill empty attribute columns from JSON data in predicted/actual columns.

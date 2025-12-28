@@ -1,37 +1,3 @@
----
-name: popup-integration-initial
-overview: Add an initial popup system with SQLite-backed state, a dispatcher, and hooks across task flows with caps/tiers per the new popup rules.
-todos:
-  - id: schema
-    content: Add popup tables/models and helpers for state/responses
-    status: pending
-  - id: rules
-    content: Encode trigger definitions/tiers/priorities in code
-    status: pending
-    dependencies:
-      - schema
-  - id: dispatcher
-    content: Implement popup dispatcher with caps/cooldowns
-    status: pending
-    dependencies:
-      - rules
-  - id: hooks
-    content: Hook dispatcher into UI flows (complete/start/cancel)
-    status: pending
-    dependencies:
-      - dispatcher
-  - id: tests
-    content: Add dispatcher/cap/cooldown tests
-    status: pending
-    dependencies:
-      - dispatcher
-  - id: docs
-    content: Document trigger ids/tiers + storage in popup_rules
-    status: pending
-    dependencies:
-      - hooks
----
-
 # Initial Popup Integration Plan
 
 ## Scope

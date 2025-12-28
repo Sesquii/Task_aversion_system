@@ -63,9 +63,9 @@ class TaskManager:
         os.makedirs(DATA_DIR, exist_ok=True)
         self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
         # task definition fields:
-        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days
+        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days, notes
         if not os.path.exists(self.tasks_file):
-            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days']).to_csv(self.tasks_file, index=False)
+            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days','notes']).to_csv(self.tasks_file, index=False)
         self._reload()
     def _reload(self):
         """Reload data (CSV only)."""
@@ -102,6 +102,8 @@ class TaskManager:
             self.df['completion_window_hours'] = ''
         if 'completion_window_days' not in self.df.columns:
             self.df['completion_window_days'] = ''
+        if 'notes' not in self.df.columns:
+            self.df['notes'] = ''
     
     def _save(self):
         """Save data (CSV only)."""
@@ -431,6 +433,118 @@ class TaskManager:
         if t:
             return t['task_id']
         return self.create_task(name)
+    
+    def append_task_notes(self, task_id: str, note: str):
+        """Append a note to a task template (shared across all instances). Works with both CSV and database.
+        
+        Args:
+            task_id: The task ID to append notes to
+            note: The note text to append (will be timestamped and separated with '---')
+        """
+        if self.use_db:
+            return self._append_task_notes_db(task_id, note)
+        else:
+            return self._append_task_notes_csv(task_id, note)
+    
+    def _append_task_notes_csv(self, task_id: str, note: str):
+        """CSV-specific append_task_notes."""
+        from datetime import datetime
+        self._reload_csv()
+        matches = self.df.index[self.df['task_id'] == task_id]
+        if len(matches) == 0:
+            raise ValueError(f"Task {task_id} not found")
+        
+        idx = matches[0]
+        
+        # Get existing notes or initialize
+        existing_notes = self.df.at[idx, 'notes'] if 'notes' in self.df.columns else ''
+        if pd.isna(existing_notes) or existing_notes == '':
+            existing_notes = ''
+        
+        # Append new note with timestamp and separator
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamped_note = f"[{timestamp}]\n{note}"
+        
+        if existing_notes:
+            new_notes = existing_notes + '\n\n---\n\n' + timestamped_note
+        else:
+            new_notes = timestamped_note
+        
+        self.df.at[idx, 'notes'] = new_notes
+        self._save_csv()
+    
+    def _append_task_notes_db(self, task_id: str, note: str):
+        """Database-specific append_task_notes."""
+        try:
+            from datetime import datetime
+            with self.db_session() as session:
+                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                if not task:
+                    raise ValueError(f"Task {task_id} not found")
+                
+                # Get existing notes or initialize
+                existing_notes = task.notes or ''
+                
+                # Append new note with timestamp and separator
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                timestamped_note = f"[{timestamp}]\n{note}"
+                
+                if existing_notes:
+                    new_notes = existing_notes + '\n\n---\n\n' + timestamped_note
+                else:
+                    new_notes = timestamped_note
+                
+                task.notes = new_notes
+                task.updated_at = datetime.now()
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in append_task_notes and CSV fallback is disabled: {e}") from e
+            print(f"[TaskManager] Database error in append_task_notes: {e}, falling back to CSV")
+            self.use_db = False
+            self._ensure_csv_initialized()
+            return self._append_task_notes_csv(task_id, note)
+    
+    def get_task_notes(self, task_id: str) -> str:
+        """Get notes for a task template. Works with both CSV and database.
+        
+        Args:
+            task_id: The task ID
+            
+        Returns:
+            Notes string (empty string if no notes)
+        """
+        if self.use_db:
+            return self._get_task_notes_db(task_id)
+        else:
+            return self._get_task_notes_csv(task_id)
+    
+    def _get_task_notes_csv(self, task_id: str) -> str:
+        """CSV-specific get_task_notes."""
+        self._reload_csv()
+        matches = self.df.index[self.df['task_id'] == task_id]
+        if len(matches) == 0:
+            return ''
+        
+        idx = matches[0]
+        notes = self.df.at[idx, 'notes'] if 'notes' in self.df.columns else ''
+        return notes if not pd.isna(notes) else ''
+    
+    def _get_task_notes_db(self, task_id: str) -> str:
+        """Database-specific get_task_notes."""
+        try:
+            with self.db_session() as session:
+                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                if not task:
+                    return ''
+                return task.notes or ''
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_task_notes and CSV fallback is disabled: {e}") from e
+            print(f"[TaskManager] Database error in get_task_notes: {e}, falling back to CSV")
+            self.use_db = False
+            self._ensure_csv_initialized()
+            return self._get_task_notes_csv(task_id)
 
 
 

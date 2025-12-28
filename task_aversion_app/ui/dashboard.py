@@ -289,21 +289,320 @@ def refresh_templates(search_query=None):
             col = columns[idx % 3]
             print(f"[Dashboard] Rendering template {idx+1}/{len(rows)}: '{t.get('name')}' in column {idx % 3 + 1}")
             with col:
-                with ui.card().classes("p-2 mb-2 w-full"):
+                task_id = t['task_id']
+                card_id = f"template-{task_id}"
+                with ui.card().classes("p-2 mb-2 w-full context-menu-card").props(f'id="{card_id}" data-template-id="{task_id}" data-context-menu="template"'):
                     ui.markdown(f"**{t['name']}**").classes("text-xs")
-                    with ui.row().classes("gap-1"):
-                        ui.button("INIT", on_click=lambda tid=t['task_id']: init_quick(tid)).props("dense size=sm")
-                        ui.button("EDIT", on_click=lambda task=t: edit_template(task)).props("dense size=sm color=blue")
-                        ui.button("COPY", on_click=lambda task=t: copy_template(task)).props("dense size=sm color=green")
-                        ui.button("DELETE", on_click=lambda tid=t['task_id']: delete_template(tid)).props("dense size=sm color=red")
+                    ui.button("Initialize", on_click=lambda tid=task_id: init_quick(tid)).props("dense size=sm").classes("w-full")
+                    # Hidden buttons for context menu actions
+                    ui.button("", on_click=lambda task=t: edit_template(task)).props(f'id="context-btn-template-edit-{task_id}"').style("display: none;")
+                    ui.button("", on_click=lambda task=t: copy_template(task)).props(f'id="context-btn-template-copy-{task_id}"').style("display: none;")
+                    ui.button("", on_click=lambda tid=task_id: delete_template(tid)).props(f'id="context-btn-template-delete-{task_id}"').style("display: none;")
     
     print(f"[Dashboard] refresh_templates() completed successfully")
+    # Re-initialize context menus after templates are refreshed
+    ui.run_javascript("setTimeout(initContextMenus, 100);")
 
 
 def delete_instance(instance_id):
     im.delete_instance(instance_id)
     ui.notify("Deleted", color='negative')
     ui.navigate.reload()
+
+
+def add_instance_note(instance_id):
+    """Add a note to an instance (active or initialized)."""
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg p-4'):
+        ui.label("Add Note").classes("text-xl font-bold mb-4")
+        note_input = ui.textarea(label="Note", placeholder="Enter your note here...").classes("w-full").props("rows=5")
+        
+        with ui.row().classes("gap-2 mt-4 justify-end"):
+            ui.button("Cancel", on_click=dialog.close)
+            def save_note():
+                note_text = note_input.value.strip()
+                if not note_text:
+                    ui.notify("Note cannot be empty", color='warning')
+                    return
+                try:
+                    im.append_instance_notes(instance_id, note_text)
+                    ui.notify("Note added", color='positive')
+                    dialog.close()
+                    ui.navigate.reload()
+                except Exception as e:
+                    ui.notify(f"Error adding note: {e}", color='negative')
+            ui.button("Save", on_click=save_note, color='primary')
+        
+    dialog.open()
+
+
+def view_instance_notes(instance_id):
+    """View all notes for an instance (task-level notes + pause notes if any)."""
+    instance = im.get_instance(instance_id)
+    if not instance:
+        ui.notify("Instance not found", color='negative')
+        return
+    
+    # Get task-level notes (shared across all instances)
+    task_id = instance.get('task_id')
+    if task_id:
+        notes = tm.get_task_notes(task_id)
+    else:
+        notes = ''
+    
+    # Get pause notes from instance actual data (instance-specific)
+    actual_raw = instance.get('actual', '{}') or '{}'
+    try:
+        actual_data = json.loads(actual_raw) if isinstance(actual_raw, str) else actual_raw
+    except json.JSONDecodeError:
+        actual_data = {}
+    
+    pause_reason = actual_data.get('pause_reason', '') or ''
+    
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-4'):
+        ui.label("Task Notes").classes("text-xl font-bold mb-4")
+        
+        # Regular notes (shared across instances with same initialization description)
+        if notes:
+            ui.label("Notes").classes("text-md font-semibold mb-2")
+            ui.markdown(notes).classes("w-full p-4 bg-gray-50 rounded border mb-4").style("max-height: 300px; overflow-y: auto; white-space: pre-wrap;")
+        else:
+            ui.label("No notes yet").classes("text-gray-500 p-4 mb-4")
+        
+        # Pause notes (instance-specific, shown separately)
+        if pause_reason:
+            ui.label("Pause Notes (instance-specific)").classes("text-md font-semibold mt-4 mb-2 text-orange-600")
+            ui.label(pause_reason.strip()).classes("w-full p-4 bg-orange-50 border border-orange-200 rounded").style("max-height: 200px; overflow-y: auto; white-space: pre-wrap;")
+        
+        with ui.row().classes("gap-2 mt-4 justify-end"):
+            ui.button("Close", on_click=dialog.close, color='primary')
+        
+    dialog.open()
+
+
+def copy_instance(instance_id):
+    """Create a new instance based on an existing instance."""
+    instance = im.get_instance(instance_id)
+    if not instance:
+        ui.notify("Instance not found", color='negative')
+        return
+    
+    # Get the task template
+    task_id = instance.get('task_id')
+    task = tm.get_task(task_id)
+    if not task:
+        ui.notify("Task template not found", color='negative')
+        return
+    
+    # Get predicted data from the instance
+    predicted_str = instance.get('predicted', '{}') or '{}'
+    try:
+        predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
+    except (json.JSONDecodeError, TypeError):
+        predicted_data = {}
+    
+    # Create a new instance with the same predicted data
+    new_instance_id = im.create_instance(
+        task_id,
+        task['name'],
+        task_version=task.get('version') or 1,
+        predicted=predicted_data
+    )
+    
+    if new_instance_id:
+        ui.notify("Instance copied", color='positive')
+        ui.navigate.reload()
+    else:
+        ui.notify("Failed to copy instance", color='negative')
+
+
+def view_initialized_instance(instance_id):
+    """View an initialized instance's expected values, time, and notes in a friendly UI."""
+    instance = im.get_instance(instance_id)
+    if not instance:
+        ui.notify("Instance not found", color='negative')
+        return
+    
+    # Check if instance is initialized
+    initialized_at = instance.get('initialized_at', '')
+    if not initialized_at or str(initialized_at).strip() == '':
+        ui.notify("Instance not yet initialized", color='warning')
+        return
+    
+    # Get predicted data (expected values)
+    predicted_raw = instance.get('predicted', '{}') or '{}'
+    try:
+        predicted_data = json.loads(predicted_raw) if isinstance(predicted_raw, str) else predicted_raw
+    except json.JSONDecodeError:
+        predicted_data = {}
+    
+    # Get notes from actual data (shared across instances with same initialization description)
+    actual_raw = instance.get('actual', '{}') or '{}'
+    try:
+        actual_data = json.loads(actual_raw) if isinstance(actual_raw, str) else actual_raw
+    except json.JSONDecodeError:
+        actual_data = {}
+    
+    notes = actual_data.get('notes', '') or ''
+    
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-6'):
+        ui.label("Initialized Task Details").classes("text-2xl font-bold mb-4")
+        
+        # Task name
+        task_name = instance.get('task_name', 'Unknown Task')
+        ui.label(f"Task: {task_name}").classes("text-lg font-semibold mb-2")
+        
+        # Initialized timestamp
+        if initialized_at:
+            ui.label(f"Initialized: {initialized_at}").classes("text-sm text-gray-600 mb-4")
+        
+        # Expected time
+        time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
+        try:
+            time_estimate = int(float(time_estimate))
+        except (ValueError, TypeError):
+            time_estimate = 0
+        ui.label("Expected Time").classes("text-md font-semibold mt-4 mb-1")
+        ui.label(f"{time_estimate} minutes").classes("text-lg mb-4")
+        
+        # Expected values section
+        ui.label("Expected Values").classes("text-md font-semibold mt-4 mb-2")
+        
+        with ui.card().classes("w-full p-4 bg-gray-50"):
+            # Expected aversion
+            expected_aversion = predicted_data.get('expected_aversion') or predicted_data.get('initialization_expected_aversion') or 0
+            try:
+                expected_aversion = int(float(expected_aversion))
+            except (ValueError, TypeError):
+                expected_aversion = 0
+            ui.label(f"Expected Aversion: {expected_aversion}/100").classes("text-sm mb-2")
+            
+            # Expected relief
+            expected_relief = predicted_data.get('expected_relief', 0)
+            try:
+                expected_relief = int(float(expected_relief))
+            except (ValueError, TypeError):
+                expected_relief = 0
+            ui.label(f"Expected Relief: {expected_relief}/100").classes("text-sm mb-2")
+            
+            # Expected mental energy
+            expected_mental_energy = predicted_data.get('expected_mental_energy', 0)
+            try:
+                expected_mental_energy = int(float(expected_mental_energy))
+            except (ValueError, TypeError):
+                expected_mental_energy = 0
+            ui.label(f"Expected Mental Energy: {expected_mental_energy}/100").classes("text-sm mb-2")
+            
+            # Expected difficulty
+            expected_difficulty = predicted_data.get('expected_difficulty', 0)
+            try:
+                expected_difficulty = int(float(expected_difficulty))
+            except (ValueError, TypeError):
+                expected_difficulty = 0
+            ui.label(f"Expected Difficulty: {expected_difficulty}/100").classes("text-sm mb-2")
+            
+            # Expected emotional load
+            expected_emotional = predicted_data.get('expected_emotional_load', 0)
+            try:
+                expected_emotional = int(float(expected_emotional))
+            except (ValueError, TypeError):
+                expected_emotional = 0
+            ui.label(f"Expected Emotional Load: {expected_emotional}/100").classes("text-sm mb-2")
+            
+            # Expected physical load
+            expected_physical = predicted_data.get('expected_physical_load', 0)
+            try:
+                expected_physical = int(float(expected_physical))
+            except (ValueError, TypeError):
+                expected_physical = 0
+            ui.label(f"Expected Physical Load: {expected_physical}/100").classes("text-sm")
+        
+        # Emotions section
+        ui.label("Emotions").classes("text-md font-semibold mt-4 mb-2")
+        emotion_values = predicted_data.get('emotion_values', {})
+        if isinstance(emotion_values, str):
+            try:
+                emotion_values = json.loads(emotion_values) if emotion_values else {}
+            except json.JSONDecodeError:
+                emotion_values = {}
+        if not isinstance(emotion_values, dict):
+            emotion_values = {}
+        
+        # Also check for old 'emotions' field (comma-separated string or list) for backward compatibility
+        if not emotion_values:
+            emotions_data = predicted_data.get('emotions', '') or ''
+            if isinstance(emotions_data, str):
+                emotion_list = [e.strip() for e in emotions_data.split(',') if e.strip()]
+            elif isinstance(emotions_data, list):
+                emotion_list = [e for e in emotions_data if e]
+            else:
+                emotion_list = []
+            if emotion_list:
+                emotion_values = {emotion: 50 for emotion in emotion_list}  # Default value of 50 for old format
+        
+        if emotion_values:
+            with ui.card().classes("w-full p-4 bg-blue-50"):
+                for emotion, value in emotion_values.items():
+                    try:
+                        value_int = int(float(value)) if value is not None else 50
+                    except (ValueError, TypeError):
+                        value_int = 50
+                    ui.label(f"• {emotion}: {value_int}/100").classes("text-sm mb-1")
+        else:
+            ui.label("No emotions specified").classes("text-gray-500 p-4")
+        
+        # Notes section (shared across instances with same initialization description)
+        ui.label("Notes").classes("text-md font-semibold mt-4 mb-2")
+        if notes:
+            ui.markdown(notes).classes("w-full p-4 bg-gray-50 rounded border").style("max-height: 300px; overflow-y: auto; white-space: pre-wrap;")
+        else:
+            ui.label("No notes yet").classes("text-gray-500 p-4")
+        
+        # Description if available
+        description = predicted_data.get('description', '')
+        if description and description.strip():
+            ui.label("Description").classes("text-md font-semibold mt-4 mb-2")
+            ui.label(description.strip()).classes("text-sm text-gray-700 p-3 bg-gray-50 rounded border").style("max-height: 200px; overflow-y: auto; white-space: pre-wrap;")
+        
+        with ui.row().classes("gap-2 mt-6 justify-end"):
+            ui.button("Close", on_click=dialog.close, color='primary')
+        
+    dialog.open()
+
+
+def edit_instance(instance_id):
+    """Edit a completed instance - navigate to completion page in edit mode."""
+    instance = im.get_instance(instance_id)
+    if not instance:
+        ui.notify("Instance not found", color='negative')
+        return
+    
+    # Check if instance is completed
+    is_completed = instance.get('is_completed', False)
+    completed_at = instance.get('completed_at', '')
+    if is_completed or (completed_at and str(completed_at).strip() != ''):
+        # Navigate to completion page in edit mode
+        ui.navigate.to(f'/complete_task?instance_id={instance_id}&edit=true')
+        return
+    
+    ui.notify("Instance not completed", color='warning')
+
+
+def edit_completed_instance(instance_id):
+    """Edit a completed instance - navigate to completion page with edit mode."""
+    instance = im.get_instance(instance_id)
+    if not instance:
+        ui.notify("Instance not found", color='negative')
+        return
+    
+    # Check if instance is completed
+    completed_at = instance.get('completed_at', '')
+    if not completed_at or str(completed_at).strip() == '':
+        ui.notify("Instance not completed", color='warning')
+        return
+    
+    # Navigate to completion page to edit
+    ui.navigate.to(f'/complete_task?instance_id={instance_id}&edit=true')
+
 
 def edit_template(task):
     """Open a dialog to edit a task template."""
@@ -1312,6 +1611,62 @@ def build_dashboard(task_manager):
         .metric-bg-red {
             background-color: #fee2e2 !important;
         }
+        
+        /* Context menu styling */
+        .context-menu {
+            position: fixed;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.375rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 10000;
+            min-width: 150px;
+            padding: 0.25rem 0;
+            display: none;
+        }
+        
+        .context-menu-item {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            color: #1f2937;
+            transition: background-color 0.15s;
+        }
+        
+        .context-menu-item:hover {
+            background-color: #f3f4f6;
+        }
+        
+        .context-menu-item.edit {
+            color: #3b82f6;
+        }
+        
+        .context-menu-item.copy {
+            color: #22c55e;
+        }
+        
+        .context-menu-item.delete {
+            color: #ef4444;
+        }
+        
+        .context-menu-item:first-child {
+            border-top-left-radius: 0.375rem;
+            border-top-right-radius: 0.375rem;
+        }
+        
+        .context-menu-item:last-child {
+            border-bottom-left-radius: 0.375rem;
+            border-bottom-right-radius: 0.375rem;
+        }
+        
+        /* Context menu cards - subtle hover effect to indicate interactivity */
+        .context-menu-card {
+            cursor: context-menu;
+        }
+        
+        .context-menu-card:hover {
+            background-color: #f9fafb;
+        }
     </style>
     <script>
         // Handle zoom-responsive behavior
@@ -1466,6 +1821,169 @@ def build_dashboard(task_manager):
         
         // Re-initialize after a short delay to catch dynamically added elements
         setTimeout(initMetricTooltips, 100);
+    </script>
+    <script>
+        // Context menu functionality
+        let contextMenu = null;
+        
+        function createContextMenu() {
+            if (contextMenu) {
+                contextMenu.remove();
+            }
+            contextMenu = document.createElement('div');
+            contextMenu.className = 'context-menu';
+            contextMenu.id = 'context-menu';
+            document.body.appendChild(contextMenu);
+            return contextMenu;
+        }
+        
+        function showContextMenu(event, type, id, additionalData) {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            const menu = createContextMenu();
+            menu.innerHTML = '';
+            
+            let menuItems = [];
+            
+            if (type === 'template') {
+                menuItems = [
+                    { label: 'Edit', action: 'edit', class: 'edit' },
+                    { label: 'Copy', action: 'copy', class: 'copy' },
+                    { label: 'Delete', action: 'delete', class: 'delete' }
+                ];
+            } else if (type === 'instance') {
+                // Initialized tasks: View, Add Note, Complete
+                menuItems = [
+                    { label: 'View', action: 'view', class: 'edit' },
+                    { label: 'Add Note', action: 'addnote', class: 'edit' },
+                    { label: 'Complete', action: 'complete', class: 'copy' }
+                ];
+            } else if (type === 'completed') {
+                // Completed/cancelled tasks: Edit, Delete only
+                menuItems = [
+                    { label: 'Edit', action: 'edit', class: 'edit' },
+                    { label: 'Delete', action: 'delete', class: 'delete' }
+                ];
+            } else if (type === 'active') {
+                // Active tasks: Add Notes, View Notes
+                menuItems = [
+                    { label: 'Add Note', action: 'addnote', class: 'edit' },
+                    { label: 'View Notes', action: 'viewnotes', class: 'edit' }
+                ];
+            }
+            
+            menuItems.forEach(item => {
+                const menuItem = document.createElement('div');
+                menuItem.className = 'context-menu-item ' + item.class;
+                menuItem.textContent = item.label;
+                menuItem.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    handleContextMenuAction(item.action, type, id, additionalData);
+                    hideContextMenu();
+                });
+                menu.appendChild(menuItem);
+            });
+            
+            menu.style.display = 'block';
+            menu.style.left = event.clientX + 'px';
+            menu.style.top = event.clientY + 'px';
+            
+            // Adjust position if menu would go off screen
+            setTimeout(() => {
+                const rect = menu.getBoundingClientRect();
+                if (rect.right > window.innerWidth) {
+                    menu.style.left = (event.clientX - rect.width) + 'px';
+                }
+                if (rect.bottom > window.innerHeight) {
+                    menu.style.top = (event.clientY - rect.height) + 'px';
+                }
+            }, 0);
+        }
+        
+        function hideContextMenu() {
+            if (contextMenu) {
+                contextMenu.style.display = 'none';
+            }
+        }
+        
+        function handleContextMenuAction(action, type, id, additionalData) {
+            // Find and click the hidden button for this action
+            const buttonId = `context-btn-${type}-${action}-${id}`;
+            const button = document.getElementById(buttonId);
+            if (button) {
+                if (action === 'delete' || action === 'cancel') {
+                    const confirmMsg = type === 'template' 
+                        ? 'Are you sure you want to delete this task template?'
+                        : action === 'cancel'
+                        ? 'Are you sure you want to cancel this task?'
+                        : 'Are you sure you want to delete this instance?';
+                    if (confirm(confirmMsg)) {
+                        button.click();
+                    }
+                } else if (action === 'addnote' || action === 'viewnotes' || action === 'view' || action === 'complete') {
+                    // No confirmation needed for view/note/complete actions
+                    button.click();
+                } else {
+                    button.click();
+                }
+            }
+        }
+        
+        // Initialize context menus
+        function initContextMenus() {
+            // Use a marker to prevent duplicate listeners
+            document.querySelectorAll('[data-context-menu]:not([data-context-menu-initialized])').forEach(element => {
+                element.setAttribute('data-context-menu-initialized', 'true');
+                
+                element.addEventListener('contextmenu', function(e) {
+                    const type = element.getAttribute('data-context-menu');
+                    let id = null;
+                    
+                    if (type === 'template') {
+                        id = element.getAttribute('data-template-id');
+                    } else if (type === 'instance' || type === 'completed' || type === 'active') {
+                        id = element.getAttribute('data-instance-id');
+                    }
+                    
+                    if (id) {
+                        showContextMenu(e, type, id, null);
+                    }
+                });
+            });
+            
+            // Also handle completed task items
+            document.querySelectorAll('[data-completed-instance-id]:not([data-context-menu-initialized])').forEach(element => {
+                element.setAttribute('data-context-menu-initialized', 'true');
+                
+                element.addEventListener('contextmenu', function(e) {
+                    const id = element.getAttribute('data-completed-instance-id');
+                    if (id) {
+                        showContextMenu(e, 'completed', id, null);
+                    }
+                });
+            });
+        }
+        
+        // Hide context menu on click outside
+        document.addEventListener('click', hideContextMenu);
+        document.addEventListener('contextmenu', function(e) {
+            if (!e.target.closest('[data-context-menu]') && !e.target.closest('[data-completed-instance-id]')) {
+                hideContextMenu();
+            }
+        });
+        
+        // Initialize on page load
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                setTimeout(initContextMenus, 200);
+            });
+        } else {
+            setTimeout(initContextMenus, 200);
+        }
+        
+        // Re-initialize after DOM updates
+        setTimeout(initContextMenus, 500);
     </script>
     """)
 
@@ -1694,7 +2212,7 @@ def build_dashboard(task_manager):
                                 for r in recent:
                                     with ui.row().classes("justify-between items-center mb-1"):
                                         ui.label(r['name']).classes("text-sm")
-                                        ui.button("INIT", 
+                                        ui.button("Initialize", 
                                                   on_click=lambda n=r['name']: init_quick(n)
                                                   ).props("dense size=sm")
                     
@@ -1702,29 +2220,42 @@ def build_dashboard(task_manager):
                     right_half = ui.column().classes("half-width-right")
                     with right_half:
                         with ui.card().classes("w-full p-2").style("display: flex; flex-direction: column; align-self: flex-start; height: 100%;"):
-                            ui.label("Recently Completed").classes("font-bold text-sm mb-2")
+                            ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
                             ui.separator()
                             # Scrollable content area - matches height of left half content
                             completed_scroll = ui.column().classes("w-full mt-2").style("overflow-y: auto; overflow-x: hidden; max-height: 400px;")
                             with completed_scroll:
-                                # Get completed tasks and display them
-                                completed = im.list_recent_completed(limit=20) if hasattr(im, "list_recent_completed") else []
+                                # Get recent tasks (completed + cancelled) and display them
+                                recent_tasks = im.list_recent_tasks(limit=20) if hasattr(im, "list_recent_tasks") else []
                                 
-                                if not completed:
-                                    ui.label("No completed tasks").classes("text-xs text-gray-500")
+                                if not recent_tasks:
+                                    ui.label("No recent tasks").classes("text-xs text-gray-500")
                                 else:
-                                    for c in completed:
+                                    for c in recent_tasks:
+                                        # Get timestamp from either completed_at or cancelled_at
                                         completed_at = str(c.get('completed_at', ''))
-                                        with ui.row().classes("justify-between items-center mb-1"):
-                                            ui.label(c['task_name']).classes("text-xs")
-                                            if completed_at:
-                                                parts = completed_at.split()
+                                        cancelled_at = str(c.get('cancelled_at', ''))
+                                        status = c.get('status', 'completed')
+                                        timestamp_str = completed_at if status == 'completed' else cancelled_at
+                                        instance_id_completed = c.get('instance_id', '')
+                                        
+                                        with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                                            # Show task name with status indicator
+                                            task_name = c.get('task_name', 'Unknown')
+                                            status_label = " [Cancelled]" if status == 'cancelled' else ""
+                                            ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                                            if timestamp_str:
+                                                parts = timestamp_str.split()
                                                 if len(parts) >= 2:
                                                     date_part = parts[0]
                                                     time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                                                     ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                                                 else:
-                                                    ui.label(completed_at).classes("text-xs text-gray-400")
+                                                    ui.label(timestamp_str).classes("text-xs text-gray-400")
+                                            # Hidden buttons for context menu actions (Edit, Delete only)
+                                            if instance_id_completed:
+                                                ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                                                ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
                 
                 # Task Templates section - directly below the row
                 with ui.column().classes("scrollable-section flex-1"):
@@ -1834,7 +2365,11 @@ def build_dashboard(task_manager):
                                     except (json.JSONDecodeError, TypeError):
                                         pass
                                     
-                                    with ui.card().classes("w-full p-2 task-card-hover mb-2").props(f'data-instance-id="{instance_id}"').style("position: relative;"):
+                                    with ui.card().classes("w-full p-2 task-card-hover mb-2 context-menu-card").props(f'data-instance-id="{instance_id}" data-context-menu="instance"').style("position: relative;"):
+                                        # Hidden buttons for context menu actions (initialized tasks: View, Add Note, Complete)
+                                        ui.button("", on_click=lambda iid=instance_id: view_initialized_instance(iid)).props(f'id="context-btn-instance-view-{instance_id}"').style("display: none;")
+                                        ui.button("", on_click=lambda iid=instance_id: add_instance_note(iid)).props(f'id="context-btn-instance-addnote-{instance_id}"').style("display: none;")
+                                        ui.button("", on_click=lambda iid=instance_id: go_complete(iid)).props(f'id="context-btn-instance-complete-{instance_id}"').style("display: none;")
                                         with ui.row().classes("w-full items-center gap-2"):
                                             ui.label(inst.get("task_name")).classes("text-sm font-bold flex-1")
                                             # Small indicator icon if task has pause notes
@@ -1848,7 +2383,7 @@ def build_dashboard(task_manager):
                                         
                                         initialized_at = inst.get('initialized_at', '')
                                         if initialized_at:
-                                            ui.label(f"Init: {initialized_at}").classes("text-xs text-gray-500")
+                                            ui.label(f"Initialize: {initialized_at}").classes("text-xs text-gray-500")
                                         
                                         # Show initialization description if available
                                         init_description = predicted_data.get('description', '')
@@ -1859,9 +2394,6 @@ def build_dashboard(task_manager):
                                             ui.button("Start",
                                                       on_click=lambda i=inst['instance_id']: start_instance(i)
                                                       ).props("dense size=sm").classes("bg-green-500")
-                                            ui.button("Complete",
-                                                      on_click=lambda i=inst['instance_id']: go_complete(i)
-                                                      ).props("dense size=sm")
                                             ui.button("Cancel",
                                                       on_click=lambda i=inst['instance_id']: go_cancel(i)
                                                       ).props("dense size=sm color=red")
@@ -1907,7 +2439,10 @@ def build_dashboard(task_manager):
                         # Get layout preference from environment variable (default: "full")
                         layout_mode = os.getenv('INIT_CARD_LAYOUT', 'full').lower()
                         
-                        with ui.card().classes("w-full p-3 task-card-hover").props(f'data-instance-id="{instance_id}"').style("position: relative;"):
+                        with ui.card().classes("w-full p-3 task-card-hover context-menu-card").props(f'data-instance-id="{instance_id}" data-context-menu="active"').style("position: relative;"):
+                            # Hidden buttons for context menu actions (active task: Add Notes, View Notes)
+                            ui.button("", on_click=lambda iid=instance_id: add_instance_note(iid)).props(f'id="context-btn-active-addnote-{instance_id}"').style("display: none;")
+                            ui.button("", on_click=lambda iid=instance_id: view_instance_notes(iid)).props(f'id="context-btn-active-viewnotes-{instance_id}"').style("display: none;")
                             if layout_mode == 'columns':
                                 # Multi-column layout option
                                 with ui.row().classes("w-full gap-4"):
@@ -1964,7 +2499,7 @@ def build_dashboard(task_manager):
                                 
                                 initialized_at = current_task.get('initialized_at', '')
                                 if initialized_at:
-                                    ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mb-2")
+                                    ui.label(f"Initialize: {initialized_at}").classes("text-xs text-gray-500 mb-2")
                                 
                                 # Show initialization description if available
                                 init_description = predicted_data.get('description', '')
@@ -2120,39 +2655,51 @@ def build_summary_section():
 
 def build_recently_completed_panel():
     """Build the recently completed tasks panel."""
-    ui.label("Recently Completed").classes("font-bold text-sm mb-2")
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
     ui.separator()
     
-    # Container for completed tasks
+    # Container for recent tasks
     completed_container = ui.column().classes("w-full")
     
     def refresh_completed():
         completed_container.clear()
         
-        completed = im.list_recent_completed(limit=20) \
-            if hasattr(im, "list_recent_completed") else []
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
         
-        if not completed:
+        if not recent_tasks:
             with completed_container:
-                ui.label("No completed tasks").classes("text-xs text-gray-500")
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
             return
         
         # Show flat list with date and time
         with completed_container:
-            for c in completed:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
                 completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
                 # Format: "Task Name YYYY-MM-DD HH:MM"
-                with ui.row().classes("justify-between items-center mb-1"):
-                    ui.label(c['task_name']).classes("text-xs")
-                    if completed_at:
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
                         # Extract date and time parts
-                        parts = completed_at.split()
+                        parts = timestamp_str.split()
                         if len(parts) >= 2:
                             date_part = parts[0]
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(completed_at).classes("text-xs text-gray-400")
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
     
     # Initial render
     refresh_completed()
