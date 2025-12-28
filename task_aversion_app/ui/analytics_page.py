@@ -16,9 +16,15 @@ NUMERIC_ATTRIBUTE_OPTIONS = [
 
 CALCULATED_METRICS = [
     {'label': 'Stress Level', 'value': 'stress_level'},
+    {'label': 'Relief Score (Actual)', 'value': 'relief_score'},
+    {'label': 'Expected Relief', 'value': 'expected_relief'},
+    {'label': 'Net Relief (Actual - Expected)', 'value': 'net_relief'},
+    {'label': 'Serendipity Factor', 'value': 'serendipity_factor'},
+    {'label': 'Disappointment Factor', 'value': 'disappointment_factor'},
     {'label': 'Net Wellbeing', 'value': 'net_wellbeing'},
     {'label': 'Net Wellbeing (Normalized)', 'value': 'net_wellbeing_normalized'},
     {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
+    {'label': 'Stress-Relief Correlation Score', 'value': 'stress_relief_correlation_score'},
     {'label': 'Productivity Score', 'value': 'productivity_score'},
     {'label': 'Grit Score', 'value': 'grit_score'},
     {'label': 'Relief Duration Score', 'value': 'relief_duration_score'},
@@ -40,6 +46,11 @@ def register_analytics_page():
     @ui.page('/analytics/emotional-flow')
     def emotional_flow_page():
         build_emotional_flow_page()
+    
+    @ui.page('/analytics/factors-comparison')
+    def factors_comparison_page():
+        from ui.factors_comparison_analytics import build_factors_comparison_page
+        build_factors_comparison_page()
 
 
 def build_analytics_page():
@@ -56,6 +67,10 @@ def build_analytics_page():
         with ui.row().classes("gap-3 flex-wrap"):
             ui.button("📊 Emotional Flow", on_click=lambda: ui.navigate.to('/analytics/emotional-flow')).classes("bg-purple-500 text-white")
             ui.label("Track emotion changes and patterns").classes("text-xs text-gray-500 self-center")
+            ui.button("🔄 Relief Comparison", on_click=lambda: ui.navigate.to('/analytics/relief-comparison')).classes("bg-green-500 text-white")
+            ui.label("Compare expected vs actual relief").classes("text-xs text-gray-500 self-center")
+            ui.button("⚙️ Factors Comparison", on_click=lambda: ui.navigate.to('/analytics/factors-comparison')).classes("bg-teal-500 text-white")
+            ui.label("Analyze factors that influence scores").classes("text-xs text-gray-500 self-center")
             ui.button("📋 Cancelled Tasks", on_click=lambda: ui.navigate.to('/cancelled-tasks')).classes("bg-orange-500 text-white")
             ui.label("View cancelled task patterns and statistics").classes("text-xs text-gray-500 self-center")
             ui.button("📈 Composite Score", on_click=lambda: ui.navigate.to('/composite-score')).classes("bg-indigo-500 text-white")

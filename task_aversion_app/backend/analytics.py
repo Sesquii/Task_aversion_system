@@ -1268,6 +1268,12 @@ class Analytics:
                     )
                     
                     # Calculate net_wellbeing
+                    # DIFFERENCE FROM RELIEF SCORE:
+                    # - Relief Score: Raw measure of relief felt after task completion (0-100)
+                    # - Net Wellbeing: Relief MINUS stress, showing the NET benefit/cost of the task
+                    #   - Positive net wellbeing = task provided more relief than stress (beneficial)
+                    #   - Negative net wellbeing = task caused more stress than relief (costly)
+                    #   - Zero = neutral (relief exactly equals stress)
                     df['net_wellbeing'] = df['relief_score_numeric'] - df['stress_level']
                     
                     # Calculate net_wellbeing_normalized
@@ -1290,6 +1296,76 @@ class Analytics:
                             else:
                                 df['stress_efficiency'] = 100.0
                         df['stress_efficiency'] = df['stress_efficiency'].round(2)
+                    
+                    # Calculate expected_relief: relief predicted before task (from predicted_dict)
+                    def _get_expected_relief_from_dict(row):
+                        try:
+                            predicted_dict = row.get('predicted_dict', {})
+                            if isinstance(predicted_dict, dict):
+                                return predicted_dict.get('expected_relief', None)
+                        except (KeyError, TypeError):
+                            pass
+                        return None
+                    
+                    df['expected_relief'] = df.apply(_get_expected_relief_from_dict, axis=1)
+                    df['expected_relief'] = pd.to_numeric(df['expected_relief'], errors='coerce')
+                    
+                    # Calculate net_relief: actual relief minus expected relief
+                    # Use stored value if available, otherwise calculate
+                    if 'net_relief' in df.columns:
+                        df['net_relief'] = pd.to_numeric(df['net_relief'], errors='coerce')
+                    else:
+                        df['net_relief'] = None
+                    
+                    # Fill missing net_relief by calculating from expected/actual relief
+                    missing_net_relief = df['net_relief'].isna()
+                    if missing_net_relief.any():
+                        df.loc[missing_net_relief, 'net_relief'] = (
+                            df.loc[missing_net_relief, 'relief_score_numeric'] - 
+                            df.loc[missing_net_relief, 'expected_relief']
+                        )
+                    
+                    # Positive = actual relief exceeded expectations (pleasant surprise)
+                    # Negative = actual relief fell short of expectations (disappointment)
+                    # Zero = actual relief matched expectations (accurate prediction)
+                    
+                    # Use stored serendipity_factor if available, otherwise calculate
+                    if 'serendipity_factor' in df.columns:
+                        df['serendipity_factor'] = pd.to_numeric(df['serendipity_factor'], errors='coerce')
+                    else:
+                        df['serendipity_factor'] = None
+                    
+                    # Fill missing serendipity_factor by calculating from net_relief
+                    missing_serendipity = df['serendipity_factor'].isna()
+                    if missing_serendipity.any():
+                        df.loc[missing_serendipity, 'serendipity_factor'] = df.loc[missing_serendipity, 'net_relief'].apply(
+                            lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0
+                        )
+                    # Ensure all values are non-negative
+                    df['serendipity_factor'] = df['serendipity_factor'].fillna(0.0)
+                    df['serendipity_factor'] = df['serendipity_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+                    
+                    # Use stored disappointment_factor if available, otherwise calculate
+                    if 'disappointment_factor' in df.columns:
+                        df['disappointment_factor'] = pd.to_numeric(df['disappointment_factor'], errors='coerce')
+                    else:
+                        df['disappointment_factor'] = None
+                    
+                    # Fill missing disappointment_factor by calculating from net_relief
+                    missing_disappointment = df['disappointment_factor'].isna()
+                    if missing_disappointment.any():
+                        df.loc[missing_disappointment, 'disappointment_factor'] = df.loc[missing_disappointment, 'net_relief'].apply(
+                            lambda x: max(0.0, -float(x)) if pd.notna(x) else 0.0
+                        )
+                    # Ensure all values are non-negative
+                    df['disappointment_factor'] = df['disappointment_factor'].fillna(0.0)
+                    df['disappointment_factor'] = df['disappointment_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+                    
+                    # Calculate stress_relief_correlation_score: measures inverse correlation
+                    stress_norm = pd.to_numeric(df['stress_level'], errors='coerce').fillna(50.0)
+                    relief_norm = pd.to_numeric(df['relief_score_numeric'], errors='coerce').fillna(50.0)
+                    correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
+                    df['stress_relief_correlation_score'] = correlation_raw.clip(0.0, 100.0).round(2)
                     
                     # Calculate behavioral_score (simplified version - full version is in CSV path)
                     def _calculate_behavioral_score(row):
@@ -1474,6 +1550,12 @@ class Analytics:
         )
         
         # Calculate net_wellbeing: relief minus stress (can be positive or negative)
+        # DIFFERENCE FROM RELIEF SCORE:
+        # - Relief Score: Raw measure of relief felt after task completion (0-100)
+        # - Net Wellbeing: Relief MINUS stress, showing the NET benefit/cost of the task
+        #   - Positive net wellbeing = task provided more relief than stress (beneficial)
+        #   - Negative net wellbeing = task caused more stress than relief (costly)
+        #   - Zero = neutral (relief exactly equals stress)
         # Range: -100 to +100, where 0 = neutral (relief = stress)
         df['net_wellbeing'] = df['relief_score_numeric'] - df['stress_level']
         
@@ -1501,6 +1583,84 @@ class Analytics:
                     # All values identical; treat them as 100 for visibility
                     df['stress_efficiency'] = 100.0
             df['stress_efficiency'] = df['stress_efficiency'].round(2)
+        
+        # Calculate expected_relief: relief predicted before task (from predicted_dict)
+        def _get_expected_relief_from_dict(row):
+            try:
+                predicted_dict = row.get('predicted_dict', {})
+                if isinstance(predicted_dict, dict):
+                    return predicted_dict.get('expected_relief', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        df['expected_relief'] = df.apply(_get_expected_relief_from_dict, axis=1)
+        df['expected_relief'] = pd.to_numeric(df['expected_relief'], errors='coerce')
+        
+        # Calculate net_relief: actual relief minus expected relief
+        # Use stored value if available, otherwise calculate
+        if 'net_relief' in df.columns:
+            df['net_relief'] = pd.to_numeric(df['net_relief'], errors='coerce')
+        else:
+            df['net_relief'] = None
+        
+        # Fill missing net_relief by calculating from expected/actual relief
+        missing_net_relief = df['net_relief'].isna()
+        if missing_net_relief.any():
+            df.loc[missing_net_relief, 'net_relief'] = (
+                df.loc[missing_net_relief, 'relief_score_numeric'] - 
+                df.loc[missing_net_relief, 'expected_relief']
+            )
+        
+        # Positive = actual relief exceeded expectations (pleasant surprise)
+        # Negative = actual relief fell short of expectations (disappointment)
+        # Zero = actual relief matched expectations (accurate prediction)
+        
+        # Use stored serendipity_factor if available, otherwise calculate
+        if 'serendipity_factor' in df.columns:
+            df['serendipity_factor'] = pd.to_numeric(df['serendipity_factor'], errors='coerce')
+        else:
+            df['serendipity_factor'] = None
+        
+        # Fill missing serendipity_factor by calculating from net_relief
+        missing_serendipity = df['serendipity_factor'].isna()
+        if missing_serendipity.any():
+            df.loc[missing_serendipity, 'serendipity_factor'] = df.loc[missing_serendipity, 'net_relief'].apply(
+                lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0
+            )
+        # Ensure all values are non-negative
+        df['serendipity_factor'] = df['serendipity_factor'].fillna(0.0)
+        df['serendipity_factor'] = df['serendipity_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+        
+        # Use stored disappointment_factor if available, otherwise calculate
+        if 'disappointment_factor' in df.columns:
+            df['disappointment_factor'] = pd.to_numeric(df['disappointment_factor'], errors='coerce')
+        else:
+            df['disappointment_factor'] = None
+        
+        # Fill missing disappointment_factor by calculating from net_relief
+        missing_disappointment = df['disappointment_factor'].isna()
+        if missing_disappointment.any():
+            df.loc[missing_disappointment, 'disappointment_factor'] = df.loc[missing_disappointment, 'net_relief'].apply(
+                lambda x: max(0.0, -float(x)) if pd.notna(x) else 0.0
+            )
+        # Ensure all values are non-negative
+        df['disappointment_factor'] = df['disappointment_factor'].fillna(0.0)
+        df['disappointment_factor'] = df['disappointment_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+        
+        # Calculate stress_relief_correlation_score: measures inverse correlation
+        # Formula: 100 - (stress_level + relief_score) / 2, normalized to show inverse relationship
+        # When stress is high and relief is low, score is low (poor correlation)
+        # When stress is low and relief is high, score is high (good inverse correlation)
+        # Range: 0-100, where higher = better inverse correlation
+        stress_norm = pd.to_numeric(df['stress_level'], errors='coerce').fillna(50.0)
+        relief_norm = pd.to_numeric(df['relief_score_numeric'], errors='coerce').fillna(50.0)
+        # Inverse correlation: high stress + low relief = low score, low stress + high relief = high score
+        # Normalize: 100 - (stress + (100 - relief)) / 2 = 100 - (stress + 100 - relief) / 2
+        # Simplified: (relief - stress + 100) / 2, then normalize to 0-100
+        correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
+        # Normalize to 0-100 range (theoretical range is 0-100, but clamp for safety)
+        df['stress_relief_correlation_score'] = correlation_raw.clip(0.0, 100.0).round(2)
         
         # Auto-calculate behavioral_score: how well you adhered to planned behaviour
         # Now includes obstacles overcome component for significant bonus
@@ -4804,6 +4964,23 @@ class Analytics:
             
             # If no self care tasks or no task_type, return empty
             return {'dates': [], 'values': [], 'aggregation': 'count'}
+        
+        # Ensure calculated metrics are available by calling _load_instances if needed
+        # This ensures stress_level, net_wellbeing, stress_efficiency, etc. are calculated
+        if attribute_key in ['stress_level', 'net_wellbeing', 'net_wellbeing_normalized', 
+                              'stress_efficiency', 'stress_relief_correlation_score', 'relief_score',
+                              'expected_relief', 'net_relief', 'serendipity_factor', 'disappointment_factor']:
+            # These metrics should already be calculated in _load_instances
+            # But ensure they exist by checking the dataframe
+            if attribute_key not in completed.columns:
+                # Recalculate if missing (shouldn't happen, but safety check)
+                completed = self._load_instances()
+                completed = completed[completed['completed_at'].astype(str).str.len() > 0].copy()
+                completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                completed = completed[completed['completed_at_dt'].notna()]
+                if days:
+                    cutoff = datetime.now() - timedelta(days=days)
+                    completed = completed[completed['completed_at_dt'] >= cutoff]
         
         if attribute_key not in completed.columns:
             return {'dates': [], 'values': [], 'aggregation': aggregation}

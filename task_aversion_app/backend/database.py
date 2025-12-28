@@ -154,6 +154,10 @@ class TaskInstance(Base):
     net_relief = Column(Float, default=None, nullable=True)
     behavioral_deviation = Column(Float, default=None, nullable=True)
     
+    # Emotional factors (calculated from net_relief)
+    serendipity_factor = Column(Float, default=None, nullable=True)  # Positive net_relief (pleasant surprise)
+    disappointment_factor = Column(Float, default=None, nullable=True)  # Negative net_relief (disappointment)
+    
     # Status flags
     is_completed = Column(Boolean, default=False, index=True)
     is_deleted = Column(Boolean, default=False, index=True)
@@ -204,6 +208,8 @@ class TaskInstance(Base):
             'emotional_load': str(self.emotional_load) if self.emotional_load is not None else '',
             'environmental_effect': str(self.environmental_effect) if self.environmental_effect is not None else '',
             'skills_improved': self.skills_improved or '',
+            'serendipity_factor': str(self.serendipity_factor) if self.serendipity_factor is not None else '',
+            'disappointment_factor': str(self.disappointment_factor) if self.disappointment_factor is not None else '',
         }
     
     def __repr__(self):
