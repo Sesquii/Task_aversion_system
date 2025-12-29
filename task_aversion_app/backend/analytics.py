@@ -4392,7 +4392,6 @@ class Analytics:
         from .task_manager import TaskManager
         
         filters = {**self.default_filters(), **(filters or {})}
-        print(f"[Analytics] recommendations called with filters: {filters}")
         
         # Load all task templates
         task_manager = TaskManager()
@@ -4545,7 +4544,6 @@ class Analytics:
         from .task_manager import TaskManager
         
         filters = {**self.default_filters(), **(filters or {})}
-        print(f"[Analytics] recommendations_by_category called with metrics: {metrics}, limit: {limit}, filters: {filters}")
         
         # Normalize metrics input
         if metrics is None:
@@ -4765,14 +4763,9 @@ class Analytics:
         
         # Sort by score descending and take top N
         top_n = candidates_df.sort_values('score', ascending=False).head(limit)
-        print(f"[Analytics] recommendations_by_category: {len(candidates)} candidates, taking top {len(top_n)} after sorting")
-        if len(top_n) > 0:
-            print(f"[Analytics] Top recommendation scores: {top_n['score'].tolist()}")
-            print(f"[Analytics] Top recommendation normalized scores: {top_n['score_normalized'].tolist()}")
         
         ranked = []
         for idx, (_, row) in enumerate(top_n.iterrows()):
-            print(f"[Analytics] Processing recommendation {idx + 1}: {row.get('task_name')} (score: {row.get('score')}, normalized: {row.get('score_normalized')})")
             # Collect only the metrics the user selected
             metric_values = {}
             for metric in metrics:
@@ -4809,9 +4802,7 @@ class Analytics:
                 'cognitive_load': row.get('cognitive_load'),
                 'emotional_load': row.get('emotional_load'),
             })
-            print(f"[Analytics] Added recommendation {idx + 1} to ranked list: {row.get('task_name')}")
         
-        print(f"[Analytics] recommendations_by_category: Returning {len(ranked)} ranked recommendations")
         return ranked
 
     def recommendations_from_instances(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3) -> List[Dict[str, str]]:
@@ -4830,7 +4821,6 @@ class Analytics:
         from .instance_manager import InstanceManager
         
         filters = {**self.default_filters(), **(filters or {})}
-        print(f"[Analytics] recommendations_from_instances called with metrics: {metrics}, limit: {limit}, filters: {filters}")
         
         # Normalize metrics input
         if metrics is None:
@@ -5136,7 +5126,6 @@ class Analytics:
         
         ranked = []
         for idx, (_, row) in enumerate(top_n.iterrows()):
-            print(f"[Analytics] Processing recommendation {idx + 1}: {row.get('task_name')} (score: {row.get('score')}, normalized: {row.get('score_normalized')})")
             # Collect only the metrics the user selected
             metric_values = {}
             for metric in metrics:
@@ -5174,9 +5163,7 @@ class Analytics:
                 'cognitive_load': row.get('cognitive_load'),
                 'emotional_load': row.get('emotional_load'),
             })
-            print(f"[Analytics] Added recommendation {len(ranked)} to ranked list: {row.get('task_name')}")
         
-        print(f"[Analytics] recommendations_from_instances: Returning {len(ranked)} ranked recommendations")
         return ranked
 
     def _row_to_recommendation(self, row_df: pd.DataFrame, label: str) -> Optional[Dict[str, str]]:

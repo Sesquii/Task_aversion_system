@@ -2014,46 +2014,36 @@ def build_dashboard(task_manager):
     <script>
         function initRecommendationTooltips() {
             const cards = document.querySelectorAll('.recommendation-card-hover');
-            console.log('[Dashboard] initRecommendationTooltips: Found', cards.length, 'recommendation cards');
             
             cards.forEach(function(card, index) {
                 const recId = card.getAttribute('data-rec-id');
-                console.log('[Dashboard] Card', index, 'has recId:', recId);
                 
                 if (!recId) {
-                    console.warn('[Dashboard] Card', index, 'missing data-rec-id attribute');
                     return;
                 }
                 
                 const tooltip = document.getElementById('tooltip-' + recId);
-                console.log('[Dashboard] Looking for tooltip tooltip-' + recId + ':', tooltip ? 'FOUND' : 'NOT FOUND');
                 
                 if (!tooltip) {
-                    console.warn('[Dashboard] Tooltip not found for recId:', recId);
                     return;
                 }
                 
                 // Skip if already initialized
                 if (card.hasAttribute('data-tooltip-initialized')) {
-                    console.log('[Dashboard] Card', index, 'already initialized, skipping');
                     return;
                 }
                 card.setAttribute('data-tooltip-initialized', 'true');
-                console.log('[Dashboard] Initializing tooltip for card', index, 'with recId:', recId);
                 
                 let hoverTimeout;
                 
                 card.addEventListener('mouseenter', function() {
-                    console.log('[Dashboard] Mouse entered card', recId);
                     hoverTimeout = setTimeout(function() {
-                        console.log('[Dashboard] Showing tooltip for', recId);
                         tooltip.classList.add('visible');
                         positionRecommendationTooltip(card, tooltip);
                     }, 500);
                 });
                 
                 card.addEventListener('mouseleave', function() {
-                    console.log('[Dashboard] Mouse left card', recId);
                     clearTimeout(hoverTimeout);
                     tooltip.classList.remove('visible');
                 });
@@ -2885,7 +2875,6 @@ def build_recently_completed_panel():
 
 def build_recommendations_section():
     """Build the recommendations section with search-based metric filtering."""
-    print(f"[Dashboard] Rendering recommendations section")
     global dash_filters
     if not dash_filters:
         dash_filters = {}
@@ -2968,10 +2957,9 @@ def build_recommendations_section():
                         # Empty search shows default metrics
                         selected_metrics_state[:] = default_metrics
                     
-                    print(f"[Dashboard] Metric search: '{search_query}' -> {len(selected_metrics_state)} metrics selected: {selected_metrics_state}")
                     refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
                 except Exception as ex:
-                    print(f"[Dashboard] Error in debounced search: {ex}")
+                    pass
             
             # Create a timer that will execute after 300ms of no typing
             search_debounce_timer = ui.timer(0.3, apply_search, once=True)
@@ -3055,7 +3043,6 @@ def build_recommendations_section():
                 categories_val = categories_search.value.strip() if categories_search.value else None
                 dash_filters['categories'] = categories_val
                 
-                print(f"[Dashboard] Filters applied: {dash_filters}")
                 refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
             
             ui.button("APPLY", on_click=apply_filters).props("dense")
@@ -3106,19 +3093,13 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
     else:
         recs = an.recommendations_by_category(metric_keys, filters, limit=10)
     
-    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for mode '{mode}', metrics '{metric_keys}', filters {filters}")
-    print(f"[Dashboard] Full recommendations list: {[r.get('task_name') or r.get('instance_id') for r in recs]}")
-    
     if not recs:
-        print("[Dashboard] No recommendations available - showing empty message")
         with target_container:
             ui.label("No recommendations available").classes("text-xs text-gray-500")
         return
     
-    print(f"[Dashboard] Rendering {len(recs)} recommendation cards in container")
     with target_container:
         for idx, rec in enumerate(recs):
-            print(f"[Dashboard] Rendering recommendation card {idx + 1}/{len(recs)}: {rec.get('task_name') or rec.get('instance_id')}")
             task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
             description = rec.get('description', '').strip()
             score_val = rec.get('score')
@@ -3126,10 +3107,8 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
             rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
             
             # Format the recommendation card with hover tooltip
-            print(f"[Dashboard] Creating card for rec_id: {rec_id}, task: {task_label}")
             card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
             card_element.props(f'data-rec-id="{rec_id}"')
-            print(f"[Dashboard] Card created with data-rec-id={rec_id}, tooltip should be: tooltip-{rec_id}")
             with card_element:
                 # Task name
                 ui.label(task_label).classes("font-bold text-sm mb-1")
@@ -3171,8 +3150,6 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         ui.label("No task ID").classes("text-xs text-gray-400")
             
             # Create tooltip with sub-scores using the same pattern as task tooltips
-            print(f"[Dashboard] Creating tooltip HTML for {rec_id} with {len([v for v in sub_scores.values() if v is not None])} sub-scores")
-            
             # Build tooltip content similar to format_colored_tooltip
             tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
             
@@ -3208,8 +3185,6 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
             
             # Add tooltip to body using the same method as task tooltips
             ui.add_body_html(tooltip_html)
-            print(f"[Dashboard] Tooltip HTML added to body for {rec_id}")
     
     # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    print(f"[Dashboard] Initializing recommendation tooltips after rendering {len(recs)} cards")
     ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
