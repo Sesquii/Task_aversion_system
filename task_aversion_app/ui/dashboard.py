@@ -2060,8 +2060,8 @@ def build_dashboard(task_manager):
                         # Get historical data for weekly hours
                         hours_history = an.get_weekly_hours_history()
                         hours = relief_summary['productivity_time_minutes'] / 60.0
-                        # Use weekly average * 7 for color coding (compare weekly total to average weekly total)
-                        avg_weekly_total = hours_history.get('weekly_average', 0.0) * 7.0
+                        # Use 3-month average daily hours * 7 for color coding (compare weekly total to long-term average weekly total)
+                        avg_weekly_total = hours_history.get('three_month_average', 0.0) * 7.0
                         hours_bg_class, hours_line_color = get_metric_bg_class(hours, avg_weekly_total)
                         
                         # Weekly Hours Card with hover tooltip
@@ -2070,9 +2070,15 @@ def build_dashboard(task_manager):
                             ui.label("Weekly Productivity Time").classes("text-xs text-gray-500 mb-1")
                             if hours >= 1:
                                 ui.label(f"{hours:.1f} hours").classes("text-2xl font-bold")
-                                ui.label(f"({relief_summary['productivity_time_minutes']:.0f} min)").classes("text-sm text-gray-400")
                             else:
                                 ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-2xl font-bold")
+                            # Show 3-month average as weekly value (daily avg × 7) for direct comparison
+                            three_month_avg_daily = hours_history.get('three_month_average', 0.0)
+                            three_month_avg_weekly = three_month_avg_daily * 7.0
+                            if three_month_avg_weekly > 0:
+                                ui.label(f"3-month avg: {three_month_avg_weekly:.1f} hours/week").classes("text-sm text-gray-400")
+                            else:
+                                ui.label("3-month avg: N/A").classes("text-sm text-gray-400")
                         
                         # Get historical data for weekly relief
                         relief_history = an.get_weekly_relief_history()

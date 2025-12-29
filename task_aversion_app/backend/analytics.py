@@ -3720,8 +3720,31 @@ class Analytics:
         last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
         weekly_average = pd.to_numeric(last_7_days['hours'], errors='coerce').mean() if not last_7_days.empty else 0.0
         
-        # Calculate 3-month average (average of daily hours over all days with data)
-        three_month_average = pd.to_numeric(daily_data['hours'], errors='coerce').mean() if not daily_data.empty else 0.0
+        # Calculate 3-month average accounting for untracked days
+        # Find the earliest date with data (tracking start date)
+        if not daily_data.empty:
+            earliest_date = daily_data['date'].min()
+            # Use the more recent of: tracking start date or 90 days ago
+            analysis_start = max(earliest_date, ninety_days_ago.date())
+            today = datetime.now().date()
+            
+            # Create a complete date range from analysis_start to today
+            date_range = pd.date_range(start=analysis_start, end=today, freq='D')
+            date_range_dates = [d.date() for d in date_range]
+            
+            # Create a DataFrame with all dates, filling missing days with 0 hours
+            full_daily_data = pd.DataFrame({'date': date_range_dates})
+            full_daily_data = full_daily_data.merge(
+                daily_data[['date', 'hours']],
+                on='date',
+                how='left'
+            )
+            full_daily_data['hours'] = full_daily_data['hours'].fillna(0.0)
+            
+            # Calculate average over all days in the tracking period (untracked days = 0 hours)
+            three_month_average = pd.to_numeric(full_daily_data['hours'], errors='coerce').mean() if not full_daily_data.empty else 0.0
+        else:
+            three_month_average = 0.0
         
         # Check if we have at least 2 weeks of data
         days_with_data = len(daily_data)
