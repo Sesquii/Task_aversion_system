@@ -2439,13 +2439,65 @@ def build_dashboard(task_manager):
             with ui.column().classes("dashboard-column column-middle gap-2"):
                 # Top half: Active Tasks in 2 nested columns
                 with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;").props('id="tas-active-tasks" data-tooltip-id="active_tasks"'):
-                    ui.label("Initialized Tasks").classes("text-lg font-bold mb-2")
-                    ui.separator()
-                    
                     active = im.list_active_instances()
                     current_task = get_current_task()
                     # Filter out current task from active list
                     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
+                    
+                    # Calculate total time estimate by task type
+                    total_time_by_type = {'Work': 0, 'Play': 0, 'Self care': 0}
+                    total_time = 0
+                    
+                    for inst in active_not_current:
+                        # Parse predicted data to get time estimate
+                        predicted_str = inst.get("predicted") or "{}"
+                        try:
+                            predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
+                        except (json.JSONDecodeError, TypeError):
+                            predicted_data = {}
+                        
+                        time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
+                        try:
+                            time_estimate = int(time_estimate)
+                        except (TypeError, ValueError):
+                            time_estimate = 0
+                        
+                        # Get task type from task
+                        task_id = inst.get('task_id')
+                        if task_id:
+                            task = task_manager.get_task(task_id)
+                            if task:
+                                task_type = task.get('task_type', 'Work')
+                                # Normalize task type (handle variations like 'self care', 'selfcare', 'self-care')
+                                task_type_normalized = str(task_type).strip()
+                                task_type_lower = task_type_normalized.lower()
+                                
+                                if task_type_lower == 'play':
+                                    total_time_by_type['Play'] += time_estimate
+                                elif task_type_lower in ['self care', 'selfcare', 'self-care']:
+                                    total_time_by_type['Self care'] += time_estimate
+                                else:  # Default to Work
+                                    total_time_by_type['Work'] += time_estimate
+                                total_time += time_estimate
+                    
+                    # Header with title and time estimate
+                    with ui.row().classes("w-full items-center justify-between mb-2"):
+                        ui.label("Initialized Tasks").classes("text-lg font-bold")
+                        
+                        # Time estimate with tooltip
+                        time_label = ui.label(f"{total_time} min").classes("text-sm font-semibold text-gray-700" if total_time > 0 else "text-sm text-gray-500")
+                        
+                        # Create tooltip content with breakdown by task type
+                        tooltip_parts = ["Time breakdown:"]
+                        tooltip_parts.append(f"Work: {total_time_by_type['Work']} min")
+                        tooltip_parts.append(f"Play: {total_time_by_type['Play']} min")
+                        tooltip_parts.append(f"Self care: {total_time_by_type['Self care']} min")
+                        tooltip_content = "<br>".join(tooltip_parts)
+                        
+                        # Add tooltip using NiceGUI's tooltip feature
+                        time_label.tooltip(tooltip_content)
+                    
+                    ui.separator()
                     
                     if not active_not_current:
                         ui.label("No active tasks").classes("text-xs text-gray-500")
