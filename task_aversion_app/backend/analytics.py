@@ -6,7 +6,7 @@ import math
 import os
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 from scipy import stats
@@ -3429,6 +3429,428 @@ class Analytics:
         
         # Clamp to valid range
         return max(0.0, min(1.0, persistence_factor))
+
+    def calculate_daily_scores(self, target_date: Optional[datetime] = None) -> Dict[str, float]:
+        """Calculate daily aggregated scores for a specific date.
+        
+        Calculates average scores for all tasks completed on that date:
+        - Productivity score (average)
+        - Execution score (average)
+        - Grit score (average)
+        - Composite score (if available)
+        
+        Args:
+            target_date: Date to calculate scores for (default: yesterday)
+        
+        Returns:
+            Dict with 'productivity_score', 'execution_score', 'grit_score', 'composite_score'
+        """
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        
+        # Get date string for filtering
+        target_date_str = target_date.strftime('%Y-%m-%d')
+        
+        df = self._load_instances()
+        if df.empty:
+            return {
+                'productivity_score': 0.0,
+                'execution_score': 0.0,
+                'grit_score': 0.0,
+                'composite_score': 0.0
+            }
+        
+        # Get completed tasks only
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty:
+            return {
+                'productivity_score': 0.0,
+                'execution_score': 0.0,
+                'grit_score': 0.0,
+                'composite_score': 0.0
+            }
+        
+        # Parse completed_at timestamps
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed.dropna(subset=['completed_at_dt'])
+        
+        # Filter to target date
+        completed['completed_date'] = completed['completed_at_dt'].dt.date
+        target_date_obj = target_date.date() if isinstance(target_date, datetime) else target_date
+        day_completions = completed[completed['completed_date'] == target_date_obj].copy()
+        
+        if day_completions.empty:
+            return {
+                'productivity_score': 0.0,
+                'execution_score': 0.0,
+                'grit_score': 0.0,
+                'composite_score': 0.0
+            }
+        
+        # Calculate task completion counts for grit score
+        from collections import Counter
+        task_completion_counts = Counter(day_completions['task_id'].tolist())
+        task_completion_counts_dict = dict(task_completion_counts)
+        
+        # Calculate scores for each completion
+        productivity_scores = []
+        execution_scores = []
+        grit_scores = []
+        
+        # Get self-care tasks per day for productivity score
+        self_care_per_day = {}
+        for date_str, group in day_completions.groupby(day_completions['completed_at_dt'].dt.date):
+            date_key = date_str.strftime('%Y-%m-%d')
+            task_types = group.get('task_type', pd.Series(['Work'] * len(group)))
+            self_care_count = len(task_types[task_types.astype(str).str.lower().isin(['self care', 'selfcare', 'self-care'])])
+            self_care_per_day[date_key] = self_care_count
+        
+        # Calculate work/play time per day for productivity score
+        work_play_time = {}
+        for date_str, group in day_completions.groupby(day_completions['completed_at_dt'].dt.date):
+            date_key = date_str.strftime('%Y-%m-%d')
+            task_types = group.get('task_type', pd.Series(['Work'] * len(group)))
+            durations = pd.to_numeric(group.get('duration_minutes', 0), errors='coerce').fillna(0)
+            
+            work_time = durations[task_types.astype(str).str.lower() == 'work'].sum()
+            play_time = durations[task_types.astype(str).str.lower() == 'play'].sum()
+            work_play_time[date_key] = {'work_time': work_time, 'play_time': play_time}
+        
+        # Calculate weekly average time for productivity score
+        weekly_avg_time = 0.0
+        try:
+            work_volume_metrics = self.get_daily_work_volume_metrics(days=7)
+            weekly_avg_time = work_volume_metrics.get('avg_daily_work_time', 0.0) * 7.0
+        except Exception:
+            pass
+        
+        for _, row in day_completions.iterrows():
+            try:
+                # Productivity score
+                prod_score = self.calculate_productivity_score(
+                    row=row,
+                    self_care_tasks_per_day=self_care_per_day,
+                    weekly_avg_time=weekly_avg_time,
+                    work_play_time_per_day=work_play_time
+                )
+                productivity_scores.append(prod_score)
+                
+                # Execution score
+                exec_score = self.calculate_execution_score(
+                    row=row,
+                    task_completion_counts=task_completion_counts_dict
+                )
+                execution_scores.append(exec_score)
+                
+                # Grit score
+                grit_score = self.calculate_grit_score(
+                    row=row,
+                    task_completion_counts=task_completion_counts_dict
+                )
+                grit_scores.append(grit_score)
+            except Exception:
+                # Skip if calculation fails
+                continue
+        
+        # Calculate averages
+        avg_productivity = sum(productivity_scores) / len(productivity_scores) if productivity_scores else 0.0
+        avg_execution = sum(execution_scores) / len(execution_scores) if execution_scores else 0.0
+        avg_grit = sum(grit_scores) / len(grit_scores) if grit_scores else 0.0
+        
+        # Calculate composite score (simplified - average of the three)
+        composite_score = (avg_productivity + avg_execution + avg_grit) / 3.0 if (productivity_scores or execution_scores or grit_scores) else 0.0
+        
+        return {
+            'productivity_score': round(avg_productivity, 2),
+            'execution_score': round(avg_execution, 2),
+            'grit_score': round(avg_grit, 2),
+            'composite_score': round(composite_score, 2)
+        }
+    
+    def get_historical_daily_scores(self, score_type: str = 'productivity_score', top_n: int = 10) -> List[Dict[str, Any]]:
+        """Get historical daily scores sorted by value.
+        
+        Args:
+            score_type: 'productivity_score', 'execution_score', 'grit_score', or 'composite_score'
+            top_n: Number of top scores to return (default: 10)
+        
+        Returns:
+            List of dicts with 'date', 'score', sorted by score descending
+        """
+        df = self._load_instances()
+        if df.empty:
+            return []
+        
+        # Get completed tasks only
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty:
+            return []
+        
+        # Parse completed_at timestamps
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed.dropna(subset=['completed_at_dt'])
+        
+        # Group by date and calculate daily scores
+        daily_scores = []
+        for date_obj, group in completed.groupby(completed['completed_at_dt'].dt.date):
+            try:
+                daily_score_data = self.calculate_daily_scores(target_date=datetime.combine(date_obj, datetime.min.time()))
+                score_value = daily_score_data.get(score_type, 0.0)
+                
+                if score_value > 0:  # Only include days with valid scores
+                    daily_scores.append({
+                        'date': date_obj,
+                        'score': score_value
+                    })
+            except Exception:
+                continue
+        
+        # Sort by score descending
+        daily_scores.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Return top N
+        return daily_scores[:top_n]
+    
+    def check_score_milestones(self, target_date: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+        """Check if yesterday's scores achieved any milestones.
+        
+        Compares yesterday's scores to historical bests and returns the best milestone
+        (closest to all-time best).
+        
+        Args:
+            target_date: Date to check (default: yesterday)
+        
+        Returns:
+            Dict with 'score_type', 'yesterday_score', 'all_time_best', 'rank', 'is_all_time_best'
+            or None if no milestones
+        """
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        
+        # Calculate yesterday's scores
+        yesterday_scores = self.calculate_daily_scores(target_date=target_date)
+        
+        # Check each score type for milestones
+        milestones = []
+        score_types = ['productivity_score', 'execution_score', 'grit_score', 'composite_score']
+        
+        for score_type in score_types:
+            yesterday_score = yesterday_scores.get(score_type, 0.0)
+            if yesterday_score <= 0:
+                continue  # Skip if no valid score
+            
+            # Get historical top 10
+            historical = self.get_historical_daily_scores(score_type=score_type, top_n=10)
+            
+            if not historical:
+                # First day with data - it's automatically the best
+                milestones.append({
+                    'score_type': score_type,
+                    'yesterday_score': yesterday_score,
+                    'all_time_best': yesterday_score,
+                    'rank': 1,
+                    'is_all_time_best': True,
+                    'distance_to_best': 0.0
+                })
+                continue
+            
+            # Find all-time best
+            all_time_best = historical[0]['score'] if historical else yesterday_score
+            
+            # Check if yesterday is all-time best
+            is_all_time_best = yesterday_score >= all_time_best
+            
+            # Find rank in top 10
+            rank = None
+            for i, entry in enumerate(historical):
+                if yesterday_score >= entry['score']:
+                    rank = i + 1
+                    break
+            
+            # If not in top 10, check if it's close (within 5% of all-time best)
+            if rank is None:
+                if yesterday_score >= all_time_best * 0.95:  # Within 5% of best
+                    rank = 11  # Just outside top 10 but close
+                else:
+                    continue  # Not a milestone
+            
+            # Calculate distance to all-time best (0.0 = tied, 1.0 = 100% away)
+            if all_time_best > 0:
+                distance_to_best = abs(yesterday_score - all_time_best) / all_time_best
+            else:
+                distance_to_best = 1.0
+            
+            milestones.append({
+                'score_type': score_type,
+                'yesterday_score': yesterday_score,
+                'all_time_best': all_time_best,
+                'rank': rank,
+                'is_all_time_best': is_all_time_best,
+                'distance_to_best': distance_to_best
+            })
+        
+        if not milestones:
+            return None
+        
+        # Prioritize: closest to all-time best (lowest distance_to_best)
+        # If tied, prefer all-time best, then prefer higher rank
+        milestones.sort(key=lambda x: (
+            x['distance_to_best'],  # Closest to best first
+            not x['is_all_time_best'],  # All-time bests first
+            x['rank']  # Lower rank (better) first
+        ))
+        
+        return milestones[0]  # Return best milestone
+    
+    def calculate_weekly_progress_summary(self, days: int = 7) -> Dict[str, Any]:
+        """Calculate weekly progress summary for the last N days.
+        
+        Args:
+            days: Number of days to include in summary (default: 7)
+        
+        Returns:
+            Dict with:
+            - tasks_completed: Total tasks completed
+            - avg_productivity_score: Average productivity score
+            - avg_execution_score: Average execution score
+            - avg_grit_score: Average grit score
+            - avg_composite_score: Average composite score
+            - best_day_productivity: Best daily productivity score
+            - best_day_execution: Best daily execution score
+            - best_day_grit: Best daily grit score
+            - productivity_trend: 'up', 'down', or 'stable'
+            - execution_trend: 'up', 'down', or 'stable'
+            - days_active: Number of days with at least one completion
+            - total_work_time: Total work time in minutes
+            - total_self_care_time: Total self-care time in minutes
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances()
+        if df.empty:
+            return self._empty_weekly_summary()
+        
+        # Get completed tasks only
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty:
+            return self._empty_weekly_summary()
+        
+        # Parse completed_at timestamps
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed.dropna(subset=['completed_at_dt'])
+        
+        # Get date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Filter to date range
+        week_completions = completed[
+            (completed['completed_at_dt'] >= start_date) & 
+            (completed['completed_at_dt'] <= end_date)
+        ].copy()
+        
+        if week_completions.empty:
+            return self._empty_weekly_summary()
+        
+        # Calculate daily scores for each day in the week
+        daily_scores_list = []
+        for i in range(days):
+            target_date = start_date + timedelta(days=i)
+            daily_scores = self.calculate_daily_scores(target_date=target_date)
+            if daily_scores.get('productivity_score', 0) > 0 or \
+               daily_scores.get('execution_score', 0) > 0 or \
+               daily_scores.get('grit_score', 0) > 0:
+                daily_scores['date'] = target_date.date()
+                daily_scores_list.append(daily_scores)
+        
+        if not daily_scores_list:
+            return self._empty_weekly_summary()
+        
+        # Calculate averages
+        productivity_scores = [d.get('productivity_score', 0) for d in daily_scores_list if d.get('productivity_score', 0) > 0]
+        execution_scores = [d.get('execution_score', 0) for d in daily_scores_list if d.get('execution_score', 0) > 0]
+        grit_scores = [d.get('grit_score', 0) for d in daily_scores_list if d.get('grit_score', 0) > 0]
+        composite_scores = [d.get('composite_score', 0) for d in daily_scores_list if d.get('composite_score', 0) > 0]
+        
+        avg_productivity = sum(productivity_scores) / len(productivity_scores) if productivity_scores else 0.0
+        avg_execution = sum(execution_scores) / len(execution_scores) if execution_scores else 0.0
+        avg_grit = sum(grit_scores) / len(grit_scores) if grit_scores else 0.0
+        avg_composite = sum(composite_scores) / len(composite_scores) if composite_scores else 0.0
+        
+        # Find best days
+        best_day_productivity = max([d.get('productivity_score', 0) for d in daily_scores_list], default=0.0)
+        best_day_execution = max([d.get('execution_score', 0) for d in daily_scores_list], default=0.0)
+        best_day_grit = max([d.get('grit_score', 0) for d in daily_scores_list], default=0.0)
+        
+        # Calculate trends (compare first half vs second half of week)
+        if len(daily_scores_list) >= 4:
+            mid_point = len(daily_scores_list) // 2
+            first_half_prod = [d.get('productivity_score', 0) for d in daily_scores_list[:mid_point] if d.get('productivity_score', 0) > 0]
+            second_half_prod = [d.get('productivity_score', 0) for d in daily_scores_list[mid_point:] if d.get('productivity_score', 0) > 0]
+            
+            first_half_exec = [d.get('execution_score', 0) for d in daily_scores_list[:mid_point] if d.get('execution_score', 0) > 0]
+            second_half_exec = [d.get('execution_score', 0) for d in daily_scores_list[mid_point:] if d.get('execution_score', 0) > 0]
+            
+            if first_half_prod and second_half_prod:
+                avg_first_prod = sum(first_half_prod) / len(first_half_prod)
+                avg_second_prod = sum(second_half_prod) / len(second_half_prod)
+                productivity_trend = 'up' if avg_second_prod > avg_first_prod * 1.05 else ('down' if avg_second_prod < avg_first_prod * 0.95 else 'stable')
+            else:
+                productivity_trend = 'stable'
+            
+            if first_half_exec and second_half_exec:
+                avg_first_exec = sum(first_half_exec) / len(first_half_exec)
+                avg_second_exec = sum(second_half_exec) / len(second_half_exec)
+                execution_trend = 'up' if avg_second_exec > avg_first_exec * 1.05 else ('down' if avg_second_exec < avg_first_exec * 0.95 else 'stable')
+            else:
+                execution_trend = 'stable'
+        else:
+            productivity_trend = 'stable'
+            execution_trend = 'stable'
+        
+        # Count days active
+        days_active = len(daily_scores_list)
+        
+        # Calculate total work and self-care time
+        week_completions['task_type_normalized'] = week_completions.get('task_type', 'Work').astype(str).str.strip().str.lower()
+        week_completions['duration_numeric'] = pd.to_numeric(week_completions.get('duration_minutes', 0), errors='coerce').fillna(0.0)
+        
+        work_time = week_completions[week_completions['task_type_normalized'] == 'work']['duration_numeric'].sum()
+        self_care_time = week_completions[week_completions['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])]['duration_numeric'].sum()
+        
+        return {
+            'tasks_completed': len(week_completions),
+            'avg_productivity_score': round(avg_productivity, 1),
+            'avg_execution_score': round(avg_execution, 1),
+            'avg_grit_score': round(avg_grit, 1),
+            'avg_composite_score': round(avg_composite, 1),
+            'best_day_productivity': round(best_day_productivity, 1),
+            'best_day_execution': round(best_day_execution, 1),
+            'best_day_grit': round(best_day_grit, 1),
+            'productivity_trend': productivity_trend,
+            'execution_trend': execution_trend,
+            'days_active': days_active,
+            'total_work_time': round(work_time, 1),
+            'total_self_care_time': round(self_care_time, 1)
+        }
+    
+    def _empty_weekly_summary(self) -> Dict[str, Any]:
+        """Return empty weekly summary structure."""
+        return {
+            'tasks_completed': 0,
+            'avg_productivity_score': 0.0,
+            'avg_execution_score': 0.0,
+            'avg_grit_score': 0.0,
+            'avg_composite_score': 0.0,
+            'best_day_productivity': 0.0,
+            'best_day_execution': 0.0,
+            'best_day_grit': 0.0,
+            'productivity_trend': 'stable',
+            'execution_trend': 'stable',
+            'days_active': 0,
+            'total_work_time': 0.0,
+            'total_self_care_time': 0.0
+        }
 
     def calculate_execution_score(
         self,

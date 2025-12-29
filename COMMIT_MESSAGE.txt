@@ -1,92 +1,89 @@
-feat(analytics): separate focus, momentum, and persistence factors (v1.2)
+feat(popups): add momentum, break, score milestone, and weekly summary popups
 
-Refactored execution score and grit score to properly separate mental state
-(focus) from behavioral patterns (momentum) and historical patterns (persistence).
+Added four new popup triggers to provide feedback and encouragement at key moments.
 
-## Major Changes
+## Popup Triggers Added
 
-### Focus Factor (Refactored)
-- Changed from mixed components to 100% emotion-based (pure mental state)
-- Removed task clustering component (→ momentum factor)
-- Removed template repetition component (→ persistence factor)
-- Now measures only focus-positive vs focus-negative emotions
-- Returns 0.0-1.0 range
-- Moved from execution score to grit score (emotion-based, subjective)
+### Momentum Popup (Trigger 4.1)
+- Fires when user completes exactly 5 tasks in last 24 hours
+- Only shows if momentum_factor >= 0.7 (high momentum)
+- Tiered messaging based on frequency
+- Options: "Keep Going" or "Take a Break"
+- Cooldown: 24 hours (once per day max)
 
-### Momentum Factor (New)
-- Measures building energy through repeated action (behavioral pattern)
-- Components: Task clustering (40%), Volume (30%), Consistency (20%), Acceleration (10%)
-- Returns 0.0-1.0 range
-- Added to execution score (behavioral, objective)
+### Take a Break Popup (Trigger 1.1)
+- Fires when user has been working for 4+ hours with minimal breaks
+- "Significant idle time" = 30+ minutes between tasks
+- If average gap < 30 minutes over 4+ hours, suggests break needed
+- Tiered messaging based on frequency
+- Options: "Take a Break" or "Keep Going"
+- Cooldown: 24 hours (once per day max)
 
-### Persistence Factor (New)
-- Measures continuing despite obstacles (historical pattern)
-- Components with user-specified weights:
-  - Obstacle overcoming (40% - highest): Completing despite high cognitive/emotional load
-  - Aversion resistance (30%): Completing despite high aversion
-  - Task repetition (20%): Completing same task multiple times
-  - Consistency (10%): Regular completion patterns over time
-- Returns 0.0-1.0 range
-- Added to grit score
+### Score Milestone Popup (Trigger 6.1)
+- Fires on first task completion of the day if yesterday achieved a score milestone
+- Checks productivity, execution, grit, and composite scores
+- Shows milestone closest to all-time best (prioritized)
+- Milestones: All-time best or top 10 scores
+- Tiered messaging based on frequency
+- Options: "Keep Going" or "View Scores"
+- Cooldown: 24 hours (once per day max)
+- Only one score milestone popup per day (best one shown)
 
-### Grit Score (Restructured)
-- New formula: grit = base_score * persistence_factor * focus_factor * passion_factor * time_bonus
-- Includes persistence (continuing despite obstacles)
-- Includes focus (current attention state, emotion-based)
-- Keeps passion factor (relief vs emotional load)
-- Keeps time bonus (taking longer, dedication)
-
-### Execution Score (Updated to v1.2)
-- Removed focus_factor (emotion-based, belongs in grit score)
-- Added thoroughness_factor (note-taking, existing method)
-- Added momentum_factor (behavioral pattern)
-- New formula: execution = base * difficulty * speed * start_speed * completion * thoroughness * momentum
-
-## Research Basis
-
-Confirmed through research that focus is a mental state (ability to concentrate),
-not a behavioral pattern. Behavioral indicators measure focus but are not focus itself.
+### Weekly Progress Summary Popup (Trigger 5.1)
+- Fires on first task completion of the configured day of week (default: Monday)
+- Configurable via user preferences (0=Monday, 6=Sunday)
+- Shows weekly progress summary for the last 7 days:
+  - Tasks completed
+  - Days active
+  - Average scores (productivity, execution, grit)
+  - Best day productivity score
+  - Total work time
+  - Trend indicators (up/down/stable)
+- Tiered messaging based on frequency
+- Options: "Keep Going" or "View Details"
+- Cooldown: 7 days (once per week max)
 
 ## Files Modified
 
+- backend/popup_dispatcher.py:
+  - Added _evaluate_trigger_4_1() (momentum popup at 5 tasks)
+  - Added _evaluate_trigger_1_1() (take a break after 4 hours)
+  - Added _evaluate_trigger_6_1() (score milestone popup)
+  - Added _evaluate_trigger_5_1() (weekly progress summary popup)
+  - Added _get_trigger_4_1_message() (tiered momentum messages)
+  - Added _get_trigger_1_1_message() (tiered break messages)
+  - Added _get_trigger_6_1_message() (tiered milestone messages)
+  - Added _get_trigger_5_1_message() (tiered weekly summary messages)
+
 - backend/analytics.py:
-  - Refactored calculate_focus_factor() (emotion-only)
-  - Added calculate_momentum_factor() (new)
-  - Added calculate_persistence_factor() (new)
-  - Updated calculate_grit_score() (restructured)
-  - Updated calculate_execution_score() (removed focus, added momentum + thoroughness)
-  - Updated EXECUTION_SCORE_VERSION to '1.2'
+  - Added calculate_daily_scores() (calculate aggregated daily scores)
+  - Added get_historical_daily_scores() (get top N historical daily scores)
+  - Added check_score_milestones() (check if yesterday achieved milestones)
+  - Added calculate_weekly_progress_summary() (calculate weekly summary statistics)
 
-## Documentation Created
+- backend/user_state.py:
+  - Added get_weekly_summary_day() (get configured day of week for weekly summary)
+  - Added set_weekly_summary_day() (set configured day of week, 0=Monday, 6=Sunday)
 
-- docs/focus_momentum_persistence_final_design.md: Final design document
-- docs/focus_momentum_persistence_separation.md: Conceptual separation analysis
-- docs/implementation_summary_v1.2.md: Implementation summary
+- ui/complete_task.py:
+  - Updated popup response handler to support 'break' and 'view' options
 
 ## Value Assessment: 8/10
 
 **Strengths:**
-- Clear conceptual separation (focus = mental state, momentum = behavioral, persistence = historical)
-- Proper placement in appropriate scores (focus in grit, momentum in execution)
-- User-specified weights for persistence factor
-- Research-backed design decisions
-- Comprehensive documentation
+- Comprehensive popup system covering momentum, breaks, achievements, and weekly summaries
+- Configurable weekly summary day to match user workflow (0=Monday, 6=Sunday)
+- Retrospective encouragement (score milestones shown day after achievement)
+- Tiered messaging adapts to user frequency (first time, repeats, habitual)
+- All popups respect cooldowns and daily caps to prevent notification fatigue
+- Smart prioritization (only one score milestone popup per day, best one shown)
+- Actionable options (continue, break, view details) provide clear next steps
+- Weekly summary includes trend indicators (up/down/stable) for quick insights
 
 **Future Enhancements:**
-- Momentum popup at 5 tasks (next step)
-- Take a break popup after 4 hours (next step)
-- Additional components for recommendations (time-of-day, task type consistency, etc.)
-- Testing with real data to calibrate weights
-
-## Breaking Changes
-
-- Execution score formula changed (focus factor removed, momentum + thoroughness added)
-- Grit score formula changed (persistence and focus factors added)
-- Focus factor now requires emotion data (was previously behavioral)
-
-## Migration Notes
-
-- Existing execution scores will be recalculated with new formula
-- Focus factor now purely emotion-based (requires emotion_values in actual/predicted dicts)
-- Momentum factor requires completed_at timestamps and task_id
-- Persistence factor requires cognitive_load, emotional_load, initial_aversion
+- UI for configuring weekly summary day preference in settings
+- Additional popup triggers for other milestones (streak achievements, consistency patterns)
+- Fine-tune popup trigger thresholds based on user feedback (5 tasks, 4 hours, etc.)
+- Analytics dashboard integration for "View Details" and "View Scores" options
+- A/B testing different messaging tiers to optimize engagement
+- User preference to disable specific popup types

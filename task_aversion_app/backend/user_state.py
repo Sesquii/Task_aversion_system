@@ -469,6 +469,46 @@ class UserStateManager:
             raise ValueError("Daily cap must be >= 1")
         
         return self.update_preference(user_id, "popup_daily_cap", int(daily_cap))
+    
+    def get_weekly_summary_day(self, user_id: str = "default") -> int:
+        """Get the day of week for weekly summary popup (0=Monday, 6=Sunday).
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Day of week (0-6), default 0 (Monday)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return 0  # Default: Monday
+        
+        day_str = prefs.get("weekly_summary_day", "")
+        if not day_str:
+            return 0  # Default: Monday
+        
+        try:
+            day = int(day_str)
+            if 0 <= day <= 6:
+                return day
+            return 0  # Invalid, default to Monday
+        except (ValueError, TypeError):
+            return 0  # Default: Monday
+    
+    def set_weekly_summary_day(self, day_of_week: int, user_id: str = "default") -> Dict[str, Any]:
+        """Set the day of week for weekly summary popup.
+        
+        Args:
+            day_of_week: Day of week (0=Monday, 1=Tuesday, ..., 6=Sunday)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        if not (0 <= day_of_week <= 6):
+            raise ValueError("Day of week must be 0-6 (0=Monday, 6=Sunday)")
+        
+        return self.update_preference(user_id, "weekly_summary_day", int(day_of_week))
 
     # -----------------------------
     # Cancellation penalties management

@@ -582,6 +582,18 @@ def complete_task_page(task_manager, emotion_manager):
                     elif response_value == 'continue':
                         # User wants to continue, proceed with submission
                         do_submit_completion()
+                    elif response_value == 'break':
+                        # User wants to take a break, still submit but show break message
+                        ui.notify("Good idea to take a break! Task will be completed.", color='positive')
+                        do_submit_completion()
+                    elif response_value == 'view':
+                        # User wants to view scores, submit and navigate (if navigation available)
+                        ui.notify("Task completed. Check your analytics dashboard for score details.", color='info')
+                        do_submit_completion()
+                        # TODO: Navigate to analytics/scores view if available
+                    else:
+                        # Default: proceed with submission
+                        do_submit_completion()
                 
                 show_popup_modal(popup, on_response=handle_popup_response)
                 return  # Don't submit yet, wait for popup response
