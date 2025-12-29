@@ -3051,14 +3051,14 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
     if not metric_keys:
         metric_keys = ["relief_score"]
     
-    # Get recommendations for the selected metrics (top 3)
+    # Get recommendations for the selected metrics (top 10)
     # Use module-level dash_filters if available, otherwise empty dict
     filters = globals().get('dash_filters', {})
     
     if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=3)
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
     else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=3)
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
     
     print(f"[Dashboard] Recommendations result ({len(recs)} entries) for mode '{mode}', metrics '{metric_keys}', filters {filters}")
     print(f"[Dashboard] Full recommendations list: {[r.get('task_name') or r.get('instance_id') for r in recs]}")
