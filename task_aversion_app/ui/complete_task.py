@@ -1,12 +1,16 @@
 # ui/complete_task.py
+from typing import Optional
 from nicegui import ui
 from fastapi import Request
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
+from backend.popup_dispatcher import PopupDispatcher
+from ui.popup_modal import show_popup_modal
 import json
 
 im = InstanceManager()
 user_state = UserStateManager()
+popup_dispatcher = PopupDispatcher()
 
 def complete_task_page(task_manager, emotion_manager):
 
@@ -502,6 +506,92 @@ def complete_task_page(task_manager, emotion_manager):
             if not instance_check:
                 ui.notify(f"Instance {iid} not found", color='negative')
                 return
+
+            # Check if sliders were adjusted (compare current values to defaults)
+            sliders_adjusted = False
+            
+            # Check relief slider
+            current_relief = int(actual_relief.value) if actual_relief.value is not None else 0
+            if current_relief != default_relief:
+                sliders_adjusted = True
+            
+            # Check mental energy slider
+            current_mental_energy = int(actual_mental_energy.value) if actual_mental_energy.value is not None else 0
+            if current_mental_energy != default_mental_energy:
+                sliders_adjusted = True
+            
+            # Check difficulty slider
+            current_difficulty = int(actual_difficulty.value) if actual_difficulty.value is not None else 0
+            if current_difficulty != default_difficulty:
+                sliders_adjusted = True
+            
+            # Check emotional slider
+            current_emotional = int(actual_emotional.value) if actual_emotional.value is not None else 0
+            if current_emotional != default_emotional:
+                sliders_adjusted = True
+            
+            # Check physical slider
+            current_physical = int(actual_physical.value) if actual_physical.value is not None else 0
+            if current_physical != default_physical:
+                sliders_adjusted = True
+            
+            # Check emotion sliders
+            for emotion in emotion_sliders.keys():
+                current_val = int(emotion_sliders[emotion].value)
+                default_val = get_emotion_default_value(emotion)
+                if current_val != default_val:
+                    sliders_adjusted = True
+                    break
+            
+            # Check aversion slider if it exists
+            if aversion_slider is not None:
+                current_aversion = int(aversion_slider.value) if aversion_slider.value is not None else 0
+                if current_aversion != current_expected_aversion:
+                    sliders_adjusted = True
+            
+            # Evaluate popup triggers
+            completion_context = {
+                'event_type': 'complete',
+                'instance_id': iid,
+                'task_id': task_id,
+                'sliders_adjusted': sliders_adjusted
+            }
+            
+            popup = popup_dispatcher.evaluate_triggers(
+                completion_context=completion_context,
+                user_id='default'
+            )
+            
+            # If popup should show, display it and handle response
+            if popup:
+                def handle_popup_response(response_value: str, helpful: Optional[bool], comment: Optional[str]):
+                    # Log response
+                    popup_dispatcher.handle_popup_response(
+                        trigger_id=popup['trigger_id'],
+                        response_value=response_value,
+                        helpful=helpful,
+                        comment=comment,
+                        task_id=task_id,
+                        user_id='default'
+                    )
+                    
+                    if response_value == 'edit':
+                        # User wants to edit sliders, don't submit
+                        ui.notify("Please adjust your sliders before completing", color='info')
+                        return
+                    elif response_value == 'continue':
+                        # User wants to continue, proceed with submission
+                        do_submit_completion()
+                
+                show_popup_modal(popup, on_response=handle_popup_response)
+                return  # Don't submit yet, wait for popup response
+            
+            # No popup, proceed with submission
+            do_submit_completion()
+        
+        def do_submit_completion():
+            """Internal function that actually performs the submission."""
+            iid = (inst_input.value or "").strip()
 
             # Collect emotion values from sliders
             # Check all emotions that have sliders (even if not in all_emotions)

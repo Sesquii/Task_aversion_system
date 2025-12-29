@@ -1,3 +1,4 @@
+from typing import Optional
 from nicegui import ui
 from datetime import datetime
 import json
@@ -5,8 +6,11 @@ import json
 from fastapi import Request
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
+from backend.popup_dispatcher import PopupDispatcher
+from ui.popup_modal import show_popup_modal
 
 im = InstanceManager()
+popup_dispatcher = PopupDispatcher()
 user_state = UserStateManager()
 
 
@@ -336,6 +340,100 @@ def initialize_task_page(task_manager, emotion_manager):
             )
 
             def save():
+                # Check if sliders were adjusted (compare current values to defaults)
+                sliders_adjusted = False
+                
+                # Check aversion slider
+                current_aversion = max(0, int(aversion_slider.value or 0))
+                if current_aversion != default_aversion:
+                    sliders_adjusted = True
+                
+                # Check relief slider
+                current_relief = int(predicted_relief.value) if predicted_relief.value is not None else 0
+                if current_relief != default_relief:
+                    sliders_adjusted = True
+                
+                # Check mental energy slider
+                current_mental_energy = int(mental_energy.value) if mental_energy.value is not None else 0
+                if current_mental_energy != default_mental_energy:
+                    sliders_adjusted = True
+                
+                # Check difficulty slider
+                current_difficulty = int(task_difficulty.value) if task_difficulty.value is not None else 0
+                if current_difficulty != default_difficulty:
+                    sliders_adjusted = True
+                
+                # Check emotional slider
+                current_emotional = int(emotional_load.value) if emotional_load.value is not None else 0
+                if current_emotional != default_emotional:
+                    sliders_adjusted = True
+                
+                # Check physical slider
+                current_physical = int(physical_load.value) if physical_load.value is not None else 0
+                if current_physical != default_physical:
+                    sliders_adjusted = True
+                
+                # Check motivation slider
+                current_motivation = int(motivation.value) if motivation.value is not None else 0
+                if current_motivation != default_motivation:
+                    sliders_adjusted = True
+                
+                # Check emotion sliders
+                for emotion in emotion_sliders.keys():
+                    current_val = int(emotion_sliders[emotion].value)
+                    default_val = emotion_values_dict.get(emotion, 50)
+                    try:
+                        default_val = int(float(default_val))
+                        if default_val < 0 or default_val > 100:
+                            default_val = 50
+                    except (ValueError, TypeError):
+                        default_val = 50
+                    if current_val != default_val:
+                        sliders_adjusted = True
+                        break
+                
+                # Evaluate popup triggers
+                initialization_context = {
+                    'event_type': 'initialize',
+                    'instance_id': instance_id,
+                    'task_id': task_id,
+                    'sliders_adjusted': sliders_adjusted
+                }
+                
+                popup = popup_dispatcher.evaluate_triggers(
+                    completion_context=initialization_context,
+                    user_id='default'
+                )
+                
+                # If popup should show, display it and handle response
+                if popup:
+                    def handle_popup_response(response_value: str, helpful: Optional[bool], comment: Optional[str]):
+                        # Log response
+                        popup_dispatcher.handle_popup_response(
+                            trigger_id=popup['trigger_id'],
+                            response_value=response_value,
+                            helpful=helpful,
+                            comment=comment,
+                            task_id=task_id,
+                            user_id='default'
+                        )
+                        
+                        if response_value == 'edit':
+                            # User wants to edit sliders, don't save
+                            ui.notify("Please adjust your sliders before initializing", color='info')
+                            return
+                        elif response_value == 'continue':
+                            # User wants to continue, proceed with save
+                            do_save()
+                    
+                    show_popup_modal(popup, on_response=handle_popup_response)
+                    return  # Don't save yet, wait for popup response
+                
+                # No popup, proceed with save
+                do_save()
+            
+            def do_save():
+                """Internal function that actually performs the save."""
                 emotion_list = parse_emotions_input()
                 physical_value = (
                     custom_physical.value if physical_context.value == "Custom..." else physical_context.value

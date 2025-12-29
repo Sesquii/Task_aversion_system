@@ -429,6 +429,46 @@ class UserStateManager:
             del categories[category_key]
             self.set_cancellation_categories(categories, user_id)
         return categories
+    
+    # -----------------------------
+    # Popup settings management
+    # -----------------------------
+    def get_popup_daily_cap(self, user_id: str = "default") -> Optional[int]:
+        """Get daily popup cap for a user.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Daily cap value (int) or None if not set
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return None
+        
+        cap_str = prefs.get("popup_daily_cap", "")
+        if not cap_str:
+            return None
+        
+        try:
+            return int(cap_str)
+        except (ValueError, TypeError):
+            return None
+    
+    def set_popup_daily_cap(self, daily_cap: int, user_id: str = "default") -> Dict[str, Any]:
+        """Set daily popup cap for a user.
+        
+        Args:
+            daily_cap: Maximum number of popups per day (must be >= 1)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        if daily_cap < 1:
+            raise ValueError("Daily cap must be >= 1")
+        
+        return self.update_preference(user_id, "popup_daily_cap", int(daily_cap))
 
     # -----------------------------
     # Cancellation penalties management

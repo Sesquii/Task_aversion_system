@@ -1,79 +1,86 @@
-refactor(scale): remove 0-10 to 0-100 scaling logic, make 0-100 scale native throughout
+feat(popups): implement popup system infrastructure and initial slider reminder popup
 
-Refactor codebase to use 0-100 scale natively for all metrics, removing all
-scaling logic that was "working overtime" to convert between scales. This
-simplifies the codebase, eliminates the scaling bug where 9/100 was incorrectly
-displayed as 90, and makes the system more consistent.
+Implement complete popup system infrastructure with database models, state management,
+dispatcher service, and UI integration. Add initial popup trigger (7.1) that reminds
+users to adjust sliders before completing/initializing tasks to maintain emotional
+regulation awareness.
 
 Features:
-- All UI sliders now natively use 0-100 scale (were already correct)
-- Updated task_schema.py defaults: relief_score (5→50), emotional_load (4→40)
-- Removed all scaling helper functions and conversion logic
-- Old data with 0-10 values is read as-is (no scaling, backward compatible)
+- Popup system infrastructure with database-backed state management
+- Trigger 7.1: "No sliders adjusted" reminder popup
+- Tiered messaging system (first time = brief, repeats = more direct)
+- Daily popup cap system (default: 5, configurable via user preferences)
+- Cooldown system (24 hours default per trigger)
+- Popup modal UI with "Continue" and "Edit" options
+- Helpful toggle and optional feedback collection
+- Integration in complete_task.py and initialize_task.py
+- Graceful fallback if database unavailable
 
-Bug Fixes:
-- Fixed scaling bug where values like 9/100 were incorrectly displayed as 90
-- Fixed scaling logic that was too broad (checking <= 10 caught values already
-  on 0-100 scale)
-- Removed all scaling logic from display and calculation paths
+Technical Implementation:
+- Database models: PopupTrigger (tracks counts, cooldowns, feedback) and PopupResponse (logs)
+- PopupStateManager: CRUD operations, cooldown checks, daily count tracking, tier calculation
+- PopupDispatcher: Trigger evaluation, priority system, tiered message selection
+- Popup modal component: Reusable UI with options, helpful toggle, feedback collection
+- Slider change detection: Compares current values to defaults/initialization values
 
-Technical Changes:
-- Removed is_0_to_10_scale() and scale_0_to_10_to_100() helper functions
-- Removed should_scale_10_to_100() method from Analytics class
-- Removed all scaling checks (if value <= 10: value * 10) throughout codebase
-- Updated all files to read values directly without scaling
-- Added comments noting that old 0-10 data is used as-is (acceptable since
-  it was only used for a short time and won't skew results)
+Database Schema:
+- popup_triggers table: user_id, trigger_id, task_id, count, last_shown_at, helpful, last_response, last_comment
+- popup_responses table: user_id, trigger_id, task_id, instance_id, response_value, helpful, comment, context
+
+Files created:
+- task_aversion_app/backend/popup_state.py
+  - PopupStateManager class for state management and CRUD operations
+  - Methods: get_trigger_state, increment_trigger_count, update_trigger_feedback, check_cooldown, get_daily_popup_count, log_popup_response, get_trigger_tier
+
+- task_aversion_app/backend/popup_dispatcher.py
+  - PopupDispatcher class for trigger evaluation and popup content generation
+  - Methods: evaluate_triggers, _evaluate_trigger_7_1, _get_trigger_7_1_message, handle_popup_response
+  - Implements trigger 7.1 with tiered messaging (tier 0, 1-2, 3+)
+
+- task_aversion_app/ui/popup_modal.py
+  - show_popup_modal() function for displaying popups
+  - Supports title, message, options, helpful toggle, feedback collection
 
 Files modified:
-- task_aversion_app/backend/task_schema.py
-  - Updated relief_score: range_hint "0-10" → "0-100", default 5 → 50
-  - Updated emotional_load: range_hint "0-10" → "0-100", default 4 → 40
+- task_aversion_app/backend/database.py
+  - Added PopupTrigger model (tracks trigger state per user/task)
+  - Added PopupResponse model (logs popup shows and responses)
 
-- task_aversion_app/ui/dashboard.py
-  - Removed is_0_to_10_scale() and scale_0_to_10_to_100() helper functions
-  - Removed all scaling logic from display functions (relief, mental energy,
-    difficulty, physical load, emotional load, motivation)
-  - Values now displayed directly without scaling
+- task_aversion_app/backend/user_state.py
+  - Added get_popup_daily_cap() method
+  - Added set_popup_daily_cap() method
+  - Stores popup_daily_cap preference in user_preferences.csv
 
 - task_aversion_app/ui/complete_task.py
-  - Removed scaling logic when displaying predicted relief value
-  - Old 0-10 values displayed as-is
+  - Added slider change detection (compares current values to defaults)
+  - Integrated popup evaluation before submission
+  - Shows popup if no sliders adjusted, handles "continue" vs "edit" responses
 
-- task_aversion_app/backend/analytics.py
-  - Removed should_scale_10_to_100() static method
-  - Removed all scaling logic from DataFrame processing
-  - Removed scaling from mental_energy_needed and task_difficulty handling
-  - Removed scaling from cognitive_load backward compatibility
+- task_aversion_app/ui/initialize_task.py
+  - Added slider change detection (compares current values to defaults)
+  - Integrated popup evaluation before save
+  - Shows popup if no sliders adjusted, handles "continue" vs "edit" responses
 
-- task_aversion_app/backend/instance_manager.py
-  - Removed scaling from normalize_relief() function
-  - Removed scaling from scale_values_10_to_100() method (now just ensures
-    values are floats, no scaling)
-  - Updated all scaling checks to just read values as-is
+Popup Trigger 7.1 Details:
+- Fires when user attempts to complete/initialize without adjusting any sliders
+- Tier 0 (first time): Brief, encouraging message about accurate tracking
+- Tier 1-2 (repeats): More direct message about emotional regulation
+- Tier 3+ (habitual): Supportive but clear reminder about maintaining awareness
+- Includes optional reinforcement message about emotional tracking benefits
+- Options: "Continue" (proceed anyway) or "Edit" (go back to adjust sliders)
 
-- task_aversion_app/data_audit.py
-  - Removed all scaling logic from relief, cognitive, emotional, aversion values
-  - Values read directly without conversion
+Settings:
+- Daily popup cap: Configurable via user_state.set_popup_daily_cap() (default: 5)
+- Cooldown: 24 hours per trigger (configurable in dispatcher)
+- User feedback: Collected via "Helpful?" toggle and optional comment
 
-- task_aversion_app/backend/data_archival.py
-  - Removed all scaling logic from relief, cognitive, emotional values
-  - Values read directly without conversion
-
-- task_aversion_app/ui/factors_comparison_analytics.py
-  - Removed scaling from _normalize_relief() function
-  - Values read directly without conversion
-
-- task_aversion_app/migrate_factors_to_database.py
-  - Removed scaling logic from normalize_relief() function
-  - Values read directly without conversion
-
-Commit Value: 8/10
-This refactoring significantly improves code maintainability and correctness by
-eliminating complex scaling logic that was prone to bugs (like the 9/100 → 90
-display bug). The codebase is now simpler, more consistent, and easier to
-understand. While this doesn't add new user-facing features, it removes
-technical debt and prevents future scaling-related bugs. The backward
-compatibility approach (reading old 0-10 data as-is) is acceptable since that
-data was only used briefly and won't significantly skew results. This is a
-high-value refactoring that improves code quality and reduces maintenance burden.
+Commit Value: 7/10
+This implements a solid foundation for the popup system with proper database backing,
+state management, and UI integration. The initial trigger (7.1) addresses an important
+user experience issue - reminding users to maintain emotional regulation awareness
+during task completion. The infrastructure is extensible for future triggers and includes
+good practices like cooldowns, daily caps, and user feedback collection. The tiered
+messaging system provides progressive depth without being intrusive. The main limitation
+is that the settings UI for daily cap isn't fully implemented yet (separate task
+planned), but the backend infrastructure is complete and functional. This is a valuable
+feature that improves data quality and user awareness of emotional state tracking.

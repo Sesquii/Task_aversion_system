@@ -243,6 +243,114 @@ class Emotion(Base):
         return f"<Emotion(emotion='{self.emotion}')>"
 
 
+class PopupTrigger(Base):
+    """
+    Popup trigger state model.
+    Tracks per-trigger counts, cooldowns, and user responses for popup system.
+    """
+    __tablename__ = 'popup_triggers'
+    
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # User identifier (for future multi-user support, default to 'default')
+    user_id = Column(String, default='default', nullable=False, index=True)
+    
+    # Trigger identifier (e.g., '7.1', '1.1', '2.1')
+    trigger_id = Column(String, nullable=False, index=True)
+    
+    # Optional task_id for task-specific triggers
+    task_id = Column(String, default=None, nullable=True, index=True)
+    
+    # Count of times this trigger has fired
+    count = Column(Integer, default=0, nullable=False)
+    
+    # Last time this popup was shown
+    last_shown_at = Column(DateTime, default=None, nullable=True)
+    
+    # User feedback: was this popup helpful?
+    helpful = Column(Boolean, default=None, nullable=True)
+    
+    # Last response value (if applicable)
+    last_response = Column(String, default=None, nullable=True)
+    
+    # Last comment/feedback from user
+    last_comment = Column(Text, default=None, nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary."""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'trigger_id': self.trigger_id,
+            'task_id': self.task_id,
+            'count': self.count,
+            'last_shown_at': self.last_shown_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_shown_at else None,
+            'helpful': self.helpful,
+            'last_response': self.last_response,
+            'last_comment': self.last_comment,
+            'created_at': self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
+            'updated_at': self.updated_at.strftime("%Y-%m-%d %H:%M:%S") if self.updated_at else None,
+        }
+    
+    def __repr__(self):
+        return f"<PopupTrigger(trigger_id='{self.trigger_id}', count={self.count})>"
+
+
+class PopupResponse(Base):
+    """
+    Popup response log model.
+    Stores detailed logs of popup shows and user responses.
+    """
+    __tablename__ = 'popup_responses'
+    
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # User identifier
+    user_id = Column(String, default='default', nullable=False, index=True)
+    
+    # Trigger identifier
+    trigger_id = Column(String, nullable=False, index=True)
+    
+    # Optional task_id and instance_id for context
+    task_id = Column(String, default=None, nullable=True, index=True)
+    instance_id = Column(String, default=None, nullable=True, index=True)
+    
+    # Response data
+    response_value = Column(String, default=None, nullable=True)  # e.g., 'continue', 'edit', 'yes', 'no'
+    helpful = Column(Boolean, default=None, nullable=True)
+    comment = Column(Text, default=None, nullable=True)
+    
+    # Context data (JSON) - stores completion context, survey context, etc.
+    context = Column(JSON, default=dict)
+    
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary."""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'trigger_id': self.trigger_id,
+            'task_id': self.task_id,
+            'instance_id': self.instance_id,
+            'response_value': self.response_value,
+            'helpful': self.helpful,
+            'comment': self.comment,
+            'context': json.dumps(self.context) if isinstance(self.context, dict) else (self.context or '{}'),
+            'created_at': self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
+        }
+    
+    def __repr__(self):
+        return f"<PopupResponse(trigger_id='{self.trigger_id}', response='{self.response_value}')>"
+
+
 # Future models will be added here:
 # - User (for future multi-user support)
 # - Survey (for future survey system)
