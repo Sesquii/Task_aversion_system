@@ -155,12 +155,11 @@ def complete_task_page(task_manager, emotion_manager):
         if edit_mode:
             actual_relief.disable()
         # Show predicted value from initialization if available
+        # Note: Old data may have 0-10 scale values, but we display them as-is (no scaling)
         if 'expected_relief' in predicted_data:
             pred_val = predicted_data.get('expected_relief')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_relief:
                     ui.label(f"Initialized: {pred_val} (current: {default_relief})").classes("text-xs text-gray-500")

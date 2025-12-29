@@ -83,25 +83,19 @@ class DataArchival:
         for idx, row in completed.iterrows():
             actual_dict = row.get('actual_parsed', {}) if isinstance(row.get('actual_parsed'), dict) else {}
             
-            # Relief
+            # Relief (0-100 scale natively, old data may have 0-10 values but we use as-is)
             relief = actual_dict.get('actual_relief') or actual_dict.get('relief')
             if relief is not None:
-                if 0 <= relief <= 10:
-                    relief = relief * 10
                 relief_values.append(relief)
             
-            # Cognitive
+            # Cognitive (0-100 scale natively, old data may have 0-10 values but we use as-is)
             cognitive = actual_dict.get('actual_cognitive') or actual_dict.get('cognitive_load')
             if cognitive is not None:
-                if 0 <= cognitive <= 10:
-                    cognitive = cognitive * 10
                 cognitive_values.append(cognitive)
             
-            # Emotional
+            # Emotional (0-100 scale natively, old data may have 0-10 values but we use as-is)
             emotional = actual_dict.get('actual_emotional') or actual_dict.get('emotional_load')
             if emotional is not None:
-                if 0 <= emotional <= 10:
-                    emotional = emotional * 10
                 emotional_values.append(emotional)
         
         # Calculate stress (average of cognitive + emotional)
@@ -111,10 +105,8 @@ class DataArchival:
             emotional = actual_dict.get('actual_emotional') or actual_dict.get('emotional_load', 0)
             
             if isinstance(cognitive, (int, float)) and isinstance(emotional, (int, float)):
-                if 0 <= cognitive <= 10:
-                    cognitive = cognitive * 10
-                if 0 <= emotional <= 10:
-                    emotional = emotional * 10
+                # Note: All inputs now use 0-100 scale natively.
+                # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                 stress = (cognitive + emotional) / 2
                 stress_values.append(stress)
         
@@ -168,20 +160,20 @@ class DataArchival:
                     
                     relief = actual_dict.get('actual_relief') or actual_dict.get('relief')
                     if relief is not None:
-                        if 0 <= relief <= 10:
-                            relief = relief * 10
+                        # Note: All inputs now use 0-100 scale natively.
+                        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                         task_relief.append(relief)
                     
                     cognitive = actual_dict.get('actual_cognitive') or actual_dict.get('cognitive_load')
                     if cognitive is not None:
-                        if 0 <= cognitive <= 10:
-                            cognitive = cognitive * 10
+                        # Note: All inputs now use 0-100 scale natively.
+                        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                         task_cognitive.append(cognitive)
                     
                     emotional = actual_dict.get('actual_emotional') or actual_dict.get('emotional_load')
                     if emotional is not None:
-                        if 0 <= emotional <= 10:
-                            emotional = emotional * 10
+                        # Note: All inputs now use 0-100 scale natively.
+                        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                         task_emotional.append(emotional)
                 
                 if task_relief or task_cognitive or task_emotional:

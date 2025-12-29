@@ -27,6 +27,10 @@ PRODUCTIVITY_SCORE_VERSION = '1.1'
 class Analytics:
     """Central analytics + lightweight recommendation helper."""
     
+    # Note: All inputs now use 0-100 scale natively.
+    # Old data may have 0-10 scale values, but we use them as-is (no scaling).
+    # This is acceptable since old 0-10 data was only used for a short time.
+    
     @staticmethod
     def calculate_difficulty_bonus(
         current_aversion: Optional[float],
@@ -1241,12 +1245,8 @@ class Analytics:
                     df['mental_energy_needed'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
                     df['task_difficulty'] = pd.to_numeric(df['task_difficulty'], errors='coerce')
                     
-                    # Scale from 0-10 to 0-100 if needed (backward compatibility)
-                    mental_energy_mask = (df['mental_energy_needed'] >= 0) & (df['mental_energy_needed'] <= 10) & (df['mental_energy_needed'].notna())
-                    df.loc[mental_energy_mask, 'mental_energy_needed'] = df.loc[mental_energy_mask, 'mental_energy_needed'] * 10.0
-                    
-                    difficulty_mask = (df['task_difficulty'] >= 0) & (df['task_difficulty'] <= 10) & (df['task_difficulty'].notna())
-                    df.loc[difficulty_mask, 'task_difficulty'] = df.loc[difficulty_mask, 'task_difficulty'] * 10.0
+                    # Note: All inputs now use 0-100 scale natively.
+                    # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                     
                     df['mental_energy_needed'] = df['mental_energy_needed'].fillna(50.0)
                     df['task_difficulty'] = df['task_difficulty'].fillna(50.0)
@@ -1383,8 +1383,8 @@ class Analytics:
                     if 'cognitive_load' in df.columns:
                         cognitive_numeric = pd.to_numeric(df['cognitive_load'], errors='coerce')
                         cognitive_scaled = cognitive_numeric.copy()
-                        scale_mask = (cognitive_numeric >= 0) & (cognitive_numeric <= 10) & (cognitive_numeric.notna())
-                        cognitive_scaled.loc[scale_mask] = cognitive_numeric.loc[scale_mask] * 10.0
+                        # Note: All inputs now use 0-100 scale natively.
+                        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                         
                         if 'mental_energy_needed' in df.columns:
                             mental_numeric = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
@@ -1474,10 +1474,9 @@ class Analytics:
         # This allows existing data to work with the new schema
         if 'cognitive_load' in df.columns:
             cognitive_numeric = pd.to_numeric(df['cognitive_load'], errors='coerce')
-            # Scale from 0-10 to 0-100 if needed (for old data)
             cognitive_scaled = cognitive_numeric.copy()
-            scale_mask = (cognitive_numeric >= 0) & (cognitive_numeric <= 10) & (cognitive_numeric.notna())
-            cognitive_scaled.loc[scale_mask] = cognitive_numeric.loc[scale_mask] * 10.0
+            # Note: All inputs now use 0-100 scale natively.
+            # Old data may have 0-10 scale values, but we use them as-is (no scaling).
             
             # Use cognitive_load for missing mental_energy_needed
             if 'mental_energy_needed' in df.columns:
@@ -1520,12 +1519,8 @@ class Analytics:
         df['mental_energy_needed'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
         df['task_difficulty'] = pd.to_numeric(df['task_difficulty'], errors='coerce')
         
-        # Scale from 0-10 to 0-100 if needed (for backward compatibility with old data)
-        mental_energy_mask = (df['mental_energy_needed'] >= 0) & (df['mental_energy_needed'] <= 10) & (df['mental_energy_needed'].notna())
-        df.loc[mental_energy_mask, 'mental_energy_needed'] = df.loc[mental_energy_mask, 'mental_energy_needed'] * 10.0
-        
-        difficulty_mask = (df['task_difficulty'] >= 0) & (df['task_difficulty'] <= 10) & (df['task_difficulty'].notna())
-        df.loc[difficulty_mask, 'task_difficulty'] = df.loc[difficulty_mask, 'task_difficulty'] * 10.0
+        # Note: All inputs now use 0-100 scale natively.
+        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
         
         df['mental_energy_needed'] = df['mental_energy_needed'].fillna(50.0)  # Default to 50 if missing
         df['task_difficulty'] = df['task_difficulty'].fillna(50.0)  # Default to 50 if missing

@@ -1245,16 +1245,13 @@ class InstanceManager:
             expected_relief = predicted.get('expected_relief')
             actual_relief = actual.get('actual_relief')
             
-            # Normalize relief values (scale 0-10 to 0-100 if needed)
+            # Note: All inputs now use 0-100 scale natively.
+            # Old data may have 0-10 scale values, but we use them as-is (no scaling).
             def normalize_relief(val):
                 if val is None:
                     return None
                 try:
-                    val = float(val)
-                    # If value is 0-10, scale to 0-100
-                    if 0 <= val <= 10:
-                        return val * 10.0
-                    return val
+                    return float(val)
                 except (ValueError, TypeError):
                     return None
             
@@ -2401,10 +2398,11 @@ class InstanceManager:
                                 val = pred_dict[field]
                                 try:
                                     num_val = float(val)
-                                    # Only scale if value is in 0-10 range
-                                    if 0 <= num_val <= 10:
-                                        pred_dict[field] = num_val * 10
-                                        row_updated = True
+                                    # Note: All inputs now use 0-100 scale natively.
+                                    # Old data may have 0-10 scale values, but we use them as-is (no scaling).
+                                    # No scaling needed - just ensure it's a float
+                                    pred_dict[field] = num_val
+                                    row_updated = True
                                 except (ValueError, TypeError):
                                     pass
                         if row_updated:
@@ -2423,10 +2421,11 @@ class InstanceManager:
                                 val = actual_dict[field]
                                 try:
                                     num_val = float(val)
-                                    # Only scale if value is in 0-10 range
-                                    if 0 <= num_val <= 10:
-                                        actual_dict[field] = num_val * 10
-                                        row_updated = True
+                                    # Note: All inputs now use 0-100 scale natively.
+                                    # Old data may have 0-10 scale values, but we use them as-is (no scaling).
+                                    # No scaling needed - just ensure it's a float
+                                    actual_dict[field] = num_val
+                                    row_updated = True
                                 except (ValueError, TypeError):
                                     pass
                         if row_updated:
@@ -2441,10 +2440,11 @@ class InstanceManager:
                     if val and str(val).strip() != '':
                         try:
                             num_val = float(val)
-                            # Only scale if value is in 0-10 range
-                            if 0 <= num_val <= 10:
-                                self.df.at[idx, col] = str(num_val * 10)
-                                row_updated = True
+                            # Note: All inputs now use 0-100 scale natively.
+                            # Old data may have 0-10 scale values, but we use them as-is (no scaling).
+                            # No scaling needed - just ensure it's a float
+                            self.df.at[idx, col] = str(num_val)
+                            row_updated = True
                         except (ValueError, TypeError):
                             pass
             

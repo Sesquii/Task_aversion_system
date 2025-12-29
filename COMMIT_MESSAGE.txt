@@ -1,52 +1,79 @@
-feat(recommendations): add toggleable recommendation system with normalized scores and tooltips
+refactor(scale): remove 0-10 to 0-100 scaling logic, make 0-100 scale native throughout
 
-Add comprehensive recommendation system improvements including toggle between
-task templates and initialized tasks, normalized scoring, initialization notes
-display, and detailed tooltip system for sub-scores.
+Refactor codebase to use 0-100 scale natively for all metrics, removing all
+scaling logic that was "working overtime" to convert between scales. This
+simplifies the codebase, eliminates the scaling bug where 9/100 was incorrectly
+displayed as 90, and makes the system more consistent.
 
 Features:
-- Toggle between "Task Templates" and "Initialized Tasks" recommendation modes
-- Normalized recommendation scores (0-100 scale) based on absolute scoring
-- Display initialization notes/description on recommendation cards
-- Tooltip system showing detailed sub-scores on hover (relief, cognitive load,
-  emotional load, physical load, stress, behavioral score, net wellbeing, etc.)
-- Backward compatibility for mental energy/difficulty from expected_cognitive_load
-- Use actual initialization values from predicted field with fallbacks to defaults
+- All UI sliders now natively use 0-100 scale (were already correct)
+- Updated task_schema.py defaults: relief_score (5→50), emotional_load (4→40)
+- Removed all scaling helper functions and conversion logic
+- Old data with 0-10 values is read as-is (no scaling, backward compatible)
 
 Bug Fixes:
-- Fixed score normalization to use absolute scoring instead of relative min-max
-- Fixed tooltip display using ui.add_body_html() pattern matching task tooltips
-- Fixed mental energy and task difficulty extraction with cognitive_load fallback
-- Fixed ui.html() sanitize parameter requirement
+- Fixed scaling bug where values like 9/100 were incorrectly displayed as 90
+- Fixed scaling logic that was too broad (checking <= 10 caught values already
+  on 0-100 scale)
+- Removed all scaling logic from display and calculation paths
 
 Technical Changes:
-- Added recommendations_from_instances() method in analytics.py
-- Updated recommendations_by_category() with normalized scoring
-- Added recommendation tooltip CSS and JavaScript initialization
-- Added comprehensive debugging output for recommendation system
-- Changed tooltip positioning from fixed to absolute for proper display
+- Removed is_0_to_10_scale() and scale_0_to_10_to_100() helper functions
+- Removed should_scale_10_to_100() method from Analytics class
+- Removed all scaling checks (if value <= 10: value * 10) throughout codebase
+- Updated all files to read values directly without scaling
+- Added comments noting that old 0-10 data is used as-is (acceptable since
+  it was only used for a short time and won't skew results)
 
 Files modified:
+- task_aversion_app/backend/task_schema.py
+  - Updated relief_score: range_hint "0-10" → "0-100", default 5 → 50
+  - Updated emotional_load: range_hint "0-10" → "0-100", default 4 → 40
+
 - task_aversion_app/ui/dashboard.py
-  - Added recommendation mode toggle UI
-  - Added tooltip system with hover handlers
-  - Updated refresh_recommendations() to support both modes
-  - Added CSS for recommendation tooltips
-  - Added JavaScript for tooltip initialization
-  - Added debugging output throughout
+  - Removed is_0_to_10_scale() and scale_0_to_10_to_100() helper functions
+  - Removed all scaling logic from display functions (relief, mental energy,
+    difficulty, physical load, emotional load, motivation)
+  - Values now displayed directly without scaling
+
+- task_aversion_app/ui/complete_task.py
+  - Removed scaling logic when displaying predicted relief value
+  - Old 0-10 values displayed as-is
 
 - task_aversion_app/backend/analytics.py
-  - Added recommendations_from_instances() method
-  - Updated recommendations_by_category() with normalized scoring
-  - Added backward compatibility for expected_cognitive_load
-  - Added description extraction from predicted field
-  - Added comprehensive sub-scores to recommendation dicts
-  - Added debugging output for recommendation generation
+  - Removed should_scale_10_to_100() static method
+  - Removed all scaling logic from DataFrame processing
+  - Removed scaling from mental_energy_needed and task_difficulty handling
+  - Removed scaling from cognitive_load backward compatibility
 
-Commit Value: 9/10
-This commit significantly enhances the recommendation system's usability and
-flexibility. The toggle between templates and instances provides users with
-different recommendation contexts, normalized scores make comparisons meaningful,
-and the tooltip system provides detailed insights without cluttering the UI.
-The backward compatibility fixes ensure existing data continues to work correctly.
-This is a high-value feature that improves core user workflow.
+- task_aversion_app/backend/instance_manager.py
+  - Removed scaling from normalize_relief() function
+  - Removed scaling from scale_values_10_to_100() method (now just ensures
+    values are floats, no scaling)
+  - Updated all scaling checks to just read values as-is
+
+- task_aversion_app/data_audit.py
+  - Removed all scaling logic from relief, cognitive, emotional, aversion values
+  - Values read directly without conversion
+
+- task_aversion_app/backend/data_archival.py
+  - Removed all scaling logic from relief, cognitive, emotional values
+  - Values read directly without conversion
+
+- task_aversion_app/ui/factors_comparison_analytics.py
+  - Removed scaling from _normalize_relief() function
+  - Values read directly without conversion
+
+- task_aversion_app/migrate_factors_to_database.py
+  - Removed scaling logic from normalize_relief() function
+  - Values read directly without conversion
+
+Commit Value: 8/10
+This refactoring significantly improves code maintainability and correctness by
+eliminating complex scaling logic that was prone to bugs (like the 9/100 → 90
+display bug). The codebase is now simpler, more consistent, and easier to
+understand. While this doesn't add new user-facing features, it removes
+technical debt and prevents future scaling-related bugs. The backward
+compatibility approach (reading old 0-10 data as-is) is acceptable since that
+data was only used briefly and won't significantly skew results. This is a
+high-value refactoring that improves code quality and reduces maintenance burden.

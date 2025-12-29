@@ -24,10 +24,10 @@ TASK_ATTRIBUTES: List[TaskAttribute] = [
     TaskAttribute(
         key="relief_score",
         label="Relief Score",
-        description="How much emotional relief is felt after finishing (0-10).",
+        description="How much emotional relief is felt after finishing (0-100).",
         dtype="numeric",
-        range_hint="0-10",
-        default=5,
+        range_hint="0-100",
+        default=50,
     ),
     TaskAttribute(
         key="mental_energy_needed",
@@ -48,10 +48,10 @@ TASK_ATTRIBUTES: List[TaskAttribute] = [
     TaskAttribute(
         key="emotional_load",
         label="Emotional Load",
-        description="Degree of emotional activation or stress expected during the task.",
+        description="Degree of emotional activation or stress expected during the task (0-100).",
         dtype="numeric",
-        range_hint="0-10",
-        default=4,
+        range_hint="0-100",
+        default=40,
     ),
     TaskAttribute(
         key="environmental_effect",

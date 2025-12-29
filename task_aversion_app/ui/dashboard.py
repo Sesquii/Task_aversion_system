@@ -33,6 +33,15 @@ RECOMMENDATION_METRICS = [
 
 
 # ----------------------------------------------------------
+# Helper Functions
+# ----------------------------------------------------------
+
+# Note: All inputs now use 0-100 scale natively.
+# Old data may have 0-10 scale values, but we use them as-is (no scaling).
+# This is acceptable since old 0-10 data was only used for a short time.
+
+
+# ----------------------------------------------------------
 # Helper Button Handlers
 # ----------------------------------------------------------
 
@@ -1096,13 +1105,14 @@ def format_colored_tooltip(predicted_data, task_id):
     avg_text = f" (avg: {avg_time_estimate:.1f} min)" if avg_time_estimate else ""
     lines.append(f'<div><strong>Time Estimate:</strong> <span style="color: {time_color}; font-weight: bold;">{time_est:.0f} min</span>{avg_text}</div>')
     
-    # Expected Relief
+    # Use the module-level helper function
+    pass
+    
+    # Expected Relief (0-100 scale, old data may have 0-10 values but we use as-is)
     relief = predicted_data.get('expected_relief')
     if relief is not None:
         try:
             relief = float(relief)
-            if relief <= 10:
-                relief = relief * 10  # Scale from 0-10 to 0-100
             avg_relief = averages.get('expected_relief')
             relief_color = get_value_with_deviation_color(relief, avg_relief, higher_is_worse=False)
             avg_text = f" (avg: {avg_relief:.1f})" if avg_relief else ""
@@ -1110,24 +1120,19 @@ def format_colored_tooltip(predicted_data, task_id):
         except (ValueError, TypeError):
             pass
     
-    # Mental Energy Needed
+    # Mental Energy Needed (0-100 scale, old data may have 0-10 values but we use as-is)
     mental_energy = predicted_data.get('expected_mental_energy')
     if mental_energy is None:
         # Backward compatibility: try old cognitive_load
         old_cog = predicted_data.get('expected_cognitive_load')
         if old_cog is not None:
             try:
-                old_cog = float(old_cog)
-                if old_cog <= 10:
-                    old_cog = old_cog * 10
-                mental_energy = old_cog
+                mental_energy = float(old_cog)
             except (ValueError, TypeError):
                 pass
     if mental_energy is not None:
         try:
             mental_energy = float(mental_energy)
-            if mental_energy <= 10:
-                mental_energy = mental_energy * 10  # Scale from 0-10 to 0-100
             avg_mental = averages.get('expected_mental_energy')
             if avg_mental is None:
                 avg_mental = averages.get('expected_cognitive_load')  # Backward compatibility
@@ -1137,24 +1142,19 @@ def format_colored_tooltip(predicted_data, task_id):
         except (ValueError, TypeError):
             pass
     
-    # Task Difficulty
+    # Task Difficulty (0-100 scale, old data may have 0-10 values but we use as-is)
     difficulty = predicted_data.get('expected_difficulty')
     if difficulty is None:
         # Backward compatibility: try old cognitive_load
         old_cog = predicted_data.get('expected_cognitive_load')
         if old_cog is not None:
             try:
-                old_cog = float(old_cog)
-                if old_cog <= 10:
-                    old_cog = old_cog * 10
-                difficulty = old_cog
+                difficulty = float(old_cog)
             except (ValueError, TypeError):
                 pass
     if difficulty is not None:
         try:
             difficulty = float(difficulty)
-            if difficulty <= 10:
-                difficulty = difficulty * 10  # Scale from 0-10 to 0-100
             avg_diff = averages.get('expected_difficulty')
             if avg_diff is None:
                 avg_diff = averages.get('expected_cognitive_load')  # Backward compatibility
@@ -1164,13 +1164,11 @@ def format_colored_tooltip(predicted_data, task_id):
         except (ValueError, TypeError):
             pass
     
-    # Physical Load
+    # Physical Load (0-100 scale, old data may have 0-10 values but we use as-is)
     phys_load = predicted_data.get('expected_physical_load')
     if phys_load is not None:
         try:
             phys_load = float(phys_load)
-            if phys_load <= 10:
-                phys_load = phys_load * 10  # Scale from 0-10 to 0-100
             avg_phys = averages.get('expected_physical_load')
             phys_color = get_value_with_deviation_color(phys_load, avg_phys, higher_is_worse=True)
             avg_text = f" (avg: {avg_phys:.1f})" if avg_phys else ""
@@ -1178,13 +1176,11 @@ def format_colored_tooltip(predicted_data, task_id):
         except (ValueError, TypeError):
             pass
     
-    # Expected Distress
+    # Expected Distress (0-100 scale, old data may have 0-10 values but we use as-is)
     emo_load = predicted_data.get('expected_emotional_load')
     if emo_load is not None:
         try:
             emo_load = float(emo_load)
-            if emo_load <= 10:
-                emo_load = emo_load * 10  # Scale from 0-10 to 0-100
             avg_emo = averages.get('expected_emotional_load')
             emo_color = get_value_with_deviation_color(emo_load, avg_emo, higher_is_worse=True)
             avg_text = f" (avg: {avg_emo:.1f})" if avg_emo else ""
@@ -1192,13 +1188,11 @@ def format_colored_tooltip(predicted_data, task_id):
         except (ValueError, TypeError):
             pass
     
-    # Motivation
+    # Motivation (0-100 scale, old data may have 0-10 values but we use as-is)
     motivation = predicted_data.get('motivation')
     if motivation is not None:
         try:
             motivation = float(motivation)
-            if motivation <= 10:
-                motivation = motivation * 10  # Scale from 0-10 to 0-100
             avg_mot = averages.get('motivation')
             mot_color = get_motivation_color(motivation)
             if avg_mot:

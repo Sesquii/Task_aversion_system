@@ -51,9 +51,8 @@ def normalize_relief(val):
         return None
     try:
         val = float(val)
-        # If value is 0-10, scale to 0-100
-        if 0 <= val <= 10:
-            return val * 10.0
+        # Note: All inputs now use 0-100 scale natively.
+        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
         return val
     except (ValueError, TypeError):
         return None

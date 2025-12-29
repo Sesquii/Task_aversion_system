@@ -327,14 +327,11 @@ def get_factors_comparison_data(days: int = 90) -> Dict:
     completed['expected_relief'] = completed.apply(_get_expected_relief, axis=1)
     completed['actual_relief'] = completed.apply(_get_actual_relief, axis=1)
     
-    # Convert to numeric and scale if needed (0-10 to 0-100)
+    # Convert to numeric (0-100 scale natively, old data may have 0-10 values but we use as-is)
     def _normalize_relief(val):
         if pd.isna(val):
             return None
-        val = float(val)
-        if 0 <= val <= 10:
-            return val * 10.0
-        return val
+        return float(val)
     
     completed['expected_relief'] = completed['expected_relief'].apply(_normalize_relief)
     completed['actual_relief'] = completed['actual_relief'].apply(_normalize_relief)
