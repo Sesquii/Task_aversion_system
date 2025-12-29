@@ -3107,10 +3107,10 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if mode == 'instances':
                     instance_id = rec.get('instance_id')
                     if instance_id:
-                        # Capture instance_id in lambda closure
-                        ui.button("VIEW",
-                                  on_click=lambda iid=instance_id: ui.navigate.to(f'/initialize-task?instance_id={iid}')
-                                  ).props("dense size=sm").classes("w-full")
+                        # Capture instance_id in lambda closure - start instance to move to active tasks
+                        ui.button("START",
+                                  on_click=lambda iid=instance_id: start_instance(iid)
+                                  ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
                 else:
