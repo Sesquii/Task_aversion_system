@@ -84,17 +84,15 @@ def complete_task_page(task_manager, emotion_manager):
 
             inst_select.on('update:model-value', on_choose)
 
-        # Helper to get default value from predicted (initialization) values, scaling from 0-10 to 0-100 if needed
+        # Helper to get default value from predicted (initialization) values
         # IMPORTANT: This function copies initialization values even if they are zero. No fallback to task creation.
+        # Values are stored on 0-100 scale and should be used as-is (no scaling).
         def get_default_value(actual_key, predicted_key, default=0):
             # First check if current instance already has actual values (for editing)
             if actual_key in current_actual_data:
                 val = current_actual_data[actual_key]
                 try:
                     num_val = float(val)
-                    # Scale from 0-10 to 0-100 if value is <= 10
-                    if num_val <= 10 and num_val >= 0:
-                        num_val = num_val * 10
                     return int(round(num_val))
                 except (ValueError, TypeError):
                     pass
@@ -104,9 +102,6 @@ def complete_task_page(task_manager, emotion_manager):
                 val = predicted_data[predicted_key]
                 try:
                     num_val = float(val)
-                    # Scale from 0-10 to 0-100 if value is <= 10
-                    if num_val <= 10 and num_val >= 0:
-                        num_val = num_val * 10
                     return int(round(num_val))
                 except (ValueError, TypeError):
                     pass
@@ -130,16 +125,13 @@ def complete_task_page(task_manager, emotion_manager):
         # Use .get() with a sentinel value to distinguish between missing key and 0 value
         initialization_aversion = predicted_data.get('initialization_expected_aversion', None)
         
-        # Process the value: scale if needed and convert to int
+        # Process the value: convert to int (values are stored on 0-100 scale, use as-is)
         # Handle 0 as a valid value (0 is not None, so we check if the key exists)
         current_expected_aversion = 0
         if 'initialization_expected_aversion' in predicted_data:
             # Key exists, so process the value (even if it's 0)
             try:
                 current_expected_aversion = float(initialization_aversion)
-                # Scale from 0-10 to 0-100 if needed
-                if current_expected_aversion <= 10 and current_expected_aversion >= 0:
-                    current_expected_aversion = current_expected_aversion * 10
                 current_expected_aversion = int(round(current_expected_aversion))
             except (ValueError, TypeError):
                 current_expected_aversion = 0
@@ -159,7 +151,7 @@ def complete_task_page(task_manager, emotion_manager):
         if edit_mode:
             actual_relief.disable()
         # Show predicted value from initialization if available
-        # Note: Old data may have 0-10 scale values, but we display them as-is (no scaling)
+        # Values are stored on 0-100 scale and displayed as-is (no scaling)
         if 'expected_relief' in predicted_data:
             pred_val = predicted_data.get('expected_relief')
             try:
@@ -182,8 +174,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_mental_energy')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_mental_energy:
                     ui.label(f"Initialized: {pred_val} (current: {default_mental_energy})").classes("text-xs text-gray-500")
@@ -196,8 +186,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_cognitive_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 ui.label(f"Initialized (from old data): {pred_val}").classes("text-xs text-gray-500")
             except (ValueError, TypeError):
@@ -213,8 +201,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_difficulty')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_difficulty:
                     ui.label(f"Initialized: {pred_val} (current: {default_difficulty})").classes("text-xs text-gray-500")
@@ -227,8 +213,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_cognitive_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 ui.label(f"Initialized (from old data): {pred_val}").classes("text-xs text-gray-500")
             except (ValueError, TypeError):
@@ -244,8 +228,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_emotional_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_emotional:
                     ui.label(f"Initialized: {pred_val} (current: {default_emotional})").classes("text-xs text-gray-500")
@@ -263,8 +245,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_physical_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_physical:
                     ui.label(f"Initialized: {pred_val} (current: {default_physical})").classes("text-xs text-gray-500")
