@@ -18,7 +18,7 @@ from .user_state import UserStateManager
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
 # Execution Score Formula Version
-EXECUTION_SCORE_VERSION = '1.0'
+EXECUTION_SCORE_VERSION = '1.2'
 
 # Productivity Score Formula Version
 PRODUCTIVITY_SCORE_VERSION = '1.1'
@@ -739,9 +739,12 @@ class Analytics:
     
     def calculate_grit_score(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
         """Calculate grit score with:
-        - Persistence component (sqrt→log growth, familiarity decay after very high counts)
-        - Time bonus that weights difficulty, uses diminishing returns, and fades after many repetitions
-        - Passion factor (relief vs emotional load) multiplied with persistence score
+        - Persistence factor (continuing despite obstacles) - NEW in v1.2
+        - Focus factor (current attention state, emotion-based) - NEW in v1.2
+        - Passion factor (relief vs emotional load) - existing
+        - Time bonus (taking longer, dedication) - existing
+        
+        Grit = persistence + focus + passion + time_bonus
         
         Returns:
             Grit score (higher = more grit/persistence with passion), 0 on error.
@@ -805,9 +808,29 @@ class Analytics:
                 passion_factor *= 0.9
             passion_factor = max(0.5, min(1.5, passion_factor))
             
-            # Base persistence score (before passion factor)
-            persistence_score = completion_pct * persistence_multiplier * time_bonus
-            grit_score = persistence_score * passion_factor
+            # Calculate persistence factor (continuing despite obstacles)
+            persistence_factor = self.calculate_persistence_factor(
+                row=row,
+                task_completion_counts=task_completion_counts
+            )
+            # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
+            persistence_factor_scaled = 0.5 + persistence_factor * 1.0
+            
+            # Calculate focus factor (current attention state, emotion-based)
+            focus_factor = self.calculate_focus_factor(row)
+            # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # Base score from completion percentage
+            base_score = completion_pct
+            
+            # Grit score = persistence * focus * passion * time_bonus
+            grit_score = base_score * (
+                persistence_factor_scaled *  # 0.5-1.5 range (persistence boost)
+                focus_factor_scaled *        # 0.5-1.5 range (focus boost)
+                passion_factor *             # 0.5-1.5 range (passion factor)
+                time_bonus                   # 1.0+ range (time bonus)
+            )
             
             return float(grit_score)
         
@@ -2835,6 +2858,578 @@ class Analytics:
         score = tracking_data.get('tracking_consistency_score', 0.0)
         return max(0.0, min(1.0, score / 100.0))
 
+    def calculate_focus_factor(
+        self,
+        row: Union[pd.Series, Dict]
+    ) -> float:
+        """Calculate focus factor (0.0-1.0) based on emotion-based indicators only.
+        
+        Focus is a mental state (ability to concentrate), measured through emotions.
+        This is 100% emotion-based - no behavioral components.
+        
+        Focus-positive emotions: focused, concentrated, determined, engaged, present, mindful, etc.
+        Focus-negative emotions: distracted, scattered, unfocused, restless, anxious, overwhelmed, etc.
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual)
+        
+        Returns:
+            Focus factor (0.0-1.0), where 1.0 = high focus, 0.5 = neutral, 0.0 = low focus
+        """
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+        
+        # Emotion-Based Focus Score (100% of focus factor)
+        emotion_score = 0.5  # Default neutral
+        
+        try:
+            # Try actual emotions first, fallback to predicted
+            emotion_values = actual_dict.get('emotion_values', {}) or predicted_dict.get('emotion_values', {})
+            
+            if emotion_values and isinstance(emotion_values, dict):
+                focus_positive = ['focused', 'concentrated', 'determined', 'engaged', 'flow', 
+                                 'in the zone', 'present', 'mindful', 'attentive', 'alert', 'sharp', 'absorbed']
+                focus_negative = ['distracted', 'scattered', 'overwhelmed', 'frazzled', 
+                                  'unfocused', 'disengaged', 'zoned out', 'spaced out', 'restless', 'anxious']
+                
+                positive_score = 0.0
+                negative_score = 0.0
+                
+                for emotion, value in emotion_values.items():
+                    if not emotion or not value:
+                        continue
+                    try:
+                        emotion_lower = str(emotion).lower()
+                        value_float = float(value)
+                        
+                        # Check for focus-positive emotions (substring match)
+                        if any(pos in emotion_lower for pos in focus_positive):
+                            positive_score += max(0.0, min(100.0, value_float)) / 100.0
+                        # Check for focus-negative emotions
+                        elif any(neg in emotion_lower for neg in focus_negative):
+                            negative_score += max(0.0, min(100.0, value_float)) / 100.0
+                    except (ValueError, TypeError):
+                        continue
+                
+                # Net score: positive - negative, normalized to 0-1
+                # Cap individual contributions to prevent single emotion from dominating
+                positive_score = min(1.0, positive_score)
+                negative_score = min(1.0, negative_score)
+                emotion_score = 0.5 + (positive_score - negative_score) * 0.5
+                emotion_score = max(0.0, min(1.0, emotion_score))
+        except Exception as e:
+            # On error, use neutral
+            emotion_score = 0.5
+        
+        # Focus factor is 100% emotion-based
+        return emotion_score
+
+    def calculate_momentum_factor(
+        self,
+        row: Union[pd.Series, Dict],
+        lookback_hours: int = 24,
+        repetition_days: int = 7
+    ) -> float:
+        """Calculate momentum factor (0.0-1.0) based on behavioral patterns.
+        
+        Momentum measures building energy through repeated action (behavioral, not mental state).
+        Combines four components:
+        1. Task clustering (40%): Short gaps between completions
+        2. Task volume (30%): Many tasks completed recently
+        3. Template consistency (20%): Repeating same template
+        4. Acceleration (10%): Tasks getting faster over time
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual),
+                 completed_at, task_id, duration_minutes
+            lookback_hours: Hours to look back for clustering and volume (default: 24)
+            repetition_days: Days to look back for template consistency (default: 7)
+        
+        Returns:
+            Momentum factor (0.0-1.0), where 1.0 = high momentum, 0.5 = neutral, 0.0 = low momentum
+        """
+        import math
+        
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            duration_minutes = row.get('duration_minutes', 0)
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            duration_minutes = row.get('duration_minutes', 0)
+        
+        # Default to neutral if missing critical data
+        if not completed_at:
+            return 0.5
+        
+        # Parse completion time
+        try:
+            if isinstance(completed_at, str):
+                current_completion_time = pd.to_datetime(completed_at)
+            else:
+                current_completion_time = completed_at
+        except (ValueError, TypeError):
+            return 0.5
+        
+        # 1. Task Clustering Score (40% weight)
+        clustering_score = 0.5  # Default neutral
+        
+        try:
+            df = self._load_instances()
+            if not df.empty:
+                # Get completed tasks only
+                completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                
+                if not completed.empty:
+                    # Parse completed_at timestamps
+                    completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                    completed = completed.dropna(subset=['completed_at_dt'])
+                    
+                    # Get recent completions within lookback window
+                    cutoff_time = current_completion_time - timedelta(hours=lookback_hours)
+                    recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                    recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                    
+                    # Sort by completion time
+                    recent = recent.sort_values('completed_at_dt')
+                    
+                    if len(recent) >= 2:
+                        # Calculate average gap between completions
+                        gaps = []
+                        for i in range(1, len(recent)):
+                            gap_minutes = (recent.iloc[i]['completed_at_dt'] - 
+                                         recent.iloc[i-1]['completed_at_dt']).total_seconds() / 60.0
+                            gaps.append(gap_minutes)
+                        
+                        if gaps:
+                            avg_gap = sum(gaps) / len(gaps)
+                            
+                            # Normalize: shorter gaps = higher score
+                            if avg_gap <= 15:
+                                clustering_score = 1.0
+                            elif avg_gap <= 60:
+                                # Linear: 15 min → 1.0, 60 min → 0.5
+                                clustering_score = 1.0 - ((avg_gap - 15) / 45.0) * 0.5
+                            elif avg_gap <= 240:
+                                # Exponential decay: 60 min → 0.5, 240 min → 0.25
+                                clustering_score = 0.5 * (1.0 / (avg_gap / 60.0))
+                            else:
+                                clustering_score = 0.1  # Floor for very long gaps
+        except Exception as e:
+            # On error, use neutral
+            clustering_score = 0.5
+        
+        # 2. Task Volume Score (30% weight)
+        volume_score = 0.5  # Default neutral
+        
+        try:
+            df = self._load_instances()
+            if not df.empty:
+                # Get completed tasks only
+                completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                
+                if not completed.empty:
+                    # Parse completed_at timestamps
+                    completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                    completed = completed.dropna(subset=['completed_at_dt'])
+                    
+                    # Get recent completions within lookback window
+                    cutoff_time = current_completion_time - timedelta(hours=lookback_hours)
+                    recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                    recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                    
+                    total_recent_completions = len(recent)
+                    
+                    # Volume bonus: 1 task = 0.5, 3 tasks = 0.7, 5 tasks = 0.85, 10+ tasks = 1.0
+                    if total_recent_completions <= 1:
+                        volume_score = 0.5
+                    elif total_recent_completions <= 3:
+                        # Linear: 1 → 0.5, 3 → 0.7
+                        volume_score = 0.5 + (total_recent_completions - 1) / 2.0 * 0.2
+                    elif total_recent_completions <= 5:
+                        # Linear: 3 → 0.7, 5 → 0.85
+                        volume_score = 0.7 + (total_recent_completions - 3) / 2.0 * 0.15
+                    elif total_recent_completions <= 10:
+                        # Linear: 5 → 0.85, 10 → 1.0
+                        volume_score = 0.85 + (total_recent_completions - 5) / 5.0 * 0.15
+                    else:
+                        volume_score = 1.0  # Max at 10+ tasks
+        except Exception as e:
+            # On error, use neutral
+            volume_score = 0.5
+        
+        # 3. Template Consistency Score (20% weight)
+        consistency_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                df = self._load_instances()
+                if not df.empty:
+                    # Get completed tasks only
+                    completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                    
+                    if not completed.empty:
+                        # Parse completed_at timestamps
+                        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                        completed = completed.dropna(subset=['completed_at_dt'])
+                        
+                        # Get recent completions within repetition window
+                        cutoff_time = current_completion_time - timedelta(days=repetition_days)
+                        recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                        recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                        
+                        # Count completions of this template
+                        same_template_count = len(recent[recent['task_id'] == task_id])
+                        
+                        # Template consistency: 1 instance = 0.5, 2-5 instances = 0.5→0.8, 6-10 instances = 0.8→1.0, 10+ = 1.0
+                        if same_template_count <= 1:
+                            consistency_score = 0.5  # Neutral for first completion
+                        elif same_template_count <= 5:
+                            # Linear: 1 → 0.5, 5 → 0.8
+                            consistency_score = 0.5 + (same_template_count - 1) / 4.0 * 0.3
+                        elif same_template_count <= 10:
+                            # Linear: 5 → 0.8, 10 → 1.0
+                            consistency_score = 0.8 + (same_template_count - 5) / 5.0 * 0.2
+                        else:
+                            consistency_score = 1.0  # Max at 10+ completions
+        except Exception as e:
+            # On error, use neutral
+            consistency_score = 0.5
+        
+        # 4. Acceleration Score (10% weight) - Tasks getting faster over time
+        acceleration_score = 0.5  # Default neutral
+        
+        try:
+            df = self._load_instances()
+            if not df.empty and duration_minutes:
+                # Get completed tasks only
+                completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                
+                if not completed.empty:
+                    # Parse completed_at timestamps and durations
+                    completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                    completed = completed.dropna(subset=['completed_at_dt'])
+                    completed['duration_numeric'] = pd.to_numeric(completed.get('duration_minutes', 0), errors='coerce')
+                    completed = completed.dropna(subset=['duration_numeric'])
+                    
+                    # Get recent completions within lookback window
+                    cutoff_time = current_completion_time - timedelta(hours=lookback_hours)
+                    recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                    recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                    
+                    if len(recent) >= 3:  # Need at least 3 tasks to measure acceleration
+                        # Sort by completion time
+                        recent = recent.sort_values('completed_at_dt')
+                        
+                        # Split into earlier half and later half
+                        mid_point = len(recent) // 2
+                        earlier = recent.iloc[:mid_point]
+                        later = recent.iloc[mid_point:]
+                        
+                        earlier_avg_duration = earlier['duration_numeric'].mean()
+                        later_avg_duration = later['duration_numeric'].mean()
+                        
+                        if earlier_avg_duration > 0:
+                            # Calculate acceleration: negative = getting faster (good), positive = getting slower (bad)
+                            duration_change_ratio = (later_avg_duration - earlier_avg_duration) / earlier_avg_duration
+                            
+                            # Normalize: -0.5 (50% faster) = 1.0, 0 (no change) = 0.5, +0.5 (50% slower) = 0.0
+                            if duration_change_ratio <= -0.5:
+                                acceleration_score = 1.0  # Max acceleration
+                            elif duration_change_ratio <= 0:
+                                # Getting faster: -0.5 → 1.0, 0 → 0.5
+                                acceleration_score = 0.5 + (abs(duration_change_ratio) / 0.5) * 0.5
+                            elif duration_change_ratio <= 0.5:
+                                # Getting slower: 0 → 0.5, 0.5 → 0.0
+                                acceleration_score = 0.5 - (duration_change_ratio / 0.5) * 0.5
+                            else:
+                                acceleration_score = 0.0  # Floor for very slow
+        except Exception as e:
+            # On error, use neutral
+            acceleration_score = 0.5
+        
+        # Combined Momentum Factor
+        momentum_factor = (
+            clustering_score * 0.4 +      # Task clustering
+            volume_score * 0.3 +           # Task volume
+            consistency_score * 0.2 +     # Template consistency
+            acceleration_score * 0.1      # Acceleration
+        )
+        
+        # Clamp to valid range
+        return max(0.0, min(1.0, momentum_factor))
+
+    def calculate_persistence_factor(
+        self,
+        row: Union[pd.Series, Dict],
+        task_completion_counts: Optional[Dict[str, int]] = None,
+        lookback_days: int = 30
+    ) -> float:
+        """Calculate persistence factor (0.0-1.0) based on continuing despite obstacles.
+        
+        Persistence measures historical patterns of sticking with difficult tasks.
+        Combines four components (user-specified weights):
+        1. Obstacle overcoming (40% - highest): Completing despite high cognitive/emotional load
+        2. Aversion resistance (30%): Completing despite high aversion
+        3. Task repetition (20%): Completing same task multiple times
+        4. Consistency (10%): Regular completion patterns over time
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual),
+                 completed_at, task_id, cognitive_load, emotional_load, initial_aversion
+            task_completion_counts: Optional dict mapping task_id to completion count
+            lookback_days: Days to look back for historical patterns (default: 30)
+        
+        Returns:
+            Persistence factor (0.0-1.0), where 1.0 = high persistence, 0.5 = neutral, 0.0 = low persistence
+        """
+        import math
+        import numpy as np
+        
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            cognitive_load = row.get('cognitive_load', 0)
+            emotional_load = row.get('emotional_load', 0)
+            initial_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion') or 0
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            cognitive_load = row.get('cognitive_load', 0)
+            emotional_load = row.get('emotional_load', 0)
+            initial_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion') or 0
+        
+        # Default to neutral if missing critical data
+        if not completed_at:
+            return 0.5
+        
+        # Parse completion time
+        try:
+            if isinstance(completed_at, str):
+                current_completion_time = pd.to_datetime(completed_at)
+            else:
+                current_completion_time = completed_at
+        except (ValueError, TypeError):
+            return 0.5
+        
+        # 1. Obstacle Overcoming Score (40% weight - highest)
+        obstacle_score = 0.5  # Default neutral
+        
+        try:
+            # Get cognitive and emotional load (obstacles)
+            cognitive = pd.to_numeric(cognitive_load, errors='coerce') or 0.0
+            emotional = pd.to_numeric(emotional_load, errors='coerce') or 0.0
+            
+            # Combined load (obstacle level)
+            combined_load = (cognitive + emotional) / 2.0
+            
+            # Completion rate: if task was completed, rate = 1.0
+            completion_rate = 1.0  # This task was completed, so rate is 1.0
+            
+            # Obstacle score: higher load + completion = higher persistence
+            # Formula: completion_rate * (load / 100.0)
+            # High load (80) + completion = 0.8, Low load (20) + completion = 0.2
+            if combined_load > 0:
+                obstacle_score = completion_rate * (combined_load / 100.0)
+                # Normalize: 0-100 load maps to 0.0-1.0 score, but we want to reward high load
+                # So: load 0-50 = 0.0-0.5, load 50-100 = 0.5-1.0
+                if combined_load <= 50:
+                    obstacle_score = combined_load / 100.0  # 0-50 → 0.0-0.5
+                else:
+                    obstacle_score = 0.5 + ((combined_load - 50) / 50.0) * 0.5  # 50-100 → 0.5-1.0
+            else:
+                obstacle_score = 0.5  # No load = neutral
+        except Exception as e:
+            # On error, use neutral
+            obstacle_score = 0.5
+        
+        # 2. Aversion Resistance Score (30% weight)
+        aversion_score = 0.5  # Default neutral
+        
+        try:
+            # Get initial aversion
+            aversion = pd.to_numeric(initial_aversion, errors='coerce') or 0.0
+            
+            # Completion rate: if task was completed, rate = 1.0
+            completion_rate = 1.0  # This task was completed
+            
+            # Aversion score: higher aversion + completion = higher persistence
+            # Formula: completion_rate * (aversion / 100.0)
+            # High aversion (80) + completion = 0.8, Low aversion (20) + completion = 0.2
+            if aversion > 0:
+                aversion_score = completion_rate * (aversion / 100.0)
+                # Normalize: 0-100 aversion maps to 0.0-1.0 score
+                # So: aversion 0-50 = 0.0-0.5, aversion 50-100 = 0.5-1.0
+                if aversion <= 50:
+                    aversion_score = aversion / 100.0  # 0-50 → 0.0-0.5
+                else:
+                    aversion_score = 0.5 + ((aversion - 50) / 50.0) * 0.5  # 50-100 → 0.5-1.0
+            else:
+                aversion_score = 0.5  # No aversion = neutral
+        except Exception as e:
+            # On error, use neutral
+            aversion_score = 0.5
+        
+        # 3. Task Repetition Score (20% weight)
+        repetition_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                # Use provided completion counts if available, otherwise calculate
+                if task_completion_counts and task_id in task_completion_counts:
+                    completion_count = task_completion_counts[task_id]
+                else:
+                    # Calculate from data
+                    df = self._load_instances()
+                    if not df.empty:
+                        # Get completed tasks only
+                        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                        
+                        if not completed.empty:
+                            # Parse completed_at timestamps
+                            completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                            completed = completed.dropna(subset=['completed_at_dt'])
+                            
+                            # Get recent completions within lookback window
+                            cutoff_time = current_completion_time - timedelta(days=lookback_days)
+                            recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                            recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                            
+                            # Count completions of this template
+                            completion_count = len(recent[recent['task_id'] == task_id])
+                    else:
+                        completion_count = 1  # This is the first completion
+                
+                # Repetition score: 1 completion = 0.5, 2-5 = 0.5→0.8, 6-10 = 0.8→1.0, 10+ = 1.0
+                if completion_count <= 1:
+                    repetition_score = 0.5  # Neutral for first completion
+                elif completion_count <= 5:
+                    # Linear: 1 → 0.5, 5 → 0.8
+                    repetition_score = 0.5 + (completion_count - 1) / 4.0 * 0.3
+                elif completion_count <= 10:
+                    # Linear: 5 → 0.8, 10 → 1.0
+                    repetition_score = 0.8 + (completion_count - 5) / 5.0 * 0.2
+                else:
+                    repetition_score = 1.0  # Max at 10+ completions
+        except Exception as e:
+            # On error, use neutral
+            repetition_score = 0.5
+        
+        # 4. Consistency Score (10% weight) - Regular completion patterns over time
+        consistency_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                df = self._load_instances()
+                if not df.empty:
+                    # Get completed tasks only
+                    completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                    
+                    if not completed.empty:
+                        # Parse completed_at timestamps
+                        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                        completed = completed.dropna(subset=['completed_at_dt'])
+                        
+                        # Get recent completions of this template within lookback window
+                        cutoff_time = current_completion_time - timedelta(days=lookback_days)
+                        recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                        recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                        recent = recent[recent['task_id'] == task_id].copy()
+                        
+                        if len(recent) >= 3:  # Need at least 3 completions to measure consistency
+                            # Sort by completion time
+                            recent = recent.sort_values('completed_at_dt')
+                            
+                            # Calculate time differences between completions
+                            time_diffs = []
+                            for i in range(1, len(recent)):
+                                diff_days = (recent.iloc[i]['completed_at_dt'] - 
+                                           recent.iloc[i-1]['completed_at_dt']).total_seconds() / (24 * 3600)
+                                time_diffs.append(diff_days)
+                            
+                            if time_diffs:
+                                # Calculate variance in time differences (lower variance = more consistent)
+                                variance = np.var(time_diffs) if len(time_diffs) > 1 else 0.0
+                                
+                                # Normalize: lower variance = higher consistency
+                                # Assume max reasonable variance is 30 days (completions spread over a month)
+                                max_variance = 900.0  # 30 days squared
+                                consistency_score = 1.0 - min(1.0, variance / max_variance)
+                                # Clamp to reasonable range
+                                consistency_score = max(0.0, min(1.0, consistency_score))
+        except Exception as e:
+            # On error, use neutral
+            consistency_score = 0.5
+        
+        # Combined Persistence Factor
+        persistence_factor = (
+            obstacle_score * 0.4 +        # Obstacle overcoming (highest weight)
+            aversion_score * 0.3 +        # Aversion resistance
+            repetition_score * 0.2 +      # Task repetition
+            consistency_score * 0.1       # Consistency
+        )
+        
+        # Clamp to valid range
+        return max(0.0, min(1.0, persistence_factor))
+
     def calculate_execution_score(
         self,
         row: Union[pd.Series, Dict],
@@ -2842,20 +3437,27 @@ class Analytics:
     ) -> float:
         """Calculate execution score (0-100) for efficient execution of difficult tasks.
         
-        **Formula Version: 1.0**
+        **Formula Version: 1.2**
         
-        Combines four component factors:
+        Combines six component factors:
         1. Difficulty factor: High aversion + high load
         2. Speed factor: Fast execution relative to estimate
         3. Start speed factor: Fast start after initialization (procrastination resistance)
         4. Completion factor: Full completion (100% or close)
+        5. Thoroughness factor: Note-taking and attention to detail (v1.2)
+        6. Momentum factor: Building energy through repeated action (v1.2)
         
         Formula: execution_score = base_score * (1.0 + difficulty_factor) * 
                                    (0.5 + speed_factor * 0.5) * 
                                    (0.5 + start_speed_factor * 0.5) * 
-                                   completion_factor
+                                   completion_factor *
+                                   thoroughness_factor *
+                                   (0.5 + momentum_factor * 0.5)
+        
+        Note: Focus factor (emotion-based) is NOT included here - it belongs in grit score.
         
         See: docs/execution_module_v1.0.md for complete formula documentation.
+        See: docs/focus_momentum_persistence_final_design.md for factor details.
         
         Args:
             row: Task instance row (pandas Series from CSV or dict from database)
@@ -2989,6 +3591,15 @@ class Analytics:
             # Low completion: significant penalty
             completion_factor = completion_pct / 50.0 * 0.5
         
+        # 5. Thoroughness Factor (note-taking and attention to detail)
+        thoroughness_factor = self.calculate_thoroughness_factor(user_id='default', days=30)
+        # Returns 0.5-1.3 range, use directly
+        
+        # 6. Momentum Factor (building energy through repeated action)
+        momentum_factor = self.calculate_momentum_factor(row)
+        # Returns 0.0-1.0, scale to 0.5-1.0 range to provide boost rather than penalty
+        momentum_factor_scaled = 0.5 + momentum_factor * 0.5
+        
         # Combined Formula
         # Base score: 50 points (neutral)
         base_score = 50.0
@@ -2998,7 +3609,9 @@ class Analytics:
             (1.0 + difficulty_factor) *      # 1.0-2.0 range (difficulty boost)
             (0.5 + speed_factor * 0.5) *     # 0.5-1.0 range (speed boost)
             (0.5 + start_speed_factor * 0.5) *  # 0.5-1.0 range (start speed boost)
-            completion_factor                # 0.0-1.0 range (completion quality)
+            completion_factor *             # 0.0-1.0 range (completion quality)
+            thoroughness_factor *            # 0.5-1.3 range (thoroughness boost)
+            momentum_factor_scaled           # 0.5-1.0 range (momentum boost)
         )
         
         # Normalize to 0-100 range

@@ -1,93 +1,92 @@
-feat(analytics): add thoroughness factor with comprehensive visualizations and glossary module
+feat(analytics): separate focus, momentum, and persistence factors (v1.2)
 
-Adds a new thoroughness/notetaking factor that assesses data quality and tracking
-thoroughness based on note coverage, note length, and slider adjustment compliance.
-Includes both theoretical and data-driven visualizations, plus a dedicated glossary
-module for documentation.
+Refactored execution score and grit score to properly separate mental state
+(focus) from behavioral patterns (momentum) and historical patterns (persistence).
 
-## Core Feature
+## Major Changes
 
-- **Thoroughness Factor Calculation** (0.5 to 1.3):
-  - Base factor (0.5-1.0): Based on percentage of tasks with notes
-  - Length bonus (+0.0 to +0.3): Rewards thorough notes using exponential decay
-  - Popup penalty (-0.0 to -0.2): Progressive penalty for skipping slider adjustments
-    * Starts mild (-0.002 for 1 popup) and increases quadratically
-    * Caps at -0.2 for 10+ popups (encourages early correction)
+### Focus Factor (Refactored)
+- Changed from mixed components to 100% emotion-based (pure mental state)
+- Removed task clustering component (→ momentum factor)
+- Removed template repetition component (→ persistence factor)
+- Now measures only focus-positive vs focus-negative emotions
+- Returns 0.0-1.0 range
+- Moved from execution score to grit score (emotion-based, subjective)
 
-- **Thoroughness Score** (0-100): Normalized score for display (0.5 factor → 0, 1.0 → 50, 1.3 → 100)
+### Momentum Factor (New)
+- Measures building energy through repeated action (behavioral pattern)
+- Components: Task clustering (40%), Volume (30%), Consistency (20%), Acceleration (10%)
+- Returns 0.0-1.0 range
+- Added to execution score (behavioral, objective)
 
-## Visualizations
+### Persistence Factor (New)
+- Measures continuing despite obstacles (historical pattern)
+- Components with user-specified weights:
+  - Obstacle overcoming (40% - highest): Completing despite high cognitive/emotional load
+  - Aversion resistance (30%): Completing despite high aversion
+  - Task repetition (20%): Completing same task multiple times
+  - Consistency (10%): Regular completion patterns over time
+- Returns 0.0-1.0 range
+- Added to grit score
 
-### Data-Driven Charts (Plotly)
-- Note coverage pie chart showing percentage of tasks with notes
-- Note length distribution histogram with average and target lines
-- Popup penalty time series showing frequency over last 30 days
-- Overview chart showing component breakdown (base factor, bonuses, penalties)
+### Grit Score (Restructured)
+- New formula: grit = base_score * persistence_factor * focus_factor * passion_factor * time_bonus
+- Includes persistence (continuing despite obstacles)
+- Includes focus (current attention state, emotion-based)
+- Keeps passion factor (relief vs emotional load)
+- Keeps time bonus (taking longer, dedication)
 
-### Theoretical Visualizations (Matplotlib)
-- Note coverage: Linear progression from 0% to 100% coverage
-- Note length bonus: Exponential decay curve showing diminishing returns
-- Popup penalty: Progressive quadratic curve (starts mild, gets worse)
+### Execution Score (Updated to v1.2)
+- Removed focus_factor (emotion-based, belongs in grit score)
+- Added thoroughness_factor (note-taking, existing method)
+- Added momentum_factor (behavioral pattern)
+- New formula: execution = base * difficulty * speed * start_speed * completion * thoroughness * momentum
 
-## Integration
+## Research Basis
 
-- Added to analytics dashboard metrics (quality section)
-- Added to analytics page with "Learn More" link to glossary
-- Created dedicated thoroughness_factor module in analytics glossary
-- All charts integrated into glossary with automatic display
-
-## Technical Details
-
-- Uses PopupResponse table to track trigger 7.1 (no sliders adjusted)
-- Filters out test tasks from calculations
-- Handles missing data gracefully with fallbacks
-- Progressive penalty formula: `penalty = -0.2 * (popup_ratio^2)` where `popup_ratio = min(1.0, count / 10.0)`
-
-## Files Created
-- task_aversion_app/scripts/graphic_aids/thoroughness_note_coverage.py
-- task_aversion_app/scripts/graphic_aids/thoroughness_note_length.py
-- task_aversion_app/scripts/graphic_aids/thoroughness_popup_penalty.py
-- task_aversion_app/assets/graphic_aids/thoroughness_note_coverage.png
-- task_aversion_app/assets/graphic_aids/thoroughness_note_length.png
-- task_aversion_app/assets/graphic_aids/thoroughness_popup_penalty.png
+Confirmed through research that focus is a mental state (ability to concentrate),
+not a behavioral pattern. Behavioral indicators measure focus but are not focus itself.
 
 ## Files Modified
-- task_aversion_app/backend/analytics.py
-  - Added calculate_thoroughness_factor() method
-  - Added calculate_thoroughness_score() method
-  - Updated get_dashboard_metrics() to include thoroughness metrics
-- task_aversion_app/ui/analytics_page.py
-  - Added thoroughness_score and thoroughness_factor to CALCULATED_METRICS
-  - Added thoroughness metrics display with glossary link
-- task_aversion_app/ui/analytics_glossary.py
-  - Added thoroughness_factor module to ANALYTICS_MODULES
-  - Added overview chart support
-  - Updated component mapping for thoroughness charts
-- task_aversion_app/ui/plotly_data_charts.py
-  - Added generate_thoroughness_note_coverage_plotly()
-  - Added generate_thoroughness_note_length_plotly()
-  - Added generate_thoroughness_popup_penalty_plotly()
-  - Added generate_thoroughness_factor_overview_plotly()
-  - Registered all charts in PLOTLY_DATA_CHARTS
-- task_aversion_app/scripts/graphic_aids/generate_all.py
-  - Added thoroughness generator functions
-  - Registered in GRAPHIC_AID_GENERATORS
 
-## Value Assessment: 8.5/10
+- backend/analytics.py:
+  - Refactored calculate_focus_factor() (emotion-only)
+  - Added calculate_momentum_factor() (new)
+  - Added calculate_persistence_factor() (new)
+  - Updated calculate_grit_score() (restructured)
+  - Updated calculate_execution_score() (removed focus, added momentum + thoroughness)
+  - Updated EXECUTION_SCORE_VERSION to '1.2'
+
+## Documentation Created
+
+- docs/focus_momentum_persistence_final_design.md: Final design document
+- docs/focus_momentum_persistence_separation.md: Conceptual separation analysis
+- docs/implementation_summary_v1.2.md: Implementation summary
+
+## Value Assessment: 8/10
 
 **Strengths:**
-- Complete feature with calculations, UI, visualizations, and documentation
-- Provides valuable insights into data quality and tracking thoroughness
-- Well-integrated following existing patterns
-- Comprehensive visualizations (both theoretical and data-driven)
-- Progressive penalty system encourages early correction
-- Good user experience with glossary integration
+- Clear conceptual separation (focus = mental state, momentum = behavioral, persistence = historical)
+- Proper placement in appropriate scores (focus in grit, momentum in execution)
+- User-specified weights for persistence factor
+- Research-backed design decisions
+- Comprehensive documentation
 
-**Areas for Potential Enhancement:**
-- Could integrate thoroughness factor into other score calculations
-- Could add more actionable insights or recommendations
-- Could track thoroughness trends over time
+**Future Enhancements:**
+- Momentum popup at 5 tasks (next step)
+- Take a break popup after 4 hours (next step)
+- Additional components for recommendations (time-of-day, task type consistency, etc.)
+- Testing with real data to calibrate weights
 
-This feature significantly enhances the analytics system by providing visibility into
-data quality and encouraging better tracking practices through progressive penalties
-and comprehensive visualizations.
+## Breaking Changes
+
+- Execution score formula changed (focus factor removed, momentum + thoroughness added)
+- Grit score formula changed (persistence and focus factors added)
+- Focus factor now requires emotion data (was previously behavioral)
+
+## Migration Notes
+
+- Existing execution scores will be recalculated with new formula
+- Focus factor now purely emotion-based (requires emotion_values in actual/predicted dicts)
+- Momentum factor requires completed_at timestamps and task_id
+- Persistence factor requires cognitive_load, emotional_load, initial_aversion
