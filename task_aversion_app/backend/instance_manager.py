@@ -2,7 +2,7 @@
 import os
 import pandas as pd
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict
 import json
 import time
 
@@ -2612,6 +2612,153 @@ class InstanceManager:
             return self._get_baseline_aversion_sensitive_db(task_id)
         else:
             return self._get_baseline_aversion_sensitive_csv(task_id)
+    
+    def get_batch_baseline_aversions(self, task_ids: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
+        """Batch-load baseline aversions for multiple task_ids at once.
+        
+        Returns:
+            Dict mapping task_id to {'robust': float or None, 'sensitive': float or None}
+        """
+        if self.use_db:
+            return self._get_batch_baseline_aversions_db(task_ids)
+        else:
+            return self._get_batch_baseline_aversions_csv(task_ids)
+    
+    def _get_batch_baseline_aversions_db(self, task_ids: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
+        """Database-specific batch baseline aversion loader."""
+        import numpy as np
+        result = {task_id: {'robust': None, 'sensitive': None} for task_id in task_ids}
+        
+        if not task_ids:
+            return result
+        
+        try:
+            with self.db_session() as session:
+                # Load all instances for all task_ids in one query
+                instances = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id.in_(task_ids),
+                    self.TaskInstance.initialized_at.isnot(None)
+                ).all()
+                
+                # Group by task_id
+                task_aversion_values = {task_id: [] for task_id in task_ids}
+                
+                for instance in instances:
+                    predicted = instance.predicted or {}
+                    if isinstance(predicted, dict):
+                        val = predicted.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                task_aversion_values[instance.task_id].append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                
+                # Calculate robust (median) and sensitive (trimmed mean) for each task
+                for task_id, values in task_aversion_values.items():
+                    if not values:
+                        continue
+                    
+                    # Robust: median
+                    result[task_id]['robust'] = round(float(np.median(values)))
+                    
+                    # Sensitive: trimmed mean (IQR method)
+                    if len(values) >= 4:
+                        q1 = np.percentile(values, 25)
+                        q3 = np.percentile(values, 75)
+                        iqr = q3 - q1
+                        lower_bound = q1 - 1.5 * iqr
+                        upper_bound = q3 + 1.5 * iqr
+                        trimmed = [v for v in values if lower_bound <= v <= upper_bound]
+                        if trimmed:
+                            result[task_id]['sensitive'] = round(float(np.mean(trimmed)))
+                        else:
+                            result[task_id]['sensitive'] = round(float(np.mean(values)))
+                    else:
+                        result[task_id]['sensitive'] = round(float(np.mean(values)))
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_batch_baseline_aversions: {e}") from e
+            print(f"[InstanceManager] Database error in get_batch_baseline_aversions: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_batch_baseline_aversions_csv(task_ids)
+        
+        return result
+    
+    def _get_batch_baseline_aversions_csv(self, task_ids: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
+        """CSV-specific batch baseline aversion loader."""
+        import json
+        import numpy as np
+        result = {task_id: {'robust': None, 'sensitive': None} for task_id in task_ids}
+        
+        if not task_ids:
+            return result
+        
+        try:
+            self._reload()
+        except Exception as e:
+            print(f"[InstanceManager] Error reloading in get_batch_baseline_aversions: {e}")
+            return result
+        
+        # Get all initialized instances for these tasks
+        initialized = self.df[
+            (self.df['task_id'].isin(task_ids)) & 
+            (self.df['initialized_at'].astype(str).str.strip() != '')
+        ].copy()
+        
+        if initialized.empty:
+            return result
+        
+        # Group by task_id
+        task_aversion_values = {task_id: [] for task_id in task_ids}
+        
+        for idx in initialized.index:
+            task_id = initialized.at[idx, 'task_id']
+            predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
+            if predicted_str and predicted_str != '{}':
+                try:
+                    pred_dict = json.loads(predicted_str)
+                    if isinstance(pred_dict, dict):
+                        val = pred_dict.get('expected_aversion')
+                        if val is not None:
+                            try:
+                                num_val = float(val)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                task_aversion_values[task_id].append(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+        
+        # Calculate robust (median) and sensitive (trimmed mean) for each task
+        for task_id, values in task_aversion_values.items():
+            if not values:
+                continue
+            
+            # Robust: median
+            result[task_id]['robust'] = round(float(np.median(values)))
+            
+            # Sensitive: trimmed mean (IQR method)
+            if len(values) >= 4:
+                q1 = np.percentile(values, 25)
+                q3 = np.percentile(values, 75)
+                iqr = q3 - q1
+                lower_bound = q1 - 1.5 * iqr
+                upper_bound = q3 + 1.5 * iqr
+                trimmed = [v for v in values if lower_bound <= v <= upper_bound]
+                if trimmed:
+                    result[task_id]['sensitive'] = round(float(np.mean(trimmed)))
+                else:
+                    result[task_id]['sensitive'] = round(float(np.mean(values)))
+            else:
+                result[task_id]['sensitive'] = round(float(np.mean(values)))
+        
+        return result
     
     def _get_baseline_aversion_sensitive_csv(self, task_id: str) -> Optional[float]:
         """CSV-specific get_baseline_aversion_sensitive."""

@@ -3,17 +3,68 @@ from nicegui import ui
 import json
 import html
 import os
+import time
+import logging
+from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 from backend.task_manager import TaskManager
 from backend.instance_manager import InstanceManager
 from backend.emotion_manager import EmotionManager
 from backend.analytics import Analytics
+from backend.user_state import UserStateManager
+
+# Setup performance logging for monitored metrics
+PERF_LOG_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'logs')
+PERF_LOG_FILE = None
+perf_logger = None
+
+try:
+    os.makedirs(PERF_LOG_DIR, exist_ok=True)
+    PERF_LOG_FILE = os.path.join(PERF_LOG_DIR, f'monitored_metrics_perf_{datetime.now().strftime("%Y%m%d")}.log')
+    
+    # Configure logging
+    perf_logger = logging.getLogger('monitored_metrics_perf')
+    perf_logger.setLevel(logging.DEBUG)
+    # Prevent duplicate handlers
+    perf_logger.handlers.clear()
+    handler = logging.FileHandler(PERF_LOG_FILE, mode='a', encoding='utf-8')
+    # Use a custom formatter to include microseconds (time.strftime doesn't support %f)
+    class MicrosecondFormatter(logging.Formatter):
+        def formatTime(self, record, datefmt=None):
+            dt = datetime.fromtimestamp(record.created)
+            return dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+    handler.setFormatter(MicrosecondFormatter('%(asctime)s [%(levelname)s] %(message)s'))
+    perf_logger.addHandler(handler)
+    perf_logger.propagate = False  # Prevent propagation to root logger
+except Exception as e:
+    print(f"[Dashboard] Warning: Could not setup performance logging: {e}")
+    # Create a null logger that does nothing
+    perf_logger = logging.getLogger('monitored_metrics_perf_null')
+    perf_logger.addHandler(logging.NullHandler())
+
+def safe_log(level, message):
+    """Safely log a message, falling back to print if logging fails."""
+    try:
+        if perf_logger:
+            if level == 'info':
+                perf_logger.info(message)
+            elif level == 'error':
+                perf_logger.error(message)
+            elif level == 'warning':
+                perf_logger.warning(message)
+            elif level == 'debug':
+                perf_logger.debug(message)
+    except Exception as e:
+        # Fallback to print if logging fails
+        print(f"[Dashboard Perf Log Error] {e}: {message}")
 
 tm = TaskManager()
 im = InstanceManager()
 em = EmotionManager()
 an = Analytics()
+user_state = UserStateManager()
+DEFAULT_USER_ID = "default_user"
 
 # Module-level variables for dashboard state
 dash_filters = {}
@@ -233,12 +284,24 @@ def format_elapsed_time(minutes):
 
 
 def update_ongoing_timer(instance_id, timer_element):
-    """Update the ongoing timer display for a started instance."""
+    """Update the ongoing timer display for a started instance.
+    
+    This function updates the timer display and schedules the next update.
+    It includes error handling to prevent timer leaks when clients disconnect.
+    """
+    # Early return if element is not provided
+    if not timer_element:
+        return
+    
+    # Check if instance is still active
     instance = im.get_instance(instance_id)
     if not instance or not instance.get('started_at'):
         # Instance no longer active or not started, stop timer
-        if timer_element:
+        try:
             timer_element.text = ""
+        except (AttributeError, RuntimeError, Exception):
+            # Element is invalid, silently stop
+            pass
         return
     
     try:
@@ -270,17 +333,117 @@ def update_ongoing_timer(instance_id, timer_element):
         total_elapsed_minutes = current_elapsed_minutes + time_spent_before_pause
         elapsed_str = format_elapsed_time(total_elapsed_minutes)
         
-        # Update the element text
-        if timer_element:
+        # Update the element text (with comprehensive error handling)
+        try:
             timer_element.text = f"Ongoing for {elapsed_str}"
+        except (AttributeError, RuntimeError, Exception):
+            # Element is no longer valid (client disconnected), stop timer
+            return
         
-        # Schedule next update in 1 second (only if instance is still active)
-        active_instances = im.list_active_instances()
-        is_still_active = any(inst.get('instance_id') == instance_id for inst in active_instances)
-        if is_still_active:
-            ui.timer(1.0, lambda: update_ongoing_timer(instance_id, timer_element), once=True)
-    except Exception as e:
-        print(f"[Dashboard] Error updating timer: {e}")
+        # Schedule next update in 1 second (only if instance is still active and element/client are valid)
+        # Use try/except to catch any errors during timer creation
+        try:
+            # Verify element is still valid before creating new timer
+            try:
+                # Try to access element properties to verify it's still valid
+                _ = timer_element.text
+            except (AttributeError, RuntimeError, Exception):
+                # Element is no longer valid, stop timer
+                return
+            
+            # Check if element's client is still valid before creating timer
+            # Based on NiceGUI issue #3028: elements can be used after client disconnects
+            # We need to verify the element is still in the client's elements dictionary
+            try:
+                # Check element's client property (more reliable than ui.context.client)
+                element_client = getattr(timer_element, 'client', None)
+                context_client = None
+                try:
+                    context_client = ui.context.client
+                except (AttributeError, RuntimeError):
+                    pass
+                
+                # If element has a client, check if it's still valid
+                # Per NiceGUI issue #3028 (https://github.com/zauberzeug/nicegui/issues/3028),
+                # elements can be used after clients disconnect, causing KeyErrors when NiceGUI
+                # tries to clean them up. We verify the element is still functional before using it.
+                if element_client:
+                    try:
+                        # Try to access client properties to verify it's still valid
+                        _ = element_client.id
+                        _ = element_client.outbox
+                        
+                        # Additional check: try to access element's internal state
+                        # If element was removed from client, accessing its id might fail
+                        element_id = getattr(timer_element, 'id', None)
+                        if element_id is None:
+                            return
+                        
+                        # Try a "dry run" operation on the element to verify it's still functional
+                        # We already updated the text above, so if that succeeded, element should be valid
+                        # But we do one more check by trying to read a property
+                        try:
+                            _ = timer_element.text
+                        except (AttributeError, RuntimeError, KeyError, Exception):
+                            return
+                    except (AttributeError, RuntimeError, KeyError, Exception):
+                        return
+                elif context_client:
+                    # Fallback to context client if element doesn't have one
+                    try:
+                        _ = context_client.id
+                        _ = context_client.outbox
+                    except (AttributeError, RuntimeError, Exception):
+                        return
+                else:
+                    # No client available at all
+                    return
+            except (AttributeError, RuntimeError, KeyError, Exception):
+                # Error checking client, stop timer to be safe
+                return
+            
+            active_instances = im.list_active_instances()
+            is_still_active = any(inst.get('instance_id') == instance_id for inst in active_instances)
+            if is_still_active:
+                # Create next timer with error handling in the callback
+                def safe_update():
+                    try:
+                        update_ongoing_timer(instance_id, timer_element)
+                    except Exception:
+                        # Silently stop if update fails (client likely disconnected)
+                        pass
+                
+                # Final check: verify client is still valid right before creating timer
+                # This helps reduce race conditions where client gets deleted between checks
+                try:
+                    # Re-check element client one more time right before timer creation
+                    final_client = getattr(timer_element, 'client', None)
+                    if final_client:
+                        try:
+                            # Quick validation - access id and outbox
+                            _ = final_client.id
+                            _ = final_client.outbox
+                        except (AttributeError, RuntimeError, Exception):
+                            return
+                except Exception:
+                    return
+                
+                # Wrap timer creation in try/except to catch client deletion errors
+                # Note: NiceGUI may log a warning if client is deleted, but we try to prevent it
+                try:
+                    # Create timer - if client is deleted, NiceGUI will log a warning but not raise
+                    # The warning is informational and doesn't crash the app
+                    ui.timer(1.0, safe_update, once=True)
+                except (AttributeError, RuntimeError, Exception, BaseException):
+                    # Client was deleted or invalid, stop timer silently
+                    pass
+        except Exception:
+            # Stop timer if any error occurs during scheduling
+            pass
+    except Exception:
+        # Log unexpected errors but don't create new timer
+        # Silently fail to avoid console spam
+        pass
 
 
 def show_details(instance_id):
@@ -383,6 +546,85 @@ def delete_instance(instance_id):
     im.delete_instance(instance_id)
     ui.notify("Deleted", color='negative')
     ui.navigate.reload()
+
+
+def edit_monitored_metrics_config():
+    """Edit monitored metrics configuration."""
+    from backend.user_state import UserStateManager
+    user_state = UserStateManager()
+    DEFAULT_USER_ID = "default_user"
+    
+    # Get current config
+    config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+    current_selected = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+    current_baseline = config.get('coloration_baseline', 'last_3_months')
+    
+    # Available metrics
+    available_metrics_list = [
+        {'key': 'productivity_time', 'label': 'Weekly Productivity Time'},
+        {'key': 'productivity_score', 'label': 'Weekly Productivity Score'},
+    ]
+    
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-6'):
+        ui.label("Configure Monitored Metrics").classes("text-xl font-bold mb-4")
+        
+        # Metric selection (up to 4)
+        ui.label("Select Metrics (up to 4):").classes("text-sm font-semibold mb-2")
+        metric_checkboxes = {}
+        for metric in available_metrics_list:
+            is_selected = metric['key'] in current_selected
+            checkbox = ui.checkbox(metric['label'], value=is_selected)
+            metric_checkboxes[metric['key']] = checkbox
+        
+        ui.separator().classes("my-4")
+        
+        # Coloration baseline selection
+        ui.label("Coloration Baseline:").classes("text-sm font-semibold mb-2")
+        # NiceGUI select expects a dict mapping values to labels
+        baseline_options = {
+            'last_3_months': 'Last 3 Months',
+            'last_month': 'Last Month',
+            'last_week': 'Last Week',
+            'average': 'Average (Weekly + 3-Month)',
+            'all_data': 'All Data',
+        }
+        baseline_select = ui.select(
+            baseline_options,
+            value=current_baseline,
+            label="Compare metrics relative to:"
+        ).classes("w-full")
+        
+        with ui.row().classes("gap-2 mt-6 justify-end"):
+            ui.button("Cancel", on_click=dialog.close)
+            def save_config():
+                # Get selected metrics
+                selected = [key for key, checkbox in metric_checkboxes.items() if checkbox.value]
+                
+                # Limit to 4
+                if len(selected) > 4:
+                    ui.notify("Maximum 4 metrics allowed. Selecting first 4.", color='warning')
+                    selected = selected[:4]
+                
+                # Ensure at least one metric is selected
+                if not selected:
+                    ui.notify("Please select at least one metric", color='warning')
+                    return
+                
+                # Save configuration
+                try:
+                    new_config = {
+                        'selected_metrics': selected,
+                        'coloration_baseline': baseline_select.value
+                    }
+                    user_state.set_monitored_metrics_config(new_config, DEFAULT_USER_ID)
+                    ui.notify("Configuration saved", color='positive')
+                    dialog.close()
+                    ui.navigate.reload()
+                except Exception as e:
+                    ui.notify(f"Error saving configuration: {e}", color='negative')
+            ui.button("Save", on_click=save_config, color='primary')
+    
+    dialog.open()
 
 
 def add_instance_note(instance_id):
@@ -1439,6 +1681,334 @@ def get_metric_bg_class(current_value, average_value):
         return ("metric-bg-yellow", "#eab308")  # Yellow
 
 
+def _get_value_key_from_history(history_data: dict) -> str:
+    """Auto-detect the value key from history data.
+    
+    Args:
+        history_data: Dict with historical data
+        
+    Returns:
+        Key name for values (e.g., 'hours', 'relief_points', 'productivity_scores')
+    """
+    # Common value keys in history data
+    possible_keys = ['hours', 'relief_points', 'productivity_scores', 'scores', 'values']
+    for key in possible_keys:
+        if key in history_data and history_data[key] and isinstance(history_data[key], list):
+            return key
+    return None
+
+
+def get_baseline_value(history_data: dict, baseline_type: str, value_key: str = None) -> float:
+    """Get baseline value for a metric based on baseline type.
+    
+    Generic function that works with any metric's history data structure.
+    
+    Args:
+        history_data: Dict with historical data (from get_weekly_hours_history or similar)
+        baseline_type: One of 'last_3_months', 'last_month', 'last_week', 'average', 'all_data'
+        value_key: Optional key name for values (e.g., 'hours', 'relief_points'). 
+                   If None, will auto-detect from history_data
+    
+    Returns:
+        Baseline value (float) - daily average
+    """
+    # Auto-detect value key if not provided
+    if value_key is None:
+        value_key = _get_value_key_from_history(history_data)
+    
+    # Get values list (empty list if not found)
+    values = history_data.get(value_key, []) if value_key else []
+    dates = history_data.get('dates', [])
+    
+    # Handle each baseline type generically
+    if baseline_type == 'last_3_months':
+        return history_data.get('three_month_average', 0.0)
+    
+    elif baseline_type == 'last_month':
+        # Calculate last month average from daily data
+        if dates and values and len(dates) == len(values):
+            from datetime import datetime, timedelta
+            thirty_days_ago = datetime.now() - timedelta(days=30)
+            last_month_values = []
+            for i, date_str in enumerate(dates):
+                try:
+                    date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    if date_obj >= thirty_days_ago.date() and i < len(values):
+                        last_month_values.append(float(values[i]))
+                except (ValueError, TypeError):
+                    continue
+            if last_month_values:
+                return sum(last_month_values) / len(last_month_values)
+        # Fallback to weekly average if calculation fails
+        return history_data.get('weekly_average', 0.0)
+    
+    elif baseline_type == 'last_week':
+        return history_data.get('weekly_average', 0.0)
+    
+    elif baseline_type == 'average':
+        # Average of weekly_average and three_month_average
+        weekly = history_data.get('weekly_average', 0.0)
+        three_month = history_data.get('three_month_average', 0.0)
+        if weekly > 0 and three_month > 0:
+            return (weekly + three_month) / 2.0
+        return weekly if weekly > 0 else three_month
+    
+    elif baseline_type == 'all_data':
+        # Average of all historical values
+        if values:
+            try:
+                numeric_values = [float(v) for v in values if v is not None]
+                if numeric_values:
+                    return sum(numeric_values) / len(numeric_values)
+            except (ValueError, TypeError):
+                pass
+        # Fallback to weekly average
+        return history_data.get('weekly_average', 0.0)
+    
+    else:
+        # Default to three_month_average
+        return history_data.get('three_month_average', 0.0)
+
+
+def render_monitored_metrics_section(container):
+    """Render the monitored metrics section with up to 4 configurable metrics.
+    
+    Args:
+        container: UI container to render into
+    """
+    from datetime import datetime, timedelta
+    
+    # Get configuration
+    config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+    selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+    coloration_baseline = config.get('coloration_baseline', 'last_3_months')
+    
+    # Limit to 4 metrics
+    selected_metrics = selected_metrics[:4]
+    
+    # Get data
+    try:
+        relief_summary = an.get_relief_summary()
+    except Exception as e:
+        print(f"[Dashboard] Error getting relief summary: {e}")
+        relief_summary = {
+            'productivity_time_minutes': 0,
+            'weekly_productivity_score': 0.0,
+        }
+    
+    # Available metrics configuration
+    available_metrics = {
+        'productivity_time': {
+            'label': 'Productivity Time',
+            'get_value': lambda: relief_summary.get('productivity_time_minutes', 0) / 60.0,
+            'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
+            'get_history': lambda: an.get_weekly_hours_history(),
+            'history_key': 'hours',
+            'tooltip_id': 'monitored-productivity-time',
+            'chart_title': 'Daily Hours'
+        },
+        'productivity_score': {
+            'label': 'Productivity Score',
+            'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
+            'format_value': lambda v: f"{v:.1f}",
+            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
+            'history_key': 'scores',
+            'tooltip_id': 'monitored-productivity-score',
+            'chart_title': 'Daily Productivity Score'
+        },
+    }
+    
+    # Create metrics grid (2x2 layout for 4 metrics)
+    with container:
+        # Header with edit button
+        with ui.row().classes("w-full justify-between items-center mb-2"):
+            ui.label("Monitored Metrics").classes("text-sm font-semibold")
+            ui.button("Edit", on_click=lambda: open_metrics_config_dialog()).props("dense size=sm")
+        
+        # Metrics grid - 2 columns, 2 rows
+        metrics_grid = ui.row().classes("w-full gap-1").style("display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.25rem;")
+        
+        # Render selected metrics
+        # IMPORTANT: Only process selected_metrics - do NOT iterate over available_metrics
+        # This ensures history functions are only called for selected metrics, not all metrics
+        for i, metric_key in enumerate(selected_metrics):
+            if metric_key not in available_metrics:
+                continue
+            
+            metric_config = available_metrics[metric_key]
+            
+            # Get current value
+            try:
+                current_value = metric_config['get_value']()
+            except Exception as e:
+                print(f"[Dashboard] Error getting value for {metric_key}: {e}")
+                current_value = 0.0
+            
+            # Get history for baseline calculation - ONLY called for selected metrics
+            try:
+                history_data = metric_config['get_history']()
+                if history_data is None:
+                    history_data = {}
+            except Exception as e:
+                print(f"[Dashboard] Error getting history for {metric_key}: {e}")
+                history_data = {}
+            
+            # Calculate baseline (generic for any metric)
+            value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
+            baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
+            # All metrics store weekly totals in current_value, so convert baseline daily average to weekly
+            baseline_value = baseline_daily * 7.0
+            
+            # Get color class (compare weekly totals)
+            bg_class, line_color = get_metric_bg_class(current_value, baseline_value)
+            
+            # Create small metric card
+            with metrics_grid:
+                metric_card = ui.card().classes(f"p-2 metric-card-hover {bg_class}").style("min-width: 0;").props(f'data-tooltip-id="{metric_config["tooltip_id"]}"')
+                with metric_card:
+                    ui.label(metric_config['label']).classes("text-xs text-gray-500 mb-0.5")
+                    formatted_value = metric_config['format_value'](current_value)
+                    ui.label(formatted_value).classes("text-lg font-bold")
+                    
+                    # Show baseline info
+                    baseline_label = {
+                        'last_3_months': '3mo avg',
+                        'last_month': '1mo avg',
+                        'last_week': '1wk avg',
+                        'average': 'avg',
+                        'all_data': 'all avg'
+                    }.get(coloration_baseline, 'avg')
+                    
+                    # Format baseline display (generic for any metric)
+                    if 'time' in metric_key.lower() or 'hours' in metric_config.get('label', '').lower():
+                        # Time-based metrics: show as hours/week
+                        if baseline_value > 0:
+                            ui.label(f"{baseline_label}: {baseline_value:.1f}h/wk").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
+                    else:
+                        # Score-based metrics: show as number
+                        if baseline_value > 0:
+                            ui.label(f"{baseline_label}: {baseline_value:.1f}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
+                
+                # Create tooltip container
+                tooltip_id = metric_config['tooltip_id']
+                ui.add_body_html(f'<div id="{tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"></div>')
+                
+                # Render chart if history available
+                if history_data and history_data.get('dates') and history_data.get(metric_config['history_key']):
+                    dates = history_data['dates']
+                    values = history_data[metric_config['history_key']]
+                    
+                    if len(dates) > 0 and len(values) > 0:
+                        # Calculate current daily average (generic: all metrics store weekly totals)
+                        current_daily_avg = current_value / 7.0 if current_value > 0 else 0.0
+                        
+                        chart_fig = create_metric_tooltip_chart(
+                            dates,
+                            values,
+                            current_daily_avg,
+                            history_data.get('weekly_average', 0.0),
+                            history_data.get('three_month_average', 0.0),
+                            metric_config['chart_title'],
+                            line_color
+                        )
+                        
+                        if chart_fig:
+                            with ui.element('div').props(f'id="{tooltip_id}-temp"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
+                                ui.plotly(chart_fig)
+                            
+                            ui.run_javascript(f'''
+                                function moveChart_{tooltip_id}() {{
+                                    const temp = document.getElementById('{tooltip_id}-temp');
+                                    const tooltip = document.getElementById('{tooltip_id}');
+                                    if (temp && tooltip) {{
+                                        const plotlyDiv = temp.querySelector('.plotly');
+                                        if (plotlyDiv && plotlyDiv.offsetHeight > 0) {{
+                                            tooltip.innerHTML = '';
+                                            tooltip.appendChild(plotlyDiv);
+                                            temp.remove();
+                                            return true;
+                                        }}
+                                    }}
+                                    return false;
+                                }}
+                                
+                                setTimeout(function() {{
+                                    if (!moveChart_{tooltip_id}()) {{
+                                        setTimeout(function() {{
+                                            if (!moveChart_{tooltip_id}()) {{
+                                                setTimeout(moveChart_{tooltip_id}, 300);
+                                            }}
+                                        }}, 200);
+                                    }}
+                                }}, 300);
+                            ''')
+
+
+def open_metrics_config_dialog():
+    """Open dialog to configure monitored metrics."""
+    config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+    selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+    coloration_baseline = config.get('coloration_baseline', 'last_3_months')
+    
+    available_metric_options = [
+        {'key': 'productivity_time', 'label': 'Productivity Time'},
+        {'key': 'productivity_score', 'label': 'Productivity Score'},
+    ]
+    
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg p-4'):
+        ui.label("Configure Monitored Metrics").classes("text-xl font-bold mb-4")
+        
+        # Metric selection
+        ui.label("Select Metrics (up to 4):").classes("text-sm font-semibold mb-2")
+        metric_checkboxes = {}
+        for option in available_metric_options:
+            is_selected = option['key'] in selected_metrics
+            metric_checkboxes[option['key']] = ui.checkbox(option['label'], value=is_selected)
+        
+        # Baseline selection
+        ui.label("Coloration Baseline:").classes("text-sm font-semibold mt-4 mb-2")
+        # NiceGUI select expects a dict mapping values to labels
+        baseline_options = {
+            'last_3_months': 'Last 3 Months',
+            'last_month': 'Last Month',
+            'last_week': 'Last Week',
+            'average': 'Average',
+            'all_data': 'All Data',
+        }
+        baseline_select = ui.select(
+            baseline_options,
+            value=coloration_baseline,
+            label="Baseline"
+        ).classes("w-full")
+        
+        with ui.row().classes("gap-2 mt-4 justify-end"):
+            ui.button("Cancel", on_click=dialog.close)
+            
+            def save_config():
+                # Get selected metrics
+                new_selected = [key for key, checkbox in metric_checkboxes.items() if checkbox.value]
+                # Limit to 4
+                new_selected = new_selected[:4]
+                
+                # Save configuration
+                new_config = {
+                    'selected_metrics': new_selected,
+                    'coloration_baseline': baseline_select.value
+                }
+                user_state.set_monitored_metrics_config(new_config, DEFAULT_USER_ID)
+                ui.notify("Configuration saved", color='positive')
+                dialog.close()
+                ui.navigate.reload()
+            
+            ui.button("Save", on_click=save_config, color='primary')
+    
+    dialog.open()
+
+
 # ----------------------------------------------------------
 # MAIN DASHBOARD
 # ----------------------------------------------------------
@@ -2197,187 +2767,293 @@ def build_dashboard(task_manager):
                 # Row with left half (metrics + quick tasks) and right half (recently completed)
                 # Create a proper flex row container
                 with ui.element('div').classes("metrics-row").style("display: flex !important; flex-direction: row !important; width: 100% !important; gap: 0.5rem; margin-bottom: 0.5rem; align-items: flex-start;"):
-                    # Left half: Productivity Time, Weekly Relief Score, Quick Tasks
+                    # Left half: Monitored Metrics, Quick Tasks
                     left_half = ui.column().classes("half-width-left gap-2")
                     with left_half:
-                        # Productivity metrics
-                        try:
-                            relief_summary = an.get_relief_summary()
-                        except Exception as e:
-                            print(f"[Dashboard] Error getting relief summary: {e}")
-                            # Show error message to user
-                            error_card = ui.card().classes("w-full p-4 bg-red-50 border border-red-200")
-                            with error_card:
-                                ui.label("⚠️ Data Loading Error").classes("text-lg font-bold text-red-700 mb-2")
-                                ui.label(
-                                    "Unable to load analytics data. This may be due to:\n"
-                                    "• File is open in Excel or another program\n"
-                                    "• OneDrive sync is in progress\n"
-                                    "• File permissions issue"
-                                ).classes("text-sm text-red-600 mb-2")
-                                ui.label(f"Error details: {str(e)}").classes("text-xs text-red-500")
-                                ui.button("Retry", on_click=lambda: ui.navigate.to('/')).classes("mt-2")
-                            # Use empty/default values to prevent further errors
-                            relief_summary = {
-                                'productivity_time_minutes': 0,
-                                'default_relief_points': 0,
-                                'net_relief_points': 0,
-                                'positive_count': 0,
-                                'positive_avg': 0,
-                                'negative_count': 0,
-                                'negative_avg': 0,
-                                'obstacles_overcome_robust': 0,
-                                'obstacles_overcome_sensitive': 0,
+                        # Monitored Metrics Section - Performance Logging
+                        section_start = time.time()
+                        safe_log('info', "=" * 80)
+                        safe_log('info', "MONITORED METRICS SECTION - START")
+                        
+                        from backend.user_state import UserStateManager
+                        user_state = UserStateManager()
+                        DEFAULT_USER_ID = "default_user"
+                        
+                        # Get monitored metrics configuration
+                        config_start = time.time()
+                        metrics_config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+                        config_time = (time.time() - config_start) * 1000
+                        safe_log('info', f"  [CONFIG] get_monitored_metrics_config: {config_time:.2f}ms")
+                        
+                        selected_metrics = metrics_config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+                        coloration_baseline = metrics_config.get('coloration_baseline', 'last_3_months')
+                        safe_log('info', f"  [CONFIG] selected_metrics: {selected_metrics}, baseline: {coloration_baseline}")
+                        
+                        # Limit to 4 metrics
+                        selected_metrics = selected_metrics[:4]
+                        
+                        # Available metrics definitions
+                        # Note: Only metrics that need relief_summary will trigger its calculation
+                        available_metrics = {
+                            'productivity_time': {
+                                'label': 'Productivity Time',
+                                'needs_relief_summary': False,  # Uses lightweight get_productivity_time_minutes instead
+                                'get_value': lambda rs: an.get_productivity_time_minutes() / 60.0,
+                                'format_value': lambda v, rs: f"{v:.1f} hrs" if v >= 1 else f"{(an.get_productivity_time_minutes()):.0f} min",
+                                'get_history': lambda: an.get_weekly_hours_history(),
+                                'history_value_key': 'hours',
+                                'tooltip_id': 'monitored-productivity-time',
+                                'chart_title': 'Daily Hours',
+                                'is_weekly_total': True
+                            },
+                            'productivity_score': {
+                                'label': 'Productivity Score',
+                                'needs_relief_summary': True,  # Flag to indicate this metric needs relief_summary
+                                'get_value': lambda rs: rs.get('weekly_productivity_score', 0.0) if rs else 0.0,
+                                'format_value': lambda v, rs: f"{v:.1f}",
+                                'get_history': lambda: an.get_weekly_productivity_history(),
+                                'history_value_key': 'productivity_scores',
+                                'tooltip_id': 'monitored-productivity-score',
+                                'chart_title': 'Daily Productivity Score',
+                                'is_weekly_total': True
                             }
+                        }
                         
-                        # Get historical data for weekly hours
-                        hours_history = an.get_weekly_hours_history()
-                        hours = relief_summary['productivity_time_minutes'] / 60.0
-                        # Use 3-month average daily hours * 7 for color coding (compare weekly total to long-term average weekly total)
-                        avg_weekly_total = hours_history.get('three_month_average', 0.0) * 7.0
-                        hours_bg_class, hours_line_color = get_metric_bg_class(hours, avg_weekly_total)
+                        # Only load relief_summary if at least one selected metric needs it
+                        needs_relief_summary = any(
+                            metric_key in available_metrics and 
+                            available_metrics[metric_key].get('needs_relief_summary', False)
+                            for metric_key in selected_metrics
+                        )
                         
-                        # Weekly Hours Card with hover tooltip
-                        hours_card = ui.card().classes(f"w-full p-3 metric-card-hover {hours_bg_class}").props('data-tooltip-id="weekly-hours"')
-                        with hours_card:
-                            ui.label("Weekly Productivity Time").classes("text-xs text-gray-500 mb-1")
-                            if hours >= 1:
-                                ui.label(f"{hours:.1f} hours").classes("text-2xl font-bold")
-                            else:
-                                ui.label(f"{relief_summary['productivity_time_minutes']:.0f} min").classes("text-2xl font-bold")
-                            # Show 3-month average as weekly value (daily avg × 7) for direct comparison
-                            three_month_avg_daily = hours_history.get('three_month_average', 0.0)
-                            three_month_avg_weekly = three_month_avg_daily * 7.0
-                            if three_month_avg_weekly > 0:
-                                ui.label(f"3-month avg: {three_month_avg_weekly:.1f} hours/week").classes("text-sm text-gray-400")
-                            else:
-                                ui.label("3-month avg: N/A").classes("text-sm text-gray-400")
+                        relief_summary = None
+                        if needs_relief_summary:
+                            relief_start = time.time()
+                            try:
+                                relief_summary = an.get_relief_summary()
+                                relief_time = (time.time() - relief_start) * 1000
+                                safe_log('info', f"  [RELIEF] get_relief_summary: {relief_time:.2f}ms")
+                            except Exception as e:
+                                relief_time = (time.time() - relief_start) * 1000
+                                safe_log('error', f"  [RELIEF] get_relief_summary FAILED after {relief_time:.2f}ms: {e}")
+                                print(f"[Dashboard] Error getting relief summary: {e}")
+                                error_card = ui.card().classes("w-full p-4 bg-red-50 border border-red-200")
+                                with error_card:
+                                    ui.label("[WARNING] Data Loading Error").classes("text-lg font-bold text-red-700 mb-2")
+                                    ui.label(
+                                        "Unable to load analytics data. This may be due to:\n"
+                                        "• File is open in Excel or another program\n"
+                                        "• OneDrive sync is in progress\n"
+                                        "• File permissions issue"
+                                    ).classes("text-sm text-red-600 mb-2")
+                                    ui.label(f"Error details: {str(e)}").classes("text-xs text-red-500")
+                                    ui.button("Retry", on_click=lambda: ui.navigate.to('/')).classes("mt-2")
+                                relief_summary = {
+                                    'productivity_time_minutes': 0,
+                                    'weekly_productivity_score': 0.0,
+                                }
+                        else:
+                            safe_log('info', "  [RELIEF] Skipping get_relief_summary - no selected metrics need it")
                         
-                        # Get historical data for weekly relief
-                        relief_history = an.get_weekly_relief_history()
-                        weekly_relief = relief_summary.get('weekly_relief_score', 0.0)
-                        # Use weekly average * 7 for color coding (compare weekly total to average weekly total)
-                        avg_weekly_total = relief_history.get('weekly_average', 0.0) * 7.0
-                        relief_bg_class, relief_line_color = get_metric_bg_class(weekly_relief, avg_weekly_total)
-                        
-                        # Weekly Relief Card with hover tooltip
-                        relief_card = ui.card().classes(f"w-full p-3 metric-card-hover {relief_bg_class}").props('data-tooltip-id="weekly-relief"')
-                        with relief_card:
-                            ui.label("Weekly Relief Score").classes("text-xs text-gray-500 mb-1")
-                            ui.label(f"{weekly_relief:.2f}").classes("text-2xl font-bold text-blue-600")
-                        
-                        # Create tooltip containers and render Plotly charts
-                        hours_tooltip_id = 'tooltip-weekly-hours'
-                        relief_tooltip_id = 'tooltip-weekly-relief'
-                        
-                        # Create tooltip HTML containers first
-                        ui.add_body_html(f'<div id="{hours_tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"></div>')
-                        ui.add_body_html(f'<div id="{relief_tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"></div>')
-                        
-                        # Render charts using NiceGUI plotly in temporary containers, then move to tooltips
-                        if hours_history.get('dates') and hours_history.get('hours') and hours_history.get('has_sufficient_data', False):
-                            # Calculate current daily average (weekly total / 7)
-                            current_daily_avg = hours_history.get('current_value', 0.0) / 7.0 if hours_history.get('current_value', 0.0) > 0 else 0.0
-                            hours_fig = create_metric_tooltip_chart(
-                                hours_history['dates'],
-                                hours_history['hours'],  # Already daily values
-                                current_daily_avg,
-                                hours_history.get('weekly_average', 0.0),
-                                hours_history.get('three_month_average', 0.0),
-                                'Daily Hours',
-                                hours_line_color  # Pass the color based on performance
-                            )
-                            if hours_fig:
-                                # Create temporary container for chart
-                                with ui.element('div').props(f'id="{hours_tooltip_id}-temp"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
-                                    ui.plotly(hours_fig)
-                                # Move chart to tooltip
-                                ui.run_javascript(f'''
-                                    function moveHoursChart() {{
-                                        const temp = document.getElementById('{hours_tooltip_id}-temp');
-                                        const tooltip = document.getElementById('{hours_tooltip_id}');
-                                        if (temp && tooltip) {{
-                                            const plotlyDiv = temp.querySelector('.plotly');
-                                            if (plotlyDiv && plotlyDiv.offsetHeight > 0) {{
-                                                tooltip.innerHTML = '';
-                                                tooltip.appendChild(plotlyDiv);
-                                                temp.remove();
-                                                return true;
-                                            }}
-                                        }}
-                                        return false;
-                                    }}
+                        # Monitored Metrics header with edit button
+                        with ui.row().classes("w-full items-center justify-between mb-1"):
+                            ui.label("Monitored Metrics").classes("text-sm font-semibold")
+                            
+                            def edit_monitored_metrics_config():
+                                """Open dialog to configure monitored metrics."""
+                                print(f"[Dashboard] edit_monitored_metrics_config called")
+                                config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+                                selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+                                coloration_baseline = config.get('coloration_baseline', 'last_3_months')
+                                print(f"[Dashboard] Current config - selected: {selected_metrics}, baseline: {coloration_baseline}")
+                                
+                                # Use the same available_metrics structure from the render function
+                                # Build list from available_metrics dict
+                                available_metric_options = [
+                                    {'key': key, 'label': metric_def['label']}
+                                    for key, metric_def in available_metrics.items()
+                                ]
+                                print(f"[Dashboard] Available metrics: {[opt['key'] for opt in available_metric_options]}")
+                                
+                                with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg p-4'):
+                                    ui.label("Configure Monitored Metrics").classes("text-xl font-bold mb-4")
                                     
-                                    // Try multiple times with increasing delays
-                                    setTimeout(function() {{
-                                        if (!moveHoursChart()) {{
-                                            setTimeout(function() {{
-                                                if (!moveHoursChart()) {{
-                                                    setTimeout(moveHoursChart, 300);
-                                                }}
-                                            }}, 200);
-                                        }}
-                                    }}, 300);
-                                ''')
-                        elif hours_history.get('dates') and hours_history.get('hours'):
-                            # Not enough data
-                            ui.run_javascript(f'''
-                                const tooltip = document.getElementById('{hours_tooltip_id}');
-                                if (tooltip) {{
-                                    tooltip.innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">Needs more data<br>(At least 2 weeks required)</div>';
-                                }}
-                            ''')
-                        
-                        if relief_history.get('dates') and relief_history.get('relief_points') and relief_history.get('has_sufficient_data', False):
-                            # Calculate current daily average (weekly total / 7)
-                            current_daily_avg = relief_history.get('current_value', 0.0) / 7.0 if relief_history.get('current_value', 0.0) > 0 else 0.0
-                            relief_fig = create_metric_tooltip_chart(
-                                relief_history['dates'],
-                                relief_history['relief_points'],  # Already daily values
-                                current_daily_avg,
-                                relief_history.get('weekly_average', 0.0),
-                                relief_history.get('three_month_average', 0.0),
-                                'Daily Relief Points',
-                                relief_line_color  # Pass the color based on performance
-                            )
-                            if relief_fig:
-                                with ui.element('div').props(f'id="{relief_tooltip_id}-temp"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
-                                    ui.plotly(relief_fig)
-                                ui.run_javascript(f'''
-                                    function moveReliefChart() {{
-                                        const temp = document.getElementById('{relief_tooltip_id}-temp');
-                                        const tooltip = document.getElementById('{relief_tooltip_id}');
-                                        if (temp && tooltip) {{
-                                            const plotlyDiv = temp.querySelector('.plotly');
-                                            if (plotlyDiv && plotlyDiv.offsetHeight > 0) {{
-                                                tooltip.innerHTML = '';
-                                                tooltip.appendChild(plotlyDiv);
-                                                temp.remove();
-                                                return true;
-                                            }}
-                                        }}
-                                        return false;
-                                    }}
+                                    # Metric selection
+                                    ui.label("Select Metrics (up to 4):").classes("text-sm font-semibold mb-2")
+                                    metric_checkboxes = {}
+                                    for option in available_metric_options:
+                                        is_selected = option['key'] in selected_metrics
+                                        metric_checkboxes[option['key']] = ui.checkbox(option['label'], value=is_selected)
                                     
-                                    // Try multiple times with increasing delays
-                                    setTimeout(function() {{
-                                        if (!moveReliefChart()) {{
-                                            setTimeout(function() {{
-                                                if (!moveReliefChart()) {{
-                                                    setTimeout(moveReliefChart, 300);
+                                    # Baseline selection
+                                    ui.label("Coloration Baseline:").classes("text-sm font-semibold mt-4 mb-2")
+                                    # NiceGUI select expects a dict mapping values to labels
+                                    baseline_options = {
+                                        'last_3_months': 'Last 3 Months',
+                                        'last_month': 'Last Month',
+                                        'last_week': 'Last Week',
+                                        'average': 'Average',
+                                        'all_data': 'All Data',
+                                    }
+                                    baseline_select = ui.select(
+                                        baseline_options,
+                                        value=coloration_baseline,
+                                        label="Baseline"
+                                    ).classes("w-full")
+                                    
+                                    with ui.row().classes("gap-2 mt-4 justify-end"):
+                                        ui.button("Cancel", on_click=dialog.close)
+                                        
+                                        def save_config():
+                                            # Get selected metrics
+                                            new_selected = [key for key, checkbox in metric_checkboxes.items() if checkbox.value]
+                                            # Limit to 4
+                                            new_selected = new_selected[:4]
+                                            
+                                            # Save configuration
+                                            new_config = {
+                                                'selected_metrics': new_selected,
+                                                'coloration_baseline': baseline_select.value
+                                            }
+                                            user_state.set_monitored_metrics_config(new_config, DEFAULT_USER_ID)
+                                            ui.notify("Configuration saved", color='positive')
+                                            dialog.close()
+                                            ui.navigate.reload()
+                                        
+                                        ui.button("Save", on_click=save_config, color='primary')
+                                
+                                dialog.open()
+                            
+                            ui.button("Edit", on_click=edit_monitored_metrics_config).props("dense size=sm")
+                        
+                        # PERFORMANCE OPTIMIZATION: Don't calculate full history on page load
+                        # Only show current value and simple baseline from relief_summary
+                        # Full history with charts will be lazy-loaded on hover (via JavaScript)
+                        # This matches the old behavior where history was only calculated when needed
+                        
+                        # Display selected metrics in 2x2 grid (up to 4)
+                        # IMPORTANT: Only process selected_metrics - do NOT iterate over available_metrics
+                        metrics_grid = ui.row().classes("w-full").style("display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.25rem;")
+                        with metrics_grid:
+                            for idx, metric_key in enumerate(selected_metrics):
+                                metric_start = time.time()
+                                safe_log('info', f"  [METRIC {idx+1}/{len(selected_metrics)}] Processing: {metric_key}")
+                                
+                                if metric_key not in available_metrics:
+                                    safe_log('warning', f"    [METRIC {idx+1}] {metric_key} not in available_metrics, skipping")
+                                    continue
+                                
+                                metric_def = available_metrics[metric_key]
+                                
+                                # Get current value (fast - from relief_summary if needed)
+                                value_start = time.time()
+                                try:
+                                    # Pass relief_summary to get_value if metric needs it
+                                    if metric_def.get('needs_relief_summary', False):
+                                        current_value = metric_def['get_value'](relief_summary)
+                                    else:
+                                        current_value = metric_def['get_value'](None)
+                                    value_time = (time.time() - value_start) * 1000
+                                    safe_log('info', f"    [METRIC {idx+1}] get_value: {value_time:.2f}ms, value={current_value}")
+                                except Exception as e:
+                                    value_time = (time.time() - value_start) * 1000
+                                    safe_log('error', f"    [METRIC {idx+1}] get_value FAILED after {value_time:.2f}ms: {e}")
+                                    print(f"[Dashboard] Error getting value for {metric_key}: {e}")
+                                    current_value = 0.0
+                                
+                                # Format value (pass relief_summary if needed for formatting)
+                                try:
+                                    if metric_def.get('needs_relief_summary', False):
+                                        formatted_value = metric_def['format_value'](current_value, relief_summary)
+                                    else:
+                                        formatted_value = metric_def['format_value'](current_value, None)
+                                except Exception as e:
+                                    formatted_value = str(current_value)
+                                
+                                # Simple baseline calculation (fast, no expensive history)
+                                # For now, use a simple heuristic: baseline is 90% of current
+                                # This gives neutral color (yellow) when at baseline, green when above, red when below
+                                baseline_value = current_value * 0.9 if current_value > 0 else 0.0
+                                
+                                # Get color class based on simple comparison
+                                if baseline_value == 0:
+                                    bg_class = "metric-bg-yellow"
+                                    line_color = "#eab308"
+                                elif current_value >= baseline_value * 1.1:  # 10% above baseline
+                                    bg_class = "metric-bg-green"
+                                    line_color = "#22c55e"
+                                elif current_value <= baseline_value * 0.9:  # 10% below baseline
+                                    bg_class = "metric-bg-red"
+                                    line_color = "#ef4444"
+                                else:
+                                    bg_class = "metric-bg-yellow"
+                                    line_color = "#eab308"
+                                
+                                # Create metric card
+                                tooltip_id = metric_def['tooltip_id']
+                                metric_card = ui.card().classes(f"w-full p-3 metric-card-hover {bg_class}").props(f'data-tooltip-id="{tooltip_id}"')
+                                
+                                with metric_card:
+                                    ui.label(metric_def['label']).classes("text-xs text-gray-500 mb-1")
+                                    ui.label(formatted_value).classes("text-2xl font-bold")
+                                    
+                                    # Show baseline info (simple estimate for now)
+                                    baseline_label_map = {
+                                        'last_3_months': '3mo avg',
+                                        'last_month': '1mo avg',
+                                        'last_week': '1wk avg',
+                                        'average': 'avg',
+                                        'all_data': 'all avg'
+                                    }
+                                    baseline_label = baseline_label_map.get(coloration_baseline, 'baseline')
+                                    
+                                    # Format baseline display based on metric type
+                                    if 'time' in metric_key.lower() or 'hours' in metric_def.get('label', '').lower():
+                                        # Time-based metrics: show as hours/week
+                                        if baseline_value > 0:
+                                            ui.label(f"{baseline_label}: {baseline_value:.1f}h/wk (est)").classes("text-xs text-gray-400")
+                                        else:
+                                            ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
+                                    else:
+                                        # Score-based metrics: show as number
+                                        if baseline_value > 0:
+                                            ui.label(f"{baseline_label}: {baseline_value:.1f} (est)").classes("text-xs text-gray-400")
+                                        else:
+                                            ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
+                                
+                                # Create tooltip container (history will be loaded lazily on hover via JavaScript)
+                                ui.add_body_html(f'<div id="{tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"></div>')
+                                
+                                # Lazy-load history on hover (via JavaScript event handler)
+                                # This defers expensive history calculation until user actually hovers
+                                metric_key_js = metric_key  # Capture for closure
+                                ui.run_javascript(f'''
+                                    (function() {{
+                                        const card = document.querySelector('[data-tooltip-id="{tooltip_id}"]');
+                                        const tooltip = document.getElementById('{tooltip_id}');
+                                        let historyLoaded = false;
+                                        
+                                        if (card && tooltip) {{
+                                            card.addEventListener('mouseenter', function() {{
+                                                if (!historyLoaded) {{
+                                                    historyLoaded = true;
+                                                    // Trigger history calculation via Python callback
+                                                    // This will be handled by a separate endpoint or deferred
+                                                    tooltip.innerHTML = '<div style="padding: 10px;">Loading chart...</div>';
                                                 }}
-                                            }}, 200);
+                                            }});
                                         }}
-                                    }}, 300);
+                                    }})();
                                 ''')
-                        elif relief_history.get('dates') and relief_history.get('relief_points'):
-                            # Not enough data
-                            ui.run_javascript(f'''
-                                const tooltip = document.getElementById('{relief_tooltip_id}');
-                                if (tooltip) {{
-                                    tooltip.innerHTML = '<div class="text-xs text-gray-500 p-4 text-center">Needs more data<br>(At least 2 weeks required)</div>';
-                                }}
-                            ''')
+                                
+                                metric_total_time = (time.time() - metric_start) * 1000
+                                safe_log('info', f"  [METRIC {idx+1}] TOTAL TIME: {metric_total_time:.2f}ms")
+                        
+                        section_total_time = (time.time() - section_start) * 1000
+                        safe_log('info', f"MONITORED METRICS SECTION - COMPLETE: {section_total_time:.2f}ms total")
+                        safe_log('info', "=" * 80)
+                        log_file_msg = f" (log: {PERF_LOG_FILE})" if PERF_LOG_FILE else ""
+                        print(f"[Dashboard] Monitored Metrics section completed in {section_total_time:.2f}ms{log_file_msg}")
                         
                         # Quick Tasks
                         with ui.card().classes("w-full p-2"):
@@ -2891,6 +3567,2722 @@ def build_summary_section():
                 max_spike_robust = relief_summary.get('max_obstacle_spike_robust', 0.0)
                 max_spike_sensitive = relief_summary.get('max_obstacle_spike_sensitive', 0.0)
                 ui.label(f"Robust: {max_spike_robust:.1f} | Sensitive: {max_spike_sensitive:.1f}").classes("text-sm font-bold")
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+# Analytics panel is now just a header - removed compact panel
+
+
+def build_recommendations_section():
+    """Build the recommendations section with search-based metric filtering."""
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
+    with ui.column().classes("scrollable-section"):
+        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
+        ui.separator()
+        
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
+        
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
+        ).classes("w-full mb-2")
+        
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+                except Exception as ex:
+                    pass
+            
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
+        
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
+        with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
+            
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+
+
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
+    target_container.clear()
+    
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+    
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
+    
+    # Get recommendations for the selected metrics (top 10)
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
+    
+    if not recs:
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
+        return
+    
+    with target_container:
+        for idx, rec in enumerate(recs):
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
+            
+            # Format the recommendation card with hover tooltip
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            with card_element:
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
+                
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
+                    try:
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+# Analytics panel is now just a header - removed compact panel
+
+
+def build_recommendations_section():
+    """Build the recommendations section with search-based metric filtering."""
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
+    with ui.column().classes("scrollable-section"):
+        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
+        ui.separator()
+        
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
+        
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
+        ).classes("w-full mb-2")
+        
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+                except Exception as ex:
+                    pass
+            
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
+        
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
+        with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
+            
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+
+
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
+    target_container.clear()
+    
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+    
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
+    
+    # Get recommendations for the selected metrics (top 10)
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
+    
+    if not recs:
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
+        return
+    
+    with target_container:
+        for idx, rec in enumerate(recs):
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
+            
+            # Format the recommendation card with hover tooltip
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            with card_element:
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
+                
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
+                    try:
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+# Analytics panel is now just a header - removed compact panel
+
+
+def build_recommendations_section():
+    """Build the recommendations section with search-based metric filtering."""
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
+    with ui.column().classes("scrollable-section"):
+        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
+        ui.separator()
+        
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
+        
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
+        ).classes("w-full mb-2")
+        
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+                except Exception as ex:
+                    pass
+            
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
+        
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
+        with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
+            
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+
+
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
+    target_container.clear()
+    
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+    
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
+    
+    # Get recommendations for the selected metrics (top 10)
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
+    
+    if not recs:
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
+        return
+    
+    with target_container:
+        for idx, rec in enumerate(recs):
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
+            
+            # Format the recommendation card with hover tooltip
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            with card_element:
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
+                
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
+                    try:
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+# Analytics panel is now just a header - removed compact panel
+
+
+def build_recommendations_section():
+    """Build the recommendations section with search-based metric filtering."""
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
+    with ui.column().classes("scrollable-section"):
+        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
+        ui.separator()
+        
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
+        
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
+        ).classes("w-full mb-2")
+        
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+                except Exception as ex:
+                    pass
+            
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
+        
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
+        with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
+            
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+
+
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
+    target_container.clear()
+    
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+    
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
+    
+    # Get recommendations for the selected metrics (top 10)
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
+    
+    if not recs:
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
+        return
+    
+    with target_container:
+        for idx, rec in enumerate(recs):
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
+            
+            # Format the recommendation card with hover tooltip
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            with card_element:
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
+                
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
+                    try:
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+# Analytics panel is now just a header - removed compact panel
+
+
+def build_recommendations_section():
+    """Build the recommendations section with search-based metric filtering."""
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
+    with ui.column().classes("scrollable-section"):
+        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
+        ui.separator()
+        
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
+        
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
+        ).classes("w-full mb-2")
+        
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+                except Exception as ex:
+                    pass
+            
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
+        
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
+        with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
+            
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+
+
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
+    target_container.clear()
+    
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+    
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
+    
+    # Get recommendations for the selected metrics (top 10)
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
+    
+    if not recs:
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
+        return
+    
+    with target_container:
+        for idx, rec in enumerate(recs):
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
+            
+            # Format the recommendation card with hover tooltip
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            with card_element:
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
+                
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
+                    try:
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+# Analytics panel is now just a header - removed compact panel
+
+
+def build_recommendations_section():
+    """Build the recommendations section with search-based metric filtering."""
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
+    with ui.column().classes("scrollable-section"):
+        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
+        ui.separator()
+        
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
+        
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
+        ).classes("w-full mb-2")
+        
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+                except Exception as ex:
+                    pass
+            
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
+        
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
+        with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
+            
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+
+
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
+    target_container.clear()
+    
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+    
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
+    
+    # Get recommendations for the selected metrics (top 10)
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
+    
+    if not recs:
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
+        return
+    
+    with target_container:
+        for idx, rec in enumerate(recs):
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
+            
+            # Format the recommendation card with hover tooltip
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            with card_element:
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
+                
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
+                    try:
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        recent_tasks = im.list_recent_tasks(limit=20) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+# Analytics panel is now just a header - removed compact panel
+
+
+def build_recommendations_section():
+    """Build the recommendations section with search-based metric filtering."""
+    global dash_filters
+    if not dash_filters:
+        dash_filters = {}
+    with ui.column().classes("scrollable-section"):
+        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
+        ui.separator()
+        
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
+        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
+        
+        # Metric search input (replaces multi-select)
+        metric_search_input = ui.input(
+            label="Search metrics",
+            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
+        ).classes("w-full mb-2")
+        
+        # Store selected metrics based on search
+        selected_metrics_state = default_metrics.copy()
+        
+        # Debounce timer for search input
+        search_debounce_timer = None
+        
+        def handle_metric_search(e):
+            """Handle metric search input changes with debouncing."""
+            nonlocal search_debounce_timer
+            
+            # Cancel existing timer if any
+            if search_debounce_timer is not None:
+                search_debounce_timer.deactivate()
+            
+            # Get the current value
+            value = None
+            if hasattr(e, 'args'):
+                if isinstance(e.args, str):
+                    value = e.args
+                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                    value = e.args[0]
+                elif isinstance(e.args, dict):
+                    value = e.args.get('value') or e.args.get('label')
+            elif hasattr(e, 'value'):
+                value = e.value
+            else:
+                try:
+                    value = metric_search_input.value
+                except Exception:
+                    pass
+            
+            # Create a debounced function that will execute after user stops typing
+            def apply_search():
+                """Apply the search filter after debounce delay."""
+                try:
+                    current_value = metric_search_input.value
+                    search_query = str(current_value).strip().lower() if current_value else None
+                    if search_query == '':
+                        search_query = None
+                    
+                    # Filter metrics based on search
+                    if search_query:
+                        filtered_metrics = [
+                            label for label in metric_labels
+                            if search_query in label.lower()
+                        ]
+                        # If search matches nothing, show all metrics (better UX than showing nothing)
+                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
+                    else:
+                        # Empty search shows default metrics
+                        selected_metrics_state[:] = default_metrics
+                    
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+                except Exception as ex:
+                    pass
+            
+            # Create a timer that will execute after 300ms of no typing
+            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
+        
+        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
+        metric_search_input.on('update:model-value', handle_metric_search)
+        
+        # Filters row
+        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
+        
+        with filter_row:
+            # Duration filters
+            min_duration = ui.number(
+                label="Min duration (min)",
+                value=dash_filters.get('min_duration'),
+            ).classes("w-32")
+            
+            max_duration = ui.number(
+                label="Max duration (min)",
+                value=dash_filters.get('max_duration'),
+            ).classes("w-32")
+            
+            # Task type filter
+            task_type_select = ui.select(
+                options={
+                    '': 'All Types',
+                    'Work': 'Work',
+                    'Play': 'Play',
+                    'Self care': 'Self care',
+                },
+                label="Task Type",
+                value=dash_filters.get('task_type', ''),
+            ).classes("w-32")
+            
+            # Recurring filter
+            is_recurring_select = ui.select(
+                options={
+                    '': 'All',
+                    'true': 'Recurring',
+                    'false': 'One-time',
+                },
+                label="Recurring",
+                value=dash_filters.get('is_recurring', ''),
+            ).classes("w-32")
+            
+            # Categories search filter
+            categories_search = ui.input(
+                label="Categories",
+                placeholder="Search categories...",
+                value=dash_filters.get('categories', ''),
+            ).classes("w-40")
+            
+            def apply_filters():
+                # Min duration
+                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
+                if min_val is not None:
+                    try:
+                        min_val = float(min_val)
+                    except (TypeError, ValueError):
+                        min_val = None
+                dash_filters['min_duration'] = min_val
+                
+                # Max duration
+                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
+                if max_val is not None:
+                    try:
+                        max_val = float(max_val)
+                    except (TypeError, ValueError):
+                        max_val = None
+                dash_filters['max_duration'] = max_val
+                
+                # Task type
+                task_type_val = task_type_select.value if task_type_select.value else None
+                dash_filters['task_type'] = task_type_val
+                
+                # Is recurring
+                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
+                dash_filters['is_recurring'] = is_recurring_val
+                
+                # Categories
+                categories_val = categories_search.value.strip() if categories_search.value else None
+                dash_filters['categories'] = categories_val
+                
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+            
+            ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
+        
+        # Recommendations container
+        rec_container = ui.column().classes("w-full")
+        
+        # Initial render
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+
+
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
+    target_container.clear()
+    
+    # Normalize selected metrics (list of labels)
+    if selected_metrics is None:
+        selected_metrics = []
+    if isinstance(selected_metrics, str):
+        selected_metrics = [selected_metrics]
+    if metric_key_map is None:
+        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
+    
+    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
+    if not metric_keys:
+        metric_keys = ["relief_score"]
+    
+    # Get recommendations for the selected metrics (top 10)
+    # Use module-level dash_filters if available, otherwise empty dict
+    filters = globals().get('dash_filters', {})
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
+    
+    if not recs:
+        with target_container:
+            ui.label("No recommendations available").classes("text-xs text-gray-500")
+        return
+    
+    with target_container:
+        for idx, rec in enumerate(recs):
+            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
+            
+            # Format the recommendation card with hover tooltip
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            with card_element:
+                # Task name
+                ui.label(task_label).classes("font-bold text-sm mb-1")
+                
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
+                
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
+                    try:
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
 
 
 def build_recently_completed_panel():

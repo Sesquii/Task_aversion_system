@@ -604,4 +604,69 @@ class UserStateManager:
             }}
         }})();
         """
+    
+    # -----------------------------
+    # Monitored metrics configuration
+    # -----------------------------
+    def get_monitored_metrics_config(self, user_id: str = "default") -> Dict[str, Any]:
+        """Get monitored metrics configuration.
+        
+        Returns:
+            Dict with:
+            - selected_metrics: List of metric keys to display (default: ['productivity_time', 'productivity_score'])
+            - coloration_baseline: Baseline for coloration ('last_3_months', 'last_month', 'last_week', 'average', 'all_data')
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {
+                'selected_metrics': ['productivity_time', 'productivity_score'],
+                'coloration_baseline': 'last_3_months'
+            }
+        
+        config_json = prefs.get("monitored_metrics_config", "")
+        if not config_json:
+            return {
+                'selected_metrics': ['productivity_time', 'productivity_score'],
+                'coloration_baseline': 'last_3_months'
+            }
+        
+        try:
+            import json
+            config = json.loads(config_json)
+            # Ensure defaults
+            if 'selected_metrics' not in config:
+                config['selected_metrics'] = ['productivity_time', 'productivity_score']
+            if 'coloration_baseline' not in config:
+                config['coloration_baseline'] = 'last_3_months'
+            return config
+        except (json.JSONDecodeError, TypeError):
+            return {
+                'selected_metrics': ['productivity_time', 'productivity_score'],
+                'coloration_baseline': 'last_3_months'
+            }
+    
+    def set_monitored_metrics_config(self, config: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
+        """Set monitored metrics configuration.
+        
+        Args:
+            config: Dict with selected_metrics and coloration_baseline
+            user_id: User ID
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Validate
+        validated = {}
+        if 'selected_metrics' in config:
+            validated['selected_metrics'] = list(config['selected_metrics'])
+        if 'coloration_baseline' in config:
+            baseline = config['coloration_baseline']
+            if baseline in ['last_3_months', 'last_month', 'last_week', 'average', 'all_data']:
+                validated['coloration_baseline'] = baseline
+            else:
+                validated['coloration_baseline'] = 'last_3_months'
+        
+        config_json = json.dumps(validated)
+        return self.update_preference(user_id, "monitored_metrics_config", config_json)
 

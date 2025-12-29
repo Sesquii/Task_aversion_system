@@ -41,6 +41,9 @@ else:
 # Session factory
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
+# Track if database has been initialized (to avoid duplicate print messages)
+_db_initialized = False
+
 
 def get_session():
     """Get a database session. Use as context manager or call close() manually."""
@@ -48,14 +51,21 @@ def get_session():
 
 
 def init_db():
-    """Initialize database by creating all tables."""
+    """Initialize database by creating all tables. Idempotent - safe to call multiple times."""
+    global _db_initialized
+    
     # Ensure data directory exists for SQLite
     if DATABASE_URL.startswith('sqlite'):
         db_path = DATABASE_URL.replace('sqlite:///', '')
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else '.', exist_ok=True)
     
+    # Create tables (idempotent operation)
     Base.metadata.create_all(engine)
-    print(f"[Database] Initialized database at {DATABASE_URL}")
+    
+    # Only print message once to avoid console spam
+    if not _db_initialized:
+        print(f"[Database] Initialized database at {DATABASE_URL}")
+        _db_initialized = True
 
 
 # ============================================================================

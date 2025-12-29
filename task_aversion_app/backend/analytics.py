@@ -9,6 +9,13 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
+import warnings
+# Suppress pandas warnings that flood the terminal
+# FutureWarning about downcasting in fillna operations
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*Downcasting.*')
+# SettingWithCopyWarning about modifying DataFrame slices (pandas raises this as a generic Warning)
+warnings.filterwarnings('ignore', message='.*SettingWithCopyWarning.*')
+warnings.filterwarnings('ignore', message='.*A value is trying to be set on a copy of a slice.*')
 from scipy import stats
 
 from .task_schema import TASK_ATTRIBUTES, attribute_defaults
@@ -30,6 +37,11 @@ class Analytics:
     # Note: All inputs now use 0-100 scale natively.
     # Old data may have 0-10 scale values, but we use them as-is (no scaling).
     # This is acceptable since old 0-10 data was only used for a short time.
+    
+    # Cache for expensive operations
+    _relief_summary_cache = None
+    _relief_summary_cache_time = None
+    _cache_ttl_seconds = 30  # Cache for 30 seconds
     
     @staticmethod
     def calculate_difficulty_bonus(
@@ -4041,9 +4053,83 @@ class Analytics:
         
         return execution_score
 
-    def get_relief_summary(self) -> Dict[str, any]:
-        """Calculate relief points, productivity time, and relief statistics."""
+    def get_productivity_time_minutes(self) -> float:
+        """Get productivity time for last 7 days (Work + Self care only).
+        
+        Lightweight function that only calculates productivity time without
+        all the relief calculations. Much faster than get_relief_summary().
+        
+        Returns:
+            Productivity time in minutes (float)
+        """
+        from datetime import timedelta
         df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return 0.0
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed['task_type'] = completed['task_type'].fillna('Work')
+            completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Work and Self care tasks (exclude Play)
+            completed = completed[
+                completed['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
+            ]
+        
+        # Get actual time from completed tasks (last 7 days only)
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed_last_7d = completed[completed['completed_at_dt'] >= seven_days_ago]
+        
+        def _get_actual_time(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed_last_7d = completed_last_7d.copy()
+        completed_last_7d['time_actual'] = completed_last_7d.apply(_get_actual_time, axis=1)
+        completed_last_7d['time_actual'] = pd.to_numeric(completed_last_7d['time_actual'], errors='coerce')
+        
+        # Sum productivity time for last 7 days
+        productivity_time = completed_last_7d['time_actual'].fillna(0).sum()
+        return float(productivity_time)
+
+    def get_relief_summary(self) -> Dict[str, any]:
+        """Calculate relief points, productivity time, and relief statistics.
+        
+        Results are cached for 30 seconds to improve performance on repeated calls.
+        """
+        import time as time_module
+        total_start = time_module.time()
+        
+        # Check cache first
+        current_time = time_module.time()
+        if (Analytics._relief_summary_cache is not None and 
+            Analytics._relief_summary_cache_time is not None and
+            (current_time - Analytics._relief_summary_cache_time) < Analytics._cache_ttl_seconds):
+            return Analytics._relief_summary_cache
+        
+        # Calculate fresh result with timing
+        load_start = time_module.time()
+        df = self._load_instances()
+        load_time = (time_module.time() - load_start) * 1000
+        print(f"[Analytics] get_relief_summary: _load_instances: {load_time:.2f}ms")
         
         if df.empty:
             return {
@@ -4120,64 +4206,34 @@ class Analytics:
                 'max_obstacle_spike_sensitive': 0.0,
             }
         
-        # Extract expected relief from predicted_dict
-        # predicted_dict is a Series, so we need to access it properly
-        def _get_expected_relief(row):
-            try:
-                pred_dict = row['predicted_dict']
-                if isinstance(pred_dict, dict):
-                    return pred_dict.get('expected_relief', None)
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        def _get_initial_aversion(row):
-            """Get initial aversion from predicted_dict."""
-            try:
-                pred_dict = row['predicted_dict']
-                if isinstance(pred_dict, dict):
-                    return pred_dict.get('initial_aversion', None)
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        def _get_expected_aversion(row):
-            """Get expected aversion from predicted_dict."""
-            try:
-                pred_dict = row['predicted_dict']
-                if isinstance(pred_dict, dict):
-                    return pred_dict.get('expected_aversion', None)
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        completed['expected_relief'] = completed.apply(_get_expected_relief, axis=1)
+        # Extract expected relief from predicted_dict (vectorized)
+        extract_start = time_module.time()
+        completed['expected_relief'] = completed['predicted_dict'].apply(
+            lambda d: d.get('expected_relief') if isinstance(d, dict) else None
+        )
         completed['expected_relief'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
         
-        # Get initial and expected aversion
-        completed['initial_aversion'] = completed.apply(_get_initial_aversion, axis=1)
+        # Get initial and expected aversion (vectorized)
+        completed['initial_aversion'] = completed['predicted_dict'].apply(
+            lambda d: d.get('initial_aversion') if isinstance(d, dict) else None
+        )
         completed['initial_aversion'] = pd.to_numeric(completed['initial_aversion'], errors='coerce')
-        completed['expected_aversion'] = completed.apply(_get_expected_aversion, axis=1)
+        completed['expected_aversion'] = completed['predicted_dict'].apply(
+            lambda d: d.get('expected_aversion') if isinstance(d, dict) else None
+        )
         completed['expected_aversion'] = pd.to_numeric(completed['expected_aversion'], errors='coerce')
         
-        # Get actual relief from actual_dict (from completion page), not from relief_score column
-        # This ensures we get the actual value even if CSV column was previously overwritten
-        def _get_actual_relief(row):
-            try:
-                actual_dict = row['actual_dict']
-                if isinstance(actual_dict, dict):
-                    return actual_dict.get('actual_relief', None)
-            except (KeyError, TypeError):
-                pass
-            # Fallback to relief_score column if actual_dict doesn't have it
-            try:
-                return row.get('relief_score')
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        completed['actual_relief'] = completed.apply(_get_actual_relief, axis=1)
+        # Get actual relief from actual_dict (vectorized)
+        completed['actual_relief'] = completed['actual_dict'].apply(
+            lambda d: d.get('actual_relief') if isinstance(d, dict) else None
+        )
+        # Fallback to relief_score column if actual_dict doesn't have it
+        completed['actual_relief'] = completed['actual_relief'].fillna(
+            pd.to_numeric(completed.get('relief_score', pd.Series()), errors='coerce')
+        )
         completed['actual_relief'] = pd.to_numeric(completed['actual_relief'], errors='coerce')
+        extract_time = (time_module.time() - extract_start) * 1000
+        print(f"[Analytics] get_relief_summary: extract fields: {extract_time:.2f}ms")
         
         # Filter to rows where we have both expected and actual relief
         has_both = completed['expected_relief'].notna() & completed['actual_relief'].notna()
@@ -4186,27 +4242,23 @@ class Analytics:
         # Calculate default relief points (actual - expected, can be negative)
         relief_data['default_relief_points'] = relief_data['actual_relief'] - relief_data['expected_relief']
         
-        # Apply aversion multipliers to relief points
-        def _apply_aversion_multiplier(row):
-            """Apply aversion-based multiplier to relief points."""
-            initial_av = row.get('initial_aversion')
-            expected_av = row.get('expected_aversion')
-            # Use expected_aversion as current_aversion (what was set during initialization)
-            aversion_mult = self.calculate_aversion_multiplier(initial_av, expected_av)
-            return row['default_relief_points'] * aversion_mult
-        
-        relief_data['default_relief_points'] = relief_data.apply(_apply_aversion_multiplier, axis=1)
-        
-        # Calculate net relief points (calibrated):
-        # - 0 for negative net relief (when actual < expected)
-        # - actual - expected for positive (when actual >= expected)
-        # - For negative cases, store the negative value separately
-        relief_data['net_relief_points'] = relief_data.apply(
-            lambda row: max(0.0, row['default_relief_points']), axis=1
+        # Apply aversion multipliers to relief points (vectorized where possible)
+        multiplier_start = time_module.time()
+        # Calculate multipliers for all rows at once
+        relief_data['aversion_mult'] = relief_data.apply(
+            lambda row: self.calculate_aversion_multiplier(
+                row.get('initial_aversion'), 
+                row.get('expected_aversion')
+            ),
+            axis=1
         )
-        relief_data['negative_relief_points'] = relief_data.apply(
-            lambda row: min(0.0, row['default_relief_points']), axis=1
-        )
+        relief_data['default_relief_points'] = relief_data['default_relief_points'] * relief_data['aversion_mult']
+        
+        # Calculate net relief points (vectorized)
+        relief_data['net_relief_points'] = relief_data['default_relief_points'].clip(lower=0.0)
+        relief_data['negative_relief_points'] = relief_data['default_relief_points'].clip(upper=0.0)
+        multiplier_time = (time_module.time() - multiplier_start) * 1000
+        print(f"[Analytics] get_relief_summary: apply multipliers: {multiplier_time:.2f}ms")
         
         # Calculate productivity time (sum of actual time from actual_dict) - LAST 7 DAYS ONLY
         # Productivity includes only Work and Self care tasks, not Play tasks
@@ -4266,6 +4318,8 @@ class Analytics:
                 pass
             return None
         
+        # Use .loc to avoid SettingWithCopyWarning
+        productivity_tasks = productivity_tasks.copy()
         productivity_tasks['time_actual'] = productivity_tasks.apply(_get_actual_time, axis=1)
         productivity_tasks['time_actual'] = pd.to_numeric(productivity_tasks['time_actual'], errors='coerce')
         
@@ -4291,7 +4345,10 @@ class Analytics:
         negative_avg = abs(pd.to_numeric(negative_relief['default_relief_points'], errors='coerce').mean()) if negative_count > 0 else 0.0
         
         # Get efficiency summary
+        efficiency_start = time_module.time()
         efficiency_summary = self.get_efficiency_summary()
+        efficiency_time = (time_module.time() - efficiency_start) * 1000
+        print(f"[Analytics] get_relief_summary: get_efficiency_summary: {efficiency_time:.2f}ms")
         
         # Filter out test/dev tasks from obstacles calculation
         # Keep all tasks for relief calculations, but exclude test tasks from obstacles
@@ -4306,35 +4363,20 @@ class Analytics:
         from .instance_manager import InstanceManager
         im = InstanceManager()
         
-        # Add baseline aversion (both robust and sensitive) to relief_data_for_obstacles
-        def _get_baseline_aversion_robust(row):
-            task_id = row.get('task_id')
-            if task_id:
-                try:
-                    return im.get_baseline_aversion_robust(task_id)
-                except Exception as e:
-                    print(f"[Analytics] Error getting baseline_aversion_robust for task {task_id}: {e}")
-                    return None
-            return None
+        # Batch-load baseline aversions (OPTIMIZED: single query instead of N queries)
+        baseline_start = time_module.time()
+        unique_task_ids = relief_data_for_obstacles['task_id'].unique().tolist()
+        baseline_aversions = im.get_batch_baseline_aversions(unique_task_ids)
+        baseline_time = (time_module.time() - baseline_start) * 1000
+        print(f"[Analytics] get_relief_summary: batch baseline aversions ({len(unique_task_ids)} tasks): {baseline_time:.2f}ms")
         
-        def _get_baseline_aversion_sensitive(row):
-            task_id = row.get('task_id')
-            if task_id:
-                try:
-                    return im.get_baseline_aversion_sensitive(task_id)
-                except Exception as e:
-                    print(f"[Analytics] Error getting baseline_aversion_sensitive for task {task_id}: {e}")
-                    return None
-            return None
-        
-        try:
-            relief_data_for_obstacles['baseline_aversion_robust'] = relief_data_for_obstacles.apply(_get_baseline_aversion_robust, axis=1)
-            relief_data_for_obstacles['baseline_aversion_sensitive'] = relief_data_for_obstacles.apply(_get_baseline_aversion_sensitive, axis=1)
-        except Exception as e:
-            print(f"[Analytics] Error calculating baseline aversion: {e}")
-            # Set default values if calculation fails
-            relief_data_for_obstacles['baseline_aversion_robust'] = None
-            relief_data_for_obstacles['baseline_aversion_sensitive'] = None
+        # Map baseline aversions to rows (vectorized)
+        relief_data_for_obstacles['baseline_aversion_robust'] = relief_data_for_obstacles['task_id'].map(
+            lambda tid: baseline_aversions.get(tid, {}).get('robust') if tid in baseline_aversions else None
+        )
+        relief_data_for_obstacles['baseline_aversion_sensitive'] = relief_data_for_obstacles['task_id'].map(
+            lambda tid: baseline_aversions.get(tid, {}).get('sensitive') if tid in baseline_aversions else None
+        )
         
         # Calculate obstacles scores using multiple formulas for comparison
         def _calculate_obstacles_scores_robust(row):
@@ -4406,6 +4448,8 @@ class Analytics:
             return spike_amount if is_spontaneous else 0.0
         
         if not relief_data_last_7d.empty:
+            # Use .copy() to avoid SettingWithCopyWarning
+            relief_data_last_7d = relief_data_last_7d.copy()
             relief_data_last_7d['spike_amount_robust'] = relief_data_last_7d.apply(_get_max_spike_robust, axis=1)
             relief_data_last_7d['spike_amount_sensitive'] = relief_data_last_7d.apply(_get_max_spike_sensitive, axis=1)
             max_spike_robust = relief_data_last_7d['spike_amount_robust'].max() if 'spike_amount_robust' in relief_data_last_7d.columns else 0.0
@@ -4763,7 +4807,7 @@ class Analytics:
         completed_last_7d_for_grit = completed[completed['completed_at_dt'] >= seven_days_ago]
         weekly_grit_score = completed_last_7d_for_grit['grit_score'].fillna(0).sum()
         
-        return {
+        result = {
             'productivity_time_minutes': round(float(productivity_time), 1),
             'default_relief_points': round(float(default_total), 2),
             'net_relief_points': round(float(net_total), 2),
@@ -4808,6 +4852,15 @@ class Analytics:
             # Aversion analytics: all score variants for comparison
             **{k: round(float(v), 2) for k, v in obstacles_totals.items()},
         }
+        
+        # Update cache before returning
+        Analytics._relief_summary_cache = result
+        Analytics._relief_summary_cache_time = time_module.time()
+        
+        total_time = (time_module.time() - total_start) * 1000
+        print(f"[Analytics] get_relief_summary: TOTAL TIME: {total_time:.2f}ms")
+        
+        return result
 
     def get_weekly_hours_history(self) -> Dict[str, any]:
         """Get historical daily productivity hours data for trend analysis (last 90 days).
@@ -4861,6 +4914,8 @@ class Analytics:
                 pass
             return None
         
+        # Use .copy() to avoid SettingWithCopyWarning (per pandas docs)
+        completed = completed.copy()
         completed['time_actual'] = completed.apply(_get_actual_time, axis=1)
         completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
         completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
@@ -5042,6 +5097,158 @@ class Analytics:
         return {
             'dates': daily_data['date_str'].tolist(),
             'relief_points': daily_data['relief_points'].tolist(),
+            'current_value': round(float(current_value), 2),
+            'weekly_average': round(float(weekly_average), 2),
+            'three_month_average': round(float(three_month_average), 2),
+            'has_sufficient_data': has_sufficient_data,
+            'days_with_data': days_with_data,
+        }
+
+    def get_weekly_productivity_history(self) -> Dict[str, any]:
+        """Get historical daily productivity score data for trend analysis (last 90 days).
+        
+        Returns:
+            Dict with 'dates' (list of date strings), 'productivity_scores' (list of scores per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate productivity score for each task
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Get self-care tasks per day for productivity score calculation
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate productivity scores
+        self_care_tasks_per_day = {}
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            
+            # Count self-care tasks per day
+            self_care_tasks = completed_with_type[
+                completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+            ]
+            if not self_care_tasks.empty:
+                # Use .copy() to avoid SettingWithCopyWarning (per pandas docs)
+                self_care_tasks = self_care_tasks.copy()
+                self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                daily_counts = self_care_tasks.groupby('date').size()
+                for date, count in daily_counts.items():
+                    self_care_tasks_per_day[str(date)] = int(count)
+        
+        # Calculate productivity score for each completed task
+        weekly_avg_time = 0.0  # Will be calculated if needed
+        completed['productivity_score'] = completed.apply(
+            lambda row: self.calculate_productivity_score(
+                row,
+                self_care_tasks_per_day,
+                weekly_avg_time
+            ),
+            axis=1
+        )
+        
+        completed['productivity_score'] = pd.to_numeric(completed['productivity_score'], errors='coerce')
+        completed = completed[completed['productivity_score'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last 90 days
+        from datetime import timedelta
+        ninety_days_ago = datetime.now() - timedelta(days=90)
+        valid = completed[completed['completed_at_dt'] >= ninety_days_ago].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by day
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_data = valid.groupby('date')['productivity_score'].sum().reset_index()
+        daily_data = daily_data.sort_values('date')
+        
+        # Filter to last 90 days
+        daily_data = daily_data[daily_data['date'] >= ninety_days_ago.date()].copy()
+        
+        # Format dates as strings
+        daily_data['date_str'] = daily_data['date'].astype(str)
+        
+        # Get current value (last 7 days total)
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        current_week_data = valid[valid['completed_at_dt'] >= seven_days_ago]
+        current_value = current_week_data['productivity_score'].sum() if not current_week_data.empty else 0.0
+        
+        # Calculate weekly average (average of daily scores over last 7 days with data)
+        last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
+        weekly_average = pd.to_numeric(last_7_days['productivity_score'], errors='coerce').mean() if not last_7_days.empty else 0.0
+        
+        # Calculate 3-month average
+        if not daily_data.empty:
+            earliest_date = daily_data['date'].min()
+            analysis_start = max(earliest_date, ninety_days_ago.date())
+            today = datetime.now().date()
+            
+            date_range = pd.date_range(start=analysis_start, end=today, freq='D')
+            date_range_dates = [d.date() for d in date_range]
+            
+            full_daily_data = pd.DataFrame({'date': date_range_dates})
+            full_daily_data = full_daily_data.merge(
+                daily_data[['date', 'productivity_score']],
+                on='date',
+                how='left'
+            )
+            full_daily_data['productivity_score'] = full_daily_data['productivity_score'].fillna(0.0)
+            
+            three_month_average = pd.to_numeric(full_daily_data['productivity_score'], errors='coerce').mean() if not full_daily_data.empty else 0.0
+        else:
+            three_month_average = 0.0
+        
+        # Check if we have at least 2 weeks of data
+        days_with_data = len(daily_data)
+        has_sufficient_data = days_with_data >= 14
+        
+        return {
+            'dates': daily_data['date_str'].tolist(),
+            'productivity_scores': daily_data['productivity_score'].tolist(),
             'current_value': round(float(current_value), 2),
             'weekly_average': round(float(weekly_average), 2),
             'three_month_average': round(float(three_month_average), 2),
