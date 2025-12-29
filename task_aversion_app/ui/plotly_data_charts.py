@@ -8,6 +8,7 @@ from plotly.subplots import make_subplots
 import numpy as np
 import json
 import math
+import pandas as pd
 from typing import Optional, Dict, List, Tuple
 
 
@@ -521,10 +522,397 @@ def generate_goal_adjustment_plotly() -> Optional[go.Figure]:
     return fig
 
 
+def generate_thoroughness_note_coverage_plotly() -> Optional[go.Figure]:
+    """Generate note coverage visualization showing percentage of tasks with notes."""
+    try:
+        import sys
+        import os
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.normpath(os.path.join(script_dir, '..'))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from backend.task_manager import TaskManager
+        from backend.analytics import Analytics
+        
+        task_manager = TaskManager()
+        analytics = Analytics()
+        tasks_df = task_manager.get_all()
+        
+        if tasks_df.empty:
+            return None
+        
+        # Filter out test tasks
+        if 'name' in tasks_df.columns:
+            tasks_df = tasks_df[~tasks_df['name'].apply(
+                lambda x: Analytics._is_test_task(x) if pd.notna(x) else False
+            )]
+        
+        if tasks_df.empty:
+            return None
+        
+        # Calculate note coverage
+        tasks_with_notes = 0
+        tasks_without_notes = 0
+        
+        for _, task in tasks_df.iterrows():
+            has_notes = False
+            description = str(task.get('description', '') or '').strip()
+            notes = str(task.get('notes', '') or '').strip()
+            
+            if description or notes:
+                has_notes = True
+                tasks_with_notes += 1
+            else:
+                tasks_without_notes += 1
+        
+        total_tasks = len(tasks_df)
+        note_coverage = (tasks_with_notes / total_tasks * 100) if total_tasks > 0 else 0.0
+        
+        # Create pie chart
+        fig = go.Figure(data=[go.Pie(
+            labels=['Tasks with Notes', 'Tasks without Notes'],
+            values=[tasks_with_notes, tasks_without_notes],
+            hole=0.4,
+            marker_colors=['#14b8a6', '#94a3b8'],
+            textinfo='label+percent+value',
+            texttemplate='%{label}<br>%{value} tasks<br>(%{percent})',
+        )])
+        
+        fig.update_layout(
+            title=f"Note Coverage: {note_coverage:.1f}% of tasks have notes",
+            margin=dict(l=20, r=20, t=60, b=20),
+            annotations=[dict(
+                text=f'{note_coverage:.1f}%<br>Coverage',
+                x=0.5, y=0.5, font_size=16, showarrow=False
+            )]
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating note coverage chart: {e}")
+        return None
+
+
+def generate_thoroughness_note_length_plotly() -> Optional[go.Figure]:
+    """Generate note length distribution visualization."""
+    try:
+        import sys
+        import os
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.normpath(os.path.join(script_dir, '..'))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from backend.task_manager import TaskManager
+        from backend.analytics import Analytics
+        
+        task_manager = TaskManager()
+        analytics = Analytics()
+        tasks_df = task_manager.get_all()
+        
+        if tasks_df.empty:
+            return None
+        
+        # Filter out test tasks
+        if 'name' in tasks_df.columns:
+            tasks_df = tasks_df[~tasks_df['name'].apply(
+                lambda x: Analytics._is_test_task(x) if pd.notna(x) else False
+            )]
+        
+        # Calculate note lengths
+        note_lengths = []
+        task_names = []
+        
+        for _, task in tasks_df.iterrows():
+            description = str(task.get('description', '') or '').strip()
+            notes = str(task.get('notes', '') or '').strip()
+            total_length = len(description) + len(notes)
+            
+            if total_length > 0:
+                note_lengths.append(total_length)
+                task_name = str(task.get('name', 'Unknown'))
+                task_names.append(task_name)
+        
+        if not note_lengths:
+            return None
+        
+        avg_length = sum(note_lengths) / len(note_lengths)
+        
+        # Create histogram
+        fig = go.Figure()
+        
+        fig.add_trace(go.Histogram(
+            x=note_lengths,
+            nbinsx=20,
+            name='Note Length Distribution',
+            marker_color='#14b8a6',
+            opacity=0.7
+        ))
+        
+        # Add average line
+        fig.add_vline(
+            x=avg_length,
+            line_dash="dash",
+            line_color="red",
+            annotation_text=f"Average: {avg_length:.0f} chars",
+            annotation_position="top"
+        )
+        
+        # Add target line (500 chars for max bonus)
+        fig.add_vline(
+            x=500,
+            line_dash="dot",
+            line_color="green",
+            annotation_text="Target: 500 chars (max bonus)",
+            annotation_position="top"
+        )
+        
+        fig.update_layout(
+            title=f"Note Length Distribution (Average: {avg_length:.0f} characters)",
+            xaxis_title="Note Length (characters)",
+            yaxis_title="Number of Tasks",
+            margin=dict(l=20, r=20, t=60, b=20),
+            showlegend=False
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating note length chart: {e}")
+        return None
+
+
+def generate_thoroughness_popup_penalty_plotly() -> Optional[go.Figure]:
+    """Generate popup penalty visualization showing frequency of no-slider popups."""
+    try:
+        import sys
+        import os
+        from datetime import datetime, timedelta
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.normpath(os.path.join(script_dir, '..'))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from backend.database import get_session, PopupResponse
+        
+        # Get popup data for last 30 days
+        cutoff_date = datetime.utcnow() - timedelta(days=30)
+        
+        with get_session() as session:
+            popups = session.query(PopupResponse).filter(
+                PopupResponse.trigger_id == '7.1',
+                PopupResponse.user_id == 'default',
+                PopupResponse.created_at >= cutoff_date
+            ).order_by(PopupResponse.created_at).all()
+        
+        if not popups:
+            # Show empty state with message
+            fig = go.Figure()
+            fig.add_annotation(
+                text="No popup data yet. Popups appear when you complete/initialize tasks without adjusting sliders.",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=14, color="gray")
+            )
+            fig.update_layout(
+                title="No Slider Adjustment Popups (Last 30 Days)",
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                margin=dict(l=20, r=20, t=60, b=20)
+            )
+            return fig
+        
+        # Group by date
+        from collections import defaultdict
+        daily_counts = defaultdict(int)
+        
+        for popup in popups:
+            date = popup.created_at.date() if hasattr(popup.created_at, 'date') else datetime.fromisoformat(str(popup.created_at)).date()
+            daily_counts[date] += 1
+        
+        # Sort by date
+        sorted_dates = sorted(daily_counts.keys())
+        dates = [str(d) for d in sorted_dates]
+        counts = [daily_counts[d] for d in sorted_dates]
+        
+        total_popups = len(popups)
+        avg_per_day = total_popups / 30.0 if total_popups > 0 else 0.0
+        
+        # Create bar chart
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            x=dates,
+            y=counts,
+            name='No-Slider Popups',
+            marker_color='#ef4444',
+            text=counts,
+            textposition='outside'
+        ))
+        
+        # Add average line
+        if avg_per_day > 0:
+            fig.add_hline(
+                y=avg_per_day,
+                line_dash="dash",
+                line_color="orange",
+                annotation_text=f"Average: {avg_per_day:.2f} per day",
+                annotation_position="right"
+            )
+        
+        # Add penalty threshold line (10 popups = max penalty)
+        fig.add_hline(
+            y=10,
+            line_dash="dot",
+            line_color="red",
+            annotation_text="Max penalty threshold (10 popups)",
+            annotation_position="right"
+        )
+        
+        fig.update_layout(
+            title=f"No-Slider Popups Over Time (Total: {total_popups}, Last 30 Days)",
+            xaxis_title="Date",
+            yaxis_title="Number of Popups",
+            margin=dict(l=20, r=20, t=60, b=20),
+            xaxis=dict(tickangle=-45),
+            showlegend=False
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating popup penalty chart: {e}")
+        return None
+
+
+def generate_thoroughness_factor_overview_plotly() -> Optional[go.Figure]:
+    """Generate overview chart showing all thoroughness components."""
+    try:
+        import sys
+        import os
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.normpath(os.path.join(script_dir, '..'))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from backend.analytics import Analytics
+        
+        analytics = Analytics()
+        
+        # Calculate current thoroughness factor and components
+        thoroughness_factor = analytics.calculate_thoroughness_factor(user_id='default', days=30)
+        thoroughness_score = analytics.calculate_thoroughness_score(user_id='default', days=30)
+        
+        # Get component breakdown (we'll need to extract this from the calculation)
+        # For now, create a visual representation
+        from backend.task_manager import TaskManager
+        from backend.database import get_session, PopupResponse
+        from datetime import datetime, timedelta
+        
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        if tasks_df.empty:
+            return None
+        
+        # Calculate components
+        total_tasks = len(tasks_df)
+        tasks_with_notes = 0
+        total_note_length = 0
+        note_count = 0
+        
+        for _, task in tasks_df.iterrows():
+            has_notes = False
+            note_length = 0
+            description = str(task.get('description', '') or '').strip()
+            notes = str(task.get('notes', '') or '').strip()
+            
+            if description:
+                has_notes = True
+                note_length += len(description)
+            if notes:
+                has_notes = True
+                note_length += len(notes)
+            
+            if has_notes:
+                tasks_with_notes += 1
+                total_note_length += note_length
+                note_count += 1
+        
+        note_coverage = (tasks_with_notes / total_tasks) if total_tasks > 0 else 0.0
+        base_factor = 0.5 + (note_coverage * 0.5)
+        
+        avg_note_length = (total_note_length / note_count) if note_count > 0 else 0.0
+        if avg_note_length > 0:
+            length_ratio = min(1.0, avg_note_length / 500.0)
+            length_bonus = 0.3 * (1.0 - math.exp(-length_ratio * 2.0))
+        else:
+            length_bonus = 0.0
+        
+        # Get popup count
+        popup_penalty = 0.0
+        try:
+            with get_session() as session:
+                cutoff_date = datetime.utcnow() - timedelta(days=30)
+                popup_count = session.query(PopupResponse).filter(
+                    PopupResponse.trigger_id == '7.1',
+                    PopupResponse.user_id == 'default',
+                    PopupResponse.created_at >= cutoff_date
+                ).count()
+                
+                if popup_count > 0:
+                    popup_ratio = min(1.0, popup_count / 10.0)
+                    popup_penalty = -0.2 * (1.0 - math.exp(-popup_ratio * 2.0))
+        except Exception:
+            pass
+        
+        # Create component breakdown chart
+        components = ['Base Factor\n(Note Coverage)', 'Length Bonus', 'Popup Penalty', 'Total Factor']
+        values = [base_factor, length_bonus, popup_penalty, thoroughness_factor]
+        colors = ['#14b8a6', '#10b981', '#ef4444', '#3b82f6']
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            x=components,
+            y=values,
+            marker_color=colors,
+            text=[f'{v:.3f}' for v in values],
+            textposition='outside',
+            name='Component Value'
+        ))
+        
+        # Add baseline line at 1.0
+        fig.add_hline(
+            y=1.0,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text="Baseline (1.0)",
+            annotation_position="right"
+        )
+        
+        fig.update_layout(
+            title=f"Thoroughness Factor Breakdown (Score: {thoroughness_score:.1f})",
+            xaxis_title="Component",
+            yaxis_title="Factor Value",
+            margin=dict(l=20, r=20, t=60, b=20),
+            showlegend=False,
+            yaxis=dict(range=[-0.3, 1.4])
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating thoroughness overview chart: {e}")
+        return None
+
+
 # Mapping of chart generators
 PLOTLY_DATA_CHARTS = {
     'productivity_score_baseline_completion': generate_baseline_completion_plotly,
     'productivity_score_work_multiplier': generate_work_multiplier_plotly,
     'productivity_score_weekly_avg_bonus': generate_weekly_avg_bonus_plotly,
     'productivity_score_goal_adjustment': generate_goal_adjustment_plotly,
+    'thoroughness_note_coverage': generate_thoroughness_note_coverage_plotly,
+    'thoroughness_note_length': generate_thoroughness_note_length_plotly,
+    'thoroughness_popup_penalty': generate_thoroughness_popup_penalty_plotly,
+    'thoroughness_factor_overview': generate_thoroughness_factor_overview_plotly,
 }

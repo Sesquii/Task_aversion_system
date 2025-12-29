@@ -891,6 +891,158 @@ class Analytics:
         
         return bonus_multiplier
     
+    def calculate_thoroughness_factor(self, user_id: str = 'default', days: int = 30) -> float:
+        """Calculate thoroughness/notetaking factor based on note-taking behavior.
+        
+        Factors considered:
+        1. Percentage of tasks with notes (description + notes field)
+        2. Average note length/thoroughness
+        3. Count of popup trigger 7.1 (no sliders adjusted) - negative factor
+        
+        Formula:
+        - Base factor from note coverage: 0.5 (no notes) to 1.0 (all tasks have notes)
+        - Note length bonus: +0.0 to +0.3 based on average note length
+        - Popup penalty: -0.0 to -0.2 based on frequency of no-slider popups
+        
+        Args:
+            user_id: User identifier (default: 'default')
+            days: Number of days to look back for popup data (default: 30)
+        
+        Returns:
+            Thoroughness factor (0.5 to 1.3), where 1.0 = baseline thoroughness
+        """
+        try:
+            from .task_manager import TaskManager
+            from .database import get_session, PopupTrigger
+            
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
+            
+            if tasks_df.empty:
+                return 1.0  # Default neutral factor if no tasks
+            
+            # Filter out test tasks
+            if 'name' in tasks_df.columns:
+                tasks_df = tasks_df[~tasks_df['name'].apply(lambda x: Analytics._is_test_task(x) if pd.notna(x) else False)]
+            
+            if tasks_df.empty:
+                return 1.0
+            
+            total_tasks = len(tasks_df)
+            
+            # 1. Calculate percentage of tasks with notes
+            tasks_with_notes = 0
+            total_note_length = 0
+            note_count = 0
+            
+            for _, task in tasks_df.iterrows():
+                has_notes = False
+                note_length = 0
+                
+                # Check description field
+                description = str(task.get('description', '') or '').strip()
+                if description:
+                    has_notes = True
+                    note_length += len(description)
+                
+                # Check notes field
+                notes = str(task.get('notes', '') or '').strip()
+                if notes:
+                    has_notes = True
+                    note_length += len(notes)
+                
+                if has_notes:
+                    tasks_with_notes += 1
+                    total_note_length += note_length
+                    note_count += 1
+            
+            # Note coverage: percentage of tasks with any notes
+            note_coverage = (tasks_with_notes / total_tasks) if total_tasks > 0 else 0.0
+            
+            # Base factor from coverage: 0.5 (no notes) to 1.0 (all tasks have notes)
+            base_factor = 0.5 + (note_coverage * 0.5)
+            
+            # 2. Note length bonus: average note length
+            avg_note_length = (total_note_length / note_count) if note_count > 0 else 0.0
+            
+            # Normalize note length: 0 chars = 0.0, 500 chars = 0.3 bonus
+            # Using exponential decay for diminishing returns
+            if avg_note_length > 0:
+                # Scale: 0-500 chars maps to 0.0-0.3 bonus
+                # Using sqrt for smooth curve (500 chars = 0.3, 1000 chars = ~0.42, but capped at 0.3)
+                length_ratio = min(1.0, avg_note_length / 500.0)
+                length_bonus = 0.3 * (1.0 - math.exp(-length_ratio * 2.0))  # Exponential decay
+            else:
+                length_bonus = 0.0
+            
+            # 3. Popup penalty: count of trigger 7.1 (no sliders adjusted)
+            popup_penalty = 0.0
+            try:
+                from .database import PopupResponse
+                with get_session() as session:
+                    cutoff_date = datetime.utcnow() - timedelta(days=days)
+                    
+                    # Get total count of trigger 7.1 responses for this user in the time period
+                    # Using PopupResponse to get actual popup occurrences (more accurate than PopupTrigger.count)
+                    popup_count = session.query(PopupResponse).filter(
+                        PopupResponse.trigger_id == '7.1',
+                        PopupResponse.user_id == user_id,
+                        PopupResponse.created_at >= cutoff_date
+                    ).count()
+                    
+                    # Normalize penalty: 0 popups = 0.0, 10+ popups = -0.2 penalty
+                    # Using exponential decay for diminishing penalty
+                    if popup_count > 0:
+                        # Scale: 0-10 popups maps to 0.0 to -0.2 penalty
+                        popup_ratio = min(1.0, popup_count / 10.0)
+                        popup_penalty = -0.2 * (1.0 - math.exp(-popup_ratio * 2.0))  # Exponential decay
+            except Exception as e:
+                # If database access fails, skip popup penalty
+                print(f"[Analytics] Could not access popup data for thoroughness factor: {e}")
+                popup_penalty = 0.0
+            
+            # Combine factors
+            thoroughness_factor = base_factor + length_bonus + popup_penalty
+            
+            # Clamp to reasonable range (0.5 to 1.3)
+            thoroughness_factor = max(0.5, min(1.3, thoroughness_factor))
+            
+            return float(thoroughness_factor)
+        
+        except Exception as e:
+            print(f"[Analytics] Error calculating thoroughness factor: {e}")
+            return 1.0  # Default neutral factor on error
+    
+    def calculate_thoroughness_score(self, user_id: str = 'default', days: int = 30) -> float:
+        """Calculate thoroughness/notetaking score (0-100) for display purposes.
+        
+        Converts the thoroughness factor to a 0-100 score where:
+        - 0 = minimum thoroughness (factor 0.5)
+        - 50 = baseline thoroughness (factor 1.0)
+        - 100 = maximum thoroughness (factor 1.3)
+        
+        Args:
+            user_id: User identifier (default: 'default')
+            days: Number of days to look back for popup data (default: 30)
+        
+        Returns:
+            Thoroughness score (0-100)
+        """
+        factor = self.calculate_thoroughness_factor(user_id=user_id, days=days)
+        
+        # Convert factor (0.5-1.3) to score (0-100)
+        # Factor 0.5 → Score 0
+        # Factor 1.0 → Score 50
+        # Factor 1.3 → Score 100
+        if factor <= 1.0:
+            # Linear mapping: 0.5-1.0 → 0-50
+            score = ((factor - 0.5) / 0.5) * 50.0
+        else:
+            # Linear mapping: 1.0-1.3 → 50-100
+            score = 50.0 + ((factor - 1.0) / 0.3) * 50.0
+        
+        return max(0.0, min(100.0, score))
+    
     @staticmethod
     def _is_test_task(task_name: str) -> bool:
         """Check if a task is a test/dev task that should be excluded from calculations.
@@ -1784,7 +1936,7 @@ class Analytics:
         if df.empty:
             return {
                 'counts': {'active': 0, 'completed_7d': 0, 'total_created': 0, 'total_completed': 0, 'completion_rate': 0.0, 'daily_self_care_tasks': 0, 'avg_daily_self_care_tasks': 0.0},
-                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None, 'avg_aversion': 0.0, 'adjusted_wellbeing': 0.0, 'adjusted_wellbeing_normalized': 50.0},
+                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None, 'avg_aversion': 0.0, 'adjusted_wellbeing': 0.0, 'adjusted_wellbeing_normalized': 50.0, 'thoroughness_score': 50.0, 'thoroughness_factor': 1.0},
                 'time': {'median_duration': 0.0, 'avg_delay': 0.0, 'estimation_accuracy': 0.0},
                 'aversion': {'general_aversion_score': 0.0},
                 'productivity_volume': {
@@ -1865,6 +2017,10 @@ class Analytics:
             consistency_score=work_consistency_score
         )
         
+        # Calculate thoroughness/notetaking score
+        thoroughness_score = self.calculate_thoroughness_score(user_id='default', days=30)
+        thoroughness_factor = self.calculate_thoroughness_factor(user_id='default', days=30)
+        
         # Calculate daily self care tasks metrics
         from .task_manager import TaskManager
         task_manager = TaskManager()
@@ -1886,7 +2042,7 @@ class Analytics:
             # Filter to self care tasks
             self_care_tasks = completed_with_type[
                 completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
-            ]
+            ].copy()
             
             if not self_care_tasks.empty:
                 # Parse completed_at dates
@@ -1969,6 +2125,8 @@ class Analytics:
                 'avg_aversion': round(avg_aversion_completed, 1),
                 'adjusted_wellbeing': round(adjusted_wellbeing, 2),
                 'adjusted_wellbeing_normalized': round(adjusted_wellbeing_normalized, 2),
+                'thoroughness_score': round(thoroughness_score, 1),
+                'thoroughness_factor': round(thoroughness_factor, 3),
             },
             'time': {
                 'median_duration': _median(df['duration_minutes']),

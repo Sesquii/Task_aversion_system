@@ -183,6 +183,64 @@ ANALYTICS_MODULES = {
             'Optional enhancements provide context-aware adjustments'
         ],
         'interactive_module': '/productivity-module'
+    },
+    'thoroughness_factor': {
+        'title': 'Thoroughness Factor',
+        'version': '1.0',
+        'description': 'Measures how thorough you are with note-taking and task tracking. Rewards comprehensive notes and consistent slider adjustments, penalizes skipping tracking.',
+        'icon': 'description',
+        'color': 'teal',
+        'components': [
+            {
+                'name': 'Note Coverage',
+                'version': '1.0',
+                'description': 'Measures percentage of tasks that have notes (description or notes field). Base factor ranges from 0.5 (no notes) to 1.0 (all tasks have notes).',
+                'formula': 'base_factor = 0.5 + (note_coverage * 0.5)',
+                'range': '0.5 - 1.0',
+                'graphic_script': 'thoroughness_note_coverage.py',
+                'details': {
+                    'note_coverage': 'Percentage of tasks with any notes (description or notes field)',
+                    'checks_both_fields': 'Considers both task description (set at creation) and runtime notes (appended over time)'
+                }
+            },
+            {
+                'name': 'Note Length Bonus',
+                'version': '1.0',
+                'description': 'Rewards thorough notes based on average note length. Uses exponential decay for diminishing returns - longer notes get bonus up to 0.3.',
+                'formula': 'length_bonus = 0.3 * (1 - exp(-length_ratio * 2.0)) where length_ratio = min(1.0, avg_note_length / 500.0)',
+                'range': '0.0 - 0.3',
+                'graphic_script': 'thoroughness_note_length.py',
+                'details': {
+                    'avg_note_length': 'Average character count across all tasks with notes',
+                    'target_length': '500+ characters = maximum bonus (0.3)',
+                    'exponential_decay': 'Smooth curve prevents excessive rewards for extremely long notes'
+                }
+            },
+            {
+                'name': 'Popup Penalty',
+                'version': '1.0',
+                'description': 'Penalizes skipping slider adjustments. Tracks popup trigger 7.1 (no sliders adjusted) and applies penalty based on frequency.',
+                'formula': 'popup_penalty = -0.2 * (1 - exp(-popup_ratio * 2.0)) where popup_ratio = min(1.0, popup_count / 10.0)',
+                'range': '-0.2 - 0.0',
+                'graphic_script': 'thoroughness_popup_penalty.py',
+                'details': {
+                    'popup_trigger_7_1': 'Popup that appears when tasks are completed/initialized without adjusting sliders',
+                    'time_window': 'Counts popups in last 30 days (configurable)',
+                    'penalty_scale': '0 popups = 0.0, 10+ popups = -0.2 (maximum penalty)',
+                    'exponential_decay': 'Smooth penalty curve prevents excessive punishment'
+                }
+            }
+        ],
+        'formula': 'thoroughness_factor = base_factor + length_bonus + popup_penalty\nthoroughness_score = convert_factor_to_score(factor)  # 0.5→0, 1.0→50, 1.3→100',
+        'range': 'Factor: 0.5 - 1.3 | Score: 0 - 100',
+        'overview_chart': 'thoroughness_factor_overview',
+        'use_cases': [
+            'Rewards comprehensive note-taking and documentation',
+            'Encourages consistent tracking (slider adjustments)',
+            'Can be used as multiplier in score calculations',
+            'Helps identify tasks that need better documentation',
+            'Tracks data quality and tracking thoroughness'
+        ]
     }
 }
 
@@ -258,6 +316,28 @@ def build_module_page(module_id: str):
     
     # Description
     ui.label(module_info['description']).classes("text-lg text-gray-700 mb-6")
+    
+    # Overview chart (if available)
+    if module_info.get('overview_chart'):
+        chart_key = module_info['overview_chart']
+        if chart_key in PLOTLY_DATA_CHARTS:
+            with ui.card().classes("p-4 mb-4 bg-blue-50 border-2 border-blue-200"):
+                ui.label("Overview Visualization").classes("text-xl font-semibold mb-2")
+                ui.label("Your current thoroughness factor breakdown and components").classes("text-sm text-gray-600 mb-3")
+                try:
+                    chart_func = PLOTLY_DATA_CHARTS[chart_key]
+                    fig = chart_func()
+                    if fig:
+                        ui.plotly(fig).classes("w-full")
+                    else:
+                        ui.label("Insufficient data to generate overview. Complete more tasks to see your thoroughness breakdown.").classes(
+                            "text-sm text-gray-500 italic"
+                        )
+                except Exception as e:
+                    print(f"[AnalyticsGlossary] Error generating overview chart: {e}")
+                    ui.label("Error generating overview chart. Please try again later.").classes(
+                        "text-sm text-red-500"
+                    )
     
     # Formula
     with ui.card().classes("p-4 mb-4 bg-gray-50"):
@@ -396,6 +476,9 @@ def _get_plotly_chart_key(component_name: str, script_name: str) -> Optional[str
         'Work Multiplier': 'productivity_score_work_multiplier',
         'Weekly Average Bonus/Penalty': 'productivity_score_weekly_avg_bonus',
         'Goal-Based Adjustment': 'productivity_score_goal_adjustment',
+        'Note Coverage': 'thoroughness_note_coverage',
+        'Note Length Bonus': 'thoroughness_note_length',
+        'Popup Penalty': 'thoroughness_popup_penalty',
     }
     
     # Try direct name match first
@@ -411,6 +494,12 @@ def _get_plotly_chart_key(component_name: str, script_name: str) -> Optional[str
         return 'productivity_score_weekly_avg_bonus'
     elif 'goal' in script_name.lower() and 'adjustment' in script_name.lower():
         return 'productivity_score_goal_adjustment'
+    elif 'note_coverage' in script_name.lower():
+        return 'thoroughness_note_coverage'
+    elif 'note_length' in script_name.lower():
+        return 'thoroughness_note_length'
+    elif 'popup_penalty' in script_name.lower():
+        return 'thoroughness_popup_penalty'
     
     return None
 

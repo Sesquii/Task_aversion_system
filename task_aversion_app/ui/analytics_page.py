@@ -31,6 +31,8 @@ CALCULATED_METRICS = [
     {'label': "Today's self care tasks", 'value': 'daily_self_care_tasks'},
     {'label': 'Work Time (minutes)', 'value': 'work_time'},
     {'label': 'Play Time (minutes)', 'value': 'play_time'},
+    {'label': 'Thoroughness Score', 'value': 'thoroughness_score'},
+    {'label': 'Thoroughness Factor', 'value': 'thoroughness_factor'},
 ]
 
 ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
@@ -75,6 +77,8 @@ def build_analytics_page():
             ui.label("View cancelled task patterns and statistics").classes("text-xs text-gray-500 self-center")
             ui.button("📈 Composite Score", on_click=lambda: ui.navigate.to('/composite-score')).classes("bg-indigo-500 text-white")
             ui.label("View overall performance score").classes("text-xs text-gray-500 self-center")
+            ui.button("📚 Analytics Glossary", on_click=lambda: ui.navigate.to('/analytics/glossary')).classes("bg-gray-500 text-white")
+            ui.label("Learn about metrics and formulas").classes("text-xs text-gray-500 self-center")
     
     # Composite Score Summary
     from backend.user_state import UserStateManager
@@ -131,10 +135,18 @@ def build_analytics_page():
             ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
             ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
             ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
+            ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
+            ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
         ]:
             with ui.card().classes("p-3 min-w-[150px]"):
                 ui.label(title).classes("text-xs text-gray-500")
                 ui.label(value).classes("text-xl font-bold")
+                # Add link to thoroughness glossary for thoroughness metrics
+                if title in ["Thoroughness Score", "Thoroughness Factor"]:
+                    ui.button("📚 Learn More", 
+                            on_click=lambda: ui.navigate.to('/analytics/glossary/thoroughness_factor')).classes(
+                        "text-xs bg-teal-500 text-white mt-1"
+                    )
     
     # Productivity Volume Section
     productivity_volume = metrics.get('productivity_volume', {})

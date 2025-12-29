@@ -391,6 +391,51 @@ def generate_goal_adjustment_image(output_path=None):
     return module.generate_goal_adjustment_image(output_path)
 
 
+def generate_note_coverage_image(output_path=None):
+    """Generate note coverage visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'thoroughness_note_coverage.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'thoroughness_note_coverage.py')
+    spec = importlib.util.spec_from_file_location("thoroughness_note_coverage", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_note_coverage_image(output_path)
+
+
+def generate_note_length_image(output_path=None):
+    """Generate note length bonus visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'thoroughness_note_length.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'thoroughness_note_length.py')
+    spec = importlib.util.spec_from_file_location("thoroughness_note_length", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_note_length_image(output_path)
+
+
+def generate_popup_penalty_image(output_path=None):
+    """Generate popup penalty visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'thoroughness_popup_penalty.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'thoroughness_popup_penalty.py')
+    spec = importlib.util.spec_from_file_location("thoroughness_popup_penalty", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_popup_penalty_image(output_path)
+
+
 # Mapping of script names to generator functions
 GRAPHIC_AID_GENERATORS = {
     'execution_score_difficulty_factor.py': generate_difficulty_factor_image,
@@ -401,6 +446,9 @@ GRAPHIC_AID_GENERATORS = {
     'productivity_score_work_multiplier.py': generate_work_multiplier_image,
     'productivity_score_weekly_avg_bonus.py': generate_weekly_avg_bonus_image,
     'productivity_score_goal_adjustment.py': generate_goal_adjustment_image,
+    'thoroughness_note_coverage.py': generate_note_coverage_image,
+    'thoroughness_note_length.py': generate_note_length_image,
+    'thoroughness_popup_penalty.py': generate_popup_penalty_image,
 }
 
 
