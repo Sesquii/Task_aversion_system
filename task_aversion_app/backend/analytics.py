@@ -902,7 +902,9 @@ class Analytics:
         Formula:
         - Base factor from note coverage: 0.5 (no notes) to 1.0 (all tasks have notes)
         - Note length bonus: +0.0 to +0.3 based on average note length
-        - Popup penalty: -0.0 to -0.2 based on frequency of no-slider popups
+        - Popup penalty: Progressive penalty starting mild, increasing over time, capped at -0.2
+          Uses quadratic progression: penalty = -0.2 * (count / 15.0)^2
+          This gives: 1 popup = -0.0009, 5 popups = -0.022, 10 popups = -0.089, 15+ popups = -0.2 (max)
         
         Args:
             user_id: User identifier (default: 'default')
@@ -990,12 +992,15 @@ class Analytics:
                         PopupResponse.created_at >= cutoff_date
                     ).count()
                     
-                    # Normalize penalty: 0 popups = 0.0, 10+ popups = -0.2 penalty
-                    # Using exponential decay for diminishing penalty
+                    # Progressive penalty: starts mild, gets worse over time, caps at -0.2
+                    # Uses power curve: penalty = -0.2 * (popup_ratio^2) for progressive increase
+                    # This means: 1 popup = -0.002, 5 popups = -0.05, 10 popups = -0.2 (max)
                     if popup_count > 0:
                         # Scale: 0-10 popups maps to 0.0 to -0.2 penalty
                         popup_ratio = min(1.0, popup_count / 10.0)
-                        popup_penalty = -0.2 * (1.0 - math.exp(-popup_ratio * 2.0))  # Exponential decay
+                        # Power curve: starts mild, increases progressively, caps at -0.2
+                        # Using power of 2 for progressive curve (can adjust exponent for steeper/gentler)
+                        popup_penalty = -0.2 * (popup_ratio ** 2.0)
             except Exception as e:
                 # If database access fails, skip popup penalty
                 print(f"[Analytics] Could not access popup data for thoroughness factor: {e}")

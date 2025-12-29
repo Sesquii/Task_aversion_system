@@ -219,15 +219,15 @@ ANALYTICS_MODULES = {
             {
                 'name': 'Popup Penalty',
                 'version': '1.0',
-                'description': 'Penalizes skipping slider adjustments. Tracks popup trigger 7.1 (no sliders adjusted) and applies penalty based on frequency.',
-                'formula': 'popup_penalty = -0.2 * (1 - exp(-popup_ratio * 2.0)) where popup_ratio = min(1.0, popup_count / 10.0)',
+                'description': 'Penalizes skipping slider adjustments. Tracks popup trigger 7.1 (no sliders adjusted) and applies progressive penalty that starts mild and gets worse over time.',
+                'formula': 'popup_penalty = -0.2 * (popup_ratio^2) where popup_ratio = min(1.0, popup_count / 10.0)',
                 'range': '-0.2 - 0.0',
                 'graphic_script': 'thoroughness_popup_penalty.py',
                 'details': {
                     'popup_trigger_7_1': 'Popup that appears when tasks are completed/initialized without adjusting sliders',
                     'time_window': 'Counts popups in last 30 days (configurable)',
-                    'penalty_scale': '0 popups = 0.0, 10+ popups = -0.2 (maximum penalty)',
-                    'exponential_decay': 'Smooth penalty curve prevents excessive punishment'
+                    'penalty_scale': '0 popups = 0.0, 1 popup = -0.002, 5 popups = -0.05, 10+ popups = -0.2 (maximum penalty)',
+                    'progressive_curve': 'Starts mild and increases progressively (power curve) - encourages early correction'
                 }
             }
         ],

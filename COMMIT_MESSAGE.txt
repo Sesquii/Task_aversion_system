@@ -1,86 +1,93 @@
-feat(popups): implement popup system infrastructure and initial slider reminder popup
+feat(analytics): add thoroughness factor with comprehensive visualizations and glossary module
 
-Implement complete popup system infrastructure with database models, state management,
-dispatcher service, and UI integration. Add initial popup trigger (7.1) that reminds
-users to adjust sliders before completing/initializing tasks to maintain emotional
-regulation awareness.
+Adds a new thoroughness/notetaking factor that assesses data quality and tracking
+thoroughness based on note coverage, note length, and slider adjustment compliance.
+Includes both theoretical and data-driven visualizations, plus a dedicated glossary
+module for documentation.
 
-Features:
-- Popup system infrastructure with database-backed state management
-- Trigger 7.1: "No sliders adjusted" reminder popup
-- Tiered messaging system (first time = brief, repeats = more direct)
-- Daily popup cap system (default: 5, configurable via user preferences)
-- Cooldown system (24 hours default per trigger)
-- Popup modal UI with "Continue" and "Edit" options
-- Helpful toggle and optional feedback collection
-- Integration in complete_task.py and initialize_task.py
-- Graceful fallback if database unavailable
+## Core Feature
 
-Technical Implementation:
-- Database models: PopupTrigger (tracks counts, cooldowns, feedback) and PopupResponse (logs)
-- PopupStateManager: CRUD operations, cooldown checks, daily count tracking, tier calculation
-- PopupDispatcher: Trigger evaluation, priority system, tiered message selection
-- Popup modal component: Reusable UI with options, helpful toggle, feedback collection
-- Slider change detection: Compares current values to defaults/initialization values
+- **Thoroughness Factor Calculation** (0.5 to 1.3):
+  - Base factor (0.5-1.0): Based on percentage of tasks with notes
+  - Length bonus (+0.0 to +0.3): Rewards thorough notes using exponential decay
+  - Popup penalty (-0.0 to -0.2): Progressive penalty for skipping slider adjustments
+    * Starts mild (-0.002 for 1 popup) and increases quadratically
+    * Caps at -0.2 for 10+ popups (encourages early correction)
 
-Database Schema:
-- popup_triggers table: user_id, trigger_id, task_id, count, last_shown_at, helpful, last_response, last_comment
-- popup_responses table: user_id, trigger_id, task_id, instance_id, response_value, helpful, comment, context
+- **Thoroughness Score** (0-100): Normalized score for display (0.5 factor → 0, 1.0 → 50, 1.3 → 100)
 
-Files created:
-- task_aversion_app/backend/popup_state.py
-  - PopupStateManager class for state management and CRUD operations
-  - Methods: get_trigger_state, increment_trigger_count, update_trigger_feedback, check_cooldown, get_daily_popup_count, log_popup_response, get_trigger_tier
+## Visualizations
 
-- task_aversion_app/backend/popup_dispatcher.py
-  - PopupDispatcher class for trigger evaluation and popup content generation
-  - Methods: evaluate_triggers, _evaluate_trigger_7_1, _get_trigger_7_1_message, handle_popup_response
-  - Implements trigger 7.1 with tiered messaging (tier 0, 1-2, 3+)
+### Data-Driven Charts (Plotly)
+- Note coverage pie chart showing percentage of tasks with notes
+- Note length distribution histogram with average and target lines
+- Popup penalty time series showing frequency over last 30 days
+- Overview chart showing component breakdown (base factor, bonuses, penalties)
 
-- task_aversion_app/ui/popup_modal.py
-  - show_popup_modal() function for displaying popups
-  - Supports title, message, options, helpful toggle, feedback collection
+### Theoretical Visualizations (Matplotlib)
+- Note coverage: Linear progression from 0% to 100% coverage
+- Note length bonus: Exponential decay curve showing diminishing returns
+- Popup penalty: Progressive quadratic curve (starts mild, gets worse)
 
-Files modified:
-- task_aversion_app/backend/database.py
-  - Added PopupTrigger model (tracks trigger state per user/task)
-  - Added PopupResponse model (logs popup shows and responses)
+## Integration
 
-- task_aversion_app/backend/user_state.py
-  - Added get_popup_daily_cap() method
-  - Added set_popup_daily_cap() method
-  - Stores popup_daily_cap preference in user_preferences.csv
+- Added to analytics dashboard metrics (quality section)
+- Added to analytics page with "Learn More" link to glossary
+- Created dedicated thoroughness_factor module in analytics glossary
+- All charts integrated into glossary with automatic display
 
-- task_aversion_app/ui/complete_task.py
-  - Added slider change detection (compares current values to defaults)
-  - Integrated popup evaluation before submission
-  - Shows popup if no sliders adjusted, handles "continue" vs "edit" responses
+## Technical Details
 
-- task_aversion_app/ui/initialize_task.py
-  - Added slider change detection (compares current values to defaults)
-  - Integrated popup evaluation before save
-  - Shows popup if no sliders adjusted, handles "continue" vs "edit" responses
+- Uses PopupResponse table to track trigger 7.1 (no sliders adjusted)
+- Filters out test tasks from calculations
+- Handles missing data gracefully with fallbacks
+- Progressive penalty formula: `penalty = -0.2 * (popup_ratio^2)` where `popup_ratio = min(1.0, count / 10.0)`
 
-Popup Trigger 7.1 Details:
-- Fires when user attempts to complete/initialize without adjusting any sliders
-- Tier 0 (first time): Brief, encouraging message about accurate tracking
-- Tier 1-2 (repeats): More direct message about emotional regulation
-- Tier 3+ (habitual): Supportive but clear reminder about maintaining awareness
-- Includes optional reinforcement message about emotional tracking benefits
-- Options: "Continue" (proceed anyway) or "Edit" (go back to adjust sliders)
+## Files Created
+- task_aversion_app/scripts/graphic_aids/thoroughness_note_coverage.py
+- task_aversion_app/scripts/graphic_aids/thoroughness_note_length.py
+- task_aversion_app/scripts/graphic_aids/thoroughness_popup_penalty.py
+- task_aversion_app/assets/graphic_aids/thoroughness_note_coverage.png
+- task_aversion_app/assets/graphic_aids/thoroughness_note_length.png
+- task_aversion_app/assets/graphic_aids/thoroughness_popup_penalty.png
 
-Settings:
-- Daily popup cap: Configurable via user_state.set_popup_daily_cap() (default: 5)
-- Cooldown: 24 hours per trigger (configurable in dispatcher)
-- User feedback: Collected via "Helpful?" toggle and optional comment
+## Files Modified
+- task_aversion_app/backend/analytics.py
+  - Added calculate_thoroughness_factor() method
+  - Added calculate_thoroughness_score() method
+  - Updated get_dashboard_metrics() to include thoroughness metrics
+- task_aversion_app/ui/analytics_page.py
+  - Added thoroughness_score and thoroughness_factor to CALCULATED_METRICS
+  - Added thoroughness metrics display with glossary link
+- task_aversion_app/ui/analytics_glossary.py
+  - Added thoroughness_factor module to ANALYTICS_MODULES
+  - Added overview chart support
+  - Updated component mapping for thoroughness charts
+- task_aversion_app/ui/plotly_data_charts.py
+  - Added generate_thoroughness_note_coverage_plotly()
+  - Added generate_thoroughness_note_length_plotly()
+  - Added generate_thoroughness_popup_penalty_plotly()
+  - Added generate_thoroughness_factor_overview_plotly()
+  - Registered all charts in PLOTLY_DATA_CHARTS
+- task_aversion_app/scripts/graphic_aids/generate_all.py
+  - Added thoroughness generator functions
+  - Registered in GRAPHIC_AID_GENERATORS
 
-Commit Value: 7/10
-This implements a solid foundation for the popup system with proper database backing,
-state management, and UI integration. The initial trigger (7.1) addresses an important
-user experience issue - reminding users to maintain emotional regulation awareness
-during task completion. The infrastructure is extensible for future triggers and includes
-good practices like cooldowns, daily caps, and user feedback collection. The tiered
-messaging system provides progressive depth without being intrusive. The main limitation
-is that the settings UI for daily cap isn't fully implemented yet (separate task
-planned), but the backend infrastructure is complete and functional. This is a valuable
-feature that improves data quality and user awareness of emotional state tracking.
+## Value Assessment: 8.5/10
+
+**Strengths:**
+- Complete feature with calculations, UI, visualizations, and documentation
+- Provides valuable insights into data quality and tracking thoroughness
+- Well-integrated following existing patterns
+- Comprehensive visualizations (both theoretical and data-driven)
+- Progressive penalty system encourages early correction
+- Good user experience with glossary integration
+
+**Areas for Potential Enhancement:**
+- Could integrate thoroughness factor into other score calculations
+- Could add more actionable insights or recommendations
+- Could track thoroughness trends over time
+
+This feature significantly enhances the analytics system by providing visibility into
+data quality and encouraging better tracking practices through progressive penalties
+and comprehensive visualizations.
