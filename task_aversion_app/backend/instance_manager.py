@@ -201,17 +201,36 @@ class InstanceManager:
     # ============================================================================
     
     def _csv_to_db_datetime(self, csv_str):
-        """Parse CSV datetime string to datetime object."""
+        """Parse CSV datetime string to datetime object.
+        
+        Supports multiple formats for backward compatibility:
+        - Old format: "%Y-%m-%d %H:%M" (minute precision)
+        - Medium format: "%Y-%m-%d %H:%M:%S" (second precision)
+        - New format: "%Y-%m-%d %H:%M:%S.%f" (microsecond precision)
+        """
         if not csv_str or csv_str.strip() == '':
             return None
         try:
-            return datetime.strptime(csv_str.strip(), "%Y-%m-%d %H:%M")
+            csv_str = csv_str.strip()
+            # Try formats in order of precision (most precise first)
+            formats = [
+                "%Y-%m-%d %H:%M:%S.%f",  # With microseconds
+                "%Y-%m-%d %H:%M:%S",     # With seconds
+                "%Y-%m-%d %H:%M",        # Minute precision (old format)
+            ]
+            for fmt in formats:
+                try:
+                    return datetime.strptime(csv_str, fmt)
+                except ValueError:
+                    continue
+            # If none worked, return None
+            return None
         except (ValueError, TypeError):
             return None
     
     def _db_to_csv_datetime(self, dt):
-        """Format datetime object to CSV string format."""
-        return dt.strftime("%Y-%m-%d %H:%M") if dt else ''
+        """Format datetime object to CSV string format with microsecond precision."""
+        return dt.strftime("%Y-%m-%d %H:%M:%S.%f") if dt else ''
     
     def _parse_json_field(self, json_str):
         """Safe JSON parsing with fallback to empty dict."""
@@ -384,6 +403,9 @@ class InstanceManager:
     def _pause_instance_csv(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
         """CSV-specific pause_instance."""
         import json
+        import sys
+        sys.stderr.write(f"\n[PAUSE DEBUG] Pausing instance {instance_id} (CSV backend)\n")
+        sys.stderr.flush()
         self._reload()
         matches = self.df.index[self.df['instance_id'] == instance_id]
         if len(matches) == 0:
@@ -391,35 +413,92 @@ class InstanceManager:
 
         idx = matches[0]
         
-        # Calculate elapsed time before resetting started_at
-        time_spent_before_pause = 0.0
-        started_at_str = self.df.at[idx, 'started_at']
-        if started_at_str and str(started_at_str).strip():
-            try:
-                started_at = self._csv_to_db_datetime(started_at_str)
-                if started_at:
-                    now = datetime.now()
-                    elapsed_seconds = (now - started_at).total_seconds()
-                    time_spent_before_pause = elapsed_seconds / 60.0  # Convert to minutes
-            except Exception as e:
-                print(f"[InstanceManager] Error calculating elapsed time on pause: {e}")
-        
-        # Get existing actual data to preserve time_spent_before_pause if resuming after multiple pauses
+        # Get existing actual data first to preserve time_spent_before_pause if resuming after multiple pauses
         actual_str = self.df.at[idx, 'actual'] or '{}'
+        sys.stderr.write(f"[PAUSE DEBUG] Raw actual JSON string: {actual_str}\n")
+        sys.stderr.flush()
         try:
             actual_data = json.loads(actual_str) if actual_str else {}
         except json.JSONDecodeError:
             actual_data = {}
+        sys.stderr.write(f"[PAUSE DEBUG] Parsed actual_data: {actual_data}\n")
+        sys.stderr.flush()
+        
+        # Calculate elapsed time from current session (if task is currently started)
+        # Use resume_started_at from actual_data if available (more precise), otherwise fall back to started_at
+        time_spent_this_session = 0.0
+        resume_started_at = None
+        
+        # Try to get precise resume timestamp from actual_data first
+        if 'resume_started_at' in actual_data:
+            try:
+                resume_started_at_str = actual_data['resume_started_at']
+                resume_started_at = datetime.fromisoformat(resume_started_at_str)
+                sys.stderr.write(f"[PAUSE DEBUG] Found resume_started_at in actual_data: {resume_started_at_str}\n")
+                sys.stderr.write(f"[PAUSE DEBUG] Parsed resume_started_at: {resume_started_at}\n")
+                sys.stderr.flush()
+            except (ValueError, TypeError) as e:
+                sys.stderr.write(f"[PAUSE DEBUG] Error parsing resume_started_at: {e}\n")
+                sys.stderr.flush()
+        
+        # Fall back to CSV started_at if resume_started_at not available
+        if resume_started_at is None:
+            started_at_str = self.df.at[idx, 'started_at']
+            sys.stderr.write(f"[PAUSE DEBUG] No resume_started_at, using started_at from CSV: '{started_at_str}'\n")
+            sys.stderr.flush()
+            if started_at_str and str(started_at_str).strip():
+                try:
+                    resume_started_at = self._csv_to_db_datetime(started_at_str)
+                    sys.stderr.write(f"[PAUSE DEBUG] Parsed started_at datetime: {resume_started_at}\n")
+                    sys.stderr.flush()
+                except Exception as e:
+                    sys.stderr.write(f"[PAUSE DEBUG] Error parsing started_at: {e}\n")
+                    sys.stderr.flush()
+        
+        # Calculate elapsed time if we have a start time
+        if resume_started_at:
+            try:
+                now = datetime.now()
+                sys.stderr.write(f"[PAUSE DEBUG] Current time: {now}\n")
+                sys.stderr.flush()
+                elapsed_seconds = (now - resume_started_at).total_seconds()
+                sys.stderr.write(f"[PAUSE DEBUG] Elapsed seconds: {elapsed_seconds}\n")
+                sys.stderr.flush()
+                if elapsed_seconds > 0:
+                    time_spent_this_session = elapsed_seconds / 60.0  # Convert to minutes
+                    sys.stderr.write(f"[PAUSE DEBUG] Time spent this session: {time_spent_this_session:.2f} minutes\n")
+                    sys.stderr.flush()
+                else:
+                    sys.stderr.write(f"[PAUSE DEBUG] Elapsed seconds <= 0, not counting this session\n")
+                    sys.stderr.flush()
+            except Exception as e:
+                sys.stderr.write(f"[InstanceManager] Error calculating elapsed time on pause: {e}\n")
+                sys.stderr.flush()
+        else:
+            sys.stderr.write(f"[PAUSE DEBUG] No start time available (resume_started_at or started_at)\n")
+            sys.stderr.flush()
         
         # Accumulate time spent (in case task was paused and resumed multiple times)
         existing_time = actual_data.get('time_spent_before_pause', 0.0)
+        sys.stderr.write(f"[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: {existing_time} (type: {type(existing_time)})\n")
+        sys.stderr.flush()
         if not isinstance(existing_time, (int, float)):
             try:
                 existing_time = float(existing_time)
+                sys.stderr.write(f"[PAUSE DEBUG] Converted existing_time to float: {existing_time}\n")
+                sys.stderr.flush()
             except (ValueError, TypeError):
                 existing_time = 0.0
-        total_time_spent = existing_time + time_spent_before_pause
+                sys.stderr.write(f"[PAUSE DEBUG] Could not convert existing_time, using 0.0\n")
+                sys.stderr.flush()
+        
+        # Add current session time to existing accumulated time
+        total_time_spent = existing_time + time_spent_this_session
+        sys.stderr.write(f"[PAUSE DEBUG] Total time calculation: {existing_time:.2f} (existing) + {time_spent_this_session:.2f} (this session) = {total_time_spent:.2f} minutes\n")
+        sys.stderr.flush()
         actual_data['time_spent_before_pause'] = total_time_spent
+        sys.stderr.write(f"[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = {total_time_spent:.2f}\n")
+        sys.stderr.flush()
         
         # Store completion percentage (ensure it's between 0 and 100)
         if not isinstance(completion_percentage, (int, float)):
@@ -439,18 +518,31 @@ class InstanceManager:
         self.df.at[idx, 'procrastination_score'] = ''
         self.df.at[idx, 'proactive_score'] = ''
 
+        # Clear resume_started_at since we're pausing
+        if 'resume_started_at' in actual_data:
+            del actual_data['resume_started_at']
+
         # Persist pause reason in actual payload
         if reason:
             actual_data['pause_reason'] = reason
         actual_data['paused'] = True
+        sys.stderr.write(f"[PAUSE DEBUG] Final actual_data before saving: {actual_data}\n")
+        sys.stderr.flush()
         self.df.at[idx, 'actual'] = json.dumps(actual_data)
+        sys.stderr.write(f"[PAUSE DEBUG] Saved actual JSON to CSV: {self.df.at[idx, 'actual']}\n")
+        sys.stderr.flush()
 
         self._save()
+        sys.stderr.write(f"[PAUSE DEBUG] CSV save completed\n\n")
+        sys.stderr.flush()
     
     def _pause_instance_db(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
         """Database-specific pause_instance."""
         try:
             import json
+            import sys
+            sys.stderr.write(f"\n[PAUSE DEBUG] Pausing instance {instance_id} (Database backend)\n")
+            sys.stderr.flush()
             with self.db_session() as session:
                 instance = session.query(self.TaskInstance).filter(
                     self.TaskInstance.instance_id == instance_id
@@ -458,30 +550,80 @@ class InstanceManager:
                 if not instance:
                     raise ValueError(f"Instance {instance_id} not found")
                 
-                # Calculate elapsed time before resetting started_at
-                time_spent_before_pause = 0.0
-                if instance.started_at:
-                    try:
-                        now = datetime.now()
-                        elapsed_seconds = (now - instance.started_at).total_seconds()
-                        time_spent_before_pause = elapsed_seconds / 60.0  # Convert to minutes
-                    except Exception as e:
-                        print(f"[InstanceManager] Error calculating elapsed time on pause: {e}")
-                
-                # Get existing actual data to preserve time_spent_before_pause if resuming after multiple pauses
+                # Get existing actual data first to preserve time_spent_before_pause if resuming after multiple pauses
                 actual_data = instance.actual or {}
                 if not isinstance(actual_data, dict):
                     actual_data = {}
+                sys.stderr.write(f"[PAUSE DEBUG] Existing actual_data from database: {actual_data}\n")
+                sys.stderr.flush()
+                
+                # Calculate elapsed time from current session (if task is currently started)
+                # Use resume_started_at from actual_data if available (more precise), otherwise fall back to started_at
+                time_spent_this_session = 0.0
+                resume_started_at = None
+                
+                # Try to get precise resume timestamp from actual_data first
+                if 'resume_started_at' in actual_data:
+                    try:
+                        resume_started_at_str = actual_data['resume_started_at']
+                        resume_started_at = datetime.fromisoformat(resume_started_at_str)
+                        sys.stderr.write(f"[PAUSE DEBUG] Found resume_started_at in actual_data: {resume_started_at_str}\n")
+                        sys.stderr.write(f"[PAUSE DEBUG] Parsed resume_started_at: {resume_started_at}\n")
+                        sys.stderr.flush()
+                    except (ValueError, TypeError) as e:
+                        sys.stderr.write(f"[PAUSE DEBUG] Error parsing resume_started_at: {e}\n")
+                        sys.stderr.flush()
+                
+                # Fall back to instance.started_at if resume_started_at not available
+                if resume_started_at is None:
+                    sys.stderr.write(f"[PAUSE DEBUG] No resume_started_at, using instance.started_at: {instance.started_at}\n")
+                    sys.stderr.flush()
+                    resume_started_at = instance.started_at
+                
+                # Calculate elapsed time if we have a start time
+                if resume_started_at:
+                    try:
+                        now = datetime.now()
+                        sys.stderr.write(f"[PAUSE DEBUG] Current time: {now}\n")
+                        sys.stderr.flush()
+                        elapsed_seconds = (now - resume_started_at).total_seconds()
+                        sys.stderr.write(f"[PAUSE DEBUG] Elapsed seconds: {elapsed_seconds}\n")
+                        sys.stderr.flush()
+                        if elapsed_seconds > 0:
+                            time_spent_this_session = elapsed_seconds / 60.0  # Convert to minutes
+                            sys.stderr.write(f"[PAUSE DEBUG] Time spent this session: {time_spent_this_session:.2f} minutes\n")
+                            sys.stderr.flush()
+                        else:
+                            sys.stderr.write(f"[PAUSE DEBUG] Elapsed seconds <= 0, not counting this session\n")
+                            sys.stderr.flush()
+                    except Exception as e:
+                        sys.stderr.write(f"[InstanceManager] Error calculating elapsed time on pause: {e}\n")
+                        sys.stderr.flush()
+                else:
+                    sys.stderr.write(f"[PAUSE DEBUG] No start time available (resume_started_at or started_at)\n")
+                    sys.stderr.flush()
                 
                 # Accumulate time spent (in case task was paused and resumed multiple times)
                 existing_time = actual_data.get('time_spent_before_pause', 0.0)
+                sys.stderr.write(f"[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: {existing_time} (type: {type(existing_time)})\n")
+                sys.stderr.flush()
                 if not isinstance(existing_time, (int, float)):
                     try:
                         existing_time = float(existing_time)
+                        sys.stderr.write(f"[PAUSE DEBUG] Converted existing_time to float: {existing_time}\n")
+                        sys.stderr.flush()
                     except (ValueError, TypeError):
                         existing_time = 0.0
-                total_time_spent = existing_time + time_spent_before_pause
+                        sys.stderr.write(f"[PAUSE DEBUG] Could not convert existing_time, using 0.0\n")
+                        sys.stderr.flush()
+                
+                # Add current session time to existing accumulated time
+                total_time_spent = existing_time + time_spent_this_session
+                sys.stderr.write(f"[PAUSE DEBUG] Total time calculation: {existing_time:.2f} (existing) + {time_spent_this_session:.2f} (this session) = {total_time_spent:.2f} minutes\n")
+                sys.stderr.flush()
                 actual_data['time_spent_before_pause'] = total_time_spent
+                sys.stderr.write(f"[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = {total_time_spent:.2f}\n")
+                sys.stderr.flush()
                 
                 # Store completion percentage (ensure it's between 0 and 100)
                 if not isinstance(completion_percentage, (int, float)):
@@ -501,13 +643,32 @@ class InstanceManager:
                 instance.procrastination_score = None
                 instance.proactive_score = None
                 
+                # Clear resume_started_at since we're pausing
+                if 'resume_started_at' in actual_data:
+                    del actual_data['resume_started_at']
+                
                 # Persist pause reason in actual payload
                 if reason:
                     actual_data['pause_reason'] = reason
                 actual_data['paused'] = True
+                sys.stderr.write(f"[PAUSE DEBUG] Final actual_data before saving: {actual_data}\n")
+                sys.stderr.flush()
                 instance.actual = actual_data
                 
                 session.commit()
+                sys.stderr.write(f"[PAUSE DEBUG] Database commit completed\n")
+                sys.stderr.flush()
+                # Verify what was saved
+                session.refresh(instance)
+                verified_actual = instance.actual or {}
+                sys.stderr.write(f"[PAUSE DEBUG] Verified saved actual_data: {verified_actual}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[PAUSE DEBUG] Verified time_spent_before_pause: {verified_actual.get('time_spent_before_pause', 'NOT FOUND')}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[PAUSE DEBUG] Verified resume_started_at removed: {'resume_started_at' not in verified_actual}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[PAUSE DEBUG] Pause complete. Committed to database.\n\n")
+                sys.stderr.flush()
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in pause_instance and CSV fallback is disabled: {e}") from e
@@ -650,36 +811,256 @@ class InstanceManager:
             return self._get_instance_csv(instance_id)
 
     def start_instance(self, instance_id):
-        """Start a task instance. Works with both CSV and database."""
+        """Start a task instance (first time, not resuming). Works with both CSV and database."""
         if self.use_db:
             return self._start_instance_db(instance_id)
         else:
             return self._start_instance_csv(instance_id)
     
+    def resume_instance(self, instance_id):
+        """Resume a paused task instance. Works with both CSV and database.
+        
+        This is separate from start_instance() to clearly track resume operations.
+        Stores resume_started_at timestamp in actual JSON for precise time tracking.
+        """
+        if self.use_db:
+            return self._resume_instance_db(instance_id)
+        else:
+            return self._resume_instance_csv(instance_id)
+    
     def _start_instance_csv(self, instance_id):
-        """CSV-specific start_instance."""
+        """CSV-specific start_instance (first time start, not resuming)."""
+        import sys
+        import json
+        sys.stderr.write(f"\n[START DEBUG] Starting instance {instance_id} (CSV backend) - FIRST TIME\n")
+        sys.stderr.flush()
         self._reload()
         idx = self.df.index[self.df['instance_id']==instance_id][0]
-        self.df.at[idx,'started_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        # Check existing state before starting
+        previous_started_at = self.df.at[idx, 'started_at']
+        previous_status = self.df.at[idx, 'status']
+        sys.stderr.write(f"[START DEBUG] Previous started_at: '{previous_started_at}'\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[START DEBUG] Previous status: '{previous_status}'\n")
+        sys.stderr.flush()
+        
+        # For first-time start, don't store resume_started_at (that's only for resume)
+        now = datetime.now()
+        started_at_str = self._db_to_csv_datetime(now)
+        sys.stderr.write(f"[START DEBUG] Setting started_at to: '{started_at_str}' (datetime: {now})\n")
+        sys.stderr.flush()
+        self.df.at[idx,'started_at'] = started_at_str
+        
+        # Set status to 'active' when starting a task
+        self.df.at[idx,'status'] = 'active'
+        sys.stderr.write(f"[START DEBUG] Setting status to: 'active'\n")
+        sys.stderr.flush()
         self._save()
+        
+        # Verify what was saved
+        self._reload()
+        saved_started_at = self.df.at[idx, 'started_at']
+        saved_status = self.df.at[idx, 'status']
+        sys.stderr.write(f"[START DEBUG] Verified saved started_at: '{saved_started_at}'\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[START DEBUG] Verified saved status: '{saved_status}'\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[START DEBUG] Start completed\n\n")
+        sys.stderr.flush()
+    
+    def _resume_instance_csv(self, instance_id):
+        """CSV-specific resume_instance (resuming a paused task)."""
+        import sys
+        import json
+        sys.stderr.write(f"\n[RESUME DEBUG] Resuming instance {instance_id} (CSV backend)\n")
+        sys.stderr.flush()
+        self._reload()
+        idx = self.df.index[self.df['instance_id']==instance_id][0]
+        
+        # Check existing state before resuming
+        previous_started_at = self.df.at[idx, 'started_at']
+        previous_status = self.df.at[idx, 'status']
+        sys.stderr.write(f"[RESUME DEBUG] Previous started_at: '{previous_started_at}'\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[RESUME DEBUG] Previous status: '{previous_status}'\n")
+        sys.stderr.flush()
+        
+        # Get existing actual data to preserve time_spent_before_pause and store resume timestamp
+        actual_str = self.df.at[idx, 'actual'] or '{}'
+        try:
+            actual_data = json.loads(actual_str) if actual_str else {}
+        except json.JSONDecodeError:
+            actual_data = {}
+        
+        existing_time = actual_data.get('time_spent_before_pause', 0.0)
+        sys.stderr.write(f"[RESUME DEBUG] Existing time_spent_before_pause: {existing_time}\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[RESUME DEBUG] Full actual_data before resume: {actual_data}\n")
+        sys.stderr.flush()
+        
+        # Store precise resume timestamp in actual JSON (ISO format for reliability)
+        now = datetime.now()
+        actual_data['resume_started_at'] = now.isoformat()
+        # Clear paused flag since we're resuming
+        if 'paused' in actual_data:
+            del actual_data['paused']
+        sys.stderr.write(f"[RESUME DEBUG] Stored resume_started_at in actual: {actual_data['resume_started_at']}\n")
+        sys.stderr.flush()
+        
+        # Also update CSV started_at for display/compatibility (but use actual_data for calculations)
+        started_at_str = self._db_to_csv_datetime(now)
+        sys.stderr.write(f"[RESUME DEBUG] Setting started_at to: '{started_at_str}' (datetime: {now})\n")
+        sys.stderr.flush()
+        self.df.at[idx,'started_at'] = started_at_str
+        self.df.at[idx, 'actual'] = json.dumps(actual_data)
+        
+        # Set status to 'active' when resuming a task
+        self.df.at[idx,'status'] = 'active'
+        sys.stderr.write(f"[RESUME DEBUG] Setting status to: 'active'\n")
+        sys.stderr.flush()
+        self._save()
+        
+        # Verify what was saved
+        self._reload()
+        saved_started_at = self.df.at[idx, 'started_at']
+        saved_status = self.df.at[idx, 'status']
+        saved_actual_str = self.df.at[idx, 'actual'] or '{}'
+        try:
+            saved_actual = json.loads(saved_actual_str) if saved_actual_str else {}
+        except:
+            saved_actual = {}
+        sys.stderr.write(f"[RESUME DEBUG] Verified saved started_at: '{saved_started_at}'\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[RESUME DEBUG] Verified saved status: '{saved_status}'\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[RESUME DEBUG] Verified resume_started_at in actual: {saved_actual.get('resume_started_at', 'NOT FOUND')}\n")
+        sys.stderr.flush()
+        sys.stderr.write(f"[RESUME DEBUG] Resume completed\n\n")
+        sys.stderr.flush()
     
     def _start_instance_db(self, instance_id):
-        """Database-specific start_instance."""
+        """Database-specific start_instance (first time start, not resuming)."""
         try:
+            import sys
+            sys.stderr.write(f"\n[START DEBUG] Starting instance {instance_id} (Database backend) - FIRST TIME\n")
+            sys.stderr.flush()
             with self.db_session() as session:
                 instance = session.query(self.TaskInstance).filter(
                     self.TaskInstance.instance_id == instance_id
                 ).first()
                 if not instance:
                     raise ValueError(f"Instance {instance_id} not found")
-                instance.started_at = datetime.now()
+                
+                # Check existing state before starting
+                previous_started_at = instance.started_at
+                previous_status = instance.status
+                sys.stderr.write(f"[START DEBUG] Previous started_at: {previous_started_at}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[START DEBUG] Previous status: {previous_status}\n")
+                sys.stderr.flush()
+                
+                # For first-time start, don't store resume_started_at (that's only for resume)
+                now = datetime.now()
+                sys.stderr.write(f"[START DEBUG] Setting started_at to: {now}\n")
+                sys.stderr.flush()
+                instance.started_at = now
+                
+                # Set status to 'active' when starting a task
+                instance.status = 'active'
+                sys.stderr.write(f"[START DEBUG] Setting status to: 'active'\n")
+                sys.stderr.flush()
                 session.commit()
+                
+                # Verify what was saved
+                session.refresh(instance)
+                saved_started_at = instance.started_at
+                saved_status = instance.status
+                sys.stderr.write(f"[START DEBUG] Verified saved started_at: {saved_started_at}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[START DEBUG] Verified saved status: {saved_status}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[START DEBUG] Start completed\n\n")
+                sys.stderr.flush()
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in start_instance and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in start_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._start_instance_csv(instance_id)
+    
+    def _resume_instance_db(self, instance_id):
+        """Database-specific resume_instance (resuming a paused task)."""
+        try:
+            import sys
+            sys.stderr.write(f"\n[RESUME DEBUG] Resuming instance {instance_id} (Database backend)\n")
+            sys.stderr.flush()
+            with self.db_session() as session:
+                instance = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                ).first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found")
+                
+                # Check existing state before resuming
+                previous_started_at = instance.started_at
+                previous_status = instance.status
+                sys.stderr.write(f"[RESUME DEBUG] Previous started_at: {previous_started_at}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[RESUME DEBUG] Previous status: {previous_status}\n")
+                sys.stderr.flush()
+                
+                # Get existing actual data to preserve time_spent_before_pause and store resume timestamp
+                actual_data = instance.actual or {}
+                if not isinstance(actual_data, dict):
+                    actual_data = {}
+                
+                existing_time = actual_data.get('time_spent_before_pause', 0.0)
+                sys.stderr.write(f"[RESUME DEBUG] Existing time_spent_before_pause: {existing_time}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[RESUME DEBUG] Full actual_data before resume: {actual_data}\n")
+                sys.stderr.flush()
+                
+                # Store precise resume timestamp in actual JSON (ISO format for reliability)
+                now = datetime.now()
+                actual_data['resume_started_at'] = now.isoformat()
+                # Clear paused flag since we're resuming
+                if 'paused' in actual_data:
+                    del actual_data['paused']
+                sys.stderr.write(f"[RESUME DEBUG] Stored resume_started_at in actual: {actual_data['resume_started_at']}\n")
+                sys.stderr.flush()
+                
+                # Also update started_at for display/compatibility (but use actual_data for calculations)
+                sys.stderr.write(f"[RESUME DEBUG] Setting started_at to: {now}\n")
+                sys.stderr.flush()
+                instance.started_at = now
+                instance.actual = actual_data
+                
+                # Set status to 'active' when resuming a task
+                instance.status = 'active'
+                sys.stderr.write(f"[RESUME DEBUG] Setting status to: 'active'\n")
+                sys.stderr.flush()
+                session.commit()
+                
+                # Verify what was saved
+                session.refresh(instance)
+                saved_started_at = instance.started_at
+                saved_status = instance.status
+                saved_actual = instance.actual or {}
+                sys.stderr.write(f"[RESUME DEBUG] Verified saved started_at: {saved_started_at}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[RESUME DEBUG] Verified saved status: {saved_status}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[RESUME DEBUG] Verified resume_started_at in actual: {saved_actual.get('resume_started_at', 'NOT FOUND')}\n")
+                sys.stderr.flush()
+                sys.stderr.write(f"[RESUME DEBUG] Resume completed\n\n")
+                sys.stderr.flush()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in resume_instance and CSV fallback is disabled: {e}") from e
+            print(f"[InstanceManager] Database error in resume_instance: {e}, falling back to CSV")
+            self.use_db = False
+            return self._resume_instance_csv(instance_id)
 
     def complete_instance(self, instance_id, actual: dict):
         """Complete a task instance. Works with both CSV and database."""

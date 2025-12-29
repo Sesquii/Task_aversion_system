@@ -80,7 +80,7 @@ def get_current_task():
 
 
 def start_instance(instance_id, container=None):
-    """Start an instance and update the container to show ongoing time."""
+    """Start an instance (first time) and update the container to show ongoing time."""
     # Check if there's already a current task running
     current = get_current_task()
     if current and current.get('instance_id') != instance_id:
@@ -89,6 +89,35 @@ def start_instance(instance_id, container=None):
     
     im.start_instance(instance_id)
     ui.notify("Instance started", color='positive')
+    
+    # Reload the page to update the current task display
+    ui.navigate.reload()
+
+def resume_instance(instance_id, container=None):
+    """Resume a paused instance and update the container to show ongoing time."""
+    # Check if there's already a current task running
+    current = get_current_task()
+    if current and current.get('instance_id') != instance_id:
+        ui.notify("You need to finish the current task first", color='warning')
+        return
+    
+    im.resume_instance(instance_id)
+    ui.notify("Instance resumed", color='positive')
+    
+    # Reload the page to update the current task display
+    ui.navigate.reload()
+
+
+def resume_instance(instance_id, container=None):
+    """Resume a paused instance and update the container to show ongoing time."""
+    # Check if there's already a current task running
+    current = get_current_task()
+    if current and current.get('instance_id') != instance_id:
+        ui.notify("You need to finish the current task first", color='warning')
+        return
+    
+    im.resume_instance(instance_id)
+    ui.notify("Instance resumed", color='positive')
     
     # Reload the page to update the current task display
     ui.navigate.reload()
@@ -110,12 +139,26 @@ def go_cancel(instance_id):
 
 
 def open_pause_dialog(instance_id):
-    """Show dialog to pause an instance with optional reason and completion percentage."""
+    """Show dialog to pause an instance with optional reason and completion percentage.
+    
+    The task is paused immediately when the dialog opens, and the dialog is just for
+    collecting optional notes and completion percentage.
+    """
+    # Pause the task immediately (with no reason/completion yet)
+    try:
+        im.pause_instance(instance_id, reason=None, completion_percentage=0.0)
+        ui.notify("Task paused", color='info')
+    except Exception as exc:
+        ui.notify(f"Error pausing task: {str(exc)}", color='negative')
+        return
+    
+    # Now show dialog to collect optional notes and completion percentage
     with ui.dialog() as dialog, ui.card().classes("w-96"):
-        ui.label("Pause task").classes("text-lg font-bold mb-2")
+        ui.label("Add pause notes (optional)").classes("text-lg font-bold mb-2")
+        ui.label("Task is already paused. You can add notes below or just close this dialog.").classes("text-sm text-gray-600 mb-3")
         reason_input = ui.textarea(
             label="Reason (optional)",
-            placeholder="Why are you pausing this task?"
+            placeholder="Why did you pause this task?"
         ).classes("w-full")
         
         completion_input = ui.number(
@@ -127,7 +170,8 @@ def open_pause_dialog(instance_id):
             format="%.0f"
         ).classes("w-full")
 
-        def submit_pause():
+        def update_pause_info():
+            """Update the pause reason and completion percentage without recalculating time."""
             reason_text = (reason_input.value or "").strip()
             completion_pct = completion_input.value
             if completion_pct is None:
@@ -142,16 +186,38 @@ def open_pause_dialog(instance_id):
                 completion_pct = 0
             
             try:
-                im.pause_instance(instance_id, reason_text if reason_text else None, completion_pct)
-                ui.notify("Task paused and moved back to initialized", color='info')
+                # Get the current instance and update its actual JSON directly
+                # This avoids recalculating time since we already paused
+                instance = im.get_instance(instance_id)
+                if instance:
+                    import json
+                    actual_str = instance.get("actual") or "{}"
+                    try:
+                        actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                    except (json.JSONDecodeError, TypeError):
+                        actual_data = {}
+                    
+                    # Update pause reason and completion percentage
+                    if reason_text:
+                        actual_data['pause_reason'] = reason_text
+                    elif 'pause_reason' in actual_data and not reason_text:
+                        # Remove pause_reason if user cleared it
+                        del actual_data['pause_reason']
+                    actual_data['pause_completion_percentage'] = completion_pct
+                    
+                    # Save the updated actual data by updating the instance directly
+                    # We need to call pause_instance again but it will preserve time_spent_before_pause
+                    # since the task is already paused (started_at is empty)
+                    im.pause_instance(instance_id, reason_text if reason_text else None, completion_pct)
+                    ui.notify("Pause notes updated", color='positive')
                 dialog.close()
                 ui.navigate.reload()
             except Exception as exc:
-                ui.notify(str(exc), color='negative')
+                ui.notify(f"Error updating pause info: {str(exc)}", color='negative')
 
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
-            ui.button("Cancel", color="warning", on_click=dialog.close)
-            ui.button("Pause", color="primary", on_click=submit_pause)
+            ui.button("Close", color="warning", on_click=dialog.close)
+            ui.button("Save Notes", color="primary", on_click=update_pause_info)
 
     dialog.open()
 
@@ -2516,10 +2582,13 @@ def build_dashboard(task_manager):
                                     actual_str = inst.get("actual") or "{}"
                                     has_pause_notes = False
                                     completion_pct = None
+                                    is_paused = False
                                     try:
                                         actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
                                         pause_reason = actual_data.get('pause_reason', '')
                                         has_pause_notes = bool(pause_reason and pause_reason.strip())
+                                        # Check if task is paused (has 'paused' flag in actual_data)
+                                        is_paused = actual_data.get('paused', False)
                                         # Get completion percentage if available
                                         completion_pct = actual_data.get('pause_completion_percentage')
                                         if completion_pct is not None:
@@ -2556,9 +2625,15 @@ def build_dashboard(task_manager):
                                             ui.label(init_description.strip()).classes("text-xs text-gray-700 mt-1 italic").style("max-width: 100%; word-wrap: break-word;")
                                         
                                         with ui.row().classes("gap-1 mt-1"):
-                                            ui.button("Start",
-                                                      on_click=lambda i=inst['instance_id']: start_instance(i)
-                                                      ).props("dense size=sm").classes("bg-green-500")
+                                            # Show "Resume" button if task is paused, otherwise "Start"
+                                            if is_paused:
+                                                ui.button("Resume",
+                                                          on_click=lambda i=inst['instance_id']: resume_instance(i)
+                                                          ).props("dense size=sm").classes("bg-blue-500")
+                                            else:
+                                                ui.button("Start",
+                                                          on_click=lambda i=inst['instance_id']: start_instance(i)
+                                                          ).props("dense size=sm").classes("bg-green-500")
                                             ui.button("Cancel",
                                                       on_click=lambda i=inst['instance_id']: go_cancel(i)
                                                       ).props("dense size=sm color=red")
@@ -3132,10 +3207,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if mode == 'instances':
                     instance_id = rec.get('instance_id')
                     if instance_id:
-                        # Capture instance_id in lambda closure - start instance to move to active tasks
-                        ui.button("START",
-                                  on_click=lambda iid=instance_id: start_instance(iid)
-                                  ).props("dense size=sm").classes("w-full bg-green-500")
+                        # Check if instance is paused
+                        instance = im.get_instance(instance_id)
+                        is_paused = False
+                        if instance:
+                            actual_str = instance.get("actual") or "{}"
+                            try:
+                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                                is_paused = actual_data.get('paused', False)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        
+                        # Show "Resume" if paused, otherwise "Start"
+                        if is_paused:
+                            ui.button("RESUME",
+                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+                        else:
+                            ui.button("START",
+                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
                 else:
