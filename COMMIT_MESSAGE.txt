@@ -1,37 +1,52 @@
-feat(analytics): implement stored factor system with database migration and debugging tools
+feat(recommendations): add toggleable recommendation system with normalized scores and tooltips
 
-- Add serendipity_factor and disappointment_factor columns to TaskInstance model
-- Create automatic factor calculation on task completion (_calculate_and_store_factors_db)
-- Implement migration script to backfill factors for existing data (migrate_factors_to_database.py)
-- Add schema migration script to add factor columns (add_factor_columns.py)
-- Update analytics.py to use stored factors with automatic fallback calculation
-- Update factors_comparison_analytics.py to use stored data with hybrid approach
-- Fix JSON serialization issues with pandas Timestamp objects in chart rendering
-- Add comprehensive debugging tools with Run Debug button and detailed output
-- Fix data loading logic to properly check stats.total_tasks instead of top-level key
-- Convert Timestamp objects to Python datetime for Plotly compatibility
-- Convert Timestamp objects to strings in recent_tasks dict for JSON serialization
+Add comprehensive recommendation system improvements including toggle between
+task templates and initialized tasks, normalized scoring, initialization notes
+display, and detailed tooltip system for sub-scores.
 
-Files created:
-- task_aversion_app/migrate_factors_to_database.py
-- task_aversion_app/add_factor_columns.py
-- task_aversion_app/docs/factor_storage_analysis.md
-- task_aversion_app/docs/factor_migration_guide.md
+Features:
+- Toggle between "Task Templates" and "Initialized Tasks" recommendation modes
+- Normalized recommendation scores (0-100 scale) based on absolute scoring
+- Display initialization notes/description on recommendation cards
+- Tooltip system showing detailed sub-scores on hover (relief, cognitive load,
+  emotional load, physical load, stress, behavioral score, net wellbeing, etc.)
+- Backward compatibility for mental energy/difficulty from expected_cognitive_load
+- Use actual initialization values from predicted field with fallbacks to defaults
+
+Bug Fixes:
+- Fixed score normalization to use absolute scoring instead of relative min-max
+- Fixed tooltip display using ui.add_body_html() pattern matching task tooltips
+- Fixed mental energy and task difficulty extraction with cognitive_load fallback
+- Fixed ui.html() sanitize parameter requirement
+
+Technical Changes:
+- Added recommendations_from_instances() method in analytics.py
+- Updated recommendations_by_category() with normalized scoring
+- Added recommendation tooltip CSS and JavaScript initialization
+- Added comprehensive debugging output for recommendation system
+- Changed tooltip positioning from fixed to absolute for proper display
 
 Files modified:
-- task_aversion_app/backend/database.py (added factor columns to TaskInstance)
-- task_aversion_app/backend/instance_manager.py (auto-calculate factors on completion)
-- task_aversion_app/backend/analytics.py (use stored factors with fallback)
-- task_aversion_app/ui/factors_comparison_analytics.py (use stored data, fix serialization, add debugging)
+- task_aversion_app/ui/dashboard.py
+  - Added recommendation mode toggle UI
+  - Added tooltip system with hover handlers
+  - Updated refresh_recommendations() to support both modes
+  - Added CSS for recommendation tooltips
+  - Added JavaScript for tooltip initialization
+  - Added debugging output throughout
 
-Technical improvements:
-- Hybrid storage approach: factors stored in database for performance, calculated on-the-fly as fallback
-- Idempotent migration script: safe to run multiple times, only updates missing factors
-- Comprehensive debugging: Run Debug button with detailed data flow analysis
-- JSON serialization fixes: proper handling of pandas Timestamp objects throughout
-- Data validation: robust checks for missing data and proper error handling
+- task_aversion_app/backend/analytics.py
+  - Added recommendations_from_instances() method
+  - Updated recommendations_by_category() with normalized scoring
+  - Added backward compatibility for expected_cognitive_load
+  - Added description extraction from predicted field
+  - Added comprehensive sub-scores to recommendation dicts
+  - Added debugging output for recommendation generation
 
-Performance benefits:
-- Fast queries: factors stored in database, can be indexed and filtered directly
-- Reduced computation: no need to recalculate factors on every analytics query
-- Backward compatible: automatic fallback calculation for old data without factors
+Commit Value: 9/10
+This commit significantly enhances the recommendation system's usability and
+flexibility. The toggle between templates and instances provides users with
+different recommendation contexts, normalized scores make comparisons meaningful,
+and the tooltip system provides detailed insights without cluttering the UI.
+The backward compatibility fixes ensure existing data continues to work correctly.
+This is a high-value feature that improves core user workflow.

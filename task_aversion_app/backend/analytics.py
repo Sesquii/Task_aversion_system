@@ -4588,11 +4588,33 @@ class Analytics:
             scores.append(score_total)
         candidates_df['score'] = scores
         
+        # Normalize scores to 0-100 range
+        # Use absolute normalization based on max possible score, not relative to candidates
+        # This ensures meaningful scores even with only one candidate
+        if len(scores) > 0:
+            num_metrics = len(metrics) if metrics else 1
+            max_possible_score = num_metrics * 100.0  # Each metric can contribute up to 100
+            
+            if max_possible_score > 0:
+                # Normalize: (score / max_possible) * 100
+                candidates_df['score_normalized'] = (candidates_df['score'] / max_possible_score) * 100.0
+                # Clamp to 0-100 range
+                candidates_df['score_normalized'] = candidates_df['score_normalized'].clip(0.0, 100.0)
+            else:
+                candidates_df['score_normalized'] = 50.0
+        else:
+            candidates_df['score_normalized'] = 50.0
+        
         # Sort by score descending and take top N
         top_n = candidates_df.sort_values('score', ascending=False).head(limit)
+        print(f"[Analytics] recommendations_by_category: {len(candidates)} candidates, taking top {len(top_n)} after sorting")
+        if len(top_n) > 0:
+            print(f"[Analytics] Top recommendation scores: {top_n['score'].tolist()}")
+            print(f"[Analytics] Top recommendation normalized scores: {top_n['score_normalized'].tolist()}")
         
         ranked = []
-        for _, row in top_n.iterrows():
+        for idx, (_, row) in enumerate(top_n.iterrows()):
+            print(f"[Analytics] Processing recommendation {idx + 1}: {row.get('task_name')} (score: {row.get('score')}, normalized: {row.get('score_normalized')})")
             # Collect only the metrics the user selected
             metric_values = {}
             for metric in metrics:
@@ -4605,14 +4627,398 @@ class Analytics:
                 'title': "Recommendation",
                 'task_id': row.get('task_id'),
                 'task_name': row.get('task_name'),
-                'score': round(float(row.get('score', 0.0)), 1),
+                'description': row.get('description', '') if 'description' in row else '',
+                'score': round(float(row.get('score_normalized', 0.0)), 1),
                 'metric_values': metric_values,
+                # Include all sub-scores for tooltip
+                'sub_scores': {
+                    'relief_score': row.get('relief_score'),
+                    'cognitive_load': row.get('cognitive_load'),
+                    'emotional_load': row.get('emotional_load'),
+                    'physical_load': row.get('physical_load'),
+                    'stress_level': row.get('stress_level'),
+                    'behavioral_score': row.get('behavioral_score'),
+                    'net_wellbeing_normalized': row.get('net_wellbeing_normalized'),
+                    'net_load': row.get('net_load'),
+                    'net_relief_proxy': row.get('net_relief_proxy'),
+                    'mental_energy_needed': row.get('mental_energy_needed'),
+                    'task_difficulty': row.get('task_difficulty'),
+                    'historical_efficiency': row.get('historical_efficiency'),
+                    'duration_minutes': row.get('duration_minutes'),
+                },
                 'duration': row.get('duration_minutes'),
                 'relief': row.get('relief_score'),
                 'cognitive_load': row.get('cognitive_load'),
                 'emotional_load': row.get('emotional_load'),
             })
+            print(f"[Analytics] Added recommendation {idx + 1} to ranked list: {row.get('task_name')}")
         
+        print(f"[Analytics] recommendations_by_category: Returning {len(ranked)} ranked recommendations")
+        return ranked
+
+    def recommendations_from_instances(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3) -> List[Dict[str, str]]:
+        """Generate recommendations from initialized (non-completed) task instances.
+        
+        Similar to recommendations_by_category but works with active instances instead of templates.
+        
+        Args:
+            metrics: Single metric name or list of metrics to rank by
+            filters: Optional filters (min_duration, max_duration, task_type, etc.)
+            limit: Maximum number of recommendations to return
+        
+        Returns:
+            List of recommendation dicts with instance_id, task_name, score, and metric_values
+        """
+        from .instance_manager import InstanceManager
+        
+        filters = {**self.default_filters(), **(filters or {})}
+        print(f"[Analytics] recommendations_from_instances called with metrics: {metrics}, limit: {limit}, filters: {filters}")
+        
+        # Normalize metrics input
+        if metrics is None:
+            metrics = []
+        if isinstance(metrics, str):
+            metrics = [metrics]
+        metrics = [m for m in metrics if m] or ["relief_score"]
+        
+        # Which metrics are better when low
+        low_is_good = {
+            "cognitive_load",
+            "emotional_load",
+            "net_load",
+            "duration_minutes",
+            "stress_level",
+            "physical_load",
+        }
+        
+        # Get all active (non-completed) instances
+        instance_manager = InstanceManager()
+        active_instances = instance_manager.list_active_instances()
+        
+        if not active_instances:
+            return []
+        
+        # Load task templates to get task metadata
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Parse filters
+        max_duration_filter = None
+        if filters.get('max_duration'):
+            try:
+                max_duration_filter = float(filters['max_duration'])
+            except (ValueError, TypeError):
+                max_duration_filter = None
+        
+        min_duration_filter = None
+        if filters.get('min_duration'):
+            try:
+                min_duration_filter = float(filters['min_duration'])
+            except (ValueError, TypeError):
+                min_duration_filter = None
+        
+        task_type_filter = filters.get('task_type')
+        is_recurring_filter = filters.get('is_recurring')
+        categories_filter = filters.get('categories')
+        
+        # Load historical instance data to get averages for relief_score fallback
+        instances_df = self._load_instances()
+        completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy() if not instances_df.empty else pd.DataFrame()
+        
+        # Calculate historical averages per task_id (for relief_score fallback)
+        task_stats = {}
+        if not completed.empty:
+            for task_id in completed['task_id'].unique():
+                task_completed = completed[completed['task_id'] == task_id]
+                if not task_completed.empty:
+                    relief_series = pd.to_numeric(task_completed['relief_score'], errors='coerce')
+                    task_stats[task_id] = {
+                        'avg_relief': relief_series.mean() if relief_series.notna().any() else None,
+                    }
+        
+        # Build recommendation candidates from active instances
+        candidates = []
+        
+        for instance in active_instances:
+            instance_id = instance.get('instance_id')
+            task_id = instance.get('task_id')
+            task_name = instance.get('task_name', '')
+            
+            # Get task template info for filtering
+            task_info = None
+            if not tasks_df.empty and task_id:
+                task_rows = tasks_df[tasks_df['task_id'] == task_id]
+                if not task_rows.empty:
+                    task_info = task_rows.iloc[0].to_dict()
+            
+            # Apply task_type filter
+            if task_type_filter and task_info:
+                task_type = task_info.get('task_type', '')
+                if str(task_type).strip() != str(task_type_filter).strip():
+                    continue
+            
+            # Apply is_recurring filter
+            if is_recurring_filter and task_info:
+                is_recurring = task_info.get('is_recurring', 'False')
+                is_recurring_str = str(is_recurring).strip().lower()
+                filter_str = str(is_recurring_filter).strip().lower()
+                if filter_str == 'true' and is_recurring_str != 'true':
+                    continue
+                elif filter_str == 'false' and is_recurring_str == 'true':
+                    continue
+            
+            # Apply categories filter
+            if categories_filter and task_info:
+                categories_query = str(categories_filter).strip().lower()
+                if categories_query:
+                    try:
+                        import json
+                        categories_str = task_info.get('categories', '[]')
+                        categories_list = json.loads(categories_str) if categories_str else []
+                        if not isinstance(categories_list, list):
+                            categories_list = []
+                        categories_match = any(
+                            categories_query in str(cat).lower() 
+                            for cat in categories_list
+                        )
+                        if not categories_match:
+                            continue
+                    except (json.JSONDecodeError, Exception):
+                        pass
+            
+            # Extract predicted data from instance (initialization values)
+            predicted_str = instance.get('predicted', '{}')
+            try:
+                import json
+                predicted = json.loads(predicted_str) if predicted_str else {}
+            except (json.JSONDecodeError, TypeError):
+                predicted = {}
+            
+            # Get task template defaults as backup
+            default_estimate = 0.0
+            if task_info:
+                default_estimate = float(task_info.get('default_estimate_minutes', 0) or 0)
+            
+            # Helper function to get value with fallback chain: predicted -> task default -> system default
+            def get_value(predicted_key, task_default_key=None, system_default=50.0):
+                """Get value from predicted, fallback to task default, then system default."""
+                # First try predicted field
+                if predicted_key in predicted and predicted[predicted_key] is not None:
+                    try:
+                        return float(predicted[predicted_key])
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Then try task template default
+                if task_default_key and task_info:
+                    task_val = task_info.get(task_default_key)
+                    if task_val is not None and task_val != '':
+                        try:
+                            return float(task_val)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Finally use system default
+                return system_default
+            
+            # Extract values from initialization (predicted field) with fallbacks
+            # Duration: time_estimate_minutes from predicted, or task default_estimate_minutes
+            duration_minutes = get_value('time_estimate_minutes', 'default_estimate_minutes', 0.0)
+            if duration_minutes == 0.0 and default_estimate > 0:
+                duration_minutes = default_estimate
+            
+            # Mental energy and difficulty (used to calculate cognitive_load)
+            # First try to get them directly
+            expected_mental_energy = get_value('expected_mental_energy', None, None)
+            expected_difficulty = get_value('expected_difficulty', None, None)
+            
+            # If either is missing, try to get from expected_cognitive_load (backward compatibility)
+            expected_cognitive_load = get_value('expected_cognitive_load', None, None)
+            if expected_cognitive_load is not None:
+                # If we have cognitive_load but not the individual components, use it for both
+                if expected_mental_energy is None:
+                    expected_mental_energy = expected_cognitive_load
+                if expected_difficulty is None:
+                    expected_difficulty = expected_cognitive_load
+            
+            # Fallback to defaults if still None
+            if expected_mental_energy is None:
+                expected_mental_energy = 50.0
+            if expected_difficulty is None:
+                expected_difficulty = 50.0
+            
+            # Cognitive load: use expected_cognitive_load if available, otherwise calculate from components
+            if expected_cognitive_load is not None:
+                cognitive_load = expected_cognitive_load
+            else:
+                # Calculate from mental_energy and difficulty (average)
+                cognitive_load = (expected_mental_energy + expected_difficulty) / 2.0
+            
+            # Emotional load: from expected_emotional_load
+            emotional_load = get_value('expected_emotional_load', None, 50.0)
+            
+            # Physical load: from expected_physical_load
+            physical_load = get_value('expected_physical_load', None, 0.0)
+            
+            # Relief score: from expected_relief, or use historical average if available
+            expected_relief = get_value('expected_relief', None, None)
+            if expected_relief is not None:
+                relief_score = expected_relief
+            else:
+                # Try to get historical average for this task from completed instances
+                stats = task_stats.get(task_id, {}) if task_id else {}
+                avg_relief = stats.get('avg_relief')
+                relief_score = avg_relief if avg_relief is not None else 50.0
+            
+            # Expected aversion (for stress calculation)
+            expected_aversion = get_value('expected_aversion', 'default_initial_aversion', 0.0)
+            
+            # Calculate stress_level from components
+            stress_level = (
+                (expected_mental_energy * 0.5 + 
+                 expected_difficulty * 0.5 + 
+                 emotional_load + 
+                 physical_load + 
+                 expected_aversion * 2.0) / 5.0
+            )
+            
+            # Behavioral score: not typically in predicted, use default
+            behavioral_score = 50.0  # Default neutral
+            
+            # Net wellbeing: calculate from relief and stress
+            net_wellbeing = relief_score - stress_level
+            # Normalize to 0-100 scale (baseline-relative)
+            net_wellbeing_normalized = max(0.0, min(100.0, 50.0 + net_wellbeing))
+            
+            # Apply duration filters
+            if max_duration_filter is not None:
+                if duration_minutes > max_duration_filter:
+                    continue
+            if min_duration_filter is not None:
+                if duration_minutes < min_duration_filter:
+                    continue
+            
+            # Calculate derived metrics
+            net_load = cognitive_load + emotional_load
+            net_relief_proxy = relief_score - cognitive_load
+            
+            # Get historical efficiency if available
+            task_efficiency = self.get_task_efficiency_history()
+            historical_efficiency = task_efficiency.get(task_id, 0.0) if task_id else 0.0
+            
+            # Get initialization notes (description) from predicted field
+            description = predicted.get('description', '') or ''
+            if not description and task_info:
+                description = task_info.get('description', '') or ''
+            
+            candidates.append({
+                'instance_id': instance_id,
+                'task_id': task_id,
+                'task_name': task_name,
+                'description': description,
+                'relief_score': relief_score,
+                'cognitive_load': cognitive_load,
+                'emotional_load': emotional_load,
+                'duration_minutes': duration_minutes,
+                'historical_efficiency': historical_efficiency,
+                'stress_level': stress_level,
+                'behavioral_score': behavioral_score,
+                'net_wellbeing_normalized': net_wellbeing_normalized,
+                'physical_load': physical_load,
+                'net_load': net_load,
+                'net_relief_proxy': net_relief_proxy,
+                'mental_energy_needed': expected_mental_energy,
+                'task_difficulty': expected_difficulty,
+            })
+        
+        if not candidates:
+            return []
+        
+        candidates_df = pd.DataFrame(candidates)
+        
+        # Scoring helper: high-good adds value; low-good adds (100 - value)
+        def metric_score(metric_name: str, value: float) -> float:
+            try:
+                v = float(value) if value is not None else 0.0
+            except (ValueError, TypeError):
+                v = 0.0
+            if metric_name in low_is_good:
+                return max(0.0, 100.0 - v)
+            return v
+        
+        # Compute score per instance
+        scores = []
+        for _, row in candidates_df.iterrows():
+            score_total = 0.0
+            for metric in metrics:
+                score_total += metric_score(metric, row.get(metric))
+            scores.append(score_total)
+        candidates_df['score'] = scores
+        
+        # Normalize scores to 0-100 range
+        # Use absolute normalization based on max possible score, not relative to candidates
+        # This ensures meaningful scores even with only one candidate
+        if len(scores) > 0:
+            num_metrics = len(metrics) if metrics else 1
+            max_possible_score = num_metrics * 100.0  # Each metric can contribute up to 100
+            
+            if max_possible_score > 0:
+                # Normalize: (score / max_possible) * 100
+                candidates_df['score_normalized'] = (candidates_df['score'] / max_possible_score) * 100.0
+                # Clamp to 0-100 range
+                candidates_df['score_normalized'] = candidates_df['score_normalized'].clip(0.0, 100.0)
+            else:
+                candidates_df['score_normalized'] = 50.0
+        else:
+            candidates_df['score_normalized'] = 50.0
+        
+        # Sort by score descending and take top N
+        top_n = candidates_df.sort_values('score', ascending=False).head(limit)
+        
+        ranked = []
+        for idx, (_, row) in enumerate(top_n.iterrows()):
+            print(f"[Analytics] Processing recommendation {idx + 1}: {row.get('task_name')} (score: {row.get('score')}, normalized: {row.get('score_normalized')})")
+            # Collect only the metrics the user selected
+            metric_values = {}
+            for metric in metrics:
+                try:
+                    metric_values[metric] = float(row.get(metric)) if row.get(metric) is not None else None
+                except (ValueError, TypeError):
+                    metric_values[metric] = None
+            
+            ranked.append({
+                'title': "Recommendation",
+                'instance_id': row.get('instance_id'),
+                'task_id': row.get('task_id'),
+                'task_name': row.get('task_name'),
+                'description': row.get('description', ''),
+                'score': round(float(row.get('score_normalized', 0.0)), 1),
+                'metric_values': metric_values,
+                # Include all sub-scores for tooltip
+                'sub_scores': {
+                    'relief_score': row.get('relief_score'),
+                    'cognitive_load': row.get('cognitive_load'),
+                    'emotional_load': row.get('emotional_load'),
+                    'physical_load': row.get('physical_load'),
+                    'stress_level': row.get('stress_level'),
+                    'behavioral_score': row.get('behavioral_score'),
+                    'net_wellbeing_normalized': row.get('net_wellbeing_normalized'),
+                    'net_load': row.get('net_load'),
+                    'net_relief_proxy': row.get('net_relief_proxy'),
+                    'mental_energy_needed': row.get('mental_energy_needed'),
+                    'task_difficulty': row.get('task_difficulty'),
+                    'historical_efficiency': row.get('historical_efficiency'),
+                    'duration_minutes': row.get('duration_minutes'),
+                },
+                'duration': row.get('duration_minutes'),
+                'relief': row.get('relief_score'),
+                'cognitive_load': row.get('cognitive_load'),
+                'emotional_load': row.get('emotional_load'),
+            })
+            print(f"[Analytics] Added recommendation {len(ranked)} to ranked list: {row.get('task_name')}")
+        
+        print(f"[Analytics] recommendations_from_instances: Returning {len(ranked)} ranked recommendations")
         return ranked
 
     def _row_to_recommendation(self, row_df: pd.DataFrame, label: str) -> Optional[Dict[str, str]]:

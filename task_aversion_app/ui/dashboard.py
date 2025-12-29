@@ -1530,6 +1530,38 @@ def build_dashboard(task_manager):
             background: white;
         }
         
+        .recommendation-card-hover {
+            cursor: pointer;
+        }
+        
+        /* Recommendation tooltip styling */
+        .recommendation-tooltip {
+            position: absolute;
+            background: #1f2937;
+            color: white;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            z-index: 1000;
+            max-width: 350px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        
+        .recommendation-tooltip div {
+            margin: 4px 0;
+        }
+        
+        .recommendation-tooltip strong {
+            color: #e5e7eb;
+        }
+        
+        .recommendation-tooltip.visible {
+            opacity: 1;
+        }
+        
         /* Responsive adjustments */
         @media (max-width: 1400px) {
             .dashboard-layout {
@@ -1984,6 +2016,97 @@ def build_dashboard(task_manager):
         
         // Re-initialize after DOM updates
         setTimeout(initContextMenus, 500);
+    </script>
+    <script>
+        function initRecommendationTooltips() {
+            const cards = document.querySelectorAll('.recommendation-card-hover');
+            console.log('[Dashboard] initRecommendationTooltips: Found', cards.length, 'recommendation cards');
+            
+            cards.forEach(function(card, index) {
+                const recId = card.getAttribute('data-rec-id');
+                console.log('[Dashboard] Card', index, 'has recId:', recId);
+                
+                if (!recId) {
+                    console.warn('[Dashboard] Card', index, 'missing data-rec-id attribute');
+                    return;
+                }
+                
+                const tooltip = document.getElementById('tooltip-' + recId);
+                console.log('[Dashboard] Looking for tooltip tooltip-' + recId + ':', tooltip ? 'FOUND' : 'NOT FOUND');
+                
+                if (!tooltip) {
+                    console.warn('[Dashboard] Tooltip not found for recId:', recId);
+                    return;
+                }
+                
+                // Skip if already initialized
+                if (card.hasAttribute('data-tooltip-initialized')) {
+                    console.log('[Dashboard] Card', index, 'already initialized, skipping');
+                    return;
+                }
+                card.setAttribute('data-tooltip-initialized', 'true');
+                console.log('[Dashboard] Initializing tooltip for card', index, 'with recId:', recId);
+                
+                let hoverTimeout;
+                
+                card.addEventListener('mouseenter', function() {
+                    console.log('[Dashboard] Mouse entered card', recId);
+                    hoverTimeout = setTimeout(function() {
+                        console.log('[Dashboard] Showing tooltip for', recId);
+                        tooltip.classList.add('visible');
+                        positionRecommendationTooltip(card, tooltip);
+                    }, 500);
+                });
+                
+                card.addEventListener('mouseleave', function() {
+                    console.log('[Dashboard] Mouse left card', recId);
+                    clearTimeout(hoverTimeout);
+                    tooltip.classList.remove('visible');
+                });
+                
+                card.addEventListener('mousemove', function(e) {
+                    if (tooltip.classList.contains('visible')) {
+                        positionRecommendationTooltip(card, tooltip, e);
+                    }
+                });
+            });
+        }
+        
+        function positionRecommendationTooltip(card, tooltip, event) {
+            const rect = card.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+            
+            let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+            let top = rect.bottom + 10;
+            
+            if (event) {
+                left = event.clientX - tooltipRect.width / 2;
+                top = event.clientY - tooltipRect.height - 10;
+            }
+            
+            // Keep tooltip within viewport
+            if (left < 10) left = 10;
+            if (left + tooltipRect.width > window.innerWidth - 10) {
+                left = window.innerWidth - tooltipRect.width - 10;
+            }
+            if (top < 10) {
+                top = rect.top - tooltipRect.height - 10;
+            }
+            
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+        }
+        
+        // Initialize on page load and after DOM updates
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initRecommendationTooltips);
+        } else {
+            initRecommendationTooltips();
+        }
+        
+        // Re-initialize after a short delay to catch dynamically added elements
+        setTimeout(initRecommendationTooltips, 100);
+        setTimeout(initRecommendationTooltips, 500);
     </script>
     """)
 
@@ -2724,6 +2847,19 @@ def build_recommendations_section():
         ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
         ui.separator()
         
+        # Recommendation mode toggle
+        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
+        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
+        with mode_toggle_row:
+            ui.label("Recommendation Type:").classes("text-sm")
+            mode_select = ui.select(
+                options={
+                    'templates': 'Task Templates',
+                    'instances': 'Initialized Tasks'
+                },
+                value='templates'
+            ).classes("w-40")
+        
         metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
         metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
         default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
@@ -2787,7 +2923,7 @@ def build_recommendations_section():
                         selected_metrics_state[:] = default_metrics
                     
                     print(f"[Dashboard] Metric search: '{search_query}' -> {len(selected_metrics_state)} metrics selected: {selected_metrics_state}")
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
+                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
                 except Exception as ex:
                     print(f"[Dashboard] Error in debounced search: {ex}")
             
@@ -2874,19 +3010,33 @@ def build_recommendations_section():
                 dash_filters['categories'] = categories_val
                 
                 print(f"[Dashboard] Filters applied: {dash_filters}")
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
+                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
             
             ui.button("APPLY", on_click=apply_filters).props("dense")
+        
+        # Handle mode change
+        def on_mode_change(e):
+            recommendation_mode['value'] = mode_select.value
+            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
+        
+        mode_select.on('update:model-value', on_mode_change)
         
         # Recommendations container
         rec_container = ui.column().classes("w-full")
         
         # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map)
+        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
 
 
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None):
-    """Refresh the recommendations display based on selected metrics."""
+def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
+    """Refresh the recommendations display based on selected metrics.
+    
+    Args:
+        target_container: UI container to render recommendations in
+        selected_metrics: List of metric labels to display
+        metric_key_map: Mapping from metric labels to keys
+        mode: 'templates' for task templates or 'instances' for initialized tasks
+    """
     target_container.clear()
     
     # Normalize selected metrics (list of labels)
@@ -2904,41 +3054,116 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
     # Get recommendations for the selected metrics (top 3)
     # Use module-level dash_filters if available, otherwise empty dict
     filters = globals().get('dash_filters', {})
-    recs = an.recommendations_by_category(metric_keys, filters, limit=3)
-    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for metrics '{metric_keys}', filters {filters}")
+    
+    if mode == 'instances':
+        recs = an.recommendations_from_instances(metric_keys, filters, limit=3)
+    else:
+        recs = an.recommendations_by_category(metric_keys, filters, limit=3)
+    
+    print(f"[Dashboard] Recommendations result ({len(recs)} entries) for mode '{mode}', metrics '{metric_keys}', filters {filters}")
+    print(f"[Dashboard] Full recommendations list: {[r.get('task_name') or r.get('instance_id') for r in recs]}")
     
     if not recs:
+        print("[Dashboard] No recommendations available - showing empty message")
         with target_container:
             ui.label("No recommendations available").classes("text-xs text-gray-500")
         return
     
+    print(f"[Dashboard] Rendering {len(recs)} recommendation cards in container")
     with target_container:
-        for rec in recs:
+        for idx, rec in enumerate(recs):
+            print(f"[Dashboard] Rendering recommendation card {idx + 1}/{len(recs)}: {rec.get('task_name') or rec.get('instance_id')}")
             task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            metric_values = rec.get('metric_values', {}) or {}
+            description = rec.get('description', '').strip()
+            score_val = rec.get('score')
+            sub_scores = rec.get('sub_scores', {})
+            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
             
-            # Format the recommendation card
-            with ui.card().classes("recommendation-card"):
+            # Format the recommendation card with hover tooltip
+            print(f"[Dashboard] Creating card for rec_id: {rec_id}, task: {task_label}")
+            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
+            card_element.props(f'data-rec-id="{rec_id}"')
+            print(f"[Dashboard] Card created with data-rec-id={rec_id}, tooltip should be: tooltip-{rec_id}")
+            with card_element:
+                # Task name
                 ui.label(task_label).classes("font-bold text-sm mb-1")
                 
-                # Show score
-                score_val = rec.get('score')
-                score_text = f"Score: {score_val}" if score_val is not None else "Score: —"
-                ui.label(score_text).classes("text-xs text-gray-600 mb-1")
+                # Show normalized score prominently
+                if score_val is not None:
+                    score_text = f"Recommendation Score: {score_val:.1f}/100"
+                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
+                else:
+                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
                 
-                # Show only the selected metrics
-                for label in selected_metrics:
-                    key = metric_key_map.get(label, label)
-                    val = metric_values.get(key, "—")
+                # Show initialization notes if available
+                if description:
+                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
+                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
+                        ui.label(description).classes("text-xs text-gray-700")
+                else:
+                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
+                
+                # Button action depends on mode
+                if mode == 'instances':
+                    instance_id = rec.get('instance_id')
+                    if instance_id:
+                        # Capture instance_id in lambda closure
+                        ui.button("VIEW",
+                                  on_click=lambda iid=instance_id: ui.navigate.to(f'/initialize-task?instance_id={iid}')
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No instance ID").classes("text-xs text-gray-400")
+                else:
+                    # Template mode - initialize button
+                    task_id = rec.get('task_id')
+                    if task_id:
+                        # Capture task_id in lambda closure
+                        ui.button("INITIALIZE",
+                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  ).props("dense size=sm").classes("w-full")
+                    else:
+                        ui.label("No task ID").classes("text-xs text-gray-400")
+            
+            # Create tooltip with sub-scores using the same pattern as task tooltips
+            print(f"[Dashboard] Creating tooltip HTML for {rec_id} with {len([v for v in sub_scores.values() if v is not None])} sub-scores")
+            
+            # Build tooltip content similar to format_colored_tooltip
+            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
+            
+            # Add sub-scores to tooltip
+            score_labels = {
+                'relief_score': 'Relief Score',
+                'cognitive_load': 'Cognitive Load',
+                'emotional_load': 'Emotional Load',
+                'physical_load': 'Physical Load',
+                'stress_level': 'Stress Level',
+                'behavioral_score': 'Behavioral Score',
+                'net_wellbeing_normalized': 'Net Wellbeing',
+                'net_load': 'Net Load',
+                'net_relief_proxy': 'Net Relief',
+                'mental_energy_needed': 'Mental Energy',
+                'task_difficulty': 'Task Difficulty',
+                'historical_efficiency': 'Historical Efficiency',
+                'duration_minutes': 'Duration (min)',
+            }
+            
+            for key, label in score_labels.items():
+                val = sub_scores.get(key)
+                if val is not None:
                     try:
-                        if isinstance(val, (int, float)):
-                            display_val = f"{val:.1f}"
-                        else:
-                            display_val = str(val)
-                    except Exception:
-                        display_val = "—"
-                    ui.label(f"{label}: {display_val}").classes("text-xs text-gray-500")
-                
-                ui.button("INITIALIZE",
-                          on_click=lambda rid=rec.get('task_id'): init_quick(rid)
-                          ).props("dense size=sm").classes("w-full")
+                        display_val = f"{float(val):.1f}"
+                    except (ValueError, TypeError):
+                        display_val = str(val)
+                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
+            
+            formatted_tooltip = ''.join(tooltip_parts)
+            tooltip_id = f'tooltip-{rec_id}'
+            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
+            
+            # Add tooltip to body using the same method as task tooltips
+            ui.add_body_html(tooltip_html)
+            print(f"[Dashboard] Tooltip HTML added to body for {rec_id}")
+    
+    # Initialize tooltips after all cards are created (same pattern as task tooltips)
+    print(f"[Dashboard] Initializing recommendation tooltips after rendering {len(recs)} cards")
+    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
