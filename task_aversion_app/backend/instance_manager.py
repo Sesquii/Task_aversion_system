@@ -6,7 +6,10 @@ from typing import Optional, List, Dict
 import json
 import time
 
+from backend.performance_logger import get_perf_logger
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+perf_logger = get_perf_logger()
 class InstanceManager:
     def __init__(self):
         # Default to database (SQLite) unless USE_CSV is explicitly set
@@ -82,76 +85,77 @@ class InstanceManager:
         Reload CSV file with retry logic to handle file locking issues.
         Common causes: Excel/other programs have file open, OneDrive sync, or concurrent access.
         """
-        last_error = None
-        for attempt in range(max_retries):
-            try:
-                self.df = pd.read_csv(self.file, dtype=str).fillna('')
-                # Success - break out of retry loop
-                break
-            except PermissionError as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
-                    delay = initial_delay * (2 ** attempt)
-                    print(f"[InstanceManager] Permission denied reading {self.file} (attempt {attempt + 1}/{max_retries}). "
-                          f"Retrying in {delay:.2f}s... "
-                          f"Tip: Close Excel/other programs that may have this file open.")
-                    time.sleep(delay)
-                else:
-                    # Last attempt failed
-                    print(f"[InstanceManager] ERROR: Failed to read {self.file} after {max_retries} attempts. "
-                          f"File may be locked by another process (Excel, OneDrive sync, etc.). "
-                          f"Using empty DataFrame as fallback.")
-                    # Fallback to empty DataFrame with expected columns
+        with perf_logger.operation("_reload_csv", file=self.file):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    self.df = pd.read_csv(self.file, dtype=str).fillna('')
+                    # Success - break out of retry loop
+                    break
+                except PermissionError as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
+                        delay = initial_delay * (2 ** attempt)
+                        print(f"[InstanceManager] Permission denied reading {self.file} (attempt {attempt + 1}/{max_retries}). "
+                              f"Retrying in {delay:.2f}s... "
+                              f"Tip: Close Excel/other programs that may have this file open.")
+                        time.sleep(delay)
+                    else:
+                        # Last attempt failed
+                        print(f"[InstanceManager] ERROR: Failed to read {self.file} after {max_retries} attempts. "
+                              f"File may be locked by another process (Excel, OneDrive sync, etc.). "
+                              f"Using empty DataFrame as fallback.")
+                        # Fallback to empty DataFrame with expected columns
+                        self.df = pd.DataFrame(columns=[
+                            'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
+                            'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
+                            'is_completed','is_deleted','status','delay_minutes'
+                        ])
+                except Exception as e:
+                    # Other errors (file not found, corrupted, etc.)
+                    last_error = e
+                    print(f"[InstanceManager] ERROR reading {self.file}: {e}")
+                    # Fallback to empty DataFrame
                     self.df = pd.DataFrame(columns=[
                         'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
                         'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
                         'is_completed','is_deleted','status','delay_minutes'
                     ])
-            except Exception as e:
-                # Other errors (file not found, corrupted, etc.)
-                last_error = e
-                print(f"[InstanceManager] ERROR reading {self.file}: {e}")
-                # Fallback to empty DataFrame
-                self.df = pd.DataFrame(columns=[
-                    'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
-                    'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
-                    'is_completed','is_deleted','status','delay_minutes'
-                ])
-                break
-        defaults = {
-            'predicted': '',
-            'actual': '',
-            'cancelled_at': '',
-            'duration_minutes': '',
-            'delay_minutes': '',
-            'relief_score': '',
-            'cognitive_load': '',
-            'mental_energy_needed': '',
-            'task_difficulty': '',
-            'emotional_load': '',
-            'environmental_effect': '',
-            'skills_improved': '',
-            'behavioral_score': '',
-            'net_relief': '',
-        }
-        for col, default in defaults.items():
-            if col not in self.df.columns:
-                self.df[col] = default
-        if 'status' not in self.df.columns:
-            if 'is_completed' in self.df.columns:
-                self.df['status'] = self.df['is_completed'].apply(
-                    lambda v: 'completed' if str(v).lower() == 'true' else 'active'
-                )
+                    break
+            defaults = {
+                'predicted': '',
+                'actual': '',
+                'cancelled_at': '',
+                'duration_minutes': '',
+                'delay_minutes': '',
+                'relief_score': '',
+                'cognitive_load': '',
+                'mental_energy_needed': '',
+                'task_difficulty': '',
+                'emotional_load': '',
+                'environmental_effect': '',
+                'skills_improved': '',
+                'behavioral_score': '',
+                'net_relief': '',
+            }
+            for col, default in defaults.items():
+                if col not in self.df.columns:
+                    self.df[col] = default
+            if 'status' not in self.df.columns:
+                if 'is_completed' in self.df.columns:
+                    self.df['status'] = self.df['is_completed'].apply(
+                        lambda v: 'completed' if str(v).lower() == 'true' else 'active'
+                    )
+                else:
+                    self.df['status'] = 'active'
             else:
-                self.df['status'] = 'active'
-        else:
-            fallback = (
-                self.df['is_completed'].apply(lambda v: 'completed' if str(v).lower() == 'true' else 'active')
-                if 'is_completed' in self.df.columns else pd.Series(['active'] * len(self.df), index=self.df.index)
-            )
-            self.df['status'] = self.df['status'].replace('', None)
-            self.df['status'] = self.df['status'].fillna(fallback)
+                fallback = (
+                    self.df['is_completed'].apply(lambda v: 'completed' if str(v).lower() == 'true' else 'active')
+                    if 'is_completed' in self.df.columns else pd.Series(['active'] * len(self.df), index=self.df.index)
+                )
+                self.df['status'] = self.df['status'].replace('', None)
+                self.df['status'] = self.df['status'].fillna(fallback)
 
     def _save(self, max_retries=5, initial_delay=0.1):
         """Save data (CSV only)."""
@@ -166,35 +170,36 @@ class InstanceManager:
         Note: We don't reload after saving since the DataFrame is already in memory.
         Reload only happens when needed (e.g., at initialization or before operations).
         """
-        last_error = None
-        for attempt in range(max_retries):
-            try:
-                self.df.to_csv(self.file, index=False)
-                # Success - no need to reload since DataFrame is already in memory
-                break
-            except PermissionError as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
-                    delay = initial_delay * (2 ** attempt)
-                    print(f"[InstanceManager] Permission denied writing to {self.file} (attempt {attempt + 1}/{max_retries}). "
-                          f"Retrying in {delay:.2f}s... "
-                          f"Tip: Close Excel/other programs that may have this file open.")
-                    time.sleep(delay)
-                else:
-                    # Last attempt failed
-                    print(f"[InstanceManager] ERROR: Failed to write to {self.file} after {max_retries} attempts. "
-                          f"File may be locked by another process (Excel, OneDrive sync, etc.). "
-                          f"Changes were not saved.")
-                    raise PermissionError(
-                        f"Cannot save to {self.file}. File is locked. "
-                        f"Please close any programs (Excel, etc.) that have this file open and try again."
-                    ) from e
-            except Exception as e:
-                # Other errors (disk full, etc.)
-                last_error = e
-                print(f"[InstanceManager] ERROR writing to {self.file}: {e}")
-                raise
+        with perf_logger.operation("_save_csv", file=self.file, rows=len(self.df)):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    self.df.to_csv(self.file, index=False)
+                    # Success - no need to reload since DataFrame is already in memory
+                    break
+                except PermissionError as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
+                        delay = initial_delay * (2 ** attempt)
+                        print(f"[InstanceManager] Permission denied writing to {self.file} (attempt {attempt + 1}/{max_retries}). "
+                              f"Retrying in {delay:.2f}s... "
+                              f"Tip: Close Excel/other programs that may have this file open.")
+                        time.sleep(delay)
+                    else:
+                        # Last attempt failed
+                        print(f"[InstanceManager] ERROR: Failed to write to {self.file} after {max_retries} attempts. "
+                              f"File may be locked by another process (Excel, OneDrive sync, etc.). "
+                              f"Changes were not saved.")
+                        raise PermissionError(
+                            f"Cannot save to {self.file}. File is locked. "
+                            f"Please close any programs (Excel, etc.) that have this file open and try again."
+                        ) from e
+                except Exception as e:
+                    # Other errors (disk full, etc.)
+                    last_error = e
+                    print(f"[InstanceManager] ERROR writing to {self.file}: {e}")
+                    raise
 
     # ============================================================================
     # Helper Methods for CSV/Database Conversion
@@ -788,21 +793,23 @@ class InstanceManager:
     
     def _get_instance_csv(self, instance_id):
         """CSV-specific get_instance."""
-        self._reload()
-        rows = self.df[self.df['instance_id'] == instance_id]
-        if rows.empty:
-            return None
-        row = rows.iloc[0].to_dict()
-        return row
+        with perf_logger.operation("_get_instance_csv", instance_id=instance_id):
+            self._reload()
+            rows = self.df[self.df['instance_id'] == instance_id]
+            if rows.empty:
+                return None
+            row = rows.iloc[0].to_dict()
+            return row
     
     def _get_instance_db(self, instance_id):
         """Database-specific get_instance."""
         try:
-            with self.db_session() as session:
-                instance = session.query(self.TaskInstance).filter(
-                    self.TaskInstance.instance_id == instance_id
-                ).first()
-                return instance.to_dict() if instance else None
+            with perf_logger.operation("_get_instance_db", instance_id=instance_id):
+                with self.db_session() as session:
+                    instance = session.query(self.TaskInstance).filter(
+                        self.TaskInstance.instance_id == instance_id
+                    ).first()
+                    return instance.to_dict() if instance else None
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in get_instance and CSV fallback is disabled: {e}") from e
@@ -1416,37 +1423,39 @@ class InstanceManager:
     def _add_prediction_to_instance_csv(self, instance_id, predicted: dict):
         """CSV-specific add_prediction_to_instance."""
         import json
-        self._reload()
-        idx = self.df.index[self.df['instance_id'] == instance_id][0]
-        self.df.at[idx,'predicted'] = json.dumps(predicted)
-        # Always set initialized_at when prediction is added (initialization happens)
-        if not self.df.at[idx,'initialized_at'] or self.df.at[idx,'initialized_at'] == '':
-            self.df.at[idx,'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # Extract predicted values to columns (only if columns are empty)
-        self._update_attributes_from_payload(idx, predicted)
-        self._save()
+        with perf_logger.operation("_add_prediction_to_instance_csv", instance_id=instance_id):
+            self._reload()
+            idx = self.df.index[self.df['instance_id'] == instance_id][0]
+            self.df.at[idx,'predicted'] = json.dumps(predicted)
+            # Always set initialized_at when prediction is added (initialization happens)
+            if not self.df.at[idx,'initialized_at'] or self.df.at[idx,'initialized_at'] == '':
+                self.df.at[idx,'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            # Extract predicted values to columns (only if columns are empty)
+            self._update_attributes_from_payload(idx, predicted)
+            self._save()
     
     def _add_prediction_to_instance_db(self, instance_id, predicted: dict):
         """Database-specific add_prediction_to_instance."""
         try:
-            with self.db_session() as session:
-                instance = session.query(self.TaskInstance).filter(
-                    self.TaskInstance.instance_id == instance_id
-                ).first()
-                if not instance:
-                    raise ValueError(f"Instance {instance_id} not found")
-                
-                # Update predicted JSON
-                instance.predicted = predicted or {}
-                
-                # Always set initialized_at when prediction is added (initialization happens)
-                if not instance.initialized_at:
-                    instance.initialized_at = datetime.now()
-                
-                # Extract predicted values to columns (only if columns are empty)
-                self._update_attributes_from_payload_db(instance, predicted)
-                
-                session.commit()
+            with perf_logger.operation("_add_prediction_to_instance_db", instance_id=instance_id):
+                with self.db_session() as session:
+                    instance = session.query(self.TaskInstance).filter(
+                        self.TaskInstance.instance_id == instance_id
+                    ).first()
+                    if not instance:
+                        raise ValueError(f"Instance {instance_id} not found")
+                    
+                    # Update predicted JSON
+                    instance.predicted = predicted or {}
+                    
+                    # Always set initialized_at when prediction is added (initialization happens)
+                    if not instance.initialized_at:
+                        instance.initialized_at = datetime.now()
+                    
+                    # Extract predicted values to columns (only if columns are empty)
+                    self._update_attributes_from_payload_db(instance, predicted)
+                    
+                    session.commit()
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in add_prediction_to_instance and CSV fallback is disabled: {e}") from e
@@ -1975,173 +1984,183 @@ class InstanceManager:
     def _get_previous_task_averages_csv(self, task_id: str) -> dict:
         """CSV-specific get_previous_task_averages."""
         import json
-        self._reload()
-        
-        # Get all initialized instances for this task (completed or not)
-        initialized = self.df[
-            (self.df['task_id'] == task_id) & 
-            (self.df['initialized_at'].astype(str).str.strip() != '')
-        ].copy()
-        
-        if initialized.empty:
-            return {}
-        
-        # Extract values from predicted JSON
-        relief_values = []
-        mental_energy_values = []
-        difficulty_values = []
-        cognitive_values = []  # Keep for backward compatibility
-        physical_values = []
-        emotional_values = []
-        motivation_values = []
-        aversion_values = []
-        
-        for idx in initialized.index:
-            predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
-            if predicted_str and predicted_str != '{}':
-                try:
-                    pred_dict = json.loads(predicted_str)
-                    if isinstance(pred_dict, dict):
-                        # Extract values, handling both 0-10 and 0-100 scales
-                        for key, value_list in [
-                            ('expected_relief', relief_values),
-                            ('expected_mental_energy', mental_energy_values),
-                            ('expected_difficulty', difficulty_values),
-                            ('expected_cognitive_load', cognitive_values),  # Backward compatibility
-                            ('expected_physical_load', physical_values),
-                            ('expected_emotional_load', emotional_values),
-                            ('motivation', motivation_values),
-                            ('expected_aversion', aversion_values)
-                        ]:
-                            val = pred_dict.get(key)
-                            if val is not None:
-                                try:
-                                    num_val = float(val)
-                                    # Scale from 0-10 to 0-100 if value is <= 10
-                                    if num_val <= 10 and num_val >= 0:
-                                        num_val = num_val * 10
-                                    value_list.append(num_val)
-                                except (ValueError, TypeError):
-                                    pass
-                        
-                        # Backward compatibility: if old cognitive_load exists but new fields don't, use it for both
-                        if 'expected_mental_energy' not in pred_dict and 'expected_difficulty' not in pred_dict:
-                            old_cog = pred_dict.get('expected_cognitive_load')
-                            if old_cog is not None:
-                                try:
-                                    num_val = float(old_cog)
-                                    if num_val <= 10 and num_val >= 0:
-                                        num_val = num_val * 10
-                                    # Use old cognitive_load for both new fields
-                                    mental_energy_values.append(num_val)
-                                    difficulty_values.append(num_val)
-                                except (ValueError, TypeError):
-                                    pass
-                except (json.JSONDecodeError, Exception):
-                    pass
-        
-        result = {}
-        if relief_values:
-            result['expected_relief'] = round(sum(relief_values) / len(relief_values))
-        if mental_energy_values:
-            result['expected_mental_energy'] = round(sum(mental_energy_values) / len(mental_energy_values))
-        if difficulty_values:
-            result['expected_difficulty'] = round(sum(difficulty_values) / len(difficulty_values))
-        if cognitive_values:
-            result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))  # Backward compatibility
-        if physical_values:
-            result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
-        if emotional_values:
-            result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
-        if motivation_values:
-            result['motivation'] = round(sum(motivation_values) / len(motivation_values))
-        if aversion_values:
-            result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
-        
-        return result
+        with perf_logger.operation("_get_previous_task_averages_csv", task_id=task_id):
+            self._reload()
+            
+            # Get all initialized instances for this task (completed or not)
+            initialized = self.df[
+                (self.df['task_id'] == task_id) & 
+                (self.df['initialized_at'].astype(str).str.strip() != '')
+            ].copy()
+            
+            perf_logger.log_event("_get_previous_task_averages_csv_filtered", 
+                                task_id=task_id, 
+                                initialized_count=len(initialized))
+            
+            if initialized.empty:
+                return {}
+            
+            # Extract values from predicted JSON
+            relief_values = []
+            mental_energy_values = []
+            difficulty_values = []
+            cognitive_values = []  # Keep for backward compatibility
+            physical_values = []
+            emotional_values = []
+            motivation_values = []
+            aversion_values = []
+            
+            for idx in initialized.index:
+                predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
+                if predicted_str and predicted_str != '{}':
+                    try:
+                        pred_dict = json.loads(predicted_str)
+                        if isinstance(pred_dict, dict):
+                            # Extract values, handling both 0-10 and 0-100 scales
+                            for key, value_list in [
+                                ('expected_relief', relief_values),
+                                ('expected_mental_energy', mental_energy_values),
+                                ('expected_difficulty', difficulty_values),
+                                ('expected_cognitive_load', cognitive_values),  # Backward compatibility
+                                ('expected_physical_load', physical_values),
+                                ('expected_emotional_load', emotional_values),
+                                ('motivation', motivation_values),
+                                ('expected_aversion', aversion_values)
+                            ]:
+                                val = pred_dict.get(key)
+                                if val is not None:
+                                    try:
+                                        num_val = float(val)
+                                        # Scale from 0-10 to 0-100 if value is <= 10
+                                        if num_val <= 10 and num_val >= 0:
+                                            num_val = num_val * 10
+                                        value_list.append(num_val)
+                                    except (ValueError, TypeError):
+                                        pass
+                            
+                            # Backward compatibility: if old cognitive_load exists but new fields don't, use it for both
+                            if 'expected_mental_energy' not in pred_dict and 'expected_difficulty' not in pred_dict:
+                                old_cog = pred_dict.get('expected_cognitive_load')
+                                if old_cog is not None:
+                                    try:
+                                        num_val = float(old_cog)
+                                        if num_val <= 10 and num_val >= 0:
+                                            num_val = num_val * 10
+                                        # Use old cognitive_load for both new fields
+                                        mental_energy_values.append(num_val)
+                                        difficulty_values.append(num_val)
+                                    except (ValueError, TypeError):
+                                        pass
+                    except (json.JSONDecodeError, Exception):
+                        pass
+            
+            result = {}
+            if relief_values:
+                result['expected_relief'] = round(sum(relief_values) / len(relief_values))
+            if mental_energy_values:
+                result['expected_mental_energy'] = round(sum(mental_energy_values) / len(mental_energy_values))
+            if difficulty_values:
+                result['expected_difficulty'] = round(sum(difficulty_values) / len(difficulty_values))
+            if cognitive_values:
+                result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))  # Backward compatibility
+            if physical_values:
+                result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
+            if emotional_values:
+                result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
+            if motivation_values:
+                result['motivation'] = round(sum(motivation_values) / len(motivation_values))
+            if aversion_values:
+                result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
+            
+            return result
     
     def _get_previous_task_averages_db(self, task_id: str) -> dict:
         """Database-specific get_previous_task_averages."""
         try:
             import json
-            with self.db_session() as session:
-                # Get all initialized instances for this task (completed or not)
-                instances = session.query(self.TaskInstance).filter(
-                    self.TaskInstance.task_id == task_id,
-                    self.TaskInstance.initialized_at.isnot(None)
-                ).all()
-                
-                if not instances:
-                    return {}
-                
-                # Extract values from predicted JSON
-                relief_values = []
-                mental_energy_values = []
-                difficulty_values = []
-                cognitive_values = []  # Keep for backward compatibility
-                physical_values = []
-                emotional_values = []
-                motivation_values = []
-                aversion_values = []
-                
-                for instance in instances:
-                    predicted = instance.predicted or {}
-                    if isinstance(predicted, dict):
-                        # Extract values, handling both 0-10 and 0-100 scales
-                        for key, value_list in [
-                            ('expected_relief', relief_values),
-                            ('expected_mental_energy', mental_energy_values),
-                            ('expected_difficulty', difficulty_values),
-                            ('expected_cognitive_load', cognitive_values),  # Backward compatibility
-                            ('expected_physical_load', physical_values),
-                            ('expected_emotional_load', emotional_values),
-                            ('motivation', motivation_values),
-                            ('expected_aversion', aversion_values)
-                        ]:
-                            val = predicted.get(key)
-                            if val is not None:
-                                try:
-                                    num_val = float(val)
-                                    # Scale from 0-10 to 0-100 if value is <= 10
-                                    if num_val <= 10 and num_val >= 0:
-                                        num_val = num_val * 10
-                                    value_list.append(num_val)
-                                except (ValueError, TypeError):
-                                    pass
-                        
-                        # Backward compatibility: if old cognitive_load exists but new fields don't, use it for both
-                        if 'expected_mental_energy' not in predicted and 'expected_difficulty' not in predicted:
-                            old_cog = predicted.get('expected_cognitive_load')
-                            if old_cog is not None:
-                                try:
-                                    num_val = float(old_cog)
-                                    if num_val <= 10 and num_val >= 0:
-                                        num_val = num_val * 10
-                                    # Use old cognitive_load for both new fields
-                                    mental_energy_values.append(num_val)
-                                    difficulty_values.append(num_val)
-                                except (ValueError, TypeError):
-                                    pass
-                
-                result = {}
-                if relief_values:
-                    result['expected_relief'] = round(sum(relief_values) / len(relief_values))
-                if mental_energy_values:
-                    result['expected_mental_energy'] = round(sum(mental_energy_values) / len(mental_energy_values))
-                if difficulty_values:
-                    result['expected_difficulty'] = round(sum(difficulty_values) / len(difficulty_values))
-                if cognitive_values:
-                    result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))  # Backward compatibility
-                if physical_values:
-                    result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
-                if emotional_values:
-                    result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
-                if motivation_values:
-                    result['motivation'] = round(sum(motivation_values) / len(motivation_values))
-                if aversion_values:
-                    result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
-                
-                return result
+            with perf_logger.operation("_get_previous_task_averages_db", task_id=task_id):
+                with self.db_session() as session:
+                    # Get all initialized instances for this task (completed or not)
+                    instances = session.query(self.TaskInstance).filter(
+                        self.TaskInstance.task_id == task_id,
+                        self.TaskInstance.initialized_at.isnot(None)
+                    ).all()
+                    
+                    perf_logger.log_event("_get_previous_task_averages_db_filtered", 
+                                        task_id=task_id, 
+                                        initialized_count=len(instances))
+                    
+                    if not instances:
+                        return {}
+                    
+                    # Extract values from predicted JSON
+                    relief_values = []
+                    mental_energy_values = []
+                    difficulty_values = []
+                    cognitive_values = []  # Keep for backward compatibility
+                    physical_values = []
+                    emotional_values = []
+                    motivation_values = []
+                    aversion_values = []
+                    
+                    for instance in instances:
+                        predicted = instance.predicted or {}
+                        if isinstance(predicted, dict):
+                            # Extract values, handling both 0-10 and 0-100 scales
+                            for key, value_list in [
+                                ('expected_relief', relief_values),
+                                ('expected_mental_energy', mental_energy_values),
+                                ('expected_difficulty', difficulty_values),
+                                ('expected_cognitive_load', cognitive_values),  # Backward compatibility
+                                ('expected_physical_load', physical_values),
+                                ('expected_emotional_load', emotional_values),
+                                ('motivation', motivation_values),
+                                ('expected_aversion', aversion_values)
+                            ]:
+                                val = predicted.get(key)
+                                if val is not None:
+                                    try:
+                                        num_val = float(val)
+                                        # Scale from 0-10 to 0-100 if value is <= 10
+                                        if num_val <= 10 and num_val >= 0:
+                                            num_val = num_val * 10
+                                        value_list.append(num_val)
+                                    except (ValueError, TypeError):
+                                        pass
+                            
+                            # Backward compatibility: if old cognitive_load exists but new fields don't, use it for both
+                            if 'expected_mental_energy' not in predicted and 'expected_difficulty' not in predicted:
+                                old_cog = predicted.get('expected_cognitive_load')
+                                if old_cog is not None:
+                                    try:
+                                        num_val = float(old_cog)
+                                        if num_val <= 10 and num_val >= 0:
+                                            num_val = num_val * 10
+                                        # Use old cognitive_load for both new fields
+                                        mental_energy_values.append(num_val)
+                                        difficulty_values.append(num_val)
+                                    except (ValueError, TypeError):
+                                        pass
+                    
+                    result = {}
+                    if relief_values:
+                        result['expected_relief'] = round(sum(relief_values) / len(relief_values))
+                    if mental_energy_values:
+                        result['expected_mental_energy'] = round(sum(mental_energy_values) / len(mental_energy_values))
+                    if difficulty_values:
+                        result['expected_difficulty'] = round(sum(difficulty_values) / len(difficulty_values))
+                    if cognitive_values:
+                        result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))  # Backward compatibility
+                    if physical_values:
+                        result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
+                    if emotional_values:
+                        result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
+                    if motivation_values:
+                        result['motivation'] = round(sum(motivation_values) / len(motivation_values))
+                    if aversion_values:
+                        result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
+                    
+                    return result
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in get_previous_task_averages and CSV fallback is disabled: {e}") from e
@@ -2287,73 +2306,75 @@ class InstanceManager:
     def _get_initial_aversion_csv(self, task_id: str) -> Optional[float]:
         """CSV-specific get_initial_aversion."""
         import json
-        self._reload()
-        
-        # Get all initialized instances for this task, sorted by initialized_at
-        initialized = self.df[
-            (self.df['task_id'] == task_id) & 
-            (self.df['initialized_at'].astype(str).str.strip() != '')
-        ].copy()
-        
-        if initialized.empty:
+        with perf_logger.operation("_get_initial_aversion_csv", task_id=task_id):
+            self._reload()
+            
+            # Get all initialized instances for this task, sorted by initialized_at
+            initialized = self.df[
+                (self.df['task_id'] == task_id) & 
+                (self.df['initialized_at'].astype(str).str.strip() != '')
+            ].copy()
+            
+            if initialized.empty:
+                return None
+            
+            # Sort by initialized_at to get the first one
+            initialized['initialized_at_dt'] = pd.to_datetime(initialized['initialized_at'], errors='coerce')
+            initialized = initialized.sort_values('initialized_at_dt')
+            
+            # Get the first instance's predicted data
+            first_idx = initialized.index[0]
+            predicted_str = str(initialized.at[first_idx, 'predicted'] or '{}').strip()
+            if predicted_str and predicted_str != '{}':
+                try:
+                    pred_dict = json.loads(predicted_str)
+                    if isinstance(pred_dict, dict):
+                        initial_aversion = pred_dict.get('initial_aversion')
+                        if initial_aversion is not None:
+                            try:
+                                num_val = float(initial_aversion)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                return round(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                except (json.JSONDecodeError, Exception):
+                    pass
+            
             return None
-        
-        # Sort by initialized_at to get the first one
-        initialized['initialized_at_dt'] = pd.to_datetime(initialized['initialized_at'], errors='coerce')
-        initialized = initialized.sort_values('initialized_at_dt')
-        
-        # Get the first instance's predicted data
-        first_idx = initialized.index[0]
-        predicted_str = str(initialized.at[first_idx, 'predicted'] or '{}').strip()
-        if predicted_str and predicted_str != '{}':
-            try:
-                pred_dict = json.loads(predicted_str)
-                if isinstance(pred_dict, dict):
-                    initial_aversion = pred_dict.get('initial_aversion')
-                    if initial_aversion is not None:
-                        try:
-                            num_val = float(initial_aversion)
-                            # Scale from 0-10 to 0-100 if value is <= 10
-                            if num_val <= 10 and num_val >= 0:
-                                num_val = num_val * 10
-                            return round(num_val)
-                        except (ValueError, TypeError):
-                            pass
-            except (json.JSONDecodeError, Exception):
-                pass
-        
-        return None
     
     def _get_initial_aversion_db(self, task_id: str) -> Optional[float]:
         """Database-specific get_initial_aversion."""
         try:
             import json
-            with self.db_session() as session:
-                # Get all initialized instances for this task, sorted by initialized_at
-                instances = session.query(self.TaskInstance).filter(
-                    self.TaskInstance.task_id == task_id,
-                    self.TaskInstance.initialized_at.isnot(None)
-                ).order_by(self.TaskInstance.initialized_at.asc()).all()
+            with perf_logger.operation("_get_initial_aversion_db", task_id=task_id):
+                with self.db_session() as session:
+                    # Get all initialized instances for this task, sorted by initialized_at
+                    instances = session.query(self.TaskInstance).filter(
+                        self.TaskInstance.task_id == task_id,
+                        self.TaskInstance.initialized_at.isnot(None)
+                    ).order_by(self.TaskInstance.initialized_at.asc()).all()
                 
-                if not instances:
+                    if not instances:
+                        return None
+                    
+                    # Get the first instance's predicted data
+                    first_instance = instances[0]
+                    predicted = first_instance.predicted or {}
+                    if isinstance(predicted, dict):
+                        initial_aversion = predicted.get('initial_aversion')
+                        if initial_aversion is not None:
+                            try:
+                                num_val = float(initial_aversion)
+                                # Scale from 0-10 to 0-100 if value is <= 10
+                                if num_val <= 10 and num_val >= 0:
+                                    num_val = num_val * 10
+                                return round(num_val)
+                            except (ValueError, TypeError):
+                                pass
+                    
                     return None
-                
-                # Get the first instance's predicted data
-                first_instance = instances[0]
-                predicted = first_instance.predicted or {}
-                if isinstance(predicted, dict):
-                    initial_aversion = predicted.get('initial_aversion')
-                    if initial_aversion is not None:
-                        try:
-                            num_val = float(initial_aversion)
-                            # Scale from 0-10 to 0-100 if value is <= 10
-                            if num_val <= 10 and num_val >= 0:
-                                num_val = num_val * 10
-                            return round(num_val)
-                        except (ValueError, TypeError):
-                            pass
-            
-            return None
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in get_initial_aversion and CSV fallback is disabled: {e}") from e
@@ -2370,28 +2391,29 @@ class InstanceManager:
     
     def _has_completed_task_csv(self, task_id: str) -> bool:
         """CSV-specific has_completed_task."""
-        self._reload()
-        if not task_id:
-            return False
-        
-        # Filter to this task_id first
-        task_instances = self.df[self.df['task_id'] == task_id]
-        if task_instances.empty:
-            return False
-        
-        # Check if any instance has is_completed == 'True' (case-insensitive)
-        is_completed_check = task_instances['is_completed'].astype(str).str.strip().str.lower() == 'true'
-        
-        # Check if any instance has completed_at set
-        completed_at_check = task_instances['completed_at'].astype(str).str.strip() != ''
-        
-        # Check if any instance has status == 'completed' (case-insensitive)
-        status_check = task_instances['status'].astype(str).str.strip().str.lower() == 'completed'
-        
-        # Return True if any of these conditions are met
-        has_completed = (is_completed_check | completed_at_check | status_check).any()
-        
-        return bool(has_completed)
+        with perf_logger.operation("_has_completed_task_csv", task_id=task_id):
+            self._reload()
+            if not task_id:
+                return False
+            
+            # Filter to this task_id first
+            task_instances = self.df[self.df['task_id'] == task_id]
+            if task_instances.empty:
+                return False
+            
+            # Check if any instance has is_completed == 'True' (case-insensitive)
+            is_completed_check = task_instances['is_completed'].astype(str).str.strip().str.lower() == 'true'
+            
+            # Check if any instance has completed_at set
+            completed_at_check = task_instances['completed_at'].astype(str).str.strip() != ''
+            
+            # Check if any instance has status == 'completed' (case-insensitive)
+            status_check = task_instances['status'].astype(str).str.strip().str.lower() == 'completed'
+            
+            # Return True if any of these conditions are met
+            has_completed = (is_completed_check | completed_at_check | status_check).any()
+            
+            return bool(has_completed)
     
     def _has_completed_task_db(self, task_id: str) -> bool:
         """Database-specific has_completed_task."""
@@ -2399,17 +2421,18 @@ class InstanceManager:
             if not task_id:
                 return False
             
-            with self.db_session() as session:
-                # Check if any instance has is_completed=True, completed_at set, or status='completed'
-                count = session.query(self.TaskInstance).filter(
-                    self.TaskInstance.task_id == task_id
-                ).filter(
-                    (self.TaskInstance.is_completed == True) |
-                    (self.TaskInstance.completed_at.isnot(None)) |
-                    (self.TaskInstance.status == 'completed')
-                ).count()
-                
-                return count > 0
+            with perf_logger.operation("_has_completed_task_db", task_id=task_id):
+                with self.db_session() as session:
+                    # Check if any instance has is_completed=True, completed_at set, or status='completed'
+                    count = session.query(self.TaskInstance).filter(
+                        self.TaskInstance.task_id == task_id
+                    ).filter(
+                        (self.TaskInstance.is_completed == True) |
+                        (self.TaskInstance.completed_at.isnot(None)) |
+                        (self.TaskInstance.status == 'completed')
+                    ).count()
+                    
+                    return count > 0
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in has_completed_task and CSV fallback is disabled: {e}") from e

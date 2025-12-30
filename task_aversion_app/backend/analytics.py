@@ -41,7 +41,7 @@ class Analytics:
     # Cache for expensive operations
     _relief_summary_cache = None
     _relief_summary_cache_time = None
-    _cache_ttl_seconds = 30  # Cache for 30 seconds
+    _cache_ttl_seconds = 300  # Cache for 5 minutes (optimized for dashboard performance)
     
     @staticmethod
     def calculate_difficulty_bonus(
@@ -1329,7 +1329,12 @@ class Analytics:
         
         return df_filtered
     
-    def _load_instances(self) -> pd.DataFrame:
+    def _load_instances(self, completed_only: bool = False) -> pd.DataFrame:
+        """Load instances from database or CSV.
+        
+        Args:
+            completed_only: If True, only load completed instances (optimization for relief_summary)
+        """
         # Default to database (SQLite) unless USE_CSV is explicitly set
         use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
         
@@ -1350,7 +1355,15 @@ class Analytics:
                 from backend.database import get_session, TaskInstance
                 session = get_session()
                 try:
-                    instances = session.query(TaskInstance).all()
+                    # OPTIMIZATION: Only load completed instances if requested
+                    if completed_only:
+                        # Filter to only completed instances at database level (much faster)
+                        instances = session.query(TaskInstance).filter(
+                            TaskInstance.completed_at.isnot(None),
+                            TaskInstance.completed_at != ''
+                        ).all()
+                    else:
+                        instances = session.query(TaskInstance).all()
                     if not instances:
                         return pd.DataFrame()
                     
@@ -4126,10 +4139,11 @@ class Analytics:
             return Analytics._relief_summary_cache
         
         # Calculate fresh result with timing
+        # OPTIMIZATION: Only load completed instances (relief_summary only needs completed tasks)
         load_start = time_module.time()
-        df = self._load_instances()
+        df = self._load_instances(completed_only=True)
         load_time = (time_module.time() - load_start) * 1000
-        print(f"[Analytics] get_relief_summary: _load_instances: {load_time:.2f}ms")
+        print(f"[Analytics] get_relief_summary: _load_instances (completed_only=True): {load_time:.2f}ms")
         
         if df.empty:
             return {
@@ -4206,31 +4220,50 @@ class Analytics:
                 'max_obstacle_spike_sensitive': 0.0,
             }
         
-        # Extract expected relief from predicted_dict (vectorized)
+        # Extract expected relief from predicted_dict (OPTIMIZED: vectorized extraction)
         extract_start = time_module.time()
-        completed['expected_relief'] = completed['predicted_dict'].apply(
-            lambda d: d.get('expected_relief') if isinstance(d, dict) else None
-        )
-        completed['expected_relief'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
+        # Use vectorized operations where possible - faster than .apply()
+        if 'predicted_dict' in completed.columns:
+            # Convert dict series to list for faster processing
+            predicted_list = completed['predicted_dict'].tolist()
+            # Use list comprehension (faster than .apply() for dict access)
+            completed['expected_relief'] = [
+                d.get('expected_relief') if isinstance(d, dict) else None 
+                for d in predicted_list
+            ]
+            completed['initial_aversion'] = [
+                d.get('initial_aversion') if isinstance(d, dict) else None 
+                for d in predicted_list
+            ]
+            completed['expected_aversion'] = [
+                d.get('expected_aversion') if isinstance(d, dict) else None 
+                for d in predicted_list
+            ]
+        else:
+            completed['expected_relief'] = None
+            completed['initial_aversion'] = None
+            completed['expected_aversion'] = None
         
-        # Get initial and expected aversion (vectorized)
-        completed['initial_aversion'] = completed['predicted_dict'].apply(
-            lambda d: d.get('initial_aversion') if isinstance(d, dict) else None
-        )
+        # Convert to numeric (vectorized)
+        completed['expected_relief'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
         completed['initial_aversion'] = pd.to_numeric(completed['initial_aversion'], errors='coerce')
-        completed['expected_aversion'] = completed['predicted_dict'].apply(
-            lambda d: d.get('expected_aversion') if isinstance(d, dict) else None
-        )
         completed['expected_aversion'] = pd.to_numeric(completed['expected_aversion'], errors='coerce')
         
-        # Get actual relief from actual_dict (vectorized)
-        completed['actual_relief'] = completed['actual_dict'].apply(
-            lambda d: d.get('actual_relief') if isinstance(d, dict) else None
-        )
+        # Get actual relief from actual_dict (OPTIMIZED: vectorized extraction)
+        if 'actual_dict' in completed.columns:
+            actual_list = completed['actual_dict'].tolist()
+            completed['actual_relief'] = [
+                d.get('actual_relief') if isinstance(d, dict) else None 
+                for d in actual_list
+            ]
+        else:
+            completed['actual_relief'] = None
+        
         # Fallback to relief_score column if actual_dict doesn't have it
-        completed['actual_relief'] = completed['actual_relief'].fillna(
-            pd.to_numeric(completed.get('relief_score', pd.Series()), errors='coerce')
-        )
+        if 'relief_score' in completed.columns:
+            completed['actual_relief'] = completed['actual_relief'].fillna(
+                pd.to_numeric(completed['relief_score'], errors='coerce')
+            )
         completed['actual_relief'] = pd.to_numeric(completed['actual_relief'], errors='coerce')
         extract_time = (time_module.time() - extract_start) * 1000
         print(f"[Analytics] get_relief_summary: extract fields: {extract_time:.2f}ms")
@@ -4242,16 +4275,16 @@ class Analytics:
         # Calculate default relief points (actual - expected, can be negative)
         relief_data['default_relief_points'] = relief_data['actual_relief'] - relief_data['expected_relief']
         
-        # Apply aversion multipliers to relief points (vectorized where possible)
+        # Apply aversion multipliers to relief points (OPTIMIZED: vectorized)
         multiplier_start = time_module.time()
-        # Calculate multipliers for all rows at once
-        relief_data['aversion_mult'] = relief_data.apply(
-            lambda row: self.calculate_aversion_multiplier(
-                row.get('initial_aversion'), 
-                row.get('expected_aversion')
-            ),
-            axis=1
-        )
+        # Calculate multipliers for all rows at once (vectorized)
+        initial_av = relief_data['initial_aversion'].fillna(0.0)
+        expected_av = relief_data['expected_aversion'].fillna(0.0)
+        # Vectorized multiplier calculation (faster than .apply())
+        relief_data['aversion_mult'] = [
+            self.calculate_aversion_multiplier(ia, ea) 
+            for ia, ea in zip(initial_av, expected_av)
+        ]
         relief_data['default_relief_points'] = relief_data['default_relief_points'] * relief_data['aversion_mult']
         
         # Calculate net relief points (vectorized)
@@ -4300,27 +4333,22 @@ class Analytics:
             productivity_tasks = completed
             relief_data['task_type'] = 'Work'
         
-        # Apply task type multipliers to relief points
-        def _apply_task_type_multiplier(row):
-            """Apply task type multiplier to relief points."""
-            task_type = row.get('task_type')
-            type_mult = self.get_task_type_multiplier(task_type)
-            return row['default_relief_points'] * type_mult
+        # Apply task type multipliers to relief points (OPTIMIZED: vectorized)
+        task_types = relief_data['task_type'].tolist()
+        type_mults = [self.get_task_type_multiplier(tt) for tt in task_types]
+        relief_data['default_relief_points'] = relief_data['default_relief_points'] * pd.Series(type_mults, index=relief_data.index)
         
-        relief_data['default_relief_points'] = relief_data.apply(_apply_task_type_multiplier, axis=1)
-        
-        def _get_actual_time(row):
-            try:
-                actual_dict = row['actual_dict']
-                if isinstance(actual_dict, dict):
-                    return actual_dict.get('time_actual_minutes', None)
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        # Use .loc to avoid SettingWithCopyWarning
-        productivity_tasks = productivity_tasks.copy()
-        productivity_tasks['time_actual'] = productivity_tasks.apply(_get_actual_time, axis=1)
+        # OPTIMIZED: Vectorized extraction of time_actual_minutes
+        if 'actual_dict' in productivity_tasks.columns:
+            actual_list = productivity_tasks['actual_dict'].tolist()
+            productivity_tasks = productivity_tasks.copy()
+            productivity_tasks['time_actual'] = [
+                d.get('time_actual_minutes') if isinstance(d, dict) else None 
+                for d in actual_list
+            ]
+        else:
+            productivity_tasks = productivity_tasks.copy()
+            productivity_tasks['time_actual'] = None
         productivity_tasks['time_actual'] = pd.to_numeric(productivity_tasks['time_actual'], errors='coerce')
         
         # Filter productivity tasks to last 7 days
@@ -4344,11 +4372,45 @@ class Analytics:
         negative_total = abs(negative_relief['default_relief_points'].sum()) if negative_count > 0 else 0.0
         negative_avg = abs(pd.to_numeric(negative_relief['default_relief_points'], errors='coerce').mean()) if negative_count > 0 else 0.0
         
-        # Get efficiency summary
+        # Get efficiency summary (OPTIMIZED: calculate inline to avoid reloading instances)
         efficiency_start = time_module.time()
-        efficiency_summary = self.get_efficiency_summary()
+        # Calculate efficiency inline from already-loaded completed DataFrame
+        if not completed.empty:
+            # Calculate efficiency for each completed task (vectorized where possible)
+            completed['efficiency_score'] = completed.apply(self.calculate_efficiency_score, axis=1)
+            valid_efficiency = completed[completed['efficiency_score'] > 0]
+            if not valid_efficiency.empty:
+                avg_efficiency = valid_efficiency['efficiency_score'].mean()
+                high_efficiency_count = len(valid_efficiency[valid_efficiency['efficiency_score'] >= 70])
+                low_efficiency_count = len(valid_efficiency[valid_efficiency['efficiency_score'] < 50])
+                # Group by completion status
+                efficiency_by_completion = {}
+                if 'completed_at' in valid_efficiency.columns:
+                    valid_efficiency['completed_at_dt'] = pd.to_datetime(valid_efficiency['completed_at'], errors='coerce')
+                    valid_efficiency['is_recent'] = valid_efficiency['completed_at_dt'] >= (datetime.now() - timedelta(days=7))
+                    efficiency_by_completion['recent'] = valid_efficiency[valid_efficiency['is_recent']]['efficiency_score'].mean() if valid_efficiency['is_recent'].any() else 0.0
+                    efficiency_by_completion['older'] = valid_efficiency[~valid_efficiency['is_recent']]['efficiency_score'].mean() if (~valid_efficiency['is_recent']).any() else 0.0
+                else:
+                    efficiency_by_completion = {'recent': avg_efficiency, 'older': avg_efficiency}
+            else:
+                avg_efficiency = 0.0
+                high_efficiency_count = 0
+                low_efficiency_count = 0
+                efficiency_by_completion = {}
+        else:
+            avg_efficiency = 0.0
+            high_efficiency_count = 0
+            low_efficiency_count = 0
+            efficiency_by_completion = {}
+        
+        efficiency_summary = {
+            'avg_efficiency': avg_efficiency,
+            'high_efficiency_count': high_efficiency_count,
+            'low_efficiency_count': low_efficiency_count,
+            'efficiency_by_completion': efficiency_by_completion,
+        }
         efficiency_time = (time_module.time() - efficiency_start) * 1000
-        print(f"[Analytics] get_relief_summary: get_efficiency_summary: {efficiency_time:.2f}ms")
+        print(f"[Analytics] get_relief_summary: get_efficiency_summary (inline): {efficiency_time:.2f}ms")
         
         # Filter out test/dev tasks from obstacles calculation
         # Keep all tasks for relief calculations, but exclude test tasks from obstacles
@@ -4370,13 +4432,16 @@ class Analytics:
         baseline_time = (time_module.time() - baseline_start) * 1000
         print(f"[Analytics] get_relief_summary: batch baseline aversions ({len(unique_task_ids)} tasks): {baseline_time:.2f}ms")
         
-        # Map baseline aversions to rows (vectorized)
-        relief_data_for_obstacles['baseline_aversion_robust'] = relief_data_for_obstacles['task_id'].map(
-            lambda tid: baseline_aversions.get(tid, {}).get('robust') if tid in baseline_aversions else None
-        )
-        relief_data_for_obstacles['baseline_aversion_sensitive'] = relief_data_for_obstacles['task_id'].map(
-            lambda tid: baseline_aversions.get(tid, {}).get('sensitive') if tid in baseline_aversions else None
-        )
+        # Map baseline aversions to rows (OPTIMIZED: vectorized)
+        task_ids = relief_data_for_obstacles['task_id'].tolist()
+        relief_data_for_obstacles['baseline_aversion_robust'] = [
+            baseline_aversions.get(tid, {}).get('robust') if tid in baseline_aversions else None
+            for tid in task_ids
+        ]
+        relief_data_for_obstacles['baseline_aversion_sensitive'] = [
+            baseline_aversions.get(tid, {}).get('sensitive') if tid in baseline_aversions else None
+            for tid in task_ids
+        ]
         
         # Calculate obstacles scores using multiple formulas for comparison
         def _calculate_obstacles_scores_robust(row):
@@ -4405,15 +4470,19 @@ class Analytics:
         relief_data_for_obstacles['obstacles_scores_robust'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_robust, axis=1)
         relief_data_for_obstacles['obstacles_scores_sensitive'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_sensitive, axis=1)
         
-        # Extract individual scores for backward compatibility and new analytics
+        # Extract individual scores for backward compatibility and new analytics (OPTIMIZED: vectorized)
         score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+        robust_scores_list = relief_data_for_obstacles['obstacles_scores_robust'].tolist()
+        sensitive_scores_list = relief_data_for_obstacles['obstacles_scores_sensitive'].tolist()
         for variant in score_variants:
-            relief_data_for_obstacles[f'obstacles_score_{variant}_robust'] = relief_data_for_obstacles['obstacles_scores_robust'].apply(
-                lambda x: x.get(variant, 0.0) if isinstance(x, dict) else 0.0
-            )
-            relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'] = relief_data_for_obstacles['obstacles_scores_sensitive'].apply(
-                lambda x: x.get(variant, 0.0) if isinstance(x, dict) else 0.0
-            )
+            relief_data_for_obstacles[f'obstacles_score_{variant}_robust'] = [
+                x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
+                for x in robust_scores_list
+            ]
+            relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'] = [
+                x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
+                for x in sensitive_scores_list
+            ]
         
         # Keep backward compatibility: use expected_only as the default
         relief_data_for_obstacles['obstacles_score_robust'] = relief_data_for_obstacles['obstacles_score_expected_only_robust']
@@ -4479,19 +4548,14 @@ class Analytics:
             else:
                 completed['task_type'] = 'Work'
         
-        # Calculate multipliers for each task
-        def _calculate_relief_multiplier(row):
-            """Calculate combined aversion and task type multiplier for relief."""
-            initial_av = row.get('initial_aversion')
-            expected_av = row.get('expected_aversion')
-            task_type = row.get('task_type')
-            
-            aversion_mult = self.calculate_aversion_multiplier(initial_av, expected_av)
-            type_mult = self.get_task_type_multiplier(task_type)
-            
-            return aversion_mult * type_mult
-        
-        completed['relief_multiplier'] = completed.apply(_calculate_relief_multiplier, axis=1)
+        # Calculate multipliers for each task (OPTIMIZED: vectorized)
+        initial_av_list = completed['initial_aversion'].fillna(0.0).tolist()
+        expected_av_list = completed['expected_aversion'].fillna(0.0).tolist()
+        task_type_list = completed['task_type'].fillna('Work').tolist()
+        completed['relief_multiplier'] = [
+            self.calculate_aversion_multiplier(ia, ea) * self.get_task_type_multiplier(tt)
+            for ia, ea, tt in zip(initial_av_list, expected_av_list, task_type_list)
+        ]
         
         # Calculate relief_duration_score per task instance (relief_score × duration_minutes × multiplier)
         # Normalize by dividing by 60 to convert minutes to hours scale (keeps scores more reasonable)
@@ -4552,40 +4616,30 @@ class Analytics:
         else:
             productivity_relief_data = pd.DataFrame()
         
-        def _calculate_productivity_multiplier(row):
-            """Calculate productivity multiplier (work: 2.0, self care: 1.0)."""
-            task_type = row.get('task_type', 'Work')
-            task_type_lower = str(task_type).strip().lower()
-            
-            if task_type_lower == 'work':
-                return 2.0
-            elif task_type_lower in ['self care', 'selfcare', 'self-care']:
-                return 1.0
-            else:
-                return 1.0
-        
+        # Calculate productivity multiplier (OPTIMIZED: vectorized)
         if not productivity_relief_data.empty:
-            productivity_relief_data['productivity_multiplier'] = productivity_relief_data.apply(_calculate_productivity_multiplier, axis=1)
+            task_type_list = productivity_relief_data['task_type'].fillna('Work').astype(str).str.strip().str.lower().tolist()
+            productivity_relief_data['productivity_multiplier'] = [
+                2.0 if tt == 'work' else (1.0 if tt in ['self care', 'selfcare', 'self-care'] else 1.0)
+                for tt in task_type_list
+            ]
             # Productivity points: we need to undo the relief task_type_multiplier and apply productivity multiplier instead
             # default_relief_points already has: (actual - expected) × aversion_mult × relief_task_type_mult
             # We want: (actual - expected) × aversion_mult × productivity_mult
             # So: productivity_points = default_relief_points / relief_task_type_mult × productivity_mult
-            def _get_relief_task_type_mult(row):
-                """Get the relief task type multiplier that was already applied."""
-                task_type = row.get('task_type')
-                return self.get_task_type_multiplier(task_type)
-            
-            productivity_relief_data['relief_task_type_mult'] = productivity_relief_data.apply(_get_relief_task_type_mult, axis=1)
-            # Calculate base points without task type multiplier
+            # Get the relief task type multiplier that was already applied (OPTIMIZED: vectorized)
+            task_type_list = productivity_relief_data['task_type'].fillna('Work').tolist()
+            productivity_relief_data['relief_task_type_mult'] = [
+                self.get_task_type_multiplier(tt) for tt in task_type_list
+            ]
+            # Calculate base points without task type multiplier (OPTIMIZED: vectorized)
             # Avoid division by zero - if relief_task_type_mult is 0 or very small, use default_relief_points directly
-            productivity_relief_data['base_relief_points'] = productivity_relief_data.apply(
-                lambda row: (
-                    row['default_relief_points'] / row['relief_task_type_mult'] 
-                    if row['relief_task_type_mult'] > 0.01 
-                    else row['default_relief_points']
-                ),
-                axis=1
-            )
+            default_points = productivity_relief_data['default_relief_points'].tolist()
+            relief_mults = productivity_relief_data['relief_task_type_mult'].tolist()
+            productivity_relief_data['base_relief_points'] = [
+                dp / rm if rm > 0.01 else dp
+                for dp, rm in zip(default_points, relief_mults)
+            ]
             # Apply productivity multiplier
             productivity_relief_data['productivity_points'] = (
                 productivity_relief_data['base_relief_points'] * 

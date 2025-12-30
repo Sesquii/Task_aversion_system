@@ -5,8 +5,11 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Optional
 
+from backend.performance_logger import get_perf_logger
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 TASKS_FILE = 'data/tasks.csv'
+perf_logger = get_perf_logger()
 
 class TaskManager:
     def __init__(self):
@@ -124,16 +127,18 @@ class TaskManager:
     
     def _get_task_csv(self, task_id):
         """CSV-specific get_task."""
-        self._reload_csv()
-        rows = self.df[self.df['task_id'] == task_id]
-        return rows.iloc[0].to_dict() if not rows.empty else None
+        with perf_logger.operation("_get_task_csv", task_id=task_id):
+            self._reload_csv()
+            rows = self.df[self.df['task_id'] == task_id]
+            return rows.iloc[0].to_dict() if not rows.empty else None
     
     def _get_task_db(self, task_id):
         """Database-specific get_task."""
         try:
-            with self.db_session() as session:
-                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
-                return task.to_dict() if task else None
+            with perf_logger.operation("_get_task_db", task_id=task_id):
+                with self.db_session() as session:
+                    task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                    return task.to_dict() if task else None
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in get_task and CSV fallback is disabled: {e}") from e
@@ -170,8 +175,9 @@ class TaskManager:
 
     def save_initialization_entry(self, entry):
         """Save a task initialization entry."""
-        self.initialization_entries.append(entry)
-        print(f"Saved initialization entry: {entry}")
+        with perf_logger.operation("save_initialization_entry", instance_id=entry.get('instance_id')):
+            self.initialization_entries.append(entry)
+            print(f"Saved initialization entry: {entry}")
     def get_all(self):
         """Return all tasks as DataFrame (CSV) or list of dicts (database). Works with both backends."""
         if self.use_db:

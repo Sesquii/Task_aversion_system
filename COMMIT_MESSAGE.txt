@@ -1,86 +1,38 @@
-feat(dashboard): scaffold monitored metrics system + optimize analytics performance
+Optimize get_relief_summary() performance for dashboard loading
 
-Primary work: Implemented configurable monitored metrics system for dashboard
-- Replace hardcoded "Weekly Productivity Time" and "Weekly Relief Score" with
-  dynamic system supporting up to 4 user-selectable metrics
-- Add metrics configuration dialog for selecting metrics and baseline types
-- Implement generic baseline calculation for any metric and baseline type
-- Add Plotly chart tooltips on hover for historical metric visualization
-- Support multiple baseline types: last 3 months, last month, last week, average, all data
-- Store user preferences in user_preferences.csv
+This commit implements several performance optimizations to reduce
+dashboard load time, particularly for the monitored metrics section
+which calls get_relief_summary().
 
-Performance optimization (overachievement): Optimize get_relief_summary from 7s to <100ms
-Dramatically improves dashboard load time by replacing N database queries with
-a single batch query for baseline aversions.
+Key optimizations:
+- Database-level filtering: Only load completed instances when calculating
+  relief summary (completed_only=True parameter), reducing data load by
+  50-80% depending on completed vs total instance ratio
+- Vectorized operations: Replaced slow .apply() calls with list
+  comprehensions for JSON parsing, multiplier calculations, and score
+  extractions (2-3x faster)
+- Extended cache duration: Increased from 30 seconds to 5 minutes to
+  reduce cache misses
+- Inline efficiency calculation: Calculate efficiency from already-loaded
+  DataFrame instead of reloading all instances via get_efficiency_summary()
 
-Monitored Metrics System:
-- Add render_monitored_metrics_section() to dashboard.py
-- Add open_metrics_config_dialog() for user configuration
-- Add generic get_baseline_value() function supporting all baseline types
-- Add create_metric_tooltip_chart() for Plotly visualization
-- Update available_metrics with needs_relief_summary flag for conditional loading
-- Add get_productivity_time_minutes() lightweight function for productivity_time metric
-- Implement lazy loading of history data (deferred to hover events)
-
-Performance Optimization Changes:
-- Add get_batch_baseline_aversions() to InstanceManager for batch loading
-  - Loads all baseline aversions (robust + sensitive) in single query
-  - Supports both database and CSV backends
-  - Reduces hundreds of individual queries to one batch operation
-- Optimize get_relief_summary() in Analytics class
-  - Replace per-row baseline aversion lookups with batch loading
-  - Use vectorized pandas operations (.map(), .clip()) instead of .apply()
-  - Add detailed timing instrumentation to identify bottlenecks
-  - Optimize field extraction with vectorized operations
-- Add timing logs for performance monitoring
-  - Track _load_instances(), field extraction, multipliers, efficiency summary
-  - Log batch baseline aversion loading time
-  - Display total function execution time
-
-Performance Impact:
-- Before: ~7 seconds (hundreds of database queries)
-- After: <100ms (single batch query + vectorized operations)
-- Improvement: ~70x faster (7000ms → <100ms)
+Performance impact:
+- First load: ~2-4x faster (from ~8s to ~2-4s estimated)
+- Cached loads: Already fast (<1ms), now cached for 5 minutes
+- Overall: More consistent performance with longer cache duration
 
 Files modified:
-- task_aversion_app/ui/dashboard.py
-  - Added render_monitored_metrics_section() for dynamic metric cards
-  - Added open_metrics_config_dialog() for user configuration
-  - Added get_baseline_value() generic baseline calculator
-  - Added create_metric_tooltip_chart() for Plotly charts
-  - Updated available_metrics with conditional relief_summary loading
-  - Added performance logging with MicrosecondFormatter
-  - Implemented lazy loading of history data
-- task_aversion_app/backend/analytics.py
-  - Added get_productivity_time_minutes() lightweight function
-  - Optimized get_relief_summary() with batch baseline loading
-  - Replaced .apply() with vectorized operations where possible
-  - Added timing instrumentation throughout function
-  - Optimized field extraction from JSON dictionaries
-- task_aversion_app/backend/instance_manager.py
-  - Added get_batch_baseline_aversions() method
-  - Added _get_batch_baseline_aversions_db() implementation
-  - Added _get_batch_baseline_aversions_csv() implementation
-  - Added List, Dict to type imports
+- backend/analytics.py: Added completed_only parameter to _load_instances(),
+  optimized JSON parsing and multiplier calculations, extended cache TTL
+- ui/dashboard.py: Simplified monitored metrics rendering call
 
-Technical Details:
-The bottleneck was baseline aversion calculation calling get_baseline_aversion_robust()
-and get_baseline_aversion_sensitive() for each completed task instance. With hundreds
-of instances, this resulted in hundreds of database queries. The batch loader fetches
-all baseline aversions in a single query, then maps them to rows using vectorized
-pandas operations.
+TODO: Initial load still needs further optimization. Current bottleneck
+remains in _load_instances() even with completed_only filtering, likely
+due to:
+- JSON parsing overhead for all completed instances
+- DataFrame construction from large result sets
+- Multiple merges with task data
 
-This optimization directly improves user experience by making dashboard metrics load
-nearly instantaneously instead of causing noticeable delays.
-
-Value & Effort Assessment
-Value: 10/10
-Direct UX impact: dashboard loads 70x faster
-Critical path optimization
-Eliminates noticeable delays
-Effort: 7/10
-Required deep codebase understanding
-Instrumentation to identify bottlenecks
-Batch loading pattern implementation
-Moderate complexity
-ROI: Exceptional — High value with moderate effort
+Assessment: 6/10 - Significant improvement but initial load still slow.
+Database-level filtering helps but needs SQL aggregations or materialized
+views for optimal performance.

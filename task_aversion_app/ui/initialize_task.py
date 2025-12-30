@@ -2,22 +2,28 @@ from typing import Optional
 from nicegui import ui
 from datetime import datetime
 import json
+import time
 
 from fastapi import Request
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
+from backend.performance_logger import get_perf_logger
 from ui.popup_modal import show_popup_modal
 
 im = InstanceManager()
 popup_dispatcher = PopupDispatcher()
 user_state = UserStateManager()
+perf_logger = get_perf_logger()
 
 
 def initialize_task_page(task_manager, emotion_manager):
 
     @ui.page('/initialize-task')
     def page(request: Request):
+        page_start_time = time.perf_counter()
+        perf_logger.log_event("initialize_task_page_load_start", instance_id=request.query_params.get("instance_id"))
+        
         params = request.query_params  # ✅
 
         instance_id = params.get("instance_id")
@@ -27,13 +33,19 @@ def initialize_task_page(task_manager, emotion_manager):
             ui.navigate.to('/')
             return
 
-        instance = im.get_instance(instance_id)
+        with perf_logger.operation("get_instance", instance_id=instance_id):
+            instance = im.get_instance(instance_id)
+        
         if not instance:
             ui.notify("Instance not found", color='negative')
             ui.navigate.to('/')
             return
 
-        task = task_manager.get_task(instance.get('task_id'))
+        task_id = instance.get('task_id')
+        
+        with perf_logger.operation("get_task", task_id=task_id):
+            task = task_manager.get_task(task_id)
+        
         predicted_raw = instance.get('predicted') or '{}'
         try:
             predicted_data = json.loads(predicted_raw) if predicted_raw else {}
@@ -49,15 +61,20 @@ def initialize_task_page(task_manager, emotion_manager):
             default_estimate = 0
         
         # Get previous averages for this task
-        task_id = instance.get('task_id')
-        previous_averages = im.get_previous_task_averages(task_id) if task_id else {}
+        with perf_logger.operation("get_previous_task_averages", task_id=task_id):
+            previous_averages = im.get_previous_task_averages(task_id) if task_id else {}
         
         # Get initial aversion (first time doing the task) and previous aversion
-        initial_aversion = im.get_initial_aversion(task_id) if task_id else None
+        with perf_logger.operation("get_initial_aversion", task_id=task_id):
+            initial_aversion = im.get_initial_aversion(task_id) if task_id else None
         previous_aversion = previous_averages.get('expected_aversion')
         
         # Check if task has been completed at least once
-        has_completed = im.has_completed_task(task_id) if task_id else False
+        with perf_logger.operation("has_completed_task", task_id=task_id):
+            has_completed = im.has_completed_task(task_id) if task_id else False
+        
+        page_load_duration = (time.perf_counter() - page_start_time) * 1000
+        perf_logger.log_timing("initialize_task_page_load_total", page_load_duration, instance_id=instance_id, task_id=task_id)
         
         # Check if task has a default_initial_aversion from template
         template_default_aversion = None
@@ -400,10 +417,23 @@ def initialize_task_page(task_manager, emotion_manager):
                     'sliders_adjusted': sliders_adjusted
                 }
                 
+                perf_logger.log_event("popup_evaluation_start", 
+                                    instance_id=instance_id, 
+                                    task_id=task_id,
+                                    sliders_adjusted=sliders_adjusted)
+                popup_eval_start = time.perf_counter()
+                
                 popup = popup_dispatcher.evaluate_triggers(
                     completion_context=initialization_context,
                     user_id='default'
                 )
+                
+                popup_eval_duration = (time.perf_counter() - popup_eval_start) * 1000
+                perf_logger.log_timing("popup_evaluation", popup_eval_duration,
+                                     instance_id=instance_id,
+                                     task_id=task_id,
+                                     sliders_adjusted=sliders_adjusted,
+                                     popup_shown=popup is not None)
                 
                 # If popup should show, display it and handle response
                 if popup:
@@ -434,6 +464,9 @@ def initialize_task_page(task_manager, emotion_manager):
             
             def do_save():
                 """Internal function that actually performs the save."""
+                save_start_time = time.perf_counter()
+                perf_logger.log_event("do_save_start", instance_id=instance_id, task_id=task_id)
+                
                 emotion_list = parse_emotions_input()
                 physical_value = (
                     custom_physical.value if physical_context.value == "Custom..." else physical_context.value
@@ -466,7 +499,8 @@ def initialize_task_page(task_manager, emotion_manager):
                 
                 # Save emotions to persistent state so they carry over to other tasks
                 # Setting to 0 removes the emotion from persistent state
-                user_state.set_persistent_emotions(emotion_values)
+                with perf_logger.operation("set_persistent_emotions"):
+                    user_state.set_persistent_emotions(emotion_values)
 
                 # Determine if this is the first time doing the task
                 # Check if there are any other initialized instances for this task
@@ -523,13 +557,27 @@ def initialize_task_page(task_manager, emotion_manager):
 
                 try:
                     # This will set initialized_at if not already set
-                    im.add_prediction_to_instance(instance_id, predicted_payload)
+                    with perf_logger.operation("add_prediction_to_instance", instance_id=instance_id):
+                        im.add_prediction_to_instance(instance_id, predicted_payload)
                 except Exception as exc:
+                    perf_logger.log_error("add_prediction_to_instance failed", exc, instance_id=instance_id)
                     ui.notify(f"Failed to save instance: {exc}", color='negative')
                     return
 
-                task_manager.save_initialization_entry(entry)
+                with perf_logger.operation("save_initialization_entry", instance_id=instance_id):
+                    task_manager.save_initialization_entry(entry)
+                
+                save_duration = (time.perf_counter() - save_start_time) * 1000
+                perf_logger.log_timing("do_save_total", save_duration, instance_id=instance_id, task_id=task_id)
+                
+                navigation_start = time.perf_counter()
+                perf_logger.log_event("navigation_start", instance_id=instance_id, task_id=task_id)
+                
                 ui.notify("Task initialized!", color='positive')
                 ui.navigate.to('/')
+                
+                # Log navigation time (this happens asynchronously, so we log it immediately)
+                navigation_duration = (time.perf_counter() - navigation_start) * 1000
+                perf_logger.log_timing("navigation_triggered", navigation_duration, instance_id=instance_id, task_id=task_id)
 
             ui.button("Save Initialization", on_click=save).classes("mt-4")
