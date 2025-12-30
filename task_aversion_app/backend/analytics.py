@@ -41,6 +41,8 @@ class Analytics:
     # Cache for expensive operations
     _relief_summary_cache = None
     _relief_summary_cache_time = None
+    _composite_scores_cache = None
+    _composite_scores_cache_time = None
     _cache_ttl_seconds = 300  # Cache for 5 minutes (optimized for dashboard performance)
     
     @staticmethod
@@ -2800,12 +2802,23 @@ class Analytics:
         Returns a dictionary of component_name -> score_value that can be used
         with calculate_composite_score().
         
+        Cached for 5 minutes to improve performance (this is an expensive operation).
+        
         Args:
             days: Number of days to analyze for time-based metrics
             
         Returns:
             Dict with component_name -> score_value (0-100 range where applicable)
         """
+        import time as time_module
+        
+        # Check cache
+        current_time = time_module.time()
+        if (Analytics._composite_scores_cache is not None and 
+            Analytics._composite_scores_cache_time is not None and
+            (current_time - Analytics._composite_scores_cache_time) < Analytics._cache_ttl_seconds):
+            return Analytics._composite_scores_cache.copy()  # Return copy to prevent mutation
+        
         scores = {}
         
         # Get dashboard metrics
@@ -2847,25 +2860,154 @@ class Analytics:
         scores['self_care_frequency'] = min(100.0, avg_self_care * 20.0)  # 5 tasks = 100 score
         
         # Execution score (average of recent completed instances)
-        try:
-            from .instance_manager import InstanceManager
-            instance_manager = InstanceManager()
-            recent_instances = instance_manager.list_recent_completed(limit=100)
-            execution_scores = []
-            
-            for instance in recent_instances:
-                execution_score = self.calculate_execution_score(instance)
-                if execution_score is not None:
-                    execution_scores.append(execution_score)
-            
-            avg_execution_score = sum(execution_scores) / len(execution_scores) if execution_scores else 50.0
-            scores['execution_score'] = avg_execution_score
-        except Exception as e:
-            # If execution score calculation fails, use neutral score
-            print(f"[Analytics] Error calculating execution score: {e}")
-            scores['execution_score'] = 50.0
+        # NOTE: Execution score is calculated separately in chunks by the dashboard
+        # to allow UI to remain responsive. Use get_execution_score_chunked() instead.
+        scores['execution_score'] = 50.0  # Placeholder - will be updated by chunked calculation
+        
+        # Cache the result
+        Analytics._composite_scores_cache = scores.copy()
+        Analytics._composite_scores_cache_time = time_module.time()
         
         return scores
+    
+    def get_execution_score_chunked(self, state: Dict[str, any], batch_size: int = 5, user_id: str = "default", persist: bool = True) -> Dict[str, any]:
+        """Calculate execution score in chunks to allow UI to remain responsive.
+        
+        This method processes instances in small batches, allowing the UI to respond
+        between batches. State is preserved between calls and can persist across page refreshes.
+        
+        Args:
+            state: Dictionary containing:
+                - 'instances': List of instances to process (set on first call or loaded from persistence)
+                - 'current_index': Current index in instances list (0 on first call or loaded from persistence)
+                - 'execution_scores': List of calculated scores (empty on first call or loaded from persistence)
+                - 'completed': Whether all instances have been processed
+            batch_size: Number of instances to process per chunk (default 5)
+            user_id: User ID for persistence (default "default")
+            persist: Whether to save state to user_state (default True)
+            
+        Returns:
+            Updated state dictionary with:
+                - 'completed': True if all instances processed, False otherwise
+                - 'avg_execution_score': Average score if completed, None otherwise
+        """
+        import time as time_module
+        from .user_state import UserStateManager
+        
+        # Try to load persisted state if state is empty
+        if not state or 'instances' not in state or state.get('instances') is None:
+            if persist:
+                user_state = UserStateManager()
+                persisted = user_state.get_execution_score_chunk_state(user_id)
+                if persisted:
+                    # Restore progress from persistence
+                    state['current_index'] = persisted.get('current_index', 0)
+                    state['execution_scores'] = persisted.get('execution_scores', [])
+                    state['completed'] = persisted.get('completed', False)
+                    # Reload instances list (not persisted due to size)
+                    from .instance_manager import InstanceManager
+                    instance_manager = InstanceManager()
+                    state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    # If we had progress, resume from where we left off
+                    if state['current_index'] > 0 and not state['completed']:
+                        # #region agent log
+                        try:
+                            import json as json_module
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'resuming chunked execution score calculation from persistence', 'data': {'resume_index': state['current_index'], 'total': len(state['instances']), 'scores_so_far': len(state['execution_scores'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                        except: pass
+                        # #endregion
+                        # Don't re-initialize, just continue processing
+                    else:
+                        # Fresh start
+                        state['current_index'] = 0
+                        state['execution_scores'] = []
+                        state['completed'] = False
+                else:
+                    # No persisted state - initialize fresh
+                    from .instance_manager import InstanceManager
+                    instance_manager = InstanceManager()
+                    state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    state['current_index'] = 0
+                    state['execution_scores'] = []
+                    state['completed'] = False
+            else:
+                # Not persisting - initialize fresh
+                from .instance_manager import InstanceManager
+                instance_manager = InstanceManager()
+                state['instances'] = instance_manager.list_recent_completed(limit=50)
+                state['current_index'] = 0
+                state['execution_scores'] = []
+                state['completed'] = False
+            
+            # #region agent log
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'starting chunked execution score calculation', 'data': {'instance_count': len(state['instances']), 'batch_size': batch_size, 'resuming': state.get('current_index', 0) > 0}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+        
+        # Process a batch of instances
+        instances = state['instances']
+        current_index = state['current_index']
+        execution_scores = state['execution_scores']
+        
+        end_index = min(current_index + batch_size, len(instances))
+        
+        # #region agent log
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'processing batch', 'data': {'start_index': current_index, 'end_index': end_index, 'total': len(instances)}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        for idx in range(current_index, end_index):
+            try:
+                execution_score = self.calculate_execution_score(instances[idx])
+                if execution_score is not None:
+                    execution_scores.append(execution_score)
+            except Exception as e:
+                print(f"[Analytics] Error calculating execution score for instance {idx}: {e}")
+        
+        state['current_index'] = end_index
+        state['execution_scores'] = execution_scores
+        
+        # Check if we're done
+        if end_index >= len(instances):
+            state['completed'] = True
+            avg_execution_score = sum(execution_scores) / len(execution_scores) if execution_scores else 50.0
+            state['avg_execution_score'] = avg_execution_score
+            
+            # Clear persisted state when completed
+            if persist:
+                try:
+                    user_state = UserStateManager()
+                    user_state.update_preference(user_id, "execution_score_chunk_state", "")  # Clear it
+                except Exception as e:
+                    print(f"[Analytics] Error clearing persisted chunk state: {e}")
+            
+            # #region agent log
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'chunked execution score calculation completed', 'data': {'total_instances': len(instances), 'score_count': len(execution_scores), 'avg_score': avg_execution_score}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+        else:
+            state['completed'] = False
+            state['avg_execution_score'] = None
+            
+            # Persist progress after each chunk
+            if persist:
+                try:
+                    user_state = UserStateManager()
+                    user_state.set_execution_score_chunk_state(state, user_id)
+                except Exception as e:
+                    print(f"[Analytics] Error persisting chunk state: {e}")
+        
+        return state
 
     def get_tracking_consistency_multiplier(self, days: int = 7) -> float:
         """Get tracking consistency score as a multiplier (0.0 to 1.0).
@@ -5649,6 +5791,145 @@ class Analytics:
         
         return result
 
+    def get_generic_metric_history(self, metric_key: str, days: int = 90) -> Dict[str, any]:
+        """Get historical daily data for a generic metric (e.g., stress_level, net_wellbeing).
+        
+        Extracts metric values from completed task instances and groups by date.
+        
+        Args:
+            metric_key: The metric key to extract (e.g., 'stress_level', 'net_wellbeing')
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        import time as time_module
+        
+        # #region agent log
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'HIST', 'location': 'analytics.py:get_generic_metric_history', 'message': 'get_generic_metric_history called', 'data': {'metric_key': metric_key, 'days': days}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse completed_at dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract metric values from actual_dict or predicted_dict
+        def _extract_metric_value(row):
+            """Extract metric value from instance row."""
+            try:
+                # Try actual_dict first (for metrics like stress_level, net_wellbeing)
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                
+                if isinstance(actual_dict, dict):
+                    value = actual_dict.get(metric_key)
+                    if value is not None:
+                        try:
+                            return float(value)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Try predicted_dict as fallback
+                predicted_dict = row.get('predicted_dict', {})
+                if isinstance(predicted_dict, str):
+                    import json
+                    predicted_dict = json.loads(predicted_dict)
+                
+                if isinstance(predicted_dict, dict):
+                    value = predicted_dict.get(metric_key)
+                    if value is not None:
+                        try:
+                            return float(value)
+                        except (ValueError, TypeError):
+                            pass
+            except Exception:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['metric_value'] = completed.apply(_extract_metric_value, axis=1)
+        
+        # Filter to valid rows with metric values
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        daily_avg = daily_avg[daily_avg['date'] >= cutoff_date].copy()
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        
+        # Weekly average (last 7 days)
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        
+        # Three month average (last 90 days)
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        # #region agent log
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'HIST', 'location': 'analytics.py:get_generic_metric_history', 'message': 'get_generic_metric_history completed', 'data': {'metric_key': metric_key, 'dates_count': len(dates), 'values_count': len(values), 'current_value': current_value}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
     def get_task_efficiency_history(self) -> Dict[str, float]:
         """Get average efficiency score per task based on completed instances.
         

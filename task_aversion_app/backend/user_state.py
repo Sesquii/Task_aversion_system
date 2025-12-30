@@ -645,6 +645,50 @@ class UserStateManager:
                 'coloration_baseline': 'last_3_months'
             }
     
+    def get_execution_score_chunk_state(self, user_id: str = "default") -> Optional[Dict[str, Any]]:
+        """Get persisted execution score chunking state.
+        
+        Returns:
+            Dict with chunking state (instances, current_index, execution_scores, etc.)
+            or None if not found
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return None
+        
+        state_json = prefs.get("execution_score_chunk_state", "")
+        if not state_json:
+            return None
+        
+        try:
+            import json
+            return json.loads(state_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    
+    def set_execution_score_chunk_state(self, state: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
+        """Persist execution score chunking state.
+        
+        Args:
+            state: Dict with chunking state (instances, current_index, execution_scores, etc.)
+            user_id: User ID (default "default")
+            
+        Returns:
+            Updated user preferences
+        """
+        import json
+        # Don't persist instances list (can be large) - only persist progress indicators
+        # Reconstruct instances list on next load
+        persisted_state = {
+            'current_index': state.get('current_index', 0),
+            'execution_scores': state.get('execution_scores', []),
+            'completed': state.get('completed', False),
+            'avg_execution_score': state.get('avg_execution_score'),
+            'last_updated': datetime.utcnow().isoformat()
+        }
+        state_json = json.dumps(persisted_state)
+        return self.update_preference(user_id, "execution_score_chunk_state", state_json)
+    
     def set_monitored_metrics_config(self, config: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
         """Set monitored metrics configuration.
         

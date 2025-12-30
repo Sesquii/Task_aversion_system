@@ -35,6 +35,7 @@ CALCULATED_METRICS = [
     {'label': 'Play Time (minutes)', 'value': 'play_time'},
     {'label': 'Thoroughness Score', 'value': 'thoroughness_score'},
     {'label': 'Thoroughness Factor', 'value': 'thoroughness_factor'},
+    {'label': 'Execution Score', 'value': 'execution_score'},
 ]
 
 ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS

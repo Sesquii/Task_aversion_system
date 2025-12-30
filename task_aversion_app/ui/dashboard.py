@@ -1820,167 +1820,228 @@ def render_monitored_metrics_section(container):
     # Limit to 4 metrics
     selected_metrics = selected_metrics[:4]
     
-    # Get data - OPTIMIZATION: Defer expensive call using timer to not block initial render
-    # Show loading state immediately
-    loading_container = ui.column().classes("w-full")
-    with loading_container:
-        ui.label("Loading metrics...").classes("text-xs text-gray-500 p-2")
+    # Create metrics grid and header immediately
+    with container:
+        # Header with edit button
+        with ui.row().classes("w-full justify-between items-center mb-2"):
+            ui.label("Monitored Metrics").classes("text-sm font-semibold")
+            ui.button("Edit", on_click=lambda: open_metrics_config_dialog()).props("dense size=sm")
+        
+        # Metrics grid - 2 columns, 2 rows
+        metrics_grid = ui.row().classes("w-full gap-1").style("display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.25rem;")
+        
+        # Create placeholder cards for all selected metrics immediately
+        metric_cards = {}  # Store card references: metric_key -> {card, value_label, baseline_label, tooltip_id}
+        for metric_key in selected_metrics:
+            with metrics_grid:
+                card = ui.card().classes("p-2 metric-card-hover bg-gray-100").style("min-width: 0;")
+                with card:
+                    label_widget = ui.label("Loading...").classes("text-xs text-gray-500 mb-0.5")
+                    value_label = ui.label("...").classes("text-lg font-bold")
+                    baseline_label = ui.label("...").classes("text-xs text-gray-400")
+                
+                # Create tooltip container
+                tooltip_id = f'monitored-{metric_key}'
+                ui.add_body_html(f'<div id="tooltip-{tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"><div style="padding: 10px; text-align: center; color: #666;">Loading...</div></div>')
+                
+                metric_cards[metric_key] = {
+                    'card': card,
+                    'label': label_widget,
+                    'value_label': value_label,
+                    'baseline_label': baseline_label,
+                    'tooltip_id': tooltip_id,
+                    'rendered': False
+                }
     
     def load_and_render():
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'load_and_render started (timer fired)', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
+        """Load metrics data incrementally using ui.timer to keep UI responsive (single-threaded)."""
+        # State for incremental loading - persists between timer calls
+        load_state = {
+            'step': 0,  # 0=relief_summary, 1=dashboard_metrics, 2=composite_scores, 3=render
+            'relief_summary': None,
+            'quality_metrics': None,
+            'composite_scores': None,
+            'timer': None
+        }
         
-        get_relief_start = time.perf_counter()
-        try:
-            with init_perf_logger.operation("get_relief_summary"):
-                # #region agent log
-                try:
-                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'calling get_relief_summary', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-                except: pass
-                # #endregion
-                relief_summary = an.get_relief_summary()
-                # #region agent log
-                try:
-                    get_relief_duration = (time.perf_counter() - get_relief_start) * 1000
-                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_relief_summary completed', 'data': {'duration_ms': get_relief_duration, 'has_data': bool(relief_summary)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-                except: pass
-                # #endregion
-        except Exception as e:
-            # #region agent log
+        def process_next_step():
+            """Process one step of loading, then yield back to event loop."""
             try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_relief_summary error', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-            print(f"[Dashboard] Error getting relief summary: {e}")
-            relief_summary = {
-                'productivity_time_minutes': 0,
-                'weekly_productivity_score': 0.0,
-            }
+                if load_state['step'] == 0:
+                    # Step 1: Get relief summary (fast, usually cached)
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 0: calling get_relief_summary', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    try:
+                        with init_perf_logger.operation("get_relief_summary"):
+                            load_state['relief_summary'] = an.get_relief_summary()
+                    except Exception as e:
+                        print(f"[Dashboard] Error getting relief summary: {e}")
+                        load_state['relief_summary'] = {
+                            'productivity_time_minutes': 0,
+                            'weekly_productivity_score': 0.0,
+                        }
+                    load_state['step'] = 1
+                    # Schedule next step - UI can process events between steps
+                    load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
+                    
+                elif load_state['step'] == 1:
+                    # Step 2: Get dashboard metrics (fast)
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 1: calling get_dashboard_metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    try:
+                        metrics_data = an.get_dashboard_metrics() if hasattr(an, 'get_dashboard_metrics') else {}
+                        load_state['quality_metrics'] = metrics_data.get('quality', {})
+                    except Exception as e:
+                        print(f"[Dashboard] Error getting dashboard metrics: {e}")
+                        load_state['quality_metrics'] = {}
+                    load_state['step'] = 2
+                    # Update metrics that depend on quality_metrics
+                    _update_metric_cards_incremental(
+                        metric_cards,
+                        selected_metrics,
+                        load_state['relief_summary'],
+                        load_state['quality_metrics'],
+                        load_state['composite_scores'],
+                        coloration_baseline,
+                        an,
+                        init_perf_logger
+                    )
+                    # Schedule next step
+                    load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
+                    
+                elif load_state['step'] == 2:
+                    # Step 3: Get composite scores (without execution score - that's done in chunks)
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 2: calling get_all_scores_for_composite (without execution score)', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    try:
+                        if hasattr(an, 'get_all_scores_for_composite'):
+                            load_state['composite_scores'] = an.get_all_scores_for_composite(days=7) or {}
+                        else:
+                            load_state['composite_scores'] = {}
+                    except Exception as e:
+                        print(f"[Dashboard] Error getting composite scores: {e}")
+                        load_state['composite_scores'] = {}
+                    
+                    # Initialize execution score chunked calculation state
+                    load_state['execution_score_state'] = {}
+                    load_state['step'] = 3
+                    # Update metrics that depend on composite_scores (without execution_score yet)
+                    _update_metric_cards_incremental(
+                        metric_cards,
+                        selected_metrics,
+                        load_state['relief_summary'],
+                        load_state['quality_metrics'],
+                        load_state['composite_scores'],
+                        coloration_baseline,
+                        an,
+                        init_perf_logger
+                    )
+                    # Schedule next step (execution score chunks)
+                    load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
+                    
+                elif load_state['step'] == 3:
+                    # Step 4: Calculate execution score in chunks (allows UI to remain responsive)
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'dashboard.py:process_next_step', 'message': 'step 3: processing execution score chunk', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    try:
+                        if hasattr(an, 'get_execution_score_chunked'):
+                            # Process a batch of instances (5 at a time) with persistence
+                            load_state['execution_score_state'] = an.get_execution_score_chunked(
+                                load_state['execution_score_state'], 
+                                batch_size=5,
+                                user_id="default",
+                                persist=True
+                            )
+                            
+                            if load_state['execution_score_state'].get('completed', False):
+                                # All instances processed - update composite scores and move to render
+                                avg_score = load_state['execution_score_state'].get('avg_execution_score', 50.0)
+                                load_state['composite_scores']['execution_score'] = avg_score
+                                # Update metrics that depend on execution_score
+                                _update_metric_cards_incremental(
+                                    metric_cards,
+                                    selected_metrics,
+                                    load_state['relief_summary'],
+                                    load_state['quality_metrics'],
+                                    load_state['composite_scores'],
+                                    coloration_baseline,
+                                    an,
+                                    init_perf_logger
+                                )
+                                load_state['step'] = 4
+                            else:
+                                # More chunks to process - schedule next chunk
+                                load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
+                                return  # Yield back to event loop
+                        else:
+                            # Fallback if chunked method doesn't exist
+                            load_state['composite_scores']['execution_score'] = 50.0
+                            load_state['step'] = 4
+                    except Exception as e:
+                        print(f"[Dashboard] Error calculating execution score in chunks: {e}")
+                        load_state['composite_scores']['execution_score'] = 50.0
+                        load_state['step'] = 4
+                    
+                    # If we completed, schedule render step
+                    if load_state['step'] == 4:
+                        load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
+                    
+                elif load_state['step'] == 4:
+                    # Step 5: Render metrics with all loaded data
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 4: rendering metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    # Cancel timer
+                    if load_state['timer']:
+                        load_state['timer'].cancel()
+                    
+                    # Update all metric cards with loaded data
+                    try:
+                        _update_metric_cards_incremental(
+                            metric_cards,
+                            selected_metrics,
+                            load_state['relief_summary'],
+                            load_state['quality_metrics'],
+                            load_state['composite_scores'],
+                            coloration_baseline,
+                            an,
+                            init_perf_logger
+                        )
+                    except Exception as e:
+                        print(f"[Dashboard] Error updating metric cards: {e}")
+                        import traceback
+                        traceback.print_exc()
+            except Exception as e:
+                print(f"[Dashboard] Error in process_next_step: {e}")
+                import traceback
+                traceback.print_exc()
         
-        # Load additional metrics data (expensive operations)
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'calling get_dashboard_metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
-        get_metrics_start = time.perf_counter()
-        try:
-            metrics_data = an.get_dashboard_metrics() if hasattr(an, 'get_dashboard_metrics') else {}
-            quality_metrics = metrics_data.get('quality', {})
-        except Exception as e:
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_dashboard_metrics error', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-            quality_metrics = {}
-        get_metrics_duration = (time.perf_counter() - get_metrics_start) * 1000
-        
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_dashboard_metrics completed', 'data': {'duration_ms': get_metrics_duration, 'quality_keys': list(quality_metrics.keys())}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'calling get_all_scores_for_composite', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
-        get_composite_start = time.perf_counter()
-        try:
-            if hasattr(an, 'get_all_scores_for_composite'):
-                composite_scores = an.get_all_scores_for_composite(days=7) or {}
-            else:
-                composite_scores = {}
-        except Exception as e:
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_all_scores_for_composite error', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-            composite_scores = {}
-        get_composite_duration = (time.perf_counter() - get_composite_start) * 1000
-        
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_all_scores_for_composite completed', 'data': {'duration_ms': get_composite_duration, 'composite_keys': list(composite_scores.keys())}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
-        # Remove loading indicator and render metrics with ALL loaded data
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'dashboard.py:load_and_render', 'message': 'about to delete loading_container', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
-        try:
-            loading_container.delete()
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'dashboard.py:load_and_render', 'message': 'loading_container.delete() succeeded', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-        except Exception as e:
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'dashboard.py:load_and_render', 'message': 'loading_container.delete() failed', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-            print(f"[Dashboard] Error deleting loading container: {e}")
-        
-        # Render metrics section with all loaded data
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:load_and_render', 'message': 'about to call render_monitored_metrics_section_loaded', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
-        try:
-            render_monitored_metrics_section_loaded(container, relief_summary, selected_metrics, coloration_baseline, an, init_perf_logger, quality_metrics=quality_metrics, composite_scores=composite_scores)
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:load_and_render', 'message': 'render_monitored_metrics_section_loaded completed', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-        except Exception as e:
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:load_and_render', 'message': 'render_monitored_metrics_section_loaded error', 'data': {'error': str(e), 'error_type': type(e).__name__}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-            print(f"[Dashboard] Error rendering metrics section: {e}")
-            import traceback
-            traceback.print_exc()
-        
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'load_and_render completed successfully', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
+        # Start incremental loading
+        load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
     
     # Defer expensive call - allows dashboard to render first
     # #region agent log
@@ -1994,6 +2055,345 @@ def render_monitored_metrics_section(container):
     
     # Return early - actual rendering happens in load_and_render
     return
+
+
+def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger):
+    """Update metric cards incrementally as data becomes available.
+    
+    Args:
+        metric_cards: Dict of metric_key -> {card, value_label, baseline_label, tooltip_id, rendered}
+        selected_metrics: List of metric keys to render
+        relief_summary: Dict with relief summary data (may be None/partial)
+        quality_metrics: Dict with quality metrics (may be None/partial)
+        composite_scores: Dict with composite scores (may be None/partial)
+        coloration_baseline: Baseline type for coloration
+        an: Analytics instance
+        init_perf_logger: Performance logger
+    """
+    import json
+    import time
+    import pandas as pd
+    from ui.analytics_page import CALCULATED_METRICS, ATTRIBUTE_LABELS
+    
+    # Use provided metrics or empty dicts
+    if relief_summary is None:
+        relief_summary = {}
+    if quality_metrics is None:
+        quality_metrics = {}
+    if composite_scores is None:
+        composite_scores = {}
+    
+    # Build available_metrics (same logic as render_monitored_metrics_section_loaded)
+    available_metrics = {
+        'productivity_time': {
+            'label': 'Productivity Time',
+            'get_value': lambda: relief_summary.get('productivity_time_minutes', 0) / 60.0,
+            'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
+            'get_history': lambda: an.get_weekly_hours_history(),
+            'history_key': 'hours',
+            'tooltip_id': 'monitored-productivity-time',
+            'chart_title': 'Daily Hours'
+        },
+        'productivity_score': {
+            'label': 'Productivity Score',
+            'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
+            'format_value': lambda v: f"{v:.1f}",
+            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
+            'history_key': 'scores',
+            'tooltip_id': 'monitored-productivity-score',
+            'chart_title': 'Daily Productivity Score'
+        },
+    }
+    
+    # Build generic metric configs
+    for metric_key in selected_metrics:
+        if metric_key not in available_metrics:
+            label = ATTRIBUTE_LABELS.get(metric_key, metric_key.replace('_', ' ').title())
+            
+            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary, analytics_instance=an):
+                def get_generic_value():
+                    # Special handling for expected_relief - get from analytics
+                    if key == 'expected_relief':
+                        try:
+                            # Try to get from dashboard_metrics first
+                            dashboard_metrics = analytics_instance.get_dashboard_metrics()
+                            if dashboard_metrics and 'quality' in dashboard_metrics:
+                                val = dashboard_metrics['quality'].get('avg_expected_relief')
+                                if val is not None:
+                                    return float(val)
+                            # Fallback: calculate from instances
+                            df = analytics_instance._load_instances()
+                            if not df.empty:
+                                completed = df[df['completed_at'].astype(str).str.len() > 0]
+                                if not completed.empty:
+                                    def _get_expected_relief(row):
+                                        try:
+                                            pred_dict = row.get('predicted_dict', {})
+                                            if isinstance(pred_dict, dict):
+                                                return pred_dict.get('expected_relief')
+                                        except:
+                                            pass
+                                        return None
+                                    expected_reliefs = completed.apply(_get_expected_relief, axis=1)
+                                    expected_reliefs = pd.to_numeric(expected_reliefs, errors='coerce').dropna()
+                                    if not expected_reliefs.empty:
+                                        return float(expected_reliefs.mean())
+                        except Exception as e:
+                            print(f"[Dashboard] Error getting expected_relief: {e}")
+                        return 0.0
+                    
+                    # Standard lookup for other metrics
+                    if key in qual_metrics:
+                        val = qual_metrics.get(key)
+                        return float(val) if val is not None else 0.0
+                    avg_key = f'avg_{key}'
+                    if avg_key in qual_metrics:
+                        val = qual_metrics.get(avg_key)
+                        return float(val) if val is not None else 0.0
+                    if key in relief:
+                        val = relief.get(key)
+                        return float(val) if val is not None else 0.0
+                    if key in comp_scores:
+                        val = comp_scores.get(key)
+                        return float(val) if val is not None else 0.0
+                    return 0.0
+                return get_generic_value
+            
+            def make_get_history(key):
+                def get_history():
+                    if hasattr(an, 'get_generic_metric_history'):
+                        return an.get_generic_metric_history(key, days=90)
+                    return None
+                return get_history
+            
+            available_metrics[metric_key] = {
+                'label': label,
+                'get_value': make_get_value(metric_key),
+                'format_value': lambda v: f"{v:.1f}",
+                'get_history': make_get_history(metric_key),
+                'history_key': 'values',
+                'tooltip_id': f'monitored-{metric_key}',
+                'chart_title': f'Daily {label}'
+            }
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'update function called', 'data': {'selected_metrics': selected_metrics, 'metric_cards_keys': list(metric_cards.keys()), 'available_metrics_keys': list(available_metrics.keys()), 'has_relief': bool(relief_summary), 'has_quality': bool(quality_metrics), 'has_composite': bool(composite_scores)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    # Update each metric card if data is available
+    for metric_key in selected_metrics:
+        if metric_key not in metric_cards or metric_key not in available_metrics:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'skipping metric - not in cards or available', 'data': {'metric_key': metric_key, 'in_cards': metric_key in metric_cards, 'in_available': metric_key in available_metrics}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            continue
+        
+        card_info = metric_cards[metric_key]
+        metric_config = available_metrics[metric_key]
+        
+        # Check if we have the minimum data needed to render this metric
+        # Some metrics need relief_summary, others need quality_metrics or composite_scores
+        try:
+            current_value = metric_config['get_value']()
+        except Exception as e:
+            # Data not ready yet - skip this update
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'metric data not ready', 'data': {'metric_key': metric_key, 'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            continue
+        
+        # Update card label (change from "Loading..." to actual label)
+        try:
+            if hasattr(card_info['label'], 'text'):
+                card_info['label'].text = metric_config['label']
+            elif hasattr(card_info['label'], 'set_text'):
+                card_info['label'].set_text(metric_config['label'])
+            else:
+                print(f"[Dashboard] Label widget for {metric_key} doesn't support text updates")
+        except Exception as e:
+            print(f"[Dashboard] Error updating label for {metric_key}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Update value (change from "..." to actual value)
+        try:
+            formatted_value = metric_config['format_value'](current_value)
+            if hasattr(card_info['value_label'], 'text'):
+                card_info['value_label'].text = formatted_value
+            elif hasattr(card_info['value_label'], 'set_text'):
+                card_info['value_label'].set_text(formatted_value)
+            else:
+                print(f"[Dashboard] Value label widget for {metric_key} doesn't support text updates")
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'updating metric card value', 'data': {'metric_key': metric_key, 'value': current_value, 'formatted': formatted_value, 'has_text_attr': hasattr(card_info['value_label'], 'text'), 'has_set_text': hasattr(card_info['value_label'], 'set_text')}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+        except Exception as e:
+            print(f"[Dashboard] Error updating value for {metric_key}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Get history for baseline (only once, when fully rendered)
+        if not card_info.get('rendered', False):
+            try:
+                history_data = metric_config['get_history']()
+                if history_data is None:
+                    history_data = {}
+            except Exception as e:
+                history_data = {}
+            
+            # Calculate baseline
+            if history_data and len(history_data.get('dates', [])) > 0:
+                value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
+                baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
+                baseline_value = baseline_daily * 7.0
+            else:
+                baseline_value = current_value
+            
+            # Update baseline label
+            baseline_label_text = {
+                'last_3_months': '3mo avg',
+                'last_month': '1mo avg',
+                'last_week': '1wk avg',
+                'average': 'avg',
+                'all_data': 'all avg'
+            }.get(coloration_baseline, 'avg')
+            
+            if 'time' in metric_key.lower() or 'hours' in metric_config.get('label', '').lower():
+                if baseline_value > 0:
+                    card_info['baseline_label'].text = f"{baseline_label_text}: {baseline_value:.1f}h/wk"
+                else:
+                    card_info['baseline_label'].text = f"{baseline_label_text}: N/A"
+            else:
+                if baseline_value > 0:
+                    card_info['baseline_label'].text = f"{baseline_label_text}: {baseline_value:.1f}"
+                else:
+                    card_info['baseline_label'].text = f"{baseline_label_text}: N/A"
+            
+            # Store baseline for color calculation
+            card_info['baseline_value'] = baseline_value
+            
+            # Update card styling (always update colors, not just on first render)
+            bg_class, line_color = get_metric_bg_class(current_value, baseline_value)
+            # Update classes - NiceGUI doesn't support direct assignment, so use style for bg color
+            # Store bg class for reference
+            card_info['current_bg_class'] = bg_class
+            # Use style to set background color instead of classes
+            bg_color_map = {
+                'metric-bg-green': '#d1fae5',
+                'metric-bg-yellow': '#fef3c7',
+                'metric-bg-red': '#fee2e2',
+                '': '#f3f4f6'  # Default gray for no data
+            }
+            bg_color = bg_color_map.get(bg_class, '#f3f4f6')
+            try:
+                # Update style with background color
+                # NiceGUI cards need style applied directly with !important to override defaults
+                card_info['card'].style(f"min-width: 0; background-color: {bg_color} !important;")
+            except Exception as e:
+                print(f"[Dashboard] Error updating card style for {metric_key}: {e}")
+                # Fallback: try adding class directly (if NiceGUI supports it)
+                try:
+                    # Remove old bg classes and add new one
+                    for old_class in ['metric-bg-green', 'metric-bg-yellow', 'metric-bg-red']:
+                        if old_class in str(card_info['card'].classes):
+                            card_info['card'].classes = card_info['card'].classes.replace(old_class, '')
+                    if bg_class:
+                        card_info['card'].classes = f"{card_info['card'].classes} {bg_class}".strip()
+                except:
+                    pass
+            try:
+                card_info['card'].props(f'data-tooltip-id="{metric_config["tooltip_id"]}"')
+            except Exception as e:
+                print(f"[Dashboard] Error updating card props for {metric_key}: {e}")
+            
+            card_info['rendered'] = True
+        else:
+            # Already rendered - just update colors with current value and stored baseline
+            baseline_value = card_info.get('baseline_value', current_value)
+            bg_class, line_color = get_metric_bg_class(current_value, baseline_value)
+            card_info['current_bg_class'] = bg_class
+            bg_color_map = {
+                'metric-bg-green': '#d1fae5',
+                'metric-bg-yellow': '#fef3c7',
+                'metric-bg-red': '#fee2e2',
+                '': '#f3f4f6'  # Default gray for no data
+            }
+            bg_color = bg_color_map.get(bg_class, '#f3f4f6')
+            try:
+                card_info['card'].style(f"min-width: 0; background-color: {bg_color} !important;")
+            except Exception as e:
+                print(f"[Dashboard] Error updating card style for {metric_key}: {e}")
+            
+            # Get history data for tooltip chart
+            try:
+                history_data = metric_config['get_history']()
+                if history_data is None:
+                    history_data = {}
+            except Exception as e:
+                history_data = {}
+            
+            # Create tooltip chart if history available
+            if history_data and history_data.get('dates') and len(history_data.get('dates', [])) > 0:
+                try:
+                    dates = history_data['dates']
+                    values = history_data[metric_config['history_key']]
+                    if len(dates) > 0 and len(values) > 0:
+                        # Calculate averages for chart
+                        current_daily_avg = current_value / 7.0 if current_value > 0 else 0.0
+                        weekly_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
+                        three_month_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
+                        
+                        fig = create_metric_tooltip_chart(
+                            dates,
+                            values,
+                            current_daily_avg,
+                            weekly_avg,
+                            three_month_avg,
+                            metric_config['chart_title'],
+                            line_color
+                        )
+                        
+                        if fig:
+                            # Render chart to HTML and move to tooltip (same logic as _render_metrics_cards)
+                            chart_html = fig.to_html(include_plotlyjs=False, div_id=f"chart-{metric_config['tooltip_id']}")
+                            tooltip_id = metric_config['tooltip_id']
+                            
+                            # Use JavaScript to move chart into tooltip container
+                            ui.run_javascript(f'''
+                                (function() {{
+                                    var chartDiv = document.getElementById("chart-{tooltip_id}");
+                                    var tooltipDiv = document.getElementById("tooltip-{tooltip_id}");
+                                    if (chartDiv && tooltipDiv) {{
+                                        tooltipDiv.innerHTML = chartDiv.innerHTML;
+                                        chartDiv.remove();
+                                    }}
+                                }})();
+                            ''')
+                except Exception as e:
+                    print(f"[Dashboard] Error creating tooltip chart for {metric_key}: {e}")
+            
+            card_info['rendered'] = True
+    
+    # Initialize tooltips after all cards are updated
+    ui.run_javascript('''
+        setTimeout(function() {
+            if (typeof initMetricTooltips === 'function') {
+                initMetricTooltips();
+            }
+        }, 300);
+    ''')
 
 
 def render_monitored_metrics_section_loaded(container, relief_summary, selected_metrics, coloration_baseline, an, init_perf_logger, quality_metrics=None, composite_scores=None):
@@ -2185,11 +2585,19 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     return 0.0
                 return get_generic_value
             
+            # Create closure-safe history function
+            def make_get_history(key):
+                def get_history():
+                    if hasattr(an, 'get_generic_metric_history'):
+                        return an.get_generic_metric_history(key, days=90)
+                    return None
+                return get_history
+            
             available_metrics[metric_key] = {
                 'label': label,
                 'get_value': make_get_value(metric_key),
                 'format_value': lambda v: f"{v:.1f}",
-                'get_history': lambda: None,  # No history for generic metrics yet
+                'get_history': make_get_history(metric_key),
                 'history_key': 'values',
                 'tooltip_id': f'monitored-{metric_key}',
                 'chart_title': f'Daily {label}'
@@ -2533,9 +2941,18 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
             # Get color class (compare weekly totals)
             bg_class, line_color = get_metric_bg_class(current_value, baseline_value)
             
+            # Map bg_class to background color for inline style
+            bg_color_map = {
+                'metric-bg-green': '#d1fae5',
+                'metric-bg-yellow': '#fef3c7',
+                'metric-bg-red': '#fee2e2',
+                '': '#f3f4f6'  # Default gray for no data
+            }
+            bg_color = bg_color_map.get(bg_class, '#f3f4f6')
+            
             # Create small metric card
             with metrics_grid:
-                metric_card = ui.card().classes(f"p-2 metric-card-hover {bg_class}").style("min-width: 0;").props(f'data-tooltip-id="{metric_config["tooltip_id"]}"')
+                metric_card = ui.card().classes(f"p-2 metric-card-hover {bg_class}").style(f"min-width: 0; background-color: {bg_color} !important;").props(f'data-tooltip-id="{metric_config["tooltip_id"]}"')
                 with metric_card:
                     ui.label(metric_config['label']).classes("text-xs text-gray-500 mb-0.5")
                     formatted_value = metric_config['format_value'](current_value)
