@@ -1,14 +1,7 @@
-
-## **Additional Rule: Environment Configuration**
-
-Create `.cursor/rules/environment-config.mdc`:
-
 ---
 description: Environment variable and configuration patterns
-globs: ["**/*.py", ".env*", "app.py"]
-alwaysApply: true
+alwaysApply: false
 ---
-
 # Environment Configuration Rules
 
 ## Environment Variables
