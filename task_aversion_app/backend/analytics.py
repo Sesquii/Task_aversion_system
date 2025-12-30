@@ -4129,14 +4129,61 @@ class Analytics:
         Results are cached for 30 seconds to improve performance on repeated calls.
         """
         import time as time_module
+        import traceback
+        import json
         total_start = time_module.time()
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                call_stack = ''.join(traceback.format_stack()[-3:-1])
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4126',
+                    'message': 'get_relief_summary called',
+                    'data': {'caller': call_stack.split('\\n')[-2].strip() if call_stack else 'unknown'},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
         
         # Check cache first
         current_time = time_module.time()
         if (Analytics._relief_summary_cache is not None and 
             Analytics._relief_summary_cache_time is not None and
             (current_time - Analytics._relief_summary_cache_time) < Analytics._cache_ttl_seconds):
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'A',
+                        'location': 'analytics.py:4139',
+                        'message': 'get_relief_summary cache hit',
+                        'data': {},
+                        'timestamp': int(time_module.time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
             return Analytics._relief_summary_cache
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4141',
+                    'message': 'get_relief_summary cache miss - calculating',
+                    'data': {},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
         
         # Calculate fresh result with timing
         # OPTIMIZATION: Only load completed instances (relief_summary only needs completed tasks)
@@ -4914,6 +4961,21 @@ class Analytics:
         total_time = (time_module.time() - total_start) * 1000
         print(f"[Analytics] get_relief_summary: TOTAL TIME: {total_time:.2f}ms")
         
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4915',
+                    'message': 'get_relief_summary completed',
+                    'data': {'total_time_ms': total_time},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
         return result
 
     def get_weekly_hours_history(self) -> Dict[str, any]:
@@ -4925,6 +4987,26 @@ class Analytics:
             Dict with 'dates' (list of date strings), 'hours' (list of hours per day),
             'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
         """
+        import time as time_module
+        import traceback
+        import json
+        # #region agent log
+        hist_start = time_module.time()
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                call_stack = ''.join(traceback.format_stack()[-3:-1])
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'B',
+                    'location': 'analytics.py:4919',
+                    'message': 'get_weekly_hours_history called',
+                    'data': {'caller': call_stack.split('\\n')[-2].strip() if call_stack else 'unknown'},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
@@ -5052,6 +5134,22 @@ class Analytics:
         days_with_data = len(daily_data)
         has_sufficient_data = days_with_data >= 14
         
+        hist_time = (time_module.time() - hist_start) * 1000
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'B',
+                    'location': 'analytics.py:5137',
+                    'message': 'get_weekly_hours_history completed',
+                    'data': {'time_ms': hist_time, 'days_count': days_with_data},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
         return {
             'dates': daily_data['date_str'].tolist(),
             'hours': daily_data['hours'].tolist(),
@@ -5165,6 +5263,26 @@ class Analytics:
             Dict with 'dates' (list of date strings), 'productivity_scores' (list of scores per day),
             'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
         """
+        import time as time_module
+        import traceback
+        import json
+        # #region agent log
+        prod_hist_start = time_module.time()
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                call_stack = ''.join(traceback.format_stack()[-3:-1])
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'C',
+                    'location': 'analytics.py:5243',
+                    'message': 'get_weekly_productivity_history called',
+                    'data': {'caller': call_stack.split('\\n')[-2].strip() if call_stack else 'unknown'},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
@@ -5299,6 +5417,22 @@ class Analytics:
         # Check if we have at least 2 weeks of data
         days_with_data = len(daily_data)
         has_sufficient_data = days_with_data >= 14
+        
+        prod_hist_time = (time_module.time() - prod_hist_start) * 1000
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'C',
+                    'location': 'analytics.py:5393',
+                    'message': 'get_weekly_productivity_history completed',
+                    'data': {'time_ms': prod_hist_time, 'days_count': days_with_data},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
         
         return {
             'dates': daily_data['date_str'].tolist(),

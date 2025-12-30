@@ -1,38 +1,47 @@
-Optimize get_relief_summary() performance for dashboard loading
+Fix monitored metrics performance and functionality issues
 
-This commit implements several performance optimizations to reduce
-dashboard load time, particularly for the monitored metrics section
-which calls get_relief_summary().
+This commit addresses critical performance and functionality issues with the
+monitored metrics feature that was causing dashboard slowdowns and timeouts.
 
-Key optimizations:
-- Database-level filtering: Only load completed instances when calculating
-  relief summary (completed_only=True parameter), reducing data load by
-  50-80% depending on completed vs total instance ratio
-- Vectorized operations: Replaced slow .apply() calls with list
-  comprehensions for JSON parsing, multiplier calculations, and score
-  extractions (2-3x faster)
-- Extended cache duration: Increased from 30 seconds to 5 minutes to
-  reduce cache misses
-- Inline efficiency calculation: Calculate efficiency from already-loaded
-  DataFrame instead of reloading all instances via get_efficiency_summary()
+Performance Improvements:
+- Dashboard now loads instantly (was 30+ seconds)
+- Analytics page loads in ~6 seconds (was timing out after 30+ seconds)
+- Implemented lazy loading for metrics section using ui.timer to defer
+  expensive operations until after initial render
+- Metrics load in background: ~20s initial, ~15s on reload
+  (get_all_scores_for_composite is the remaining bottleneck at ~17-20s)
 
-Performance impact:
-- First load: ~2-4x faster (from ~8s to ~2-4s estimated)
-- Cached loads: Already fast (<1ms), now cached for 5 minutes
-- Overall: More consistent performance with longer cache duration
+Functionality Fixes:
+- Fixed edit dialog to show all 24 available metrics (was only showing 2)
+- Fixed metric value retrieval: metrics now correctly display values from
+  quality_metrics, composite_scores, and relief_summary
+- Fixed closure capture issue: ensure data is loaded before creating closures
+  for get_value functions
+- Metrics that work: productivity_time, productivity_score, stress_level,
+  net_wellbeing, net_wellbeing_normalized, stress_efficiency,
+  thoroughness_score, thoroughness_factor
 
-Files modified:
-- backend/analytics.py: Added completed_only parameter to _load_instances(),
-  optimized JSON parsing and multiplier calculations, extended cache TTL
-- ui/dashboard.py: Simplified monitored metrics rendering call
+Remaining Issues:
+- Tooltips: productivity_time tooltip is blank but appears; other tooltips
+  show "no history data" (history data retrieval needs investigation)
+- Metrics load time: get_all_scores_for_composite() takes 17-20 seconds
+  and is the primary bottleneck for metrics loading
+- Some metrics return 0 when they shouldn't (needs further investigation)
 
-TODO: Initial load still needs further optimization. Current bottleneck
-remains in _load_instances() even with completed_only filtering, likely
-due to:
-- JSON parsing overhead for all completed instances
-- DataFrame construction from large result sets
-- Multiple merges with task data
+Technical Changes:
+- Added comprehensive instrumentation logging for debugging
+- Consolidated lazy loading in load_and_render() to fetch all data before
+  rendering metrics
+- Fixed JavaScript tooltip initialization to correctly target tooltip
+  containers
+- Added exception handling and logging throughout metrics rendering pipeline
+- Modified render_monitored_metrics_section_loaded() to accept pre-loaded
+  quality_metrics and composite_scores
 
-Assessment: 6/10 - Significant improvement but initial load still slow.
-Database-level filtering helps but needs SQL aggregations or materialized
-views for optimal performance.
+Files Modified:
+- ui/dashboard.py: Lazy loading, closure fixes, tooltip fixes, instrumentation
+- ui/analytics_page.py: Lazy loading for composite scores, import fixes
+- backend/analytics.py: Added get_all_monitored_metrics_options() method
+
+Assessment: 7/10 - Major performance improvements and core functionality
+working, but tooltip history data and metrics load time still need work.

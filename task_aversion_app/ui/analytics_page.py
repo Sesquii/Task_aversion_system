@@ -1,6 +1,8 @@
 from nicegui import ui
 import pandas as pd
 import plotly.express as px
+import time
+import json
 
 from backend.analytics import Analytics
 from backend.task_schema import TASK_ATTRIBUTES
@@ -86,24 +88,84 @@ def build_analytics_page():
     DEFAULT_USER_ID = "default_user"
     
     current_weights = user_state.get_score_weights(DEFAULT_USER_ID) or {}
-    all_scores = analytics_service.get_all_scores_for_composite(days=7)
-    composite_result = analytics_service.calculate_composite_score(
-        components=all_scores,
-        weights=current_weights,
-        normalize_components=True
-    )
     
-    with ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200"):
-        with ui.row().classes("items-center gap-4 w-full"):
+    # Composite Score section - load asynchronously to avoid timeout
+    composite_container = ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200")
+    with composite_container:
+        loading_label = ui.label("Loading composite score...").classes("text-sm text-gray-500")
+        with ui.row().classes("items-center gap-4 w-full").style("display: none;") as composite_row:
             ui.label("Composite Score").classes("text-lg font-semibold")
-            with ui.card().classes("p-3 bg-white border-2 border-indigo-300"):
-                ui.label(f"{composite_result['composite_score']:.1f}").classes("text-3xl font-bold text-indigo-700")
+            with ui.card().classes("p-3 bg-white border-2 border-indigo-300") as score_card:
+                score_label = ui.label("--").classes("text-3xl font-bold text-indigo-700")
                 ui.label("/ 100").classes("text-sm text-indigo-600")
             ui.button("View Details", on_click=lambda: ui.navigate.to('/composite-score')).classes("bg-indigo-500 text-white")
             ui.button("Configure Weights", on_click=lambda: ui.navigate.to('/settings')).classes("bg-gray-500 text-white")
+    
+    def load_composite_score():
+        """Load composite score asynchronously."""
+        try:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'analytics_page.py:load_composite', 'message': 'calling get_all_scores_for_composite', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            get_scores_start = time.perf_counter()
+            all_scores = analytics_service.get_all_scores_for_composite(days=7)
+            get_scores_duration = (time.perf_counter() - get_scores_start) * 1000
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'analytics_page.py:load_composite', 'message': 'get_all_scores_for_composite completed', 'data': {'duration_ms': get_scores_duration, 'score_count': len(all_scores)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            composite_result = analytics_service.calculate_composite_score(
+                components=all_scores,
+                weights=current_weights,
+                normalize_components=True
+            )
+            
+            # Update UI
+            loading_label.style("display: none;")
+            composite_row.style("display: flex;")
+            score_label.text = f"{composite_result['composite_score']:.1f}"
+        except Exception as e:
+            loading_label.text = f"Error loading composite score: {str(e)}"
+            loading_label.classes("text-red-500")
+    
+    # Load composite score asynchronously
+    ui.timer(0.1, load_composite_score, once=True)
 
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:105', 'message': 'analytics page calling get_dashboard_metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     metrics = analytics_service.get_dashboard_metrics()
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:106', 'message': 'analytics page calling get_relief_summary', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    get_relief_start = time.perf_counter()
     relief_summary = analytics_service.get_relief_summary()
+    get_relief_duration = (time.perf_counter() - get_relief_start) * 1000
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:106', 'message': 'analytics page get_relief_summary completed', 'data': {'duration_ms': get_relief_duration, 'has_data': bool(relief_summary)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     life_balance = metrics.get('life_balance', {})
     with ui.row().classes("gap-3 flex-wrap mb-4"):
         for title, value in [

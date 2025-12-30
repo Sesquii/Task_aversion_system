@@ -1792,6 +1792,14 @@ def render_monitored_metrics_section(container):
         container: UI container to render into
     """
     from datetime import datetime, timedelta
+    import json
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:1788', 'message': 'render_monitored_metrics_section entry', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
     
     metrics_start = time.perf_counter()
     init_perf_logger = get_init_perf_logger()
@@ -1802,19 +1810,440 @@ def render_monitored_metrics_section(container):
     selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
     coloration_baseline = config.get('coloration_baseline', 'last_3_months')
     
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:1806', 'message': 'selected_metrics before limit', 'data': {'selected_metrics': selected_metrics, 'count': len(selected_metrics)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     # Limit to 4 metrics
     selected_metrics = selected_metrics[:4]
     
-    # Get data
+    # Get data - OPTIMIZATION: Defer expensive call using timer to not block initial render
+    # Show loading state immediately
+    loading_container = ui.column().classes("w-full")
+    with loading_container:
+        ui.label("Loading metrics...").classes("text-xs text-gray-500 p-2")
+    
+    def load_and_render():
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'load_and_render started (timer fired)', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        get_relief_start = time.perf_counter()
+        try:
+            with init_perf_logger.operation("get_relief_summary"):
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'calling get_relief_summary', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
+                relief_summary = an.get_relief_summary()
+                # #region agent log
+                try:
+                    get_relief_duration = (time.perf_counter() - get_relief_start) * 1000
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_relief_summary completed', 'data': {'duration_ms': get_relief_duration, 'has_data': bool(relief_summary)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
+        except Exception as e:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_relief_summary error', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            print(f"[Dashboard] Error getting relief summary: {e}")
+            relief_summary = {
+                'productivity_time_minutes': 0,
+                'weekly_productivity_score': 0.0,
+            }
+        
+        # Load additional metrics data (expensive operations)
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'calling get_dashboard_metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        get_metrics_start = time.perf_counter()
+        try:
+            metrics_data = an.get_dashboard_metrics() if hasattr(an, 'get_dashboard_metrics') else {}
+            quality_metrics = metrics_data.get('quality', {})
+        except Exception as e:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_dashboard_metrics error', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            quality_metrics = {}
+        get_metrics_duration = (time.perf_counter() - get_metrics_start) * 1000
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_dashboard_metrics completed', 'data': {'duration_ms': get_metrics_duration, 'quality_keys': list(quality_metrics.keys())}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'calling get_all_scores_for_composite', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        get_composite_start = time.perf_counter()
+        try:
+            if hasattr(an, 'get_all_scores_for_composite'):
+                composite_scores = an.get_all_scores_for_composite(days=7) or {}
+            else:
+                composite_scores = {}
+        except Exception as e:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_all_scores_for_composite error', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            composite_scores = {}
+        get_composite_duration = (time.perf_counter() - get_composite_start) * 1000
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'get_all_scores_for_composite completed', 'data': {'duration_ms': get_composite_duration, 'composite_keys': list(composite_scores.keys())}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # Remove loading indicator and render metrics with ALL loaded data
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'dashboard.py:load_and_render', 'message': 'about to delete loading_container', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        try:
+            loading_container.delete()
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'dashboard.py:load_and_render', 'message': 'loading_container.delete() succeeded', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+        except Exception as e:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'dashboard.py:load_and_render', 'message': 'loading_container.delete() failed', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            print(f"[Dashboard] Error deleting loading container: {e}")
+        
+        # Render metrics section with all loaded data
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:load_and_render', 'message': 'about to call render_monitored_metrics_section_loaded', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        try:
+            render_monitored_metrics_section_loaded(container, relief_summary, selected_metrics, coloration_baseline, an, init_perf_logger, quality_metrics=quality_metrics, composite_scores=composite_scores)
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:load_and_render', 'message': 'render_monitored_metrics_section_loaded completed', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+        except Exception as e:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:load_and_render', 'message': 'render_monitored_metrics_section_loaded error', 'data': {'error': str(e), 'error_type': type(e).__name__}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            print(f"[Dashboard] Error rendering metrics section: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:load_and_render', 'message': 'load_and_render completed successfully', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+    
+    # Defer expensive call - allows dashboard to render first
+    # #region agent log
     try:
-        with init_perf_logger.operation("get_relief_summary"):
-            relief_summary = an.get_relief_summary()
-    except Exception as e:
-        print(f"[Dashboard] Error getting relief summary: {e}")
-        relief_summary = {
-            'productivity_time_minutes': 0,
-            'weekly_productivity_score': 0.0,
-        }
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:render_monitored_metrics_section', 'message': 'setting up ui.timer for load_and_render', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    ui.timer(0.1, load_and_render, once=True)
+    
+    # Return early - actual rendering happens in load_and_render
+    return
+
+
+def render_monitored_metrics_section_loaded(container, relief_summary, selected_metrics, coloration_baseline, an, init_perf_logger, quality_metrics=None, composite_scores=None):
+    """Render monitored metrics section with already-loaded data.
+    
+    Args:
+        quality_metrics: Optional dict of quality metrics from get_dashboard_metrics()
+        composite_scores: Optional dict of composite scores from get_all_scores_for_composite()
+    """
+    from datetime import datetime, timedelta
+    import json
+    from ui.analytics_page import CALCULATED_METRICS, ATTRIBUTE_LABELS
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:render_monitored_metrics_section_loaded', 'message': 'render_monitored_metrics_section_loaded entry', 'data': {'selected_metrics': selected_metrics, 'has_quality_metrics': quality_metrics is not None, 'has_composite_scores': composite_scores is not None, 'quality_keys': list(quality_metrics.keys()) if quality_metrics else [], 'composite_keys': list(composite_scores.keys()) if composite_scores else []}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    # Use provided metrics or empty dicts (will be populated in lazy load)
+    if quality_metrics is None:
+        quality_metrics = {}
+    if composite_scores is None:
+        composite_scores = {}
+    
+    # Build available_metrics dynamically to support any metric from the options
+    available_metrics = {
+        'productivity_time': {
+            'label': 'Productivity Time',
+            'get_value': lambda: relief_summary.get('productivity_time_minutes', 0) / 60.0,
+            'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
+            'get_history': lambda: an.get_weekly_hours_history(),
+            'history_key': 'hours',
+            'tooltip_id': 'monitored-productivity-time',
+            'chart_title': 'Daily Hours'
+        },
+        'productivity_score': {
+            'label': 'Productivity Score',
+            'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
+            'format_value': lambda v: f"{v:.1f}",
+            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
+            'history_key': 'scores',
+            'tooltip_id': 'monitored-productivity-score',
+            'chart_title': 'Daily Productivity Score'
+        },
+    }
+    
+    # Build generic metric configs for any metric not already in available_metrics
+    for metric_key in selected_metrics:
+        if metric_key not in available_metrics:
+            # Get label from analytics_page
+            label = ATTRIBUTE_LABELS.get(metric_key, metric_key.replace('_', ' ').title())
+            
+            # Create closure-safe function for getting value (capture all needed data)
+            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary):
+                def get_generic_value():
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'G',
+                                'location': 'dashboard.py:get_generic_value',
+                                'message': 'getting generic metric value',
+                                'data': {
+                                    'metric_key': key,
+                                    'quality_keys': list(qual_metrics.keys()) if qual_metrics else [],
+                                    'composite_keys': list(comp_scores.keys()) if comp_scores else [],
+                                    'relief_keys': list(relief.keys()) if relief else []
+                                },
+                                'timestamp': int(time.time() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    # Try quality metrics first (exact match)
+                    if key in qual_metrics:
+                        val = qual_metrics.get(key)
+                        result = float(val) if val is not None else 0.0
+                        # #region agent log
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({
+                                    'sessionId': 'debug-session',
+                                    'runId': 'run1',
+                                    'hypothesisId': 'G',
+                                    'location': 'dashboard.py:get_generic_value',
+                                    'message': 'found in quality_metrics',
+                                    'data': {'metric_key': key, 'value': result},
+                                    'timestamp': int(time.time() * 1000)
+                                }) + '\n')
+                        except: pass
+                        # #endregion
+                        return result
+                    
+                    # Try with 'avg_' prefix in quality_metrics
+                    avg_key = f'avg_{key}'
+                    if avg_key in qual_metrics:
+                        val = qual_metrics.get(avg_key)
+                        result = float(val) if val is not None else 0.0
+                        # #region agent log
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({
+                                    'sessionId': 'debug-session',
+                                    'runId': 'run1',
+                                    'hypothesisId': 'G',
+                                    'location': 'dashboard.py:get_generic_value',
+                                    'message': 'found in quality_metrics with avg_ prefix',
+                                    'data': {'metric_key': key, 'avg_key': avg_key, 'value': result},
+                                    'timestamp': int(time.time() * 1000)
+                                }) + '\n')
+                        except: pass
+                        # #endregion
+                        return result
+                    
+                    # Try relief_summary
+                    if key in relief:
+                        val = relief.get(key)
+                        result = float(val) if val is not None else 0.0
+                        # #region agent log
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({
+                                    'sessionId': 'debug-session',
+                                    'runId': 'run1',
+                                    'hypothesisId': 'G',
+                                    'location': 'dashboard.py:get_generic_value',
+                                    'message': 'found in relief_summary',
+                                    'data': {'metric_key': key, 'value': result},
+                                    'timestamp': int(time.time() * 1000)
+                                }) + '\n')
+                        except: pass
+                        # #endregion
+                        return result
+                    
+                    # Try composite_scores (for metrics like grit_score)
+                    if key in comp_scores:
+                        val = comp_scores.get(key)
+                        result = float(val) if val is not None else 0.0
+                        # #region agent log
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({
+                                    'sessionId': 'debug-session',
+                                    'runId': 'run1',
+                                    'hypothesisId': 'G',
+                                    'location': 'dashboard.py:get_generic_value',
+                                    'message': 'found in composite_scores',
+                                    'data': {'metric_key': key, 'value': result},
+                                    'timestamp': int(time.time() * 1000)
+                                }) + '\n')
+                        except: pass
+                        # #endregion
+                        return result
+                        result = float(val) if val is not None else 0.0
+                        # #region agent log
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({
+                                    'sessionId': 'debug-session',
+                                    'runId': 'run1',
+                                    'hypothesisId': 'G',
+                                    'location': 'dashboard.py:get_generic_value',
+                                    'message': 'found in composite_scores',
+                                    'data': {'metric_key': key, 'value': result},
+                                    'timestamp': int(time.time() * 1000)
+                                }) + '\n')
+                        except: pass
+                        # #endregion
+                        return result
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'G',
+                                'location': 'dashboard.py:get_generic_value',
+                                'message': 'metric not found, returning 0',
+                                'data': {'metric_key': key},
+                                'timestamp': int(time.time() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
+                    return 0.0
+                return get_generic_value
+            
+            available_metrics[metric_key] = {
+                'label': label,
+                'get_value': make_get_value(metric_key),
+                'format_value': lambda v: f"{v:.1f}",
+                'get_history': lambda: None,  # No history for generic metrics yet
+                'history_key': 'values',
+                'tooltip_id': f'monitored-{metric_key}',
+                'chart_title': f'Daily {label}'
+            }
+    
+    # Create metrics grid (2x2 layout for 4 metrics)
+    with container:
+        # Header with edit button
+        with ui.row().classes("w-full justify-between items-center mb-2"):
+            ui.label("Monitored Metrics").classes("text-sm font-semibold")
+            ui.button("Edit", on_click=lambda: open_metrics_config_dialog()).props("dense size=sm")
+        
+        # Metrics grid - 2 columns, 2 rows
+        metrics_grid = ui.row().classes("w-full gap-1").style("display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.25rem;")
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'D',
+                    'location': 'dashboard.py:render_loaded',
+                    'message': 'about to render metrics cards',
+                    'data': {
+                        'quality_keys_count': len(quality_metrics),
+                        'composite_keys_count': len(composite_scores),
+                        'selected_metrics': selected_metrics,
+                        'available_metrics_keys': list(available_metrics.keys())
+                    },
+                    'timestamp': int(time.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        # Render metrics using the extracted function
+        _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, relief_summary, coloration_baseline, an, init_perf_logger)
+        
+        # Initialize tooltips after metrics are rendered
+        ui.run_javascript('''
+            setTimeout(function() {
+                if (typeof initMetricTooltips === 'function') {
+                    initMetricTooltips();
+                }
+            }, 300);
+        ''')
+
+def render_metrics_after_load(container, relief_summary, selected_metrics, coloration_baseline):
+    """Render metrics after data is loaded."""
+    from datetime import datetime, timedelta
+    import json
+    init_perf_logger = get_init_perf_logger()
+    
+    # Available metrics configuration
     
     # Available metrics configuration
     available_metrics = {
@@ -1845,13 +2274,209 @@ def render_monitored_metrics_section(container):
             ui.label("Monitored Metrics").classes("text-sm font-semibold")
             ui.button("Edit", on_click=lambda: open_metrics_config_dialog()).props("dense size=sm")
         
+        # Loading indicator
+        loading_indicator = ui.label("Loading metrics...").classes("text-xs text-gray-400").style("display: none;")
+        
         # Metrics grid - 2 columns, 2 rows
         metrics_grid = ui.row().classes("w-full gap-1").style("display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.25rem;")
         
-        # Render selected metrics
-        # IMPORTANT: Only process selected_metrics - do NOT iterate over available_metrics
-        # This ensures history functions are only called for selected metrics, not all metrics
-        for i, metric_key in enumerate(selected_metrics):
+        # Show loading indicator initially
+        loading_indicator.style("display: block;")
+        
+        # Load data in background
+        def load_metrics_data():
+            """Load metrics data in background and update UI."""
+            get_relief_start = time.perf_counter()
+            try:
+                with init_perf_logger.operation("get_relief_summary"):
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:lazy_load', 'message': 'calling get_relief_summary (lazy)', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    loaded_summary = an.get_relief_summary()
+                    # #region agent log
+                    try:
+                        get_relief_duration = (time.perf_counter() - get_relief_start) * 1000
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:lazy_load', 'message': 'get_relief_summary completed (lazy)', 'data': {'duration_ms': get_relief_duration, 'has_data': bool(loaded_summary)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    # Load additional metrics data (expensive operations)
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:lazy_load', 'message': 'calling get_dashboard_metrics (lazy)', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    get_metrics_start = time.perf_counter()
+                    try:
+                        metrics_data = an.get_dashboard_metrics() if hasattr(an, 'get_dashboard_metrics') else {}
+                        quality_metrics = metrics_data.get('quality', {})
+                    except:
+                        quality_metrics = {}
+                    get_metrics_duration = (time.perf_counter() - get_metrics_start) * 1000
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:lazy_load', 'message': 'get_dashboard_metrics completed (lazy)', 'data': {'duration_ms': get_metrics_duration, 'quality_keys': list(quality_metrics.keys())}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:lazy_load', 'message': 'calling get_all_scores_for_composite (lazy)', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    get_composite_start = time.perf_counter()
+                    try:
+                        if hasattr(an, 'get_all_scores_for_composite'):
+                            composite_scores = an.get_all_scores_for_composite(days=7) or {}
+                        else:
+                            composite_scores = {}
+                    except:
+                        composite_scores = {}
+                    get_composite_duration = (time.perf_counter() - get_composite_start) * 1000
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:lazy_load', 'message': 'get_all_scores_for_composite completed (lazy)', 'data': {'duration_ms': get_composite_duration, 'composite_keys': list(composite_scores.keys())}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    # Update relief_summary
+                    nonlocal relief_summary
+                    relief_summary = loaded_summary
+                    
+                    # Rebuild available_metrics with loaded data
+                    from ui.analytics_page import ATTRIBUTE_LABELS
+                    available_metrics = {
+                        'productivity_time': {
+                            'label': 'Productivity Time',
+                            'get_value': lambda: loaded_summary.get('productivity_time_minutes', 0) / 60.0,
+                            'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{loaded_summary.get('productivity_time_minutes', 0):.0f} min",
+                            'get_history': lambda: an.get_weekly_hours_history(),
+                            'history_key': 'hours',
+                            'tooltip_id': 'monitored-productivity-time',
+                            'chart_title': 'Daily Hours'
+                        },
+                        'productivity_score': {
+                            'label': 'Productivity Score',
+                            'get_value': lambda: loaded_summary.get('weekly_productivity_score', 0.0),
+                            'format_value': lambda v: f"{v:.1f}",
+                            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
+                            'history_key': 'scores',
+                            'tooltip_id': 'monitored-productivity-score',
+                            'chart_title': 'Daily Productivity Score'
+                        },
+                    }
+                    
+                    # Add generic metrics with loaded data
+                    for metric_key in selected_metrics:
+                        if metric_key not in available_metrics:
+                            label = ATTRIBUTE_LABELS.get(metric_key, metric_key.replace('_', ' ').title())
+                            
+                            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=loaded_summary):
+                                def get_generic_value():
+                                    # Try quality metrics first (exact match)
+                                    if key in qual_metrics:
+                                        val = qual_metrics.get(key)
+                                        return float(val) if val is not None else 0.0
+                                    
+                                    # Try with 'avg_' prefix
+                                    avg_key = f'avg_{key}'
+                                    if avg_key in qual_metrics:
+                                        val = qual_metrics.get(avg_key)
+                                        return float(val) if val is not None else 0.0
+                                    
+                                    # Try relief_summary
+                                    if key in relief:
+                                        val = relief.get(key)
+                                        return float(val) if val is not None else 0.0
+                                    
+                                    # Try composite_scores
+                                    if key in comp_scores:
+                                        val = comp_scores.get(key)
+                                        return float(val) if val is not None else 0.0
+                                    
+                                    return 0.0
+                                return get_generic_value
+                            
+                            available_metrics[metric_key] = {
+                                'label': label,
+                                'get_value': make_get_value(metric_key),
+                                'format_value': lambda v: f"{v:.1f}",
+                                'get_history': lambda: None,
+                                'history_key': 'values',
+                                'tooltip_id': f'monitored-{metric_key}',
+                                'chart_title': f'Daily {label}'
+                            }
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'H1',
+                                'location': 'dashboard.py:lazy_load',
+                                'message': 'about to render metrics with loaded data',
+                                'data': {
+                                    'quality_keys': list(quality_metrics.keys()),
+                                    'composite_keys': list(composite_scores.keys()),
+                                    'selected_metrics': selected_metrics,
+                                    'available_metrics_keys': list(available_metrics.keys())
+                                },
+                                'timestamp': int(time.time() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    # Hide loading indicator
+                    loading_indicator.style("display: none;")
+                    
+                    # Clear and re-render metrics with loaded data
+                    metrics_grid.clear()
+                    _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, loaded_summary, coloration_baseline, an, init_perf_logger)
+                    
+                    # Re-initialize tooltips after metrics are rendered
+                    ui.run_javascript('''
+                        setTimeout(function() {
+                            if (typeof initMetricTooltips === 'function') {
+                                initMetricTooltips();
+                            }
+                        }, 200);
+                    ''')
+            except Exception as e:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'dashboard.py:lazy_load', 'message': 'get_relief_summary error (lazy)', 'data': {'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
+                print(f"[Dashboard] Error getting relief summary: {e}")
+                loading_indicator.text = "Error loading metrics"
+                loading_indicator.classes("text-xs text-red-400")
+        
+        # Data is already loaded before this function is called, so render immediately
+
+
+def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, relief_summary, coloration_baseline, an, init_perf_logger):
+    """Render metric cards into the grid. Called initially and after lazy load."""
+    import json
+    import time
+    
+    # Render selected metrics
+    # IMPORTANT: Only process selected_metrics - do NOT iterate over available_metrics
+    # This ensures history functions are only called for selected metrics, not all metrics
+    for i, metric_key in enumerate(selected_metrics):
             if metric_key not in available_metrics:
                 continue
             
@@ -1865,20 +2490,45 @@ def render_monitored_metrics_section(container):
                 current_value = 0.0
             
             # Get history for baseline calculation - ONLY called for selected metrics
+            get_history_start = time.perf_counter()
             try:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:1869', 'message': 'calling get_history', 'data': {'metric_key': metric_key}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
                 with init_perf_logger.operation("get_metric_history", metric_key=metric_key):
                     history_data = metric_config['get_history']()
+                get_history_duration = (time.perf_counter() - get_history_start) * 1000
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:1870', 'message': 'get_history completed', 'data': {'metric_key': metric_key, 'duration_ms': get_history_duration, 'has_data': bool(history_data), 'is_none': history_data is None}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
                 if history_data is None:
                     history_data = {}
             except Exception as e:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:1874', 'message': 'get_history error', 'data': {'metric_key': metric_key, 'error': str(e)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
                 print(f"[Dashboard] Error getting history for {metric_key}: {e}")
                 history_data = {}
             
             # Calculate baseline (generic for any metric)
-            value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
-            baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
-            # All metrics store weekly totals in current_value, so convert baseline daily average to weekly
-            baseline_value = baseline_daily * 7.0
+            # For metrics without history, use current_value as baseline (no comparison)
+            if history_data and len(history_data.get('dates', [])) > 0:
+                value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
+                baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
+                # All metrics store weekly totals in current_value, so convert baseline daily average to weekly
+                baseline_value = baseline_daily * 7.0
+            else:
+                # No history available - use current value as baseline (neutral comparison)
+                baseline_value = current_value
             
             # Get color class (compare weekly totals)
             bg_class, line_color = get_metric_bg_class(current_value, baseline_value)
@@ -1916,10 +2566,14 @@ def render_monitored_metrics_section(container):
                 
                 # Create tooltip container
                 tooltip_id = metric_config['tooltip_id']
-                ui.add_body_html(f'<div id="{tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"></div>')
+                # Fix: JavaScript looks for 'tooltip-{tooltip_id}', not just '{tooltip_id}'
+                # Add a default message for metrics without history
+                has_history = history_data and history_data.get('dates') and history_data.get(metric_config['history_key'])
+                default_msg = '' if has_history else '<div style="padding: 10px; text-align: center; color: #666;">No history data available</div>'
+                ui.add_body_html(f'<div id="tooltip-{tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;">{default_msg}</div>')
                 
                 # Render chart if history available
-                if history_data and history_data.get('dates') and history_data.get(metric_config['history_key']):
+                if has_history:
                     dates = history_data['dates']
                     values = history_data[metric_config['history_key']]
                     
@@ -1927,6 +2581,12 @@ def render_monitored_metrics_section(container):
                         # Calculate current daily average (generic: all metrics store weekly totals)
                         current_daily_avg = current_value / 7.0 if current_value > 0 else 0.0
                         
+                        # #region agent log
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H8', 'location': 'dashboard.py:1930', 'message': 'creating chart', 'data': {'metric_key': metric_key, 'tooltip_id': tooltip_id, 'dates_count': len(dates), 'values_count': len(values)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                        except: pass
+                        # #endregion
                         chart_fig = create_metric_tooltip_chart(
                             dates,
                             values,
@@ -1937,22 +2597,42 @@ def render_monitored_metrics_section(container):
                             line_color
                         )
                         
+                        # #region agent log
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H8', 'location': 'dashboard.py:1938', 'message': 'chart created', 'data': {'metric_key': metric_key, 'tooltip_id': tooltip_id, 'chart_fig_is_none': chart_fig is None, 'has_chart': bool(chart_fig)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                        except: pass
+                        # #endregion
+                        
                         if chart_fig:
                             with ui.element('div').props(f'id="{tooltip_id}-temp"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
                                 ui.plotly(chart_fig)
                             
+                            # #region agent log
+                            try:
+                                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H7', 'location': 'dashboard.py:1944', 'message': 'running javascript to move chart', 'data': {'tooltip_id': tooltip_id}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                            except: pass
+                            # #endregion
+                            
+                            # Fix: Use 'tooltip-{tooltip_id}' to match what JavaScript expects
                             ui.run_javascript(f'''
                                 function moveChart_{tooltip_id}() {{
                                     const temp = document.getElementById('{tooltip_id}-temp');
-                                    const tooltip = document.getElementById('{tooltip_id}');
+                                    const tooltip = document.getElementById('tooltip-{tooltip_id}');
                                     if (temp && tooltip) {{
                                         const plotlyDiv = temp.querySelector('.plotly');
                                         if (plotlyDiv && plotlyDiv.offsetHeight > 0) {{
                                             tooltip.innerHTML = '';
                                             tooltip.appendChild(plotlyDiv);
                                             temp.remove();
+                                            fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{location:'dashboard.js:moveChart',message:'chart moved successfully',data:{{tooltip_id:'{tooltip_id}'}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'}})}}).catch(()=>{{}});
                                             return true;
+                                        }} else {{
+                                            fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{location:'dashboard.js:moveChart',message:'plotlyDiv not found or no height',data:{{tooltip_id:'{tooltip_id}',has_plotly:!!plotlyDiv,height:plotlyDiv?plotlyDiv.offsetHeight:0}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'}})}}).catch(()=>{{}});
                                         }}
+                                    }} else {{
+                                        fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{location:'dashboard.js:moveChart',message:'temp or tooltip not found',data:{{tooltip_id:'{tooltip_id}',has_temp:!!temp,has_tooltip:!!tooltip}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'}})}}).catch(()=>{{}});
                                     }}
                                     return false;
                                 }}
@@ -1971,14 +2651,51 @@ def render_monitored_metrics_section(container):
 
 def open_metrics_config_dialog():
     """Open dialog to configure monitored metrics."""
+    import json
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H6', 'location': 'dashboard.py:1972', 'message': 'open_metrics_config_dialog entry', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
     selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
     coloration_baseline = config.get('coloration_baseline', 'last_3_months')
     
+    # Import metrics from analytics_page to get full list
+    from ui.analytics_page import CALCULATED_METRICS, NUMERIC_ATTRIBUTE_OPTIONS
+    
+    # Build available metrics from CALCULATED_METRICS and NUMERIC_ATTRIBUTE_OPTIONS
     available_metric_options = [
         {'key': 'productivity_time', 'label': 'Productivity Time'},
         {'key': 'productivity_score', 'label': 'Productivity Score'},
     ]
+    
+    # Add other calculated metrics that can be monitored
+    for metric in CALCULATED_METRICS:
+        if metric['value'] not in ['productivity_time', 'productivity_score']:  # Already added
+            # Skip metrics that don't make sense as weekly aggregates (daily counts, etc.)
+            if metric['value'] not in ['daily_self_care_tasks']:
+                available_metric_options.append({
+                    'key': metric['value'],
+                    'label': metric['label']
+                })
+    
+    # Add numeric task attributes
+    for attr in NUMERIC_ATTRIBUTE_OPTIONS:
+        if attr['value'] not in [opt['key'] for opt in available_metric_options]:
+            available_metric_options.append({
+                'key': attr['value'],
+                'label': attr['label']
+            })
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H6', 'location': 'dashboard.py:1981', 'message': 'available_metric_options count', 'data': {'count': len(available_metric_options), 'options': available_metric_options}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
     
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg p-4'):
         ui.label("Configure Monitored Metrics").classes("text-xl font-bold mb-4")
@@ -2436,12 +3153,25 @@ def build_dashboard(task_manager):
     </script>
     <script>
         function initMetricTooltips() {
-            document.querySelectorAll('.metric-card-hover').forEach(function(card) {
+            const cards = document.querySelectorAll('.metric-card-hover');
+            console.log('[DEBUG] initMetricTooltips: found', cards.length, 'metric cards');
+            fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboard.js:initMetricTooltips',message:'initMetricTooltips called',data:{card_count:cards.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'})}).catch(()=>{});
+            
+            cards.forEach(function(card) {
                 const tooltipId = card.getAttribute('data-tooltip-id');
-                if (!tooltipId) return;
+                if (!tooltipId) {
+                    console.log('[DEBUG] initMetricTooltips: card missing data-tooltip-id');
+                    return;
+                }
                 
                 const tooltip = document.getElementById('tooltip-' + tooltipId);
-                if (!tooltip) return;
+                if (!tooltip) {
+                    console.log('[DEBUG] initMetricTooltips: tooltip not found for', tooltipId, 'looking for tooltip-' + tooltipId);
+                    fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboard.js:initMetricTooltips',message:'tooltip element not found',data:{tooltip_id:tooltipId,expected_id:'tooltip-' + tooltipId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'})}).catch(()=>{});
+                    return;
+                }
+                
+                console.log('[DEBUG] initMetricTooltips: setting up tooltip for', tooltipId);
                 
                 let hoverTimeout;
                 
