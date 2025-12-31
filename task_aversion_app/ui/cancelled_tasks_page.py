@@ -3,6 +3,7 @@ from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -27,6 +28,17 @@ def get_all_cancellation_categories():
     custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
     all_categories = {**DEFAULT_CANCELLATION_CATEGORIES, **custom_categories}
     return all_categories
+
+
+def sanitize_category_key(key: str) -> str:
+    """Convert a label to a valid category key (lowercase, underscores, no spaces)."""
+    # Convert to lowercase and replace spaces/special chars with underscores
+    key = re.sub(r'[^a-z0-9_]', '_', key.lower())
+    # Remove multiple underscores
+    key = re.sub(r'_+', '_', key)
+    # Remove leading/trailing underscores
+    key = key.strip('_')
+    return key or 'custom_category'
 
 
 def get_cancellation_penalties():
@@ -242,6 +254,21 @@ def cancelled_tasks_page():
             value='all'
         ).classes("flex-1").props("dense outlined")
         
+        def refresh_category_filter():
+            """Refresh the category filter dropdown options."""
+            current_value = category_filter.value
+            new_options = {'all': 'All Categories', **get_all_cancellation_categories()}
+            # Update options - try set_options first, fall back to direct assignment
+            if hasattr(category_filter, 'set_options'):
+                category_filter.set_options(new_options)
+            else:
+                category_filter.options = new_options
+            # Restore the current value if it still exists, otherwise set to 'all'
+            if current_value and current_value in new_options:
+                category_filter.set_value(current_value)
+            else:
+                category_filter.set_value('all')
+        
         def refresh_view():
             view_container.clear()
             with view_container:
@@ -364,4 +391,85 @@ def cancelled_tasks_page():
                 print(f"[CancelledTasks] Error: {traceback.format_exc()}")
         
         render_statistics()
+    
+    # Cancellation Categories Management Section
+    ui.separator().classes("my-6")
+    with ui.card().classes("w-full max-w-4xl p-4 gap-3"):
+        ui.label("Cancellation Categories").classes("text-lg font-semibold")
+        ui.label("Manage custom cancellation categories. Default categories cannot be deleted.").classes("text-sm text-gray-600 mb-3")
+        
+        def refresh_categories_list():
+            categories_list_container.clear()
+            with categories_list_container:
+                all_categories = get_all_cancellation_categories()
+                custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
+                
+                if not all_categories:
+                    ui.label("No categories found.").classes("text-gray-500 p-4")
+                else:
+                    with ui.column().classes("w-full gap-2"):
+                        for cat_key, cat_label in sorted(all_categories.items()):
+                            is_default = cat_key in DEFAULT_CANCELLATION_CATEGORIES
+                            with ui.card().classes("w-full p-3 border border-gray-200"):
+                                with ui.row().classes("w-full items-center justify-between gap-3"):
+                                    with ui.column().classes("flex-1 gap-1"):
+                                        ui.label(cat_label).classes("text-base font-semibold")
+                                        ui.label(f"Key: {cat_key}").classes("text-xs text-gray-500")
+                                        if is_default:
+                                            ui.label("Default category").classes("text-xs text-blue-600")
+                                    
+                                    if not is_default:
+                                        def delete_category(key=cat_key):
+                                            user_state.remove_cancellation_category(key, DEFAULT_USER_ID)
+                                            refresh_categories_list()
+                                            # Refresh the category filter dropdown
+                                            refresh_category_filter()
+                                            # Refresh the view to update category filters and lists
+                                            refresh_view()
+                                            ui.notify("Category deleted", color="positive")
+                                        
+                                        ui.button("Delete", on_click=delete_category, color="negative").classes("text-xs")
+                        
+                        # Add new category form
+                        ui.separator().classes("my-2")
+                        with ui.card().classes("w-full p-3 bg-gray-50 border border-gray-300"):
+                            ui.label("Add New Category").classes("text-sm font-semibold mb-2")
+                            with ui.row().classes("w-full gap-2 items-end"):
+                                new_category_label_input = ui.input(
+                                    label="Category Label",
+                                    placeholder="e.g., Changed my mind"
+                                ).classes("flex-1")
+                                
+                                def add_category():
+                                    label = new_category_label_input.value.strip()
+                                    if not label:
+                                        ui.notify("Please enter a category label", color="negative")
+                                        return
+                                    
+                                    # Generate key from label
+                                    key = sanitize_category_key(label)
+                                    
+                                    # Check if key already exists
+                                    all_cats = get_all_cancellation_categories()
+                                    if key in all_cats:
+                                        # Make it unique
+                                        counter = 1
+                                        original_key = key
+                                        while key in all_cats:
+                                            key = f"{original_key}_{counter}"
+                                            counter += 1
+                                    
+                                    user_state.add_cancellation_category(key, label, DEFAULT_USER_ID)
+                                    new_category_label_input.set_value("")
+                                    refresh_categories_list()
+                                    # Refresh the category filter dropdown
+                                    refresh_category_filter()
+                                    # Refresh the view to update category filters and lists
+                                    refresh_view()
+                                    ui.notify("Category added", color="positive")
+                                
+                                ui.button("Add", on_click=add_category, color="positive").classes("bg-green-500 text-white")
+        
+        categories_list_container = ui.column().classes("w-full mt-3")
+        refresh_categories_list()
 

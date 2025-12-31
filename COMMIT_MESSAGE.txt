@@ -1,47 +1,38 @@
-Fix monitored metrics performance and functionality issues
+Move cancellation category management to cancelled tasks page
 
-This commit addresses critical performance and functionality issues with the
-monitored metrics feature that was causing dashboard slowdowns and timeouts.
+This commit relocates the cancellation category management functionality
+from the settings page to the cancelled tasks management interface,
+providing a more intuitive workflow where users can manage categories
+directly where they're used.
 
-Performance Improvements:
-- Dashboard now loads instantly (was 30+ seconds)
-- Analytics page loads in ~6 seconds (was timing out after 30+ seconds)
-- Implemented lazy loading for metrics section using ui.timer to defer
-  expensive operations until after initial render
-- Metrics load in background: ~20s initial, ~15s on reload
-  (get_all_scores_for_composite is the remaining bottleneck at ~17-20s)
-
-Functionality Fixes:
-- Fixed edit dialog to show all 24 available metrics (was only showing 2)
-- Fixed metric value retrieval: metrics now correctly display values from
-  quality_metrics, composite_scores, and relief_summary
-- Fixed closure capture issue: ensure data is loaded before creating closures
-  for get_value functions
-- Metrics that work: productivity_time, productivity_score, stress_level,
-  net_wellbeing, net_wellbeing_normalized, stress_efficiency,
-  thoroughness_score, thoroughness_factor
-
-Remaining Issues:
-- Tooltips: productivity_time tooltip is blank but appears; other tooltips
-  show "no history data" (history data retrieval needs investigation)
-- Metrics load time: get_all_scores_for_composite() takes 17-20 seconds
-  and is the primary bottleneck for metrics loading
-- Some metrics return 0 when they shouldn't (needs further investigation)
+Changes:
+- Removed cancellation categories section from settings page
+- Added category management (add/delete) to cancelled tasks page
+- Category filter dropdown now refreshes automatically when categories
+  are added or deleted
+- Task list view refreshes to show updated categories immediately
 
 Technical Changes:
-- Added comprehensive instrumentation logging for debugging
-- Consolidated lazy loading in load_and_render() to fetch all data before
-  rendering metrics
-- Fixed JavaScript tooltip initialization to correctly target tooltip
-  containers
-- Added exception handling and logging throughout metrics rendering pipeline
-- Modified render_monitored_metrics_section_loaded() to accept pre-loaded
-  quality_metrics and composite_scores
+- Removed unused sanitize_category_key() function and re import from
+  settings_page.py
+- Added sanitize_category_key() function to cancelled_tasks_page.py
+- Added refresh_category_filter() function to update dropdown options
+  dynamically when categories change
+- Category management section added at bottom of cancelled tasks page
+  with full add/delete functionality
+- Default categories are protected from deletion (only custom categories
+  can be deleted)
+
+User Experience:
+- Users can now add new cancellation categories directly from the
+  cancelled tasks management interface
+- Category management is co-located with cancelled task viewing and
+  editing, making the workflow more intuitive
+- Settings page description updated to indicate categories can be
+  managed in the cancelled tasks interface
 
 Files Modified:
-- ui/dashboard.py: Lazy loading, closure fixes, tooltip fixes, instrumentation
-- ui/analytics_page.py: Lazy loading for composite scores, import fixes
-- backend/analytics.py: Added get_all_monitored_metrics_options() method
-
-Assessment: 7/10 - Major performance improvements and core functionality
-working, but tooltip history data and metrics load time still need work.
+- ui/settings_page.py: Removed cancellation categories section, removed
+  unused imports and functions
+- ui/cancelled_tasks_page.py: Added category management section with
+  add/delete functionality and dynamic filter refresh
