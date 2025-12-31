@@ -27,6 +27,7 @@ def initialize_task_page(task_manager, emotion_manager):
         params = request.query_params  # ✅
 
         instance_id = params.get("instance_id")
+        edit_mode = params.get("edit", "false").lower() == "true"
 
         if not instance_id:
             ui.notify("Error: no instance_id provided", color='negative')
@@ -42,6 +43,9 @@ def initialize_task_page(task_manager, emotion_manager):
             return
 
         task_id = instance.get('task_id')
+        
+        # Check if this is a completed task being edited
+        is_completed_task = instance.get('completed_at') or instance.get('is_completed') in ('True', True, 'true')
         
         with perf_logger.operation("get_task", task_id=task_id):
             task = task_manager.get_task(task_id)
@@ -90,7 +94,20 @@ def initialize_task_page(task_manager, emotion_manager):
                     template_default_aversion = None
         
         # Helper to get default value, scaling from 0-10 to 0-100 if needed
+        # When editing a completed task, always use existing values from predicted_data
         def get_default_value(key, default=50):
+            # If editing a completed task, always use existing predicted values (even if 0)
+            if edit_mode and is_completed_task:
+                val = predicted_data.get(key)
+                if val is not None:
+                    try:
+                        num_val = float(val)
+                        # Scale from 0-10 to 0-100 if value is <= 10
+                        if num_val <= 10 and num_val >= 0:
+                            num_val = num_val * 10
+                        return int(round(num_val))
+                    except (ValueError, TypeError):
+                        pass
             # First check if current instance has a value
             val = predicted_data.get(key)
             if val is not None:
@@ -133,11 +150,23 @@ def initialize_task_page(task_manager, emotion_manager):
         with ui.column().classes("w-full gap-4"):
 
             # Page title
-            ui.label("Initialize Task").classes("text-3xl font-bold mb-4")
+            title_text = "Edit Task Initialization" if (edit_mode and is_completed_task) else "Initialize Task"
+            ui.label(title_text).classes("text-3xl font-bold mb-4")
+            
+            # Show edit mode notice
+            if edit_mode and is_completed_task:
+                with ui.card().classes("w-full p-3 bg-blue-50 border border-blue-200 mb-4"):
+                    ui.label("[EDIT MODE] You are editing a completed task. Changes will be saved as edited version.").classes("text-sm text-blue-800 font-semibold")
+                    ui.label("You can navigate to the completion page to edit completion data as well.").classes("text-xs text-blue-600 mt-1")
+                    
+                    def go_to_completion_edit():
+                        ui.navigate.to(f"/complete_task?instance_id={instance_id}&edit=true")
+                    
+                    ui.button("Edit Completion Data →", on_click=go_to_completion_edit).classes("mt-2 bg-blue-500 text-white")
 
             description_field = ui.textarea(
                 label="Task Specifics (optional)",
-                value='',
+                value=predicted_data.get('description', '') if (edit_mode and is_completed_task) else '',
             )
 
             # Aversion slider - always show so it can be adjusted for future instances
@@ -329,12 +358,20 @@ def initialize_task_page(task_manager, emotion_manager):
                 update_emotion_sliders()
 
             ui.label("Physical Context").classes("text-lg font-semibold")
+            physical_context_value = predicted_data.get('physical_context', 'None') if (edit_mode and is_completed_task) else None
             physical_context = ui.select(
-                ["None", "Home", "Work", "Gym", "Outdoors", "Errands", "Custom..."]
+                ["None", "Home", "Work", "Gym", "Outdoors", "Errands", "Custom..."],
+                value=physical_context_value if physical_context_value and physical_context_value in ["None", "Home", "Work", "Gym", "Outdoors", "Errands"] else None
             )
 
             custom_physical = ui.input(placeholder="Custom Physical Context")
-            custom_physical.set_visibility(False)
+            if physical_context_value == "Custom..." or (physical_context_value and physical_context_value not in ["None", "Home", "Work", "Gym", "Outdoors", "Errands"]):
+                custom_physical.set_value(physical_context_value if physical_context_value != "Custom..." else "")
+                custom_physical.set_visibility(True)
+                if physical_context.value != "Custom...":
+                    physical_context.set_value("Custom...")
+            else:
+                custom_physical.set_visibility(False)
 
             def physical_changed(e):
                 custom_physical.set_visibility(e.args == "Custom...")
@@ -409,7 +446,13 @@ def initialize_task_page(task_manager, emotion_manager):
                         sliders_adjusted = True
                         break
                 
-                # Evaluate popup triggers
+                # Skip popup evaluation if editing a completed task
+                if edit_mode and is_completed_task:
+                    # Directly save without popup
+                    do_save()
+                    return
+                
+                # Evaluate popup triggers (only for new initializations)
                 initialization_context = {
                     'event_type': 'initialize',
                     'instance_id': instance_id,
@@ -559,13 +602,20 @@ def initialize_task_page(task_manager, emotion_manager):
                     # This will set initialized_at if not already set
                     with perf_logger.operation("add_prediction_to_instance", instance_id=instance_id):
                         im.add_prediction_to_instance(instance_id, predicted_payload)
+                    
+                    # If editing a completed task, mark it as edited
+                    if edit_mode and is_completed_task:
+                        from ui.task_editing_manager import mark_instance_as_edited
+                        mark_instance_as_edited(instance_id)
                 except Exception as exc:
                     perf_logger.log_error("add_prediction_to_instance failed", exc, instance_id=instance_id)
                     ui.notify(f"Failed to save instance: {exc}", color='negative')
                     return
 
-                with perf_logger.operation("save_initialization_entry", instance_id=instance_id):
-                    task_manager.save_initialization_entry(entry)
+                # Only save initialization entry if not editing (to avoid duplicate entries)
+                if not (edit_mode and is_completed_task):
+                    with perf_logger.operation("save_initialization_entry", instance_id=instance_id):
+                        task_manager.save_initialization_entry(entry)
                 
                 save_duration = (time.perf_counter() - save_start_time) * 1000
                 perf_logger.log_timing("do_save_total", save_duration, instance_id=instance_id, task_id=task_id)
@@ -573,11 +623,17 @@ def initialize_task_page(task_manager, emotion_manager):
                 navigation_start = time.perf_counter()
                 perf_logger.log_event("navigation_start", instance_id=instance_id, task_id=task_id)
                 
-                ui.notify("Task initialized!", color='positive')
-                ui.navigate.to('/')
+                if edit_mode and is_completed_task:
+                    ui.notify("Task initialization updated!", color='positive')
+                    # Navigate back to task editing manager
+                    ui.navigate.to('/task-editing-manager')
+                else:
+                    ui.notify("Task initialized!", color='positive')
+                    ui.navigate.to('/')
                 
                 # Log navigation time (this happens asynchronously, so we log it immediately)
                 navigation_duration = (time.perf_counter() - navigation_start) * 1000
                 perf_logger.log_timing("navigation_triggered", navigation_duration, instance_id=instance_id, task_id=task_id)
 
-            ui.button("Save Initialization", on_click=save).classes("mt-4")
+            button_text = "Save Changes" if (edit_mode and is_completed_task) else "Save Initialization"
+            ui.button(button_text, on_click=save).classes("mt-4")

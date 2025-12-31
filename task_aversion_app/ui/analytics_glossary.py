@@ -100,7 +100,7 @@ ANALYTICS_MODULES = {
     'productivity_score': {
         'title': 'Productivity Score',
         'version': '1.0',
-        'description': 'Measures productive output based on task completion and type. Prioritizes baseline formula with optional enhancements for weekly averages, goal achievement, and burnout prevention.',
+        'description': 'Measures productive output based on task completion and type. Prioritizes baseline formula with optional enhancements for weekly averages, goal achievement, and burnout prevention. Note: The formula will be updated from productivity configuration settings formula once complete.',
         'icon': 'trending_up',
         'color': 'green',
         'components': [

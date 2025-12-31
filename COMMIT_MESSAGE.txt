@@ -1,61 +1,61 @@
-Reorganize UI: Summary page, productivity settings, and settings restructure
+Add Task Editing Manager with chronological pagination and dual edit buttons
 
-This commit reorganizes the UI to improve navigation and consolidate related
-functionality. The composite score dashboard is moved to a new Summary page,
-productivity settings are extracted to their own dedicated page with advanced
-features, and the settings page is restructured for better organization.
+This commit introduces a comprehensive Task Editing Manager system that
+replaces the separate cancelled tasks management interface. The new system
+allows users to edit both completed and cancelled tasks from a unified
+interface with chronological ordering, pagination, and direct navigation
+to initialization and completion editing pages.
 
 Changes:
-- Created new Summary page (/summary) with composite score and component
-  contributions display
-- Moved time tracking consistency from composite score page to analytics page
-- Removed configure weights section from composite score page (now only shows
-  component contributions)
-- Added Summary button to dashboard header navigation (next to Analytics)
-- Created comprehensive Productivity Settings page (/settings/productivity-settings)
-  with basic and advanced configuration options
-- Reorganized settings page: moved productivity settings to dedicated page,
-  moved composite score weights and cancellation penalties to appropriate sections
-- Added cross-links between productivity settings page and productivity module
+- Replaced "Manage Cancelled Tasks" button in settings with "Task Editing
+  Manager" button
+- Created new unified task editing interface showing completed and cancelled
+  tasks in chronological order (most recent first)
+- Added pagination support (25 tasks per page) with Previous/Next navigation
+- Completed tasks now have two edit buttons: "Edit Init" and "Edit Completion"
+- Cancelled tasks retain single edit button that opens cancellation dialog
+- Tasks are labeled with status badges (COMPLETED/CANCELLED) for clarity
+- Filter dropdown allows filtering by All/Completed/Cancelled status
 
 Technical Changes:
-- New summary_page.py: Displays composite score and component contributions
-- New productivity_settings_page.py: Full-featured productivity configuration
-  - Basic settings: weekly curve, target hours (daily/weekly), burnout thresholds
-    (weekly and daily), primary productivity task with bonus multiplier
-  - Advanced settings: Component and curve weight configuration with multiple
-    saved configurations, productivity score over time chart
-  - Weight configurations saved to CSV (productivity_weight_configs.csv) for
-    development and comparison purposes
-- Updated composite_score_page.py: Now redirects to /summary for backward
-  compatibility
-- Updated dashboard.py: Added Summary button to header navigation
-- Updated settings_page.py: Reorganized sections, replaced inline productivity
-  settings with link to dedicated page
-- Updated analytics_page.py: Added time tracking consistency section, updated
-  references from composite-score to summary
-- Updated productivity_module.py: Added link to productivity settings page
+- Created new task_editing_manager.py module with pagination logic and
+  chronological sorting
+- Added get_all_tasks_chronologically() function to combine and sort tasks
+  by completed_at/cancelled_at timestamps
+- Implemented PageState class for pagination state management
+- Updated initialize_task.py to support edit mode for completed tasks:
+  - Detects edit mode via query parameter
+  - Loads existing predicted values instead of defaults
+  - Skips popup evaluations in edit mode
+  - Marks task as edited and navigates back to editing manager
+- Updated complete_task.py to support edit mode for completed tasks:
+  - Loads all existing values including completion percentage and notes
+  - Allows full editing of all completion fields
+  - Uses update methods instead of complete_instance() to preserve status
+  - Marks task as edited and navigates back to editing manager
+- Added mark_instance_as_edited() function to track edited tasks with
+  timestamp in actual data (is_edited flag and edited_at timestamp)
+- Added helper functions _update_actual_data_csv() and _update_actual_data_db()
+  for updating instance actual data when editing completed tasks
 
 User Experience:
-- Summary page provides quick access to overall performance score and breakdown
-- Productivity settings are now in a dedicated, feature-rich page with clear
-  organization between basic and advanced settings
-- Settings page is cleaner and better organized with logical grouping
-- Time tracking consistency is now in analytics where it belongs
-- Users can experiment with multiple weight configurations to optimize formulas
-- Primary productivity task feature allows users to designate a task that gives
-  bonus points when completed
-- Cross-links between related pages improve discoverability
+- Unified interface for managing both completed and cancelled tasks
+- Chronological ordering provides better context of task history
+- Pagination improves performance with large task lists
+- Direct navigation buttons for completed tasks allow quick access to
+  edit initialization or completion data separately
+- Status badges make it easy to distinguish task types at a glance
+- Edited tasks are clearly marked with [EDITED] label and timestamp
+- Filter dropdown allows users to focus on specific task types
 
 Files Modified:
-- ui/summary_page.py: New file - Summary page with composite score display
-- ui/productivity_settings_page.py: New file - Comprehensive productivity
-  settings with basic and advanced configuration
-- ui/composite_score_page.py: Simplified to redirect to /summary
-- ui/dashboard.py: Added Summary button to header navigation
-- ui/settings_page.py: Reorganized sections, removed inline productivity
-  settings, added link to productivity settings page
-- ui/analytics_page.py: Added time tracking consistency section, updated
-  navigation references
-- ui/productivity_module.py: Added link to productivity settings page
-- app.py: Registered new summary_page and productivity_settings_page modules
+- ui/settings_page.py: Changed button text and navigation target from
+  /cancelled-tasks to /task-editing-manager
+- ui/task_editing_manager.py: New file with complete editing interface,
+  pagination, and chronological sorting logic
+- ui/initialize_task.py: Added edit mode support with value loading,
+  skip popups, and navigation back to editing manager
+- ui/complete_task.py: Added edit mode support with full field editing,
+  completion percentage/notes loading, and navigation back to editing
+  manager
+- app.py: Registered new task_editing_manager module

@@ -17,6 +17,7 @@ from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handlin
 from ui import survey_page  # registers /survey
 from ui import settings_page  # registers /settings
 from ui import cancelled_tasks_page  # registers /cancelled-tasks
+from ui import task_editing_manager  # registers /task-editing-manager
 from ui import composite_score_weights_page  # registers /settings/composite-score-weights
 from ui import cancellation_penalties_page  # registers /settings/cancellation-penalties
 from ui import productivity_settings_page  # registers /settings/productivity-settings

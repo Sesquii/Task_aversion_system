@@ -106,12 +106,12 @@ def settings_page():
         ui.label("Export all database data (tasks, instances, emotions) to CSV files in the data/ folder.").classes("text-sm text-gray-600 mt-2")
         ui.markdown("- **Data Guide**: Currently missing - documentation for local setup, data backup, and troubleshooting is planned but not yet implemented").classes("text-sm text-gray-600 mt-2")
     
-    # Cancelled Tasks Management Section
+    # Task Editing Management Section
     ui.separator().classes("my-4")
     with ui.card().classes("w-full max-w-xl p-4 gap-3"):
-        ui.label("Cancelled Tasks").classes("text-lg font-semibold")
-        ui.button("📋 Manage Cancelled Tasks", on_click=lambda: ui.navigate.to("/cancelled-tasks")).classes("bg-orange-500 text-white w-full")
-        ui.label("View, filter, and manage all cancelled task instances.").classes("text-sm text-gray-600 mt-2")
+        ui.label("Task Editing").classes("text-lg font-semibold")
+        ui.button("✏️ Task Editing Manager", on_click=lambda: ui.navigate.to("/task-editing-manager")).classes("bg-blue-500 text-white w-full")
+        ui.label("Edit completed and cancelled task instances. Navigate between initialization and completion pages for completed tasks.").classes("text-sm text-gray-600 mt-2")
         
         ui.button("⚠️ Cancellation Penalty Weights", on_click=lambda: ui.navigate.to("/settings/cancellation-penalties")).classes("bg-orange-500 text-white w-full mt-2")
         ui.label("Configure productivity penalties for different cancellation reasons.").classes("text-xs text-gray-500")
