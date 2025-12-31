@@ -78,7 +78,7 @@ def build_analytics_page():
             ui.label("Analyze factors that influence scores").classes("text-xs text-gray-500 self-center")
             ui.button("📋 Cancelled Tasks", on_click=lambda: ui.navigate.to('/cancelled-tasks')).classes("bg-orange-500 text-white")
             ui.label("View cancelled task patterns and statistics").classes("text-xs text-gray-500 self-center")
-            ui.button("📈 Composite Score", on_click=lambda: ui.navigate.to('/composite-score')).classes("bg-indigo-500 text-white")
+            ui.button("📈 Summary", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
             ui.label("View overall performance score").classes("text-xs text-gray-500 self-center")
             ui.button("📚 Analytics Glossary", on_click=lambda: ui.navigate.to('/analytics/glossary')).classes("bg-gray-500 text-white")
             ui.label("Learn about metrics and formulas").classes("text-xs text-gray-500 self-center")
@@ -99,7 +99,7 @@ def build_analytics_page():
             with ui.card().classes("p-3 bg-white border-2 border-indigo-300") as score_card:
                 score_label = ui.label("--").classes("text-3xl font-bold text-indigo-700")
                 ui.label("/ 100").classes("text-sm text-indigo-600")
-            ui.button("View Details", on_click=lambda: ui.navigate.to('/composite-score')).classes("bg-indigo-500 text-white")
+            ui.button("View Details", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
             ui.button("Configure Weights", on_click=lambda: ui.navigate.to('/settings')).classes("bg-gray-500 text-white")
     
     def load_composite_score():
@@ -139,6 +139,60 @@ def build_analytics_page():
     
     # Load composite score asynchronously
     ui.timer(0.1, load_composite_score, once=True)
+
+    # Time Tracking Consistency Section
+    with ui.card().classes("p-4 mb-4 bg-teal-50 border border-teal-200"):
+        ui.label("Time Tracking Consistency").classes("text-xl font-bold mb-2")
+        ui.label("Measures how well you track your time. Sleep up to 8 hours is rewarded. Untracked time is penalized.").classes(
+            "text-sm text-gray-600 mb-3"
+        )
+        
+        # Get time tracking details
+        tracking_data = analytics_service.calculate_time_tracking_consistency_score(days=7)
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Tracking Score").classes("text-xs text-gray-500")
+                ui.label(f"{tracking_data['tracking_consistency_score']:.1f}").classes(
+                    "text-2xl font-bold"
+                )
+                ui.label("/ 100").classes("text-xs text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Tracked Time").classes("text-xs text-gray-500")
+                tracked_hours = tracking_data['avg_tracked_time_minutes'] / 60.0
+                ui.label(f"{tracked_hours:.1f} hrs").classes("text-lg font-semibold")
+                ui.label(f"({tracking_data['avg_tracked_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Untracked Time").classes("text-xs text-gray-500")
+                untracked_hours = tracking_data['avg_untracked_time_minutes'] / 60.0
+                ui.label(f"{untracked_hours:.1f} hrs").classes("text-lg font-semibold text-orange-600")
+                ui.label(f"({tracking_data['avg_untracked_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Sleep Time").classes("text-xs text-gray-500")
+                sleep_hours = tracking_data['avg_sleep_time_minutes'] / 60.0
+                ui.label(f"{sleep_hours:.1f} hrs").classes("text-lg font-semibold")
+                ui.label(f"({tracking_data['avg_sleep_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Tracking Coverage").classes("text-xs text-gray-500")
+                coverage_pct = tracking_data['tracking_coverage'] * 100.0
+                ui.label(f"{coverage_pct:.1f}%").classes("text-lg font-semibold")
+                ui.label("of day tracked").classes("text-xs text-gray-600")
+        
+        ui.separator().classes("my-3")
+        ui.label(
+            "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
+            "Higher tracking consistency means more of your day is logged."
+        ).classes("text-sm text-gray-600")
 
     # #region agent log
     try:

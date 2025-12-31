@@ -1,38 +1,61 @@
-Move cancellation category management to cancelled tasks page
+Reorganize UI: Summary page, productivity settings, and settings restructure
 
-This commit relocates the cancellation category management functionality
-from the settings page to the cancelled tasks management interface,
-providing a more intuitive workflow where users can manage categories
-directly where they're used.
+This commit reorganizes the UI to improve navigation and consolidate related
+functionality. The composite score dashboard is moved to a new Summary page,
+productivity settings are extracted to their own dedicated page with advanced
+features, and the settings page is restructured for better organization.
 
 Changes:
-- Removed cancellation categories section from settings page
-- Added category management (add/delete) to cancelled tasks page
-- Category filter dropdown now refreshes automatically when categories
-  are added or deleted
-- Task list view refreshes to show updated categories immediately
+- Created new Summary page (/summary) with composite score and component
+  contributions display
+- Moved time tracking consistency from composite score page to analytics page
+- Removed configure weights section from composite score page (now only shows
+  component contributions)
+- Added Summary button to dashboard header navigation (next to Analytics)
+- Created comprehensive Productivity Settings page (/settings/productivity-settings)
+  with basic and advanced configuration options
+- Reorganized settings page: moved productivity settings to dedicated page,
+  moved composite score weights and cancellation penalties to appropriate sections
+- Added cross-links between productivity settings page and productivity module
 
 Technical Changes:
-- Removed unused sanitize_category_key() function and re import from
-  settings_page.py
-- Added sanitize_category_key() function to cancelled_tasks_page.py
-- Added refresh_category_filter() function to update dropdown options
-  dynamically when categories change
-- Category management section added at bottom of cancelled tasks page
-  with full add/delete functionality
-- Default categories are protected from deletion (only custom categories
-  can be deleted)
+- New summary_page.py: Displays composite score and component contributions
+- New productivity_settings_page.py: Full-featured productivity configuration
+  - Basic settings: weekly curve, target hours (daily/weekly), burnout thresholds
+    (weekly and daily), primary productivity task with bonus multiplier
+  - Advanced settings: Component and curve weight configuration with multiple
+    saved configurations, productivity score over time chart
+  - Weight configurations saved to CSV (productivity_weight_configs.csv) for
+    development and comparison purposes
+- Updated composite_score_page.py: Now redirects to /summary for backward
+  compatibility
+- Updated dashboard.py: Added Summary button to header navigation
+- Updated settings_page.py: Reorganized sections, replaced inline productivity
+  settings with link to dedicated page
+- Updated analytics_page.py: Added time tracking consistency section, updated
+  references from composite-score to summary
+- Updated productivity_module.py: Added link to productivity settings page
 
 User Experience:
-- Users can now add new cancellation categories directly from the
-  cancelled tasks management interface
-- Category management is co-located with cancelled task viewing and
-  editing, making the workflow more intuitive
-- Settings page description updated to indicate categories can be
-  managed in the cancelled tasks interface
+- Summary page provides quick access to overall performance score and breakdown
+- Productivity settings are now in a dedicated, feature-rich page with clear
+  organization between basic and advanced settings
+- Settings page is cleaner and better organized with logical grouping
+- Time tracking consistency is now in analytics where it belongs
+- Users can experiment with multiple weight configurations to optimize formulas
+- Primary productivity task feature allows users to designate a task that gives
+  bonus points when completed
+- Cross-links between related pages improve discoverability
 
 Files Modified:
-- ui/settings_page.py: Removed cancellation categories section, removed
-  unused imports and functions
-- ui/cancelled_tasks_page.py: Added category management section with
-  add/delete functionality and dynamic filter refresh
+- ui/summary_page.py: New file - Summary page with composite score display
+- ui/productivity_settings_page.py: New file - Comprehensive productivity
+  settings with basic and advanced configuration
+- ui/composite_score_page.py: Simplified to redirect to /summary
+- ui/dashboard.py: Added Summary button to header navigation
+- ui/settings_page.py: Reorganized sections, removed inline productivity
+  settings, added link to productivity settings page
+- ui/analytics_page.py: Added time tracking consistency section, updated
+  navigation references
+- ui/productivity_module.py: Added link to productivity settings page
+- app.py: Registered new summary_page and productivity_settings_page modules

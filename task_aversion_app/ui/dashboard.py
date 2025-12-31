@@ -3909,6 +3909,9 @@ def build_dashboard(task_manager):
         with ui.row().classes("w-full justify-between items-center mb-4").props('id="tas-dashboard-header" data-tooltip-id="dashboard_header"'):
             ui.label("Task Aversion Dashboard").classes("text-4xl font-bold mb-3")
             with ui.row().classes("gap-2"):
+                ui.button("Summary",
+                          on_click=lambda: ui.navigate.to('/summary'),
+                          icon="dashboard").classes("text-xl py-3 px-6").props('id="tas-summary-link" data-tooltip-id="summary_link"')
                 ui.button("Analytics",
                           on_click=lambda: ui.navigate.to('/analytics'),
                           icon="bar_chart").classes("text-xl py-3 px-6").props('id="tas-analytics-link" data-tooltip-id="analytics_link"')

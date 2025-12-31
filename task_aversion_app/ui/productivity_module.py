@@ -513,6 +513,18 @@ def productivity_module_page():
         with data_display:
             ui.label("Click 'Load Current Week Data' to load your actual productivity data.").classes("text-sm text-gray-500 italic")
     
+    ui.separator().classes("my-4")
+    with ui.card().classes("w-full p-4 bg-gray-50 border border-gray-200"):
+        ui.label("Related Resources").classes("text-lg font-semibold mb-2")
+        ui.button(
+            "⚙️ Productivity Settings",
+            on_click=lambda: ui.navigate.to("/settings/productivity-settings"),
+            icon="settings"
+        ).classes("bg-blue-500 text-white")
+        ui.label(
+            "Configure productivity scoring settings, target hours, burnout thresholds, and advanced weight configurations."
+        ).classes("text-sm text-gray-600 mt-2")
+    
     ui.button("Back to Dashboard", on_click=lambda: ui.navigate.to("/")).classes("mt-4")
 
 
