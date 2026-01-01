@@ -905,6 +905,173 @@ def generate_thoroughness_factor_overview_plotly() -> Optional[go.Figure]:
         return None
 
 
+def generate_work_volume_score_plotly() -> Optional[go.Figure]:
+    """Generate work volume score Plotly chart with actual user data."""
+    try:
+        _, analytics = get_user_instances()
+        if not analytics:
+            return None
+        
+        # Get work volume metrics
+        volume_metrics = analytics.get_daily_work_volume_metrics(days=30)
+        avg_daily_work_time = volume_metrics.get('avg_daily_work_time', 0.0)
+        work_volume_score = volume_metrics.get('work_volume_score', 0.0)
+        work_consistency_score = volume_metrics.get('work_consistency_score', 50.0)
+        variance = volume_metrics.get('variance', 0.0)
+        daily_work_times = volume_metrics.get('daily_work_times', [])  # Only days with work
+        daily_work_times_history = volume_metrics.get('daily_work_times_history', [])  # All days including zeros
+        total_days = volume_metrics.get('total_days', 0)
+        days_with_work = volume_metrics.get('days_with_work', 0)
+        
+        if not daily_work_times_history:
+            return None
+        
+        # Create subplots
+        fig = make_subplots(
+            rows=1, cols=3,
+            subplot_titles=(
+                f'Your Daily Work Times (Avg: {avg_daily_work_time:.1f} min, Score: {work_volume_score:.1f})',
+                f'Work Time Distribution ({days_with_work} work days of {total_days} total)',
+                f'Consistency: {work_consistency_score:.1f} (Variance: {variance:.0f})'
+            ),
+            specs=[[{"secondary_y": False}, {"secondary_y": False}, {"secondary_y": False}]]
+        )
+        
+        # Plot 1: Daily work times over time (using history to show all days)
+        dates = list(range(len(daily_work_times_history)))
+        fig.add_trace(go.Scatter(
+            x=dates, y=daily_work_times_history,
+            mode='lines+markers',
+            name='Daily Work Time',
+            line=dict(color='blue', width=2),
+            marker=dict(size=4),
+            hovertemplate='Day %{x}<br>%{y:.1f} min<extra></extra>'
+        ), row=1, col=1)
+        
+        # Add average line
+        fig.add_hline(
+            y=avg_daily_work_time,
+            line_dash="dash",
+            line_color="green",
+            annotation_text=f"Avg: {avg_daily_work_time:.1f} min",
+            annotation_position="right",
+            row=1, col=1
+        )
+        
+        # Add tier thresholds
+        fig.add_hline(y=120, line_dash="dot", line_color="orange", row=1, col=1, annotation_text="2h")
+        fig.add_hline(y=240, line_dash="dot", line_color="yellow", row=1, col=1, annotation_text="4h")
+        fig.add_hline(y=360, line_dash="dot", line_color="green", row=1, col=1, annotation_text="6h")
+        
+        # Plot 2: Histogram of daily work times (only days with work)
+        fig.add_trace(go.Histogram(
+            x=daily_work_times,
+            nbinsx=20,
+            name='Frequency',
+            marker_color='blue',
+            opacity=0.7
+        ), row=1, col=2)
+        
+        # Plot 3: Consistency visualization - show variance
+        # Create a bar chart showing consistency score and variance
+        fig.add_trace(go.Bar(
+            x=['Consistency Score', 'Variance'],
+            y=[work_consistency_score, min(100.0, variance / 10.0)],  # Scale variance for display
+            marker_color=['green', 'red'],
+            name='Metrics',
+            text=[f'{work_consistency_score:.1f}', f'{variance:.0f}'],
+            textposition='outside'
+        ), row=1, col=3)
+        
+        fig.update_xaxes(title_text="Day Index", row=1, col=1)
+        fig.update_xaxes(title_text="Daily Work Time (minutes)", row=1, col=2)
+        fig.update_xaxes(title_text="Metric", row=1, col=3)
+        fig.update_yaxes(title_text="Work Time (minutes)", row=1, col=1)
+        fig.update_yaxes(title_text="Frequency", row=1, col=2)
+        fig.update_yaxes(title_text="Score / Scaled Variance", row=1, col=3)
+        
+        fig.update_layout(
+            title=f"Productivity Volume: Work Volume & Consistency - Your Data<br>Consistency: {work_consistency_score:.1f}/100 (Variance: {variance:.0f}, {days_with_work}/{total_days} days with work)",
+            height=400,
+            showlegend=False
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating work volume score chart: {e}")
+        return None
+
+
+def generate_volumetric_productivity_plotly() -> Optional[go.Figure]:
+    """Generate volumetric productivity Plotly chart with actual user data."""
+    try:
+        instances, analytics = get_user_instances()
+        if not instances or not analytics:
+            return None
+        
+        # Get target hours from settings
+        from backend.user_state import UserStateManager
+        user_state = UserStateManager()
+        DEFAULT_USER_ID = "default_user"
+        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
+        target_hours_per_day = goal_hours_per_week / 5.0  # Assume 5 work days
+        
+        # Get metrics
+        metrics = analytics.get_dashboard_metrics()
+        productivity_volume = metrics.get('productivity_volume', {})
+        
+        base_productivity = productivity_volume.get('avg_base_productivity', 0.0)
+        volumetric_productivity = productivity_volume.get('volumetric_productivity_score', 0.0)
+        volumetric_potential = productivity_volume.get('volumetric_potential_score', 0.0)
+        work_volume_score = productivity_volume.get('work_volume_score', 0.0)
+        
+        if base_productivity == 0:
+            return None
+        
+        # Calculate volume multiplier
+        volume_multiplier = 0.5 + (work_volume_score / 100.0) * 1.0
+        
+        # Create comparison chart
+        fig = go.Figure()
+        
+        categories = ['Base\nProductivity', 'Volume\nMultiplier', 'Volumetric\nProductivity', 'Volumetric\nPotential']
+        values = [base_productivity, volume_multiplier * 100, volumetric_productivity, volumetric_potential]
+        colors = ['lightblue', 'orange', 'green', 'blue']
+        
+        fig.add_trace(go.Bar(
+            x=categories,
+            y=values,
+            marker_color=colors,
+            text=[f'{v:.1f}' for v in values],
+            textposition='outside',
+            name='Score'
+        ))
+        
+        # Add formula annotation
+        fig.add_annotation(
+            x=1, y=max(values) * 0.8,
+            text=f"Formula:<br>volumetric = base × multiplier<br>Multiplier: {volume_multiplier:.2f}x",
+            showarrow=False,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="black",
+            borderwidth=1
+        )
+        
+        fig.update_layout(
+            title=f"Volumetric Productivity Score Breakdown<br>Base: {base_productivity:.1f}, Volume Score: {work_volume_score:.1f}<br>Goal: {goal_hours_per_week:.1f}h/week ({target_hours_per_day:.1f}h/day)",
+            xaxis_title="Metric",
+            yaxis_title="Score",
+            height=500,
+            showlegend=False
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating volumetric productivity chart: {e}")
+        return None
+
+
 # Mapping of chart generators
 PLOTLY_DATA_CHARTS = {
     'productivity_score_baseline_completion': generate_baseline_completion_plotly,
@@ -915,4 +1082,6 @@ PLOTLY_DATA_CHARTS = {
     'thoroughness_note_length': generate_thoroughness_note_length_plotly,
     'thoroughness_popup_penalty': generate_thoroughness_popup_penalty_plotly,
     'thoroughness_factor_overview': generate_thoroughness_factor_overview_plotly,
+    'productivity_volume_work_volume_score': generate_work_volume_score_plotly,
+    'volumetric_productivity_calculation': generate_volumetric_productivity_plotly,
 }

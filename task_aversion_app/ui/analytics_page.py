@@ -264,11 +264,19 @@ def build_analytics_page():
                         "text-xs bg-teal-500 text-white mt-1"
                     )
     
+    # Get target hours from settings for display
+    from backend.user_state import UserStateManager
+    user_state = UserStateManager()
+    goal_settings = user_state.get_productivity_goal_settings("default_user")
+    goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
+    target_hours_per_day = goal_hours_per_week / 5.0  # Assume 5 work days
+    
     # Productivity Volume Section
     productivity_volume = metrics.get('productivity_volume', {})
     with ui.card().classes("p-4 mb-4"):
         ui.label("Productivity Volume Analysis").classes("text-xl font-bold mb-2")
         ui.label("Metrics that account for both efficiency and total work volume").classes("text-sm text-gray-500 mb-3")
+        ui.label(f"Goal: {goal_hours_per_week:.1f} hours/week ({target_hours_per_day:.1f} hours/day)").classes("text-xs text-blue-600 font-semibold mb-2")
         
         with ui.row().classes("gap-4 flex-wrap"):
             with ui.card().classes("p-3 min-w-[200px]"):
@@ -293,19 +301,56 @@ def build_analytics_page():
                 ui.label("Productivity Potential").classes("text-xs text-gray-500 font-semibold")
                 potential = productivity_volume.get('productivity_potential_score', 0.0)
                 ui.label(f"{potential:.1f}").classes("text-2xl font-bold text-blue-600")
-                ui.label("If you worked 6 hrs/day").classes("text-xs text-gray-400")
+                ui.label(f"If you worked {target_hours_per_day:.1f} hrs/day (Volumetric)").classes("text-xs text-gray-400")
             
             with ui.card().classes("p-3 min-w-[200px] border-2 border-orange-300"):
                 ui.label("Work Volume Gap").classes("text-xs text-gray-500 font-semibold")
                 gap = productivity_volume.get('work_volume_gap', 0.0)
                 ui.label(f"{gap:.1f} hours").classes("text-2xl font-bold text-orange-600")
-                ui.label("Gap to 6 hrs/day target").classes("text-xs text-gray-400")
+                ui.label(f"Gap to {target_hours_per_day:.1f} hrs/day target").classes("text-xs text-gray-400")
             
             with ui.card().classes("p-3 min-w-[200px] border-2 border-green-300"):
                 ui.label("Composite Productivity").classes("text-xs text-gray-500 font-semibold")
                 composite = productivity_volume.get('composite_productivity_score', 0.0)
                 ui.label(f"{composite:.1f}").classes("text-2xl font-bold text-green-600")
                 ui.label("Efficiency + Volume + Consistency").classes("text-xs text-gray-400")
+        
+        # Add glossary link
+        with ui.row().classes("mt-2"):
+            ui.button("View Volumetric Productivity Glossary", 
+                     on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
+                "text-xs bg-blue-500 text-white"
+            )
+        
+        # New Volumetric Productivity Section
+        ui.separator().classes("my-4")
+        with ui.row().classes("items-center gap-2 mb-2"):
+            ui.label("Volumetric Productivity (Volume-Integrated)").classes("text-lg font-semibold")
+            ui.button("View Glossary", 
+                     on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
+                "text-xs bg-green-500 text-white"
+            )
+        
+        ui.label("Productivity score that integrates volume factor to provide more accurate measurements.").classes("text-sm text-gray-500 mb-3")
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px] bg-gray-50"):
+                ui.label("Base Productivity (Avg)").classes("text-xs text-gray-500 font-semibold")
+                base_prod = productivity_volume.get('avg_base_productivity', 0.0)
+                ui.label(f"{base_prod:.1f}").classes("text-lg font-semibold")
+                ui.label("Per-task average").classes("text-xs text-gray-400 italic")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-green-100 border-2 border-green-300"):
+                ui.label("Volumetric Productivity").classes("text-xs text-gray-700 font-bold")
+                volumetric = productivity_volume.get('volumetric_productivity_score', 0.0)
+                ui.label(f"{volumetric:.1f}").classes("text-2xl font-bold text-green-700")
+                ui.label("Base × Volume Factor").classes("text-xs text-gray-600 italic")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-blue-100 border-2 border-blue-300"):
+                ui.label("Volumetric Potential").classes("text-xs text-gray-700 font-bold")
+                volumetric_pot = productivity_volume.get('volumetric_potential_score', 0.0)
+                ui.label(f"{volumetric_pot:.1f}").classes("text-2xl font-bold text-blue-700")
+                ui.label(f"At target volume ({target_hours_per_day:.1f} hrs/day)").classes("text-xs text-gray-600 italic")
     
     # Show warning if efficiency is high but volume is low
     avg_efficiency = metrics.get('quality', {}).get('avg_stress_efficiency')
@@ -315,7 +360,7 @@ def build_analytics_page():
                 ui.icon("warning", size="md").classes("text-yellow-600")
                 ui.label("High efficiency but low work volume detected").classes("font-semibold text-yellow-800")
             ui.label(f"You're highly efficient (efficiency: {avg_efficiency:.2f}) but only working {avg_work_time/60:.1f} hours/day on average.").classes("text-sm text-yellow-700 mt-1")
-            ui.label(f"Working more could significantly increase your productivity. Gap: {gap:.1f} hours/day to reach 6 hours/day target.").classes("text-sm text-yellow-700")
+            ui.label(f"Working more could significantly increase your productivity. Gap: {gap:.1f} hours/day to reach {target_hours_per_day:.1f} hours/day target.").classes("text-sm text-yellow-700")
     
     # Life Balance Section
     with ui.card().classes("p-4 mb-4"):

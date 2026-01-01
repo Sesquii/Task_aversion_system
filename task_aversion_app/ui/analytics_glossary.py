@@ -184,6 +184,51 @@ ANALYTICS_MODULES = {
         ],
         'interactive_module': '/productivity-module'
     },
+    'volumetric_productivity': {
+        'title': 'Volumetric Productivity',
+        'version': '1.0',
+        'description': 'Combines work volume measurement with volumetric productivity calculation. Measures daily work volume and integrates it into productivity scoring to provide a more accurate measure of overall productivity.',
+        'icon': 'bar_chart',
+        'color': 'blue',
+        'components': [
+            {
+                'name': 'Work Volume Score',
+                'version': '1.0',
+                'description': 'Measures average daily work time and converts it to a 0-100 score. Higher daily work hours = higher volume score. Uses tiered scoring: 0-2h (0-25), 2-4h (25-50), 4-6h (50-75), 6-8h+ (75-100).',
+                'formula': 'work_volume_score = f(avg_daily_work_time_minutes)\n0-120 min: (time/120) × 25\n120-240 min: 25 + ((time-120)/120) × 25\n240-360 min: 50 + ((time-240)/120) × 25\n360+ min: 75 + min(25, ((time-360)/120) × 25)',
+                'range': '0 - 100',
+                'graphic_script': 'productivity_volume_work_volume_score.py',
+                'details': {
+                    'avg_daily_work_time': 'Average minutes of work tasks completed per day (calculated from completed work tasks)',
+                    'tiered_scoring': 'Uses tiered approach to reward consistent work volume increases',
+                    'target_range': '4-6 hours/day (240-360 min) = good volume (50-75 score)'
+                }
+            },
+            {
+                'name': 'Volumetric Score Calculation',
+                'version': '1.0',
+                'description': 'Combines base productivity score with volume factor. Can be calculated per-task (task_score × volume_multiplier) or as aggregate (avg_task_score × volume_multiplier).',
+                'formula': 'volumetric_score = base_productivity_score × volume_multiplier\nOr: volumetric_score = avg_base_score × volume_multiplier (for aggregate)\nwhere volume_multiplier = 0.5 + (work_volume_score / 100) × 1.0',
+                'range': '0 - 750+ (base range × 1.5x max multiplier)',
+                'graphic_script': 'volumetric_productivity_calculation.py',
+                'details': {
+                    'per_task': 'Each task gets volume-adjusted score',
+                    'aggregate': 'Average productivity can be volume-adjusted for period analysis',
+                    'integration': 'Volume factor is now part of productivity calculation, not separate',
+                    'volume_multiplier_range': '0.5x (low volume) to 1.5x (high volume)'
+                }
+            }
+        ],
+        'formula': 'Work Volume: volume_score = f(avg_daily_work_time)\nVolumetric Score: volumetric_score = base_productivity_score × volume_multiplier\nwhere volume_multiplier = 0.5 + (work_volume_score / 100) × 1.0',
+        'range': 'Volume: 0-100 | Volumetric Score: 0-750+',
+        'use_cases': [
+            'Tracks overall work volume patterns',
+            'Integrates volume into productivity measurement',
+            'Rewards consistent high-volume work patterns',
+            'Penalizes low-volume periods even if per-task efficiency is high',
+            'Better reflects overall productivity than per-task score alone'
+        ]
+    },
     'thoroughness_factor': {
         'title': 'Thoroughness Factor',
         'version': '1.0',
@@ -479,6 +524,8 @@ def _get_plotly_chart_key(component_name: str, script_name: str) -> Optional[str
         'Note Coverage': 'thoroughness_note_coverage',
         'Note Length Bonus': 'thoroughness_note_length',
         'Popup Penalty': 'thoroughness_popup_penalty',
+        'Work Volume Score': 'productivity_volume_work_volume_score',
+        'Volumetric Score Calculation': 'volumetric_productivity_calculation',
     }
     
     # Try direct name match first
