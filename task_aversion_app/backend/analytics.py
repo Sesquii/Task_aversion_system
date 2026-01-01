@@ -4004,19 +4004,30 @@ class Analytics:
         self_care_per_day = {}
         for date_str, group in day_completions.groupby(day_completions['completed_at_dt'].dt.date):
             date_key = date_str.strftime('%Y-%m-%d')
-            task_types = group.get('task_type', pd.Series(['Work'] * len(group)))
-            self_care_count = len(task_types[task_types.astype(str).str.lower().isin(['self care', 'selfcare', 'self-care'])])
+            # Use proper DataFrame column access with fallback
+            if 'task_type' in group.columns:
+                task_types = group['task_type'].astype(str).str.lower()
+            else:
+                task_types = pd.Series(['work'] * len(group), index=group.index)
+            self_care_count = len(task_types[task_types.isin(['self care', 'selfcare', 'self-care'])])
             self_care_per_day[date_key] = self_care_count
         
         # Calculate work/play time per day for productivity score
         work_play_time = {}
         for date_str, group in day_completions.groupby(day_completions['completed_at_dt'].dt.date):
             date_key = date_str.strftime('%Y-%m-%d')
-            task_types = group.get('task_type', pd.Series(['Work'] * len(group)))
-            durations = pd.to_numeric(group.get('duration_minutes', 0), errors='coerce').fillna(0)
+            # Use proper DataFrame column access with fallback
+            if 'task_type' in group.columns:
+                task_types = group['task_type'].astype(str).str.lower()
+            else:
+                task_types = pd.Series(['work'] * len(group), index=group.index)
+            durations = pd.to_numeric(group['duration_minutes'], errors='coerce').fillna(0)
             
-            work_time = durations[task_types.astype(str).str.lower() == 'work'].sum()
-            play_time = durations[task_types.astype(str).str.lower() == 'play'].sum()
+            # Apply boolean mask properly - ensure indices align
+            work_mask = task_types == 'work'
+            play_mask = task_types == 'play'
+            work_time = durations[work_mask].sum()
+            play_time = durations[play_mask].sum()
             work_play_time[date_key] = {'work_time': work_time, 'play_time': play_time}
         
         # Calculate weekly average time for productivity score
