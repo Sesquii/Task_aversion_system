@@ -50,6 +50,44 @@ def settings_page():
         # Productivity Settings Link
         ui.button("⚙️ Productivity Settings", on_click=lambda: ui.navigate.to("/settings/productivity-settings")).classes("bg-blue-500 text-white w-full")
         ui.label("Configure productivity scoring, targets, burnout thresholds, and advanced weight settings.").classes("text-xs text-gray-500")
+        
+        # Productivity Goal Hours Setting
+        with ui.card().classes("p-3 mt-2 bg-gray-50"):
+            ui.label("Productivity Goal Hours").classes("text-sm font-semibold mb-2")
+            
+            goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+            current_goal = goal_settings.get('goal_hours_per_week', 30.0)
+            
+            goal_input = ui.number(
+                label="Goal Hours Per Week",
+                value=float(current_goal),
+                min=0,
+                max=100,
+                step=0.5,
+                format="%.1f"
+            ).props("dense outlined").classes("w-full")
+            
+            # Calculate daily target
+            daily_target = current_goal / 5.0  # Assume 5 work days
+            ui.label(f"Daily Target: {daily_target:.1f} hours/day (assuming 5 work days)").classes("text-xs text-gray-600 mt-1")
+            
+            def save_goal_hours():
+                new_goal = float(goal_input.value or 30.0)
+                settings = {
+                    'goal_hours_per_week': new_goal
+                }
+                # Preserve other settings
+                existing = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+                settings.update(existing)
+                user_state.set_productivity_goal_settings(DEFAULT_USER_ID, settings)
+                ui.notify("Goal hours saved!", color="positive")
+                # Update display
+                daily_target_new = new_goal / 5.0
+                ui.navigate.reload()
+            
+            ui.button("Save Goal Hours", on_click=save_goal_hours).classes("bg-green-500 text-white mt-2 w-full")
+            ui.label("This setting is used throughout the system for productivity potential calculations and volume targets.").classes("text-xs text-gray-500 mt-1")
+        
         ui.separator()
         ui.label("Data & Export").classes("text-lg font-semibold")
         

@@ -436,6 +436,111 @@ def generate_popup_penalty_image(output_path=None):
     return module.generate_popup_penalty_image(output_path)
 
 
+def generate_work_volume_score_image(output_path=None):
+    """Generate work volume score visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_volume_work_volume_score.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_volume_work_volume_score.py')
+    spec = importlib.util.spec_from_file_location("productivity_volume_work_volume_score", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_work_volume_score_image(output_path)
+
+
+def generate_consistency_score_image(output_path=None):
+    """Generate work consistency score visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_volume_consistency_score.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_volume_consistency_score.py')
+    spec = importlib.util.spec_from_file_location("productivity_volume_consistency_score", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_consistency_score_image(output_path)
+
+
+def generate_potential_image(output_path=None):
+    """Generate productivity potential visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_volume_potential.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_volume_potential.py')
+    spec = importlib.util.spec_from_file_location("productivity_volume_potential", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_potential_image(output_path)
+
+
+def generate_composite_image(output_path=None):
+    """Generate composite productivity score visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'productivity_volume_composite.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'productivity_volume_composite.py')
+    spec = importlib.util.spec_from_file_location("productivity_volume_composite", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_composite_image(output_path)
+
+
+def generate_volumetric_base_image(output_path=None):
+    """Generate base productivity visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'volumetric_productivity_base.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'volumetric_productivity_base.py')
+    spec = importlib.util.spec_from_file_location("volumetric_productivity_base", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_base_image(output_path)
+
+
+def generate_volumetric_volume_factor_image(output_path=None):
+    """Generate volume factor visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'volumetric_productivity_volume_factor.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'volumetric_productivity_volume_factor.py')
+    spec = importlib.util.spec_from_file_location("volumetric_productivity_volume_factor", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_volume_factor_image(output_path)
+
+
+def generate_volumetric_calculation_image(output_path=None):
+    """Generate volumetric calculation visualization image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'volumetric_productivity_calculation.png')
+    
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'volumetric_productivity_calculation.py')
+    spec = importlib.util.spec_from_file_location("volumetric_productivity_calculation", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_calculation_image(output_path)
+
+
 # Mapping of script names to generator functions
 GRAPHIC_AID_GENERATORS = {
     'execution_score_difficulty_factor.py': generate_difficulty_factor_image,
@@ -449,6 +554,13 @@ GRAPHIC_AID_GENERATORS = {
     'thoroughness_note_coverage.py': generate_note_coverage_image,
     'thoroughness_note_length.py': generate_note_length_image,
     'thoroughness_popup_penalty.py': generate_popup_penalty_image,
+    'productivity_volume_work_volume_score.py': generate_work_volume_score_image,
+    'productivity_volume_consistency_score.py': generate_consistency_score_image,
+    'productivity_volume_potential.py': generate_potential_image,
+    'productivity_volume_composite.py': generate_composite_image,
+    'volumetric_productivity_base.py': generate_volumetric_base_image,
+    'volumetric_productivity_volume_factor.py': generate_volumetric_volume_factor_image,
+    'volumetric_productivity_calculation.py': generate_volumetric_calculation_image,
 }
 
 
