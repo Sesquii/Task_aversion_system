@@ -1,33 +1,55 @@
+from typing import Optional
 from nicegui import ui
 from datetime import datetime
 import json
+import time
 
 from fastapi import Request
 from backend.instance_manager import InstanceManager
+from backend.user_state import UserStateManager
+from backend.popup_dispatcher import PopupDispatcher
+from backend.performance_logger import get_perf_logger
+from ui.popup_modal import show_popup_modal
 
 im = InstanceManager()
+popup_dispatcher = PopupDispatcher()
+user_state = UserStateManager()
+perf_logger = get_perf_logger()
 
 
 def initialize_task_page(task_manager, emotion_manager):
 
     @ui.page('/initialize-task')
     def page(request: Request):
+        page_start_time = time.perf_counter()
+        perf_logger.log_event("initialize_task_page_load_start", instance_id=request.query_params.get("instance_id"))
+        
         params = request.query_params  # ✅
 
         instance_id = params.get("instance_id")
+        edit_mode = params.get("edit", "false").lower() == "true"
 
         if not instance_id:
             ui.notify("Error: no instance_id provided", color='negative')
             ui.navigate.to('/')
             return
 
-        instance = im.get_instance(instance_id)
+        with perf_logger.operation("get_instance", instance_id=instance_id):
+            instance = im.get_instance(instance_id)
+        
         if not instance:
             ui.notify("Instance not found", color='negative')
             ui.navigate.to('/')
             return
 
-        task = task_manager.get_task(instance.get('task_id'))
+        task_id = instance.get('task_id')
+        
+        # Check if this is a completed task being edited
+        is_completed_task = instance.get('completed_at') or instance.get('is_completed') in ('True', True, 'true')
+        
+        with perf_logger.operation("get_task", task_id=task_id):
+            task = task_manager.get_task(task_id)
+        
         predicted_raw = instance.get('predicted') or '{}'
         try:
             predicted_data = json.loads(predicted_raw) if predicted_raw else {}
@@ -43,15 +65,20 @@ def initialize_task_page(task_manager, emotion_manager):
             default_estimate = 0
         
         # Get previous averages for this task
-        task_id = instance.get('task_id')
-        previous_averages = im.get_previous_task_averages(task_id) if task_id else {}
+        with perf_logger.operation("get_previous_task_averages", task_id=task_id):
+            previous_averages = im.get_previous_task_averages(task_id) if task_id else {}
         
         # Get initial aversion (first time doing the task) and previous aversion
-        initial_aversion = im.get_initial_aversion(task_id) if task_id else None
+        with perf_logger.operation("get_initial_aversion", task_id=task_id):
+            initial_aversion = im.get_initial_aversion(task_id) if task_id else None
         previous_aversion = previous_averages.get('expected_aversion')
         
         # Check if task has been completed at least once
-        has_completed = im.has_completed_task(task_id) if task_id else False
+        with perf_logger.operation("has_completed_task", task_id=task_id):
+            has_completed = im.has_completed_task(task_id) if task_id else False
+        
+        page_load_duration = (time.perf_counter() - page_start_time) * 1000
+        perf_logger.log_timing("initialize_task_page_load_total", page_load_duration, instance_id=instance_id, task_id=task_id)
         
         # Check if task has a default_initial_aversion from template
         template_default_aversion = None
@@ -67,7 +94,20 @@ def initialize_task_page(task_manager, emotion_manager):
                     template_default_aversion = None
         
         # Helper to get default value, scaling from 0-10 to 0-100 if needed
+        # When editing a completed task, always use existing values from predicted_data
         def get_default_value(key, default=50):
+            # If editing a completed task, always use existing predicted values (even if 0)
+            if edit_mode and is_completed_task:
+                val = predicted_data.get(key)
+                if val is not None:
+                    try:
+                        num_val = float(val)
+                        # Scale from 0-10 to 0-100 if value is <= 10
+                        if num_val <= 10 and num_val >= 0:
+                            num_val = num_val * 10
+                        return int(round(num_val))
+                    except (ValueError, TypeError):
+                        pass
             # First check if current instance has a value
             val = predicted_data.get(key)
             if val is not None:
@@ -110,11 +150,23 @@ def initialize_task_page(task_manager, emotion_manager):
         with ui.column().classes("w-full gap-4"):
 
             # Page title
-            ui.label("Initialize Task").classes("text-3xl font-bold mb-4")
+            title_text = "Edit Task Initialization" if (edit_mode and is_completed_task) else "Initialize Task"
+            ui.label(title_text).classes("text-3xl font-bold mb-4")
+            
+            # Show edit mode notice
+            if edit_mode and is_completed_task:
+                with ui.card().classes("w-full p-3 bg-blue-50 border border-blue-200 mb-4"):
+                    ui.label("[EDIT MODE] You are editing a completed task. Changes will be saved as edited version.").classes("text-sm text-blue-800 font-semibold")
+                    ui.label("You can navigate to the completion page to edit completion data as well.").classes("text-xs text-blue-600 mt-1")
+                    
+                    def go_to_completion_edit():
+                        ui.navigate.to(f"/complete_task?instance_id={instance_id}&edit=true")
+                    
+                    ui.button("Edit Completion Data →", on_click=go_to_completion_edit).classes("mt-2 bg-blue-500 text-white")
 
             description_field = ui.textarea(
                 label="Task Specifics (optional)",
-                value='',
+                value=predicted_data.get('description', '') if (edit_mode and is_completed_task) else '',
             )
 
             # Aversion slider - always show so it can be adjusted for future instances
@@ -216,9 +268,9 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
-            ui.label("Emotional Context").classes("text-lg font-semibold")
+            ui.label("Current Emotional State").classes("text-lg font-semibold")
 
-            # Load existing emotion values from predicted data
+            # Load existing emotion values from predicted data (task-specific)
             emotion_values_dict = predicted_data.get('emotion_values', {})
             if isinstance(emotion_values_dict, str):
                 try:
@@ -236,6 +288,10 @@ def initialize_task_page(task_manager, emotion_manager):
                         emotion_values_dict = {emotion: 50 for emotion in old_emotions}
                     else:
                         emotion_values_dict = {}
+            
+            # If no task-specific emotions exist, load persistent emotions
+            if not emotion_values_dict:
+                emotion_values_dict = user_state.get_persistent_emotions()
 
             # Single text input for emotions (comma-separated or one at a time)
             existing_emotions = list(emotion_values_dict.keys()) if emotion_values_dict else []
@@ -302,12 +358,20 @@ def initialize_task_page(task_manager, emotion_manager):
                 update_emotion_sliders()
 
             ui.label("Physical Context").classes("text-lg font-semibold")
+            physical_context_value = predicted_data.get('physical_context', 'None') if (edit_mode and is_completed_task) else None
             physical_context = ui.select(
-                ["None", "Home", "Work", "Gym", "Outdoors", "Errands", "Custom..."]
+                ["None", "Home", "Work", "Gym", "Outdoors", "Errands", "Custom..."],
+                value=physical_context_value if physical_context_value and physical_context_value in ["None", "Home", "Work", "Gym", "Outdoors", "Errands"] else None
             )
 
             custom_physical = ui.input(placeholder="Custom Physical Context")
-            custom_physical.set_visibility(False)
+            if physical_context_value == "Custom..." or (physical_context_value and physical_context_value not in ["None", "Home", "Work", "Gym", "Outdoors", "Errands"]):
+                custom_physical.set_value(physical_context_value if physical_context_value != "Custom..." else "")
+                custom_physical.set_visibility(True)
+                if physical_context.value != "Custom...":
+                    physical_context.set_value("Custom...")
+            else:
+                custom_physical.set_visibility(False)
 
             def physical_changed(e):
                 custom_physical.set_visibility(e.args == "Custom...")
@@ -330,6 +394,122 @@ def initialize_task_page(task_manager, emotion_manager):
             )
 
             def save():
+                # Check if sliders were adjusted (compare current values to defaults)
+                sliders_adjusted = False
+                
+                # Check aversion slider
+                current_aversion = max(0, int(aversion_slider.value or 0))
+                if current_aversion != default_aversion:
+                    sliders_adjusted = True
+                
+                # Check relief slider
+                current_relief = int(predicted_relief.value) if predicted_relief.value is not None else 0
+                if current_relief != default_relief:
+                    sliders_adjusted = True
+                
+                # Check mental energy slider
+                current_mental_energy = int(mental_energy.value) if mental_energy.value is not None else 0
+                if current_mental_energy != default_mental_energy:
+                    sliders_adjusted = True
+                
+                # Check difficulty slider
+                current_difficulty = int(task_difficulty.value) if task_difficulty.value is not None else 0
+                if current_difficulty != default_difficulty:
+                    sliders_adjusted = True
+                
+                # Check emotional slider
+                current_emotional = int(emotional_load.value) if emotional_load.value is not None else 0
+                if current_emotional != default_emotional:
+                    sliders_adjusted = True
+                
+                # Check physical slider
+                current_physical = int(physical_load.value) if physical_load.value is not None else 0
+                if current_physical != default_physical:
+                    sliders_adjusted = True
+                
+                # Check motivation slider
+                current_motivation = int(motivation.value) if motivation.value is not None else 0
+                if current_motivation != default_motivation:
+                    sliders_adjusted = True
+                
+                # Check emotion sliders
+                for emotion in emotion_sliders.keys():
+                    current_val = int(emotion_sliders[emotion].value)
+                    default_val = emotion_values_dict.get(emotion, 50)
+                    try:
+                        default_val = int(float(default_val))
+                        if default_val < 0 or default_val > 100:
+                            default_val = 50
+                    except (ValueError, TypeError):
+                        default_val = 50
+                    if current_val != default_val:
+                        sliders_adjusted = True
+                        break
+                
+                # Skip popup evaluation if editing a completed task
+                if edit_mode and is_completed_task:
+                    # Directly save without popup
+                    do_save()
+                    return
+                
+                # Evaluate popup triggers (only for new initializations)
+                initialization_context = {
+                    'event_type': 'initialize',
+                    'instance_id': instance_id,
+                    'task_id': task_id,
+                    'sliders_adjusted': sliders_adjusted
+                }
+                
+                perf_logger.log_event("popup_evaluation_start", 
+                                    instance_id=instance_id, 
+                                    task_id=task_id,
+                                    sliders_adjusted=sliders_adjusted)
+                popup_eval_start = time.perf_counter()
+                
+                popup = popup_dispatcher.evaluate_triggers(
+                    completion_context=initialization_context,
+                    user_id='default'
+                )
+                
+                popup_eval_duration = (time.perf_counter() - popup_eval_start) * 1000
+                perf_logger.log_timing("popup_evaluation", popup_eval_duration,
+                                     instance_id=instance_id,
+                                     task_id=task_id,
+                                     sliders_adjusted=sliders_adjusted,
+                                     popup_shown=popup is not None)
+                
+                # If popup should show, display it and handle response
+                if popup:
+                    def handle_popup_response(response_value: str, helpful: Optional[bool], comment: Optional[str]):
+                        # Log response
+                        popup_dispatcher.handle_popup_response(
+                            trigger_id=popup['trigger_id'],
+                            response_value=response_value,
+                            helpful=helpful,
+                            comment=comment,
+                            task_id=task_id,
+                            user_id='default'
+                        )
+                        
+                        if response_value == 'edit':
+                            # User wants to edit sliders, don't save
+                            ui.notify("Please adjust your sliders before initializing", color='info')
+                            return
+                        elif response_value == 'continue':
+                            # User wants to continue, proceed with save
+                            do_save()
+                    
+                    show_popup_modal(popup, on_response=handle_popup_response)
+                    return  # Don't save yet, wait for popup response
+                
+                # No popup, proceed with save
+                do_save()
+            
+            def do_save():
+                """Internal function that actually performs the save."""
+                save_start_time = time.perf_counter()
+                perf_logger.log_event("do_save_start", instance_id=instance_id, task_id=task_id)
+                
                 emotion_list = parse_emotions_input()
                 physical_value = (
                     custom_physical.value if physical_context.value == "Custom..." else physical_context.value
@@ -340,27 +520,38 @@ def initialize_task_page(task_manager, emotion_manager):
                     estimate_val = 0
 
                 # Collect emotion values from sliders
+                # Check all emotions that have sliders (even if not in emotion_list)
+                # This ensures we capture emotions that were in persistent state but removed from input
                 # Filter out emotions with 0 values (0 means emotion is not present/not being tracked)
                 # This keeps the data clean: if an emotion is set to 0, it's effectively removed from tracking
                 # The emotions list is still stored separately for backward compatibility
                 emotion_values = {}
+                # Check all emotions that have sliders (including ones that might have been removed from input)
+                for emotion in emotion_sliders.keys():
+                    value = int(emotion_sliders[emotion].value)
+                    # Only store non-zero values (0 means emotion is not present and should be removed)
+                    if value > 0:
+                        emotion_values[emotion] = value
+                
+                # Also include emotions in emotion_list that don't have sliders yet (new emotions)
                 for emotion in emotion_list:
-                    if emotion in emotion_sliders:
-                        value = int(emotion_sliders[emotion].value)
-                        # Only store non-zero values (0 means emotion is not present)
-                        if value > 0:
-                            emotion_values[emotion] = value
-                    else:
+                    if emotion not in emotion_sliders:
                         # If slider doesn't exist, use default 50 (but only if > 0)
                         # This shouldn't happen in normal flow, but handle it gracefully
                         emotion_values[emotion] = 50
+                
+                # Save emotions to persistent state so they carry over to other tasks
+                # Setting to 0 removes the emotion from persistent state
+                with perf_logger.operation("set_persistent_emotions"):
+                    user_state.set_persistent_emotions(emotion_values)
 
                 # Determine if this is the first time doing the task
                 # Check if there are any other initialized instances for this task
                 is_first_time = initial_aversion is None
                 
                 # Get aversion value: always use slider value (slider is now always shown)
-                current_aversion = int(aversion_slider.value)
+                # Ensure it's at least 0 (or 1 if using 1-100 scale - but we use 0-100, so 0 is fine)
+                current_aversion = max(0, int(aversion_slider.value or 0))
                 
                 # If this is the first time, set initial_aversion; otherwise use expected_aversion
                 predicted_payload = {
@@ -375,7 +566,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or '',
-                    "expected_aversion": current_aversion,  # Current aversion value
+                    "expected_aversion": current_aversion,  # Current aversion value (always saved, minimum 0)
                     # Backward compatibility: also include old cognitive_load field
                     "expected_cognitive_load": (mental_energy.value + task_difficulty.value) / 2,
                 }
@@ -409,13 +600,40 @@ def initialize_task_page(task_manager, emotion_manager):
 
                 try:
                     # This will set initialized_at if not already set
-                    im.add_prediction_to_instance(instance_id, predicted_payload)
+                    with perf_logger.operation("add_prediction_to_instance", instance_id=instance_id):
+                        im.add_prediction_to_instance(instance_id, predicted_payload)
+                    
+                    # If editing a completed task, mark it as edited
+                    if edit_mode and is_completed_task:
+                        from ui.task_editing_manager import mark_instance_as_edited
+                        mark_instance_as_edited(instance_id)
                 except Exception as exc:
+                    perf_logger.log_error("add_prediction_to_instance failed", exc, instance_id=instance_id)
                     ui.notify(f"Failed to save instance: {exc}", color='negative')
                     return
 
-                task_manager.save_initialization_entry(entry)
-                ui.notify("Task initialized!", color='positive')
-                ui.navigate.to('/')
+                # Only save initialization entry if not editing (to avoid duplicate entries)
+                if not (edit_mode and is_completed_task):
+                    with perf_logger.operation("save_initialization_entry", instance_id=instance_id):
+                        task_manager.save_initialization_entry(entry)
+                
+                save_duration = (time.perf_counter() - save_start_time) * 1000
+                perf_logger.log_timing("do_save_total", save_duration, instance_id=instance_id, task_id=task_id)
+                
+                navigation_start = time.perf_counter()
+                perf_logger.log_event("navigation_start", instance_id=instance_id, task_id=task_id)
+                
+                if edit_mode and is_completed_task:
+                    ui.notify("Task initialization updated!", color='positive')
+                    # Navigate back to task editing manager
+                    ui.navigate.to('/task-editing-manager')
+                else:
+                    ui.notify("Task initialized!", color='positive')
+                    ui.navigate.to('/')
+                
+                # Log navigation time (this happens asynchronously, so we log it immediately)
+                navigation_duration = (time.perf_counter() - navigation_start) * 1000
+                perf_logger.log_timing("navigation_triggered", navigation_duration, instance_id=instance_id, task_id=task_id)
 
-            ui.button("Save Initialization", on_click=save).classes("mt-4")
+            button_text = "Save Changes" if (edit_mode and is_completed_task) else "Save Initialization"
+            ui.button(button_text, on_click=save).classes("mt-4")

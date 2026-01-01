@@ -366,17 +366,15 @@ class DataAuditor:
             # Get predicted relief (expected_relief)
             pred = predicted_dict.get('expected_relief') or predicted_dict.get('relief')
             if pred is not None:
-                # Scale if needed (0-10 -> 0-100)
-                if 0 <= pred <= 10:
-                    pred = pred * 10
+                # Note: All inputs now use 0-100 scale natively.
+                # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                 predicted_relief.append(pred)
             
             # Get actual relief
             actual = actual_dict.get('actual_relief') or actual_dict.get('relief')
             if actual is not None:
-                # Scale if needed (0-10 -> 0-100)
-                if 0 <= actual <= 10:
-                    actual = actual * 10
+                # Note: All inputs now use 0-100 scale natively.
+                # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                 actual_relief.append(actual)
         
         predicted_series = pd.Series(predicted_relief)
@@ -396,11 +394,8 @@ class DataAuditor:
             actual = actual_dict.get('actual_relief') or actual_dict.get('relief')
             
             if pred is not None and actual is not None:
-                # Scale if needed
-                if 0 <= pred <= 10:
-                    pred = pred * 10
-                if 0 <= actual <= 10:
-                    actual = actual * 10
+                # Note: All inputs now use 0-100 scale natively.
+                # Old data may have 0-10 scale values, but we use them as-is (no scaling).
                 matching_indices.append({'predicted': pred, 'actual': actual})
         
         if len(matching_indices) == 0:
@@ -462,29 +457,20 @@ class DataAuditor:
             actual_dict = row.get('actual_parsed', {})
             predicted_dict = row.get('predicted_parsed', {})
             
-            # Relief (0-10 scale, should be normalized to 0-100)
+            # Relief (0-100 scale natively, old data may have 0-10 values but we use as-is)
             relief = actual_dict.get('actual_relief')
             if relief is not None:
-                # Check if needs scaling (0-10 -> 0-100)
-                if 0 <= relief <= 10:
-                    relief = relief * 10
                 relief_values.append(relief)
             
-            # Stress components
+            # Stress components (0-100 scale natively, old data may have 0-10 values but we use as-is)
             cognitive = actual_dict.get('actual_cognitive', 0)
             emotional = actual_dict.get('actual_emotional', 0)
-            if 0 <= cognitive <= 10:
-                cognitive = cognitive * 10
-            if 0 <= emotional <= 10:
-                emotional = emotional * 10
             stress = (cognitive + emotional) / 2
             stress_values.append(stress)
             
-            # Aversion
+            # Aversion (0-100 scale natively, old data may have 0-10 values but we use as-is)
             aversion = predicted_dict.get('expected_aversion') or predicted_dict.get('aversion')
             if aversion is not None:
-                if 0 <= aversion <= 10:
-                    aversion = aversion * 10
                 aversion_values.append(aversion)
         
         relief_series = pd.to_numeric(pd.Series(relief_values), errors='coerce').dropna()

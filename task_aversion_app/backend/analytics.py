@@ -6,19 +6,44 @@ import math
 import os
 import numpy as np
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
+import warnings
+# Suppress pandas warnings that flood the terminal
+# FutureWarning about downcasting in fillna operations
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*Downcasting.*')
+# SettingWithCopyWarning about modifying DataFrame slices (pandas raises this as a generic Warning)
+warnings.filterwarnings('ignore', message='.*SettingWithCopyWarning.*')
+warnings.filterwarnings('ignore', message='.*A value is trying to be set on a copy of a slice.*')
 from scipy import stats
 
 from .task_schema import TASK_ATTRIBUTES, attribute_defaults
 from .gap_detector import GapDetector
+from .user_state import UserStateManager
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+
+# Execution Score Formula Version
+EXECUTION_SCORE_VERSION = '1.2'
+
+# Productivity Score Formula Version
+PRODUCTIVITY_SCORE_VERSION = '1.1'
 
 
 class Analytics:
     """Central analytics + lightweight recommendation helper."""
+    
+    # Note: All inputs now use 0-100 scale natively.
+    # Old data may have 0-10 scale values, but we use them as-is (no scaling).
+    # This is acceptable since old 0-10 data was only used for a short time.
+    
+    # Cache for expensive operations
+    _relief_summary_cache = None
+    _relief_summary_cache_time = None
+    _composite_scores_cache = None
+    _composite_scores_cache_time = None
+    _cache_ttl_seconds = 300  # Cache for 5 minutes (optimized for dashboard performance)
     
     @staticmethod
     def calculate_difficulty_bonus(
@@ -448,8 +473,19 @@ class Analytics:
     
     def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0, 
                                      work_play_time_per_day: Optional[Dict[str, Dict[str, float]]] = None,
-                                     play_penalty_threshold: float = 2.0) -> float:
+                                     play_penalty_threshold: float = 2.0,
+                                     productivity_settings: Optional[Dict[str, any]] = None,
+                                     weekly_work_summary: Optional[Dict[str, float]] = None,
+                                     goal_hours_per_week: Optional[float] = None,
+                                     weekly_productive_hours: Optional[float] = None) -> float:
         """Calculate productivity score based on completion percentage vs time ratio.
+        
+        Version: 1.1 (2025-12-27)
+        - Efficiency multiplier now compares to task's own estimate (not weekly average)
+        - Accounts for completion percentage in efficiency calculation
+        - Penalty capped at 50% reduction to prevent negative scores
+        
+        See docs/productivity_score_v1.1.md for complete version history.
         
         Penalty Calibration:
         - Play penalty: -0.003x per percentage (max -0.3x for 100% completion = -30 score)
@@ -466,11 +502,56 @@ class Analytics:
             weekly_avg_time: Weekly average productivity time in minutes (for bonus/penalty calculation)
             work_play_time_per_day: Dictionary mapping date strings to dict with 'work_time' and 'play_time' in minutes
             play_penalty_threshold: Threshold multiplier for play penalty (default 2.0 = play must exceed work by 2x)
+            productivity_settings: Optional productivity settings dict
+            weekly_work_summary: Optional weekly work summary dict
+            goal_hours_per_week: Optional goal hours per week (if provided, applies goal-based adjustment)
+            weekly_productive_hours: Optional weekly productive hours total (required if goal_hours_per_week provided)
             
         Returns:
             Productivity score (can be negative for productivity penalty from play tasks)
         """
         try:
+            # Check if task is cancelled and apply cancellation penalty
+            status = str(row.get('status', 'active')).lower()
+            if status == 'cancelled':
+                actual_dict = row.get('actual_dict', {})
+                if not isinstance(actual_dict, dict):
+                    actual_dict = {}
+                
+                # Get cancellation category
+                cancellation_category = actual_dict.get('cancellation_category', 'other')
+                
+                # Get penalty multiplier from user settings
+                user_state = UserStateManager()
+                penalties = user_state.get_cancellation_penalties("default_user")
+                
+                # Default penalties if not configured
+                if not penalties:
+                    default_penalties = {
+                        'development_test': 0.0,
+                        'accidental_initialization': 0.0,
+                        'deferred_to_plan': 0.1,
+                        'did_while_another_active': 0.0,
+                        'failed_to_complete': 1.0,
+                        'other': 0.5
+                    }
+                    penalty_multiplier = default_penalties.get(cancellation_category, 0.5)
+                else:
+                    penalty_multiplier = penalties.get(cancellation_category, 0.5)
+                
+                # Get estimated time for the task
+                predicted_dict = row.get('predicted_dict', {})
+                if not isinstance(predicted_dict, dict):
+                    predicted_dict = {}
+                time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+                
+                # Calculate penalty: negative score based on estimated time and penalty multiplier
+                # Base penalty is the estimated time (in minutes), scaled by penalty multiplier
+                # Convert to score units (divide by 10 to get reasonable scale)
+                penalty_score = -(time_estimate / 10.0) * penalty_multiplier
+                
+                return penalty_score
+            
             actual_dict = row.get('actual_dict', {})
             predicted_dict = row.get('predicted_dict', {})
             task_type = row.get('task_type', 'Work')
@@ -509,39 +590,49 @@ class Analytics:
                 except (ValueError, TypeError, AttributeError):
                     pass
             
+            # Load productivity settings (fallback to defaults)
+            settings = productivity_settings or self.productivity_settings or {}
+            weekly_curve = settings.get('weekly_curve', 'flattened_square')
+            weekly_curve_strength = float(settings.get('weekly_curve_strength', 1.0) or 1.0)
+            weekly_burnout_threshold_hours = float(settings.get('weekly_burnout_threshold_hours', 42.0) or 42.0)
+            daily_burnout_cap_multiplier = float(settings.get('daily_burnout_cap_multiplier', 2.0) or 2.0)
+
+            # Weekly work summary (for burnout logic)
+            weekly_total_work = 0.0
+            days_count = 0
+            if weekly_work_summary:
+                weekly_total_work = float(weekly_work_summary.get('total_work_time_minutes', 0.0) or 0.0)
+                days_count = int(weekly_work_summary.get('days_count', 0) or 0)
+
             # Apply multipliers based on task type
             if task_type_lower == 'work':
                 # Work: Smooth multiplier transition from 3x to 5x based on completion_time_ratio
                 # Smooth transition: 3.0 + (2.0 * smooth_factor) where smooth_factor transitions from 0 to 1
                 # Transition happens between ratio 1.0 and 1.5 (smooth over 0.5 range)
-                if completion_time_ratio <= 1.0:
+                # Cap ratio at 1.5 to prevent extreme multipliers from very fast completions
+                capped_ratio = min(completion_time_ratio, 1.5)
+                if capped_ratio <= 1.0:
                     multiplier = 3.0
-                elif completion_time_ratio >= 1.5:
+                elif capped_ratio >= 1.5:
                     multiplier = 5.0
                 else:
                     # Smooth transition between 1.0 and 1.5
-                    smooth_factor = (completion_time_ratio - 1.0) / 0.5  # 0.0 to 1.0
+                    smooth_factor = (capped_ratio - 1.0) / 0.5  # 0.0 to 1.0
                     multiplier = 3.0 + (2.0 * smooth_factor)
                 
-                # Apply diminishing returns penalty if working too much without play
-                # This models burnout: productivity still increases but at a diminishing rate
-                # Use exponential decay: penalty = 1.0 - (1.0 - exp(-work_time / burn_threshold))
-                # When play_time = 0 and work_time is high, apply penalty
-                if play_time_today == 0 and work_time_today > 0:
-                    # Burnout threshold: 8 hours (480 minutes) of work with no play
-                    # Penalty increases as work time exceeds threshold
-                    burn_threshold = 480.0  # 8 hours in minutes
-                    if work_time_today > burn_threshold:
-                        # Calculate diminishing returns: exponential decay
-                        # More work = more penalty, but penalty approaches 1.0 (max 100% reduction)
-                        excess_work = work_time_today - burn_threshold
-                        # Penalty factor: 0.0 (no penalty) to 1.0 (max penalty)
-                        # Using exponential decay: penalty = 1 - exp(-excess_work / scale)
-                        # Scale of 240 means penalty reaches ~63% at 240 min excess (4 hours)
-                        penalty_factor = 1.0 - math.exp(-excess_work / 240.0)
-                        # Apply penalty: reduce multiplier by penalty_factor
-                        # e.g., if multiplier is 3.0 and penalty_factor is 0.5, new multiplier = 3.0 * (1 - 0.5) = 1.5
-                        multiplier = multiplier * (1.0 - penalty_factor * 0.5)  # Max 50% reduction
+                # Burnout penalty (weekly-first with daily cap)
+                # Only apply when weekly total exceeds threshold AND today's work > daily cap
+                if weekly_total_work > 0:
+                    weekly_threshold_minutes = weekly_burnout_threshold_hours * 60.0
+                    days_count = max(days_count, len(work_play_time_per_day or {}) or 1)
+                    daily_avg_work = weekly_total_work / float(max(1, days_count))
+                    daily_cap = daily_avg_work * daily_burnout_cap_multiplier
+
+                    if (weekly_total_work > weekly_threshold_minutes) and (work_time_today > daily_cap):
+                        excess_week = weekly_total_work - weekly_threshold_minutes
+                        # Exponential decay on weekly excess; capped to 50% reduction
+                        penalty_factor = 1.0 - math.exp(-excess_week / 300.0)
+                        multiplier = multiplier * (1.0 - penalty_factor * 0.5)
                 
                 # Base score is completion percentage
                 base_score = completion_pct
@@ -593,16 +684,67 @@ class Analytics:
                 # Default: no multiplier
                 score = completion_pct
             
-            # Apply weekly average bonus/penalty
-            # FIXED: Taking longer should reduce score, not increase it
-            # -0.01x penalty per percentage above weekly average, +0.01x bonus per percentage below
-            if weekly_avg_time > 0 and time_actual > 0:
-                # Calculate percentage difference from weekly average
-                time_percentage_diff = ((time_actual - weekly_avg_time) / weekly_avg_time) * 100.0
-                # Apply bonus/penalty multiplier: -0.01x per percentage above (penalty), +0.01x per percentage below (bonus)
-                # Reversed sign: taking longer = negative diff = penalty, taking less = positive diff = bonus
-                weekly_bonus_multiplier = 1.0 - (0.01 * time_percentage_diff)
-                score = score * weekly_bonus_multiplier
+            # Apply efficiency bonus/penalty based on completion efficiency
+            # Uses completion_time_ratio which accounts for both completion % and time
+            # Ratio = (completion_pct * time_estimate) / (100 * time_actual)
+            # Ratio > 1.0 = efficient (more completion per unit time)
+            # Ratio < 1.0 = inefficient (less completion per unit time)
+            # Supports linear (legacy) or flattened square response curves
+            # Cap penalty to prevent negative scores (max 50% reduction)
+            if time_estimate > 0 and time_actual > 0:
+                # Calculate efficiency based on completion_time_ratio
+                # Ratio of 1.0 = perfectly efficient (completed as expected)
+                # Ratio > 1.0 = bonus (completed more efficiently)
+                # Ratio < 1.0 = penalty (completed less efficiently)
+                efficiency_ratio = completion_time_ratio
+                
+                # Convert ratio to percentage difference from 1.0 (perfect efficiency)
+                # If ratio = 1.0, diff = 0% (no change)
+                # If ratio = 0.5, diff = -50% (50% penalty)
+                # If ratio = 2.0, diff = +100% (100% bonus)
+                efficiency_percentage_diff = (efficiency_ratio - 1.0) * 100.0
+
+                if weekly_curve == 'flattened_square':
+                    # Softer square response; large deviations grow faster but scaled down
+                    # Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                    effect = math.copysign((abs(efficiency_percentage_diff) ** 2) / 100.0, efficiency_percentage_diff)
+                    efficiency_multiplier = 1.0 - (0.01 * weekly_curve_strength * -effect)
+                else:
+                    # Linear response (legacy)
+                    # Invert: positive diff (efficient) should give bonus, negative (inefficient) should give penalty
+                    efficiency_multiplier = 1.0 - (0.01 * weekly_curve_strength * -efficiency_percentage_diff)
+                
+                # Cap both penalty and bonus to prevent extreme scores
+                # Penalty: max 50% reduction (min multiplier = 0.5)
+                # Bonus: max 50% increase (max multiplier = 1.5)
+                efficiency_multiplier = max(0.5, min(1.5, efficiency_multiplier))
+
+                score = score * efficiency_multiplier
+            
+            # Apply goal-based adjustment if goal hours and weekly productive hours are provided
+            # This provides a bonus/penalty based on weekly goal achievement
+            if goal_hours_per_week is not None and goal_hours_per_week > 0 and weekly_productive_hours is not None:
+                goal_achievement_ratio = weekly_productive_hours / goal_hours_per_week
+                # Modest adjustment: ±20% max based on goal achievement
+                # 100% goal achievement = no change (multiplier = 1.0)
+                # 120%+ = +20% bonus (multiplier = 1.2)
+                # 80-100% = linear interpolation (0.9 to 1.0)
+                # <80% = penalty down to -20% at 0% (multiplier = 0.8 minimum)
+                if goal_achievement_ratio >= 1.2:
+                    goal_multiplier = 1.2  # 20% bonus for exceeding goal significantly
+                elif goal_achievement_ratio >= 1.0:
+                    # Linear: 1.0 -> 1.0, 1.2 -> 1.2
+                    goal_multiplier = 1.0 + (goal_achievement_ratio - 1.0) * 1.0
+                elif goal_achievement_ratio >= 0.8:
+                    # Linear: 0.8 -> 0.9, 1.0 -> 1.0
+                    goal_multiplier = 0.9 + (goal_achievement_ratio - 0.8) * 0.5
+                else:
+                    # Below 80%: linear penalty down to 0.8 at 0%
+                    # Linear: 0.0 -> 0.8, 0.8 -> 0.9
+                    goal_multiplier = 0.8 + (goal_achievement_ratio / 0.8) * 0.1
+                    goal_multiplier = max(0.8, goal_multiplier)  # Cap at 0.8 minimum
+                
+                score = score * goal_multiplier
             
             return score
         
@@ -610,29 +752,18 @@ class Analytics:
             return 0.0
     
     def calculate_grit_score(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
-        """Calculate grit score that rewards taking longer on tasks you're persistent with.
+        """Calculate grit score with:
+        - Persistence factor (continuing despite obstacles) - NEW in v1.2
+        - Focus factor (current attention state, emotion-based) - NEW in v1.2
+        - Passion factor (relief vs emotional load) - existing
+        - Time bonus (taking longer, dedication) - existing
         
-        Grit score rewards persistence (doing the same task multiple times) and taking longer
-        on those persistent tasks. This is separate from productivity score, which rewards efficiency.
+        Grit = persistence + focus + passion + time_bonus
         
-        Formula:
-        - Base score = completion percentage
-        - Persistence multiplier = min(2.0, 1.0 + (completion_count - 1) * 0.1)
-          - 1 completion: 1.0x (no bonus)
-          - 2 completions: 1.1x (10% bonus)
-          - 3 completions: 1.2x (20% bonus)
-          - ... up to 2.0x max (11+ completions)
-        - Time bonus = rewards taking longer than estimated (opposite of productivity)
-          - If time_actual > time_estimate: bonus = 1.0 + (time_ratio - 1.0) * 0.5
-          - If time_actual <= time_estimate: bonus = 1.0 (no bonus for efficiency)
-        
-        Args:
-            row: Task instance row with actual_dict, predicted_dict, task_id
-            task_completion_counts: Dictionary mapping task_id to count of completed instances
-            
         Returns:
-            Grit score (0-200+ range, higher = more grit/persistence)
+            Grit score (higher = more grit/persistence with passion), 0 on error.
         """
+        import math
         try:
             actual_dict = row.get('actual_dict', {})
             predicted_dict = row.get('predicted_dict', {})
@@ -641,38 +772,83 @@ class Analytics:
             if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
                 return 0.0
             
-            # Get completion percentage and time data
             completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
             time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
             time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
             
-            # Base score is completion percentage
-            base_score = completion_pct
+            # --- Persistence multiplier: sqrt→log growth with familiarity decay ---
+            # Raw growth: power curve to approximate anchors (2x~1.02, 10x~1.22, 25x~1.6, 50x~2.6, 100x~4.1)
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+            # Familiarity decay after 100+ completions: taper as it becomes routine
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)  # 300→0.5, 500→0.33, 1000→~0.18
+            else:
+                decay = 1.0
+            persistence_multiplier = max(1.0, min(5.0, raw_multiplier * decay))
             
-            # Calculate persistence multiplier based on how many times this task has been completed
-            completion_count = task_completion_counts.get(task_id, 1)
-            # Persistence bonus: 10% per additional completion beyond first, max 2.0x
-            persistence_multiplier = min(2.0, 1.0 + (completion_count - 1) * 0.1)
-            
-            # Calculate time bonus (rewards taking longer, opposite of productivity)
+            # --- Time bonus: difficulty-weighted, diminishing returns, fades after many reps ---
+            time_bonus = 1.0
             if time_estimate > 0 and time_actual > 0:
                 time_ratio = time_actual / time_estimate
                 if time_ratio > 1.0:
-                    # Taking longer than estimated: bonus = 1.0 + (excess_time * 0.5)
-                    # Example: 2x longer = 1.0 + (1.0 * 0.5) = 1.5x bonus
-                    time_bonus = 1.0 + ((time_ratio - 1.0) * 0.5)
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.8)  # up to 1.8x at 2x longer
+                    else:
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)  # diminishing beyond 2x
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    # Difficulty weighting (harder tasks get more credit)
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    # Fade time bonus after many repetitions (negligible after ~50)
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)  # 10→1.0, 50→0.5, 90→~0.31
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
                 else:
-                    # Taking less time: no bonus (efficiency is rewarded in productivity, not grit)
                     time_bonus = 1.0
-            else:
-                time_bonus = 1.0
             
-            # Final score = base * persistence * time_bonus
-            score = base_score * persistence_multiplier * time_bonus
+            # --- Passion factor: relief vs emotional load (balanced, modest range) ---
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm  # positive if relief outweighs emotional load
+            passion_factor = 1.0 + passion_delta * 0.5  # modest weighting
+            # If not fully completed, dampen passion a bit
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
             
-            return score
+            # Calculate persistence factor (continuing despite obstacles)
+            persistence_factor = self.calculate_persistence_factor(
+                row=row,
+                task_completion_counts=task_completion_counts
+            )
+            # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
+            persistence_factor_scaled = 0.5 + persistence_factor * 1.0
+            
+            # Calculate focus factor (current attention state, emotion-based)
+            focus_factor = self.calculate_focus_factor(row)
+            # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # Base score from completion percentage
+            base_score = completion_pct
+            
+            # Grit score = persistence * focus * passion * time_bonus
+            grit_score = base_score * (
+                persistence_factor_scaled *  # 0.5-1.5 range (persistence boost)
+                focus_factor_scaled *        # 0.5-1.5 range (focus boost)
+                passion_factor *             # 0.5-1.5 range (passion factor)
+                time_bonus                   # 1.0+ range (time bonus)
+            )
+            
+            return float(grit_score)
         
-        except (KeyError, TypeError, ValueError, AttributeError) as e:
+        except (KeyError, TypeError, ValueError, AttributeError):
             return 0.0
     
     @staticmethod
@@ -751,6 +927,189 @@ class Analytics:
         bonus_multiplier = 1.0 + (threshold_level * 0.10)
         
         return bonus_multiplier
+    
+    def calculate_thoroughness_factor(self, user_id: str = 'default', days: int = 30) -> float:
+        """Calculate thoroughness/notetaking factor based on note-taking behavior.
+        
+        Factors considered:
+        1. Percentage of tasks with notes (description + notes field)
+        2. Average note length/thoroughness
+        3. Count of popup trigger 7.1 (no sliders adjusted) - negative factor
+        
+        Formula:
+        - Base factor from note coverage: 0.5 (no notes) to 1.0 (all tasks have notes)
+        - Note length bonus: +0.0 to +0.3 based on average note length
+        - Popup penalty: Progressive penalty starting mild, increasing over time, capped at -0.2
+          Uses quadratic progression: penalty = -0.2 * (count / 15.0)^2
+          This gives: 1 popup = -0.0009, 5 popups = -0.022, 10 popups = -0.089, 15+ popups = -0.2 (max)
+        
+        Args:
+            user_id: User identifier (default: 'default')
+            days: Number of days to look back for popup data (default: 30)
+        
+        Returns:
+            Thoroughness factor (0.5 to 1.3), where 1.0 = baseline thoroughness
+        """
+        # #region agent log
+        import time as time_module
+        thoroughness_func_start = time_module.perf_counter()
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor entry', 'data': {'user_id': user_id, 'days': days}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        try:
+            from .task_manager import TaskManager
+            from .database import get_session, PopupTrigger
+            
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
+            
+            if tasks_df.empty:
+                return 1.0  # Default neutral factor if no tasks
+            
+            # Filter out test tasks
+            if 'name' in tasks_df.columns:
+                tasks_df = tasks_df[~tasks_df['name'].apply(lambda x: Analytics._is_test_task(x) if pd.notna(x) else False)]
+            
+            if tasks_df.empty:
+                return 1.0
+            
+            total_tasks = len(tasks_df)
+            
+            # 1. Calculate percentage of tasks with notes
+            tasks_with_notes = 0
+            total_note_length = 0
+            note_count = 0
+            
+            for _, task in tasks_df.iterrows():
+                has_notes = False
+                note_length = 0
+                
+                # Check description field
+                description = str(task.get('description', '') or '').strip()
+                if description:
+                    has_notes = True
+                    note_length += len(description)
+                
+                # Check notes field
+                notes = str(task.get('notes', '') or '').strip()
+                if notes:
+                    has_notes = True
+                    note_length += len(notes)
+                
+                if has_notes:
+                    tasks_with_notes += 1
+                    total_note_length += note_length
+                    note_count += 1
+            
+            # Note coverage: percentage of tasks with any notes
+            note_coverage = (tasks_with_notes / total_tasks) if total_tasks > 0 else 0.0
+            
+            # Base factor from coverage: 0.5 (no notes) to 1.0 (all tasks have notes)
+            base_factor = 0.5 + (note_coverage * 0.5)
+            
+            # 2. Note length bonus: average note length
+            avg_note_length = (total_note_length / note_count) if note_count > 0 else 0.0
+            
+            # Normalize note length: 0 chars = 0.0, 500 chars = 0.3 bonus
+            # Using exponential decay for diminishing returns
+            if avg_note_length > 0:
+                # Scale: 0-500 chars maps to 0.0-0.3 bonus
+                # Using sqrt for smooth curve (500 chars = 0.3, 1000 chars = ~0.42, but capped at 0.3)
+                length_ratio = min(1.0, avg_note_length / 500.0)
+                length_bonus = 0.3 * (1.0 - math.exp(-length_ratio * 2.0))  # Exponential decay
+            else:
+                length_bonus = 0.0
+            
+            # 3. Popup penalty: count of trigger 7.1 (no sliders adjusted)
+            popup_penalty = 0.0
+            try:
+                from .database import PopupResponse
+                with get_session() as session:
+                    cutoff_date = datetime.utcnow() - timedelta(days=days)
+                    
+                    # Get total count of trigger 7.1 responses for this user in the time period
+                    # Using PopupResponse to get actual popup occurrences (more accurate than PopupTrigger.count)
+                    popup_count = session.query(PopupResponse).filter(
+                        PopupResponse.trigger_id == '7.1',
+                        PopupResponse.user_id == user_id,
+                        PopupResponse.created_at >= cutoff_date
+                    ).count()
+                    
+                    # Progressive penalty: starts mild, gets worse over time, caps at -0.2
+                    # Uses power curve: penalty = -0.2 * (popup_ratio^2) for progressive increase
+                    # This means: 1 popup = -0.002, 5 popups = -0.05, 10 popups = -0.2 (max)
+                    if popup_count > 0:
+                        # Scale: 0-10 popups maps to 0.0 to -0.2 penalty
+                        popup_ratio = min(1.0, popup_count / 10.0)
+                        # Power curve: starts mild, increases progressively, caps at -0.2
+                        # Using power of 2 for progressive curve (can adjust exponent for steeper/gentler)
+                        popup_penalty = -0.2 * (popup_ratio ** 2.0)
+            except Exception as e:
+                # If database access fails, skip popup penalty
+                print(f"[Analytics] Could not access popup data for thoroughness factor: {e}")
+                popup_penalty = 0.0
+            
+            # Combine factors
+            thoroughness_factor = base_factor + length_bonus + popup_penalty
+            
+            # Clamp to reasonable range (0.5 to 1.3)
+            thoroughness_factor = max(0.5, min(1.3, thoroughness_factor))
+            
+            # #region agent log
+            thoroughness_func_duration = time_module.perf_counter() - thoroughness_func_start
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor exit', 'data': {'duration_seconds': thoroughness_func_duration, 'factor_value': thoroughness_factor}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            return float(thoroughness_factor)
+        
+        except Exception as e:
+            print(f"[Analytics] Error calculating thoroughness factor: {e}")
+            # #region agent log
+            thoroughness_func_duration = time_module.perf_counter() - thoroughness_func_start
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor error', 'data': {'duration_seconds': thoroughness_func_duration, 'error': str(e)}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            return 1.0  # Default neutral factor on error
+    
+    def calculate_thoroughness_score(self, user_id: str = 'default', days: int = 30) -> float:
+        """Calculate thoroughness/notetaking score (0-100) for display purposes.
+        
+        Converts the thoroughness factor to a 0-100 score where:
+        - 0 = minimum thoroughness (factor 0.5)
+        - 50 = baseline thoroughness (factor 1.0)
+        - 100 = maximum thoroughness (factor 1.3)
+        
+        Args:
+            user_id: User identifier (default: 'default')
+            days: Number of days to look back for popup data (default: 30)
+        
+        Returns:
+            Thoroughness score (0-100)
+        """
+        factor = self.calculate_thoroughness_factor(user_id=user_id, days=days)
+        
+        # Convert factor (0.5-1.3) to score (0-100)
+        # Factor 0.5 → Score 0
+        # Factor 1.0 → Score 50
+        # Factor 1.3 → Score 100
+        if factor <= 1.0:
+            # Linear mapping: 0.5-1.0 → 0-50
+            score = ((factor - 0.5) / 0.5) * 50.0
+        else:
+            # Linear mapping: 1.0-1.3 → 50-100
+            score = 50.0 + ((factor - 1.0) / 0.3) * 50.0
+        
+        return max(0.0, min(100.0, score))
     
     @staticmethod
     def _is_test_task(task_name: str) -> bool:
@@ -949,6 +1308,24 @@ class Analytics:
     def __init__(self):
         self.instances_file = os.path.join(DATA_DIR, 'task_instances.csv')
         self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
+        # Load user-level productivity settings (defaults to shared user)
+        self.user_state = UserStateManager()
+        self.default_user_id = "default_user"
+        self.productivity_settings = self._load_productivity_settings()
+
+    def _load_productivity_settings(self) -> Dict[str, any]:
+        """Load persisted productivity settings or use sensible defaults."""
+        defaults = {
+            "weekly_curve": "flattened_square",  # linear | flattened_square
+            "weekly_curve_strength": 1.5,  # Increased from 1.0 to provide stronger efficiency bonuses
+            "weekly_burnout_threshold_hours": 42.0,  # 6h/day baseline
+            "daily_burnout_cap_multiplier": 2.0,
+        }
+        try:
+            stored = self.user_state.get_productivity_settings(self.default_user_id) or {}
+            return {**defaults, **stored}
+        except Exception:
+            return defaults
 
     # ------------------------------------------------------------------
     # Data loading helpers
@@ -980,7 +1357,288 @@ class Analytics:
         
         return df_filtered
     
-    def _load_instances(self) -> pd.DataFrame:
+    def _load_instances(self, completed_only: bool = False) -> pd.DataFrame:
+        """Load instances from database or CSV.
+        
+        Args:
+            completed_only: If True, only load completed instances (optimization for relief_summary)
+        """
+        # Default to database (SQLite) unless USE_CSV is explicitly set
+        use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
+        
+        if use_csv:
+            # CSV backend (explicitly requested)
+            use_db = False
+        else:
+            # Database backend (default)
+            # Ensure DATABASE_URL is set to default SQLite if not already set
+            if not os.getenv('DATABASE_URL'):
+                # Use the same default as database.py
+                os.environ['DATABASE_URL'] = 'sqlite:///data/task_aversion.db'
+            use_db = True
+        
+        if use_db:
+            # Load from database
+            try:
+                from backend.database import get_session, TaskInstance
+                session = get_session()
+                try:
+                    # OPTIMIZATION: Only load completed instances if requested
+                    if completed_only:
+                        # Filter to only completed instances at database level (much faster)
+                        instances = session.query(TaskInstance).filter(
+                            TaskInstance.completed_at.isnot(None),
+                            TaskInstance.completed_at != ''
+                        ).all()
+                    else:
+                        instances = session.query(TaskInstance).all()
+                    if not instances:
+                        return pd.DataFrame()
+                    
+                    # Convert to list of dicts
+                    data = [instance.to_dict() for instance in instances]
+                    
+                    # Convert to DataFrame
+                    df = pd.DataFrame(data).fillna('')
+                    
+                    # Ensure all required columns exist
+                    attr_defaults = attribute_defaults()
+                    def _ensure_column(col: str, default):
+                        if col not in df.columns:
+                            df[col] = default
+                    
+                    for attr, default in attr_defaults.items():
+                        _ensure_column(attr, default)
+                    _ensure_column('status', 'active')
+                    
+                    # Apply gap filtering
+                    df = self._apply_gap_filtering(df)
+                    
+                    # Process JSON fields (same as CSV path)
+                    def _safe_json(cell: str) -> Dict:
+                        if isinstance(cell, dict):
+                            return cell
+                        cell = cell or '{}'
+                        try:
+                            return json.loads(cell)
+                        except Exception:
+                            return {}
+                    
+                    df['predicted_dict'] = df['predicted'].apply(_safe_json) if 'predicted' in df.columns else {}
+                    df['actual_dict'] = df['actual'].apply(_safe_json) if 'actual' in df.columns else {}
+                    
+                    # Fill attribute columns from JSON payloads if CSV column empty (same logic as CSV path)
+                    for attr in TASK_ATTRIBUTES:
+                        column = attr.key
+                        df[column] = df[column].replace('', pd.NA)
+                        df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get(column)))
+                        df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get(column)))
+                        # Special handling for relief_score
+                        if column == 'relief_score':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_relief')))
+                        # Handle cognitive load components
+                        if column == 'mental_energy_needed':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_mental_energy') or r.get('actual_cognitive')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_mental_energy') or r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+                        if column == 'task_difficulty':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_difficulty') or r.get('actual_cognitive')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_difficulty') or r.get('expected_cognitive_load') or r.get('expected_cognitive')))
+                        if column == 'emotional_load':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('actual_emotional')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_emotional_load') or r.get('expected_emotional')))
+                        if column == 'duration_minutes':
+                            df[column] = df[column].fillna(df['actual_dict'].apply(lambda r: r.get('time_actual_minutes')))
+                            df[column] = df[column].fillna(df['predicted_dict'].apply(lambda r: r.get('time_estimate_minutes')))
+                        df[column] = df[column].fillna(attr.default)
+                        if attr.dtype == 'numeric':
+                            df[column] = pd.to_numeric(df[column], errors='coerce')
+                            df[column] = df[column].fillna(attr.default)
+                    
+                    # Handle physical_load
+                    if 'physical_load' not in df.columns:
+                        df['physical_load'] = pd.NA
+                    df['physical_load'] = df['physical_load'].replace('', pd.NA)
+                    df['physical_load'] = df['physical_load'].fillna(df['actual_dict'].apply(lambda r: r.get('actual_physical')))
+                    df['physical_load'] = df['physical_load'].fillna(df['predicted_dict'].apply(lambda r: r.get('expected_physical_load')))
+                    df['physical_load'] = pd.to_numeric(df['physical_load'], errors='coerce')
+                    df['physical_load'] = df['physical_load'].fillna(0.0)
+                    
+                    # Extract expected_aversion from JSON
+                    df['expected_aversion'] = df['predicted_dict'].apply(lambda r: r.get('expected_aversion') if isinstance(r, dict) else None)
+                    df['expected_aversion'] = pd.to_numeric(df['expected_aversion'], errors='coerce')
+                    df['expected_aversion'] = df['expected_aversion'].fillna(0.0)  # Default to 0 if missing
+                    
+                    # Calculate derived columns (same as CSV path below)
+                    # Extract and normalize cognitive load components
+                    if 'mental_energy_needed' not in df.columns:
+                        df['mental_energy_needed'] = pd.NA
+                    if 'task_difficulty' not in df.columns:
+                        df['task_difficulty'] = pd.NA
+                    
+                    df['mental_energy_needed'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
+                    df['task_difficulty'] = pd.to_numeric(df['task_difficulty'], errors='coerce')
+                    
+                    # Note: All inputs now use 0-100 scale natively.
+                    # Old data may have 0-10 scale values, but we use them as-is (no scaling).
+                    
+                    df['mental_energy_needed'] = df['mental_energy_needed'].fillna(50.0)
+                    df['task_difficulty'] = df['task_difficulty'].fillna(50.0)
+                    
+                    # Calculate stress_level
+                    df['relief_score_numeric'] = pd.to_numeric(df['relief_score'], errors='coerce').fillna(0.0)
+                    df['mental_energy_numeric'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce').fillna(50.0)
+                    df['task_difficulty_numeric'] = pd.to_numeric(df['task_difficulty'], errors='coerce').fillna(50.0)
+                    df['emotional_load_numeric'] = pd.to_numeric(df['emotional_load'], errors='coerce').fillna(0.0)
+                    df['physical_load_numeric'] = pd.to_numeric(df['physical_load'], errors='coerce').fillna(0.0)
+                    df['expected_aversion_numeric'] = pd.to_numeric(df['expected_aversion'], errors='coerce').fillna(0.0)
+                    
+                    df['stress_level'] = (
+                        (df['mental_energy_numeric'] * 0.5 + 
+                         df['task_difficulty_numeric'] * 0.5 + 
+                         df['emotional_load_numeric'] + 
+                         df['physical_load_numeric'] + 
+                         df['expected_aversion_numeric'] * 2.0) / 5.0
+                    )
+                    
+                    # Calculate net_wellbeing
+                    # DIFFERENCE FROM RELIEF SCORE:
+                    # - Relief Score: Raw measure of relief felt after task completion (0-100)
+                    # - Net Wellbeing: Relief MINUS stress, showing the NET benefit/cost of the task
+                    #   - Positive net wellbeing = task provided more relief than stress (beneficial)
+                    #   - Negative net wellbeing = task caused more stress than relief (costly)
+                    #   - Zero = neutral (relief exactly equals stress)
+                    df['net_wellbeing'] = df['relief_score_numeric'] - df['stress_level']
+                    
+                    # Calculate net_wellbeing_normalized
+                    df['net_wellbeing_normalized'] = 50.0 + (df['net_wellbeing'] / 2.0)
+                    
+                    # Calculate stress_efficiency
+                    stress_safe = pd.to_numeric(df['stress_level'], errors='coerce')
+                    stress_safe = stress_safe.mask(stress_safe <= 0, np.nan)
+                    relief_safe = pd.to_numeric(df['relief_score_numeric'], errors='coerce')
+                    df['stress_efficiency'] = (relief_safe / stress_safe).round(4)
+                    
+                    df['stress_efficiency_raw'] = df['stress_efficiency']
+                    se_valid = df['stress_efficiency'].dropna()
+                    if not se_valid.empty:
+                        se_min = se_valid.min()
+                        se_max = se_valid.max()
+                        if pd.notna(se_min) and pd.notna(se_max):
+                            if se_max > se_min:
+                                df['stress_efficiency'] = ((df['stress_efficiency'] - se_min) / (se_max - se_min)) * 100.0
+                            else:
+                                df['stress_efficiency'] = 100.0
+                        df['stress_efficiency'] = df['stress_efficiency'].round(2)
+                    
+                    # Calculate expected_relief: relief predicted before task (from predicted_dict)
+                    def _get_expected_relief_from_dict(row):
+                        try:
+                            predicted_dict = row.get('predicted_dict', {})
+                            if isinstance(predicted_dict, dict):
+                                return predicted_dict.get('expected_relief', None)
+                        except (KeyError, TypeError):
+                            pass
+                        return None
+                    
+                    df['expected_relief'] = df.apply(_get_expected_relief_from_dict, axis=1)
+                    df['expected_relief'] = pd.to_numeric(df['expected_relief'], errors='coerce')
+                    
+                    # Calculate net_relief: actual relief minus expected relief
+                    # Use stored value if available, otherwise calculate
+                    if 'net_relief' in df.columns:
+                        df['net_relief'] = pd.to_numeric(df['net_relief'], errors='coerce')
+                    else:
+                        df['net_relief'] = None
+                    
+                    # Fill missing net_relief by calculating from expected/actual relief
+                    missing_net_relief = df['net_relief'].isna()
+                    if missing_net_relief.any():
+                        df.loc[missing_net_relief, 'net_relief'] = (
+                            df.loc[missing_net_relief, 'relief_score_numeric'] - 
+                            df.loc[missing_net_relief, 'expected_relief']
+                        )
+                    
+                    # Positive = actual relief exceeded expectations (pleasant surprise)
+                    # Negative = actual relief fell short of expectations (disappointment)
+                    # Zero = actual relief matched expectations (accurate prediction)
+                    
+                    # Use stored serendipity_factor if available, otherwise calculate
+                    if 'serendipity_factor' in df.columns:
+                        df['serendipity_factor'] = pd.to_numeric(df['serendipity_factor'], errors='coerce')
+                    else:
+                        df['serendipity_factor'] = None
+                    
+                    # Fill missing serendipity_factor by calculating from net_relief
+                    missing_serendipity = df['serendipity_factor'].isna()
+                    if missing_serendipity.any():
+                        df.loc[missing_serendipity, 'serendipity_factor'] = df.loc[missing_serendipity, 'net_relief'].apply(
+                            lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0
+                        )
+                    # Ensure all values are non-negative
+                    df['serendipity_factor'] = df['serendipity_factor'].fillna(0.0)
+                    df['serendipity_factor'] = df['serendipity_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+                    
+                    # Use stored disappointment_factor if available, otherwise calculate
+                    if 'disappointment_factor' in df.columns:
+                        df['disappointment_factor'] = pd.to_numeric(df['disappointment_factor'], errors='coerce')
+                    else:
+                        df['disappointment_factor'] = None
+                    
+                    # Fill missing disappointment_factor by calculating from net_relief
+                    missing_disappointment = df['disappointment_factor'].isna()
+                    if missing_disappointment.any():
+                        df.loc[missing_disappointment, 'disappointment_factor'] = df.loc[missing_disappointment, 'net_relief'].apply(
+                            lambda x: max(0.0, -float(x)) if pd.notna(x) else 0.0
+                        )
+                    # Ensure all values are non-negative
+                    df['disappointment_factor'] = df['disappointment_factor'].fillna(0.0)
+                    df['disappointment_factor'] = df['disappointment_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+                    
+                    # Calculate stress_relief_correlation_score: measures inverse correlation
+                    stress_norm = pd.to_numeric(df['stress_level'], errors='coerce').fillna(50.0)
+                    relief_norm = pd.to_numeric(df['relief_score_numeric'], errors='coerce').fillna(50.0)
+                    correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
+                    df['stress_relief_correlation_score'] = correlation_raw.clip(0.0, 100.0).round(2)
+                    
+                    # Calculate behavioral_score (simplified version - full version is in CSV path)
+                    def _calculate_behavioral_score(row):
+                        try:
+                            behavioral = row.get('behavioral_score')
+                            if behavioral and str(behavioral).strip():
+                                return pd.to_numeric(behavioral, errors='coerce')
+                            return pd.NA
+                        except (KeyError, TypeError, ValueError):
+                            return pd.NA
+                    
+                    df['behavioral_score'] = df.apply(_calculate_behavioral_score, axis=1)
+                    
+                    # Handle cognitive_load backward compatibility
+                    if 'cognitive_load' in df.columns:
+                        cognitive_numeric = pd.to_numeric(df['cognitive_load'], errors='coerce')
+                        cognitive_scaled = cognitive_numeric.copy()
+                        # Note: All inputs now use 0-100 scale natively.
+                        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
+                        
+                        if 'mental_energy_needed' in df.columns:
+                            mental_numeric = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
+                            missing_mental = mental_numeric.isna() | (mental_numeric == 0)
+                            has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
+                            df.loc[has_cognitive & missing_mental, 'mental_energy_needed'] = cognitive_scaled.loc[has_cognitive & missing_mental]
+                        
+                        if 'task_difficulty' in df.columns:
+                            difficulty_numeric = pd.to_numeric(df['task_difficulty'], errors='coerce')
+                            missing_difficulty = difficulty_numeric.isna() | (difficulty_numeric == 0)
+                            has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
+                            df.loc[has_cognitive & missing_difficulty, 'task_difficulty'] = cognitive_scaled.loc[has_cognitive & missing_difficulty]
+                    
+                    return df
+                finally:
+                    session.close()
+            except Exception as e:
+                print(f"[Analytics] Error loading instances from database: {e}, falling back to CSV")
+                # Fall through to CSV loading
+        
+        # CSV fallback
         if not os.path.exists(self.instances_file):
             return pd.DataFrame()
 
@@ -1049,10 +1707,9 @@ class Analytics:
         # This allows existing data to work with the new schema
         if 'cognitive_load' in df.columns:
             cognitive_numeric = pd.to_numeric(df['cognitive_load'], errors='coerce')
-            # Scale from 0-10 to 0-100 if needed (for old data)
             cognitive_scaled = cognitive_numeric.copy()
-            scale_mask = (cognitive_numeric >= 0) & (cognitive_numeric <= 10) & (cognitive_numeric.notna())
-            cognitive_scaled.loc[scale_mask] = cognitive_numeric.loc[scale_mask] * 10.0
+            # Note: All inputs now use 0-100 scale natively.
+            # Old data may have 0-10 scale values, but we use them as-is (no scaling).
             
             # Use cognitive_load for missing mental_energy_needed
             if 'mental_energy_needed' in df.columns:
@@ -1095,12 +1752,8 @@ class Analytics:
         df['mental_energy_needed'] = pd.to_numeric(df['mental_energy_needed'], errors='coerce')
         df['task_difficulty'] = pd.to_numeric(df['task_difficulty'], errors='coerce')
         
-        # Scale from 0-10 to 0-100 if needed (for backward compatibility with old data)
-        mental_energy_mask = (df['mental_energy_needed'] >= 0) & (df['mental_energy_needed'] <= 10) & (df['mental_energy_needed'].notna())
-        df.loc[mental_energy_mask, 'mental_energy_needed'] = df.loc[mental_energy_mask, 'mental_energy_needed'] * 10.0
-        
-        difficulty_mask = (df['task_difficulty'] >= 0) & (df['task_difficulty'] <= 10) & (df['task_difficulty'].notna())
-        df.loc[difficulty_mask, 'task_difficulty'] = df.loc[difficulty_mask, 'task_difficulty'] * 10.0
+        # Note: All inputs now use 0-100 scale natively.
+        # Old data may have 0-10 scale values, but we use them as-is (no scaling).
         
         df['mental_energy_needed'] = df['mental_energy_needed'].fillna(50.0)  # Default to 50 if missing
         df['task_difficulty'] = df['task_difficulty'].fillna(50.0)  # Default to 50 if missing
@@ -1125,6 +1778,12 @@ class Analytics:
         )
         
         # Calculate net_wellbeing: relief minus stress (can be positive or negative)
+        # DIFFERENCE FROM RELIEF SCORE:
+        # - Relief Score: Raw measure of relief felt after task completion (0-100)
+        # - Net Wellbeing: Relief MINUS stress, showing the NET benefit/cost of the task
+        #   - Positive net wellbeing = task provided more relief than stress (beneficial)
+        #   - Negative net wellbeing = task caused more stress than relief (costly)
+        #   - Zero = neutral (relief exactly equals stress)
         # Range: -100 to +100, where 0 = neutral (relief = stress)
         df['net_wellbeing'] = df['relief_score_numeric'] - df['stress_level']
         
@@ -1152,6 +1811,84 @@ class Analytics:
                     # All values identical; treat them as 100 for visibility
                     df['stress_efficiency'] = 100.0
             df['stress_efficiency'] = df['stress_efficiency'].round(2)
+        
+        # Calculate expected_relief: relief predicted before task (from predicted_dict)
+        def _get_expected_relief_from_dict(row):
+            try:
+                predicted_dict = row.get('predicted_dict', {})
+                if isinstance(predicted_dict, dict):
+                    return predicted_dict.get('expected_relief', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        df['expected_relief'] = df.apply(_get_expected_relief_from_dict, axis=1)
+        df['expected_relief'] = pd.to_numeric(df['expected_relief'], errors='coerce')
+        
+        # Calculate net_relief: actual relief minus expected relief
+        # Use stored value if available, otherwise calculate
+        if 'net_relief' in df.columns:
+            df['net_relief'] = pd.to_numeric(df['net_relief'], errors='coerce')
+        else:
+            df['net_relief'] = None
+        
+        # Fill missing net_relief by calculating from expected/actual relief
+        missing_net_relief = df['net_relief'].isna()
+        if missing_net_relief.any():
+            df.loc[missing_net_relief, 'net_relief'] = (
+                df.loc[missing_net_relief, 'relief_score_numeric'] - 
+                df.loc[missing_net_relief, 'expected_relief']
+            )
+        
+        # Positive = actual relief exceeded expectations (pleasant surprise)
+        # Negative = actual relief fell short of expectations (disappointment)
+        # Zero = actual relief matched expectations (accurate prediction)
+        
+        # Use stored serendipity_factor if available, otherwise calculate
+        if 'serendipity_factor' in df.columns:
+            df['serendipity_factor'] = pd.to_numeric(df['serendipity_factor'], errors='coerce')
+        else:
+            df['serendipity_factor'] = None
+        
+        # Fill missing serendipity_factor by calculating from net_relief
+        missing_serendipity = df['serendipity_factor'].isna()
+        if missing_serendipity.any():
+            df.loc[missing_serendipity, 'serendipity_factor'] = df.loc[missing_serendipity, 'net_relief'].apply(
+                lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0
+            )
+        # Ensure all values are non-negative
+        df['serendipity_factor'] = df['serendipity_factor'].fillna(0.0)
+        df['serendipity_factor'] = df['serendipity_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+        
+        # Use stored disappointment_factor if available, otherwise calculate
+        if 'disappointment_factor' in df.columns:
+            df['disappointment_factor'] = pd.to_numeric(df['disappointment_factor'], errors='coerce')
+        else:
+            df['disappointment_factor'] = None
+        
+        # Fill missing disappointment_factor by calculating from net_relief
+        missing_disappointment = df['disappointment_factor'].isna()
+        if missing_disappointment.any():
+            df.loc[missing_disappointment, 'disappointment_factor'] = df.loc[missing_disappointment, 'net_relief'].apply(
+                lambda x: max(0.0, -float(x)) if pd.notna(x) else 0.0
+            )
+        # Ensure all values are non-negative
+        df['disappointment_factor'] = df['disappointment_factor'].fillna(0.0)
+        df['disappointment_factor'] = df['disappointment_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+        
+        # Calculate stress_relief_correlation_score: measures inverse correlation
+        # Formula: 100 - (stress_level + relief_score) / 2, normalized to show inverse relationship
+        # When stress is high and relief is low, score is low (poor correlation)
+        # When stress is low and relief is high, score is high (good inverse correlation)
+        # Range: 0-100, where higher = better inverse correlation
+        stress_norm = pd.to_numeric(df['stress_level'], errors='coerce').fillna(50.0)
+        relief_norm = pd.to_numeric(df['relief_score_numeric'], errors='coerce').fillna(50.0)
+        # Inverse correlation: high stress + low relief = low score, low stress + high relief = high score
+        # Normalize: 100 - (stress + (100 - relief)) / 2 = 100 - (stress + 100 - relief) / 2
+        # Simplified: (relief - stress + 100) / 2, then normalize to 0-100
+        correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
+        # Normalize to 0-100 range (theoretical range is 0-100, but clamp for safety)
+        df['stress_relief_correlation_score'] = correlation_raw.clip(0.0, 100.0).round(2)
         
         # Auto-calculate behavioral_score: how well you adhered to planned behaviour
         # Now includes obstacles overcome component for significant bonus
@@ -1280,7 +2017,7 @@ class Analytics:
         if df.empty:
             return {
                 'counts': {'active': 0, 'completed_7d': 0, 'total_created': 0, 'total_completed': 0, 'completion_rate': 0.0, 'daily_self_care_tasks': 0, 'avg_daily_self_care_tasks': 0.0},
-                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None, 'avg_aversion': 0.0, 'adjusted_wellbeing': 0.0, 'adjusted_wellbeing_normalized': 50.0},
+                'quality': {'avg_relief': 0.0, 'avg_cognitive_load': 0.0, 'avg_stress_level': 0.0, 'avg_net_wellbeing': 0.0, 'avg_net_wellbeing_normalized': 50.0, 'avg_stress_efficiency': None, 'avg_aversion': 0.0, 'adjusted_wellbeing': 0.0, 'adjusted_wellbeing_normalized': 50.0, 'thoroughness_score': 50.0, 'thoroughness_factor': 1.0},
                 'time': {'median_duration': 0.0, 'avg_delay': 0.0, 'estimation_accuracy': 0.0},
                 'aversion': {'general_aversion_score': 0.0},
                 'productivity_volume': {
@@ -1343,23 +2080,139 @@ class Analytics:
         work_volume_score = work_volume_metrics.get('work_volume_score', 0.0)
         work_consistency_score = work_volume_metrics.get('work_consistency_score', 50.0)
         
-        # Calculate average efficiency score for productivity potential
+        # Calculate average base productivity score from completed tasks
+        # This is needed for volumetric productivity calculation
+        avg_base_productivity = 0.0
+        if not completed.empty:
+            # Calculate productivity score for each completed task
+            from .task_manager import TaskManager
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
+            
+            # Get self care tasks per day for productivity calculation
+            self_care_tasks_per_day = {}
+            if not tasks_df.empty and 'task_type' in tasks_df.columns:
+                completed_with_type = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+                completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+                completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+                
+                self_care_completed = completed_with_type[
+                    completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+                ].copy()
+                
+                if not self_care_completed.empty:
+                    self_care_completed['completed_at_dt'] = pd.to_datetime(self_care_completed['completed_at'], errors='coerce')
+                    self_care_completed = self_care_completed[self_care_completed['completed_at_dt'].notna()]
+                    if not self_care_completed.empty:
+                        self_care_completed['date'] = self_care_completed['completed_at_dt'].dt.date
+                        daily_counts = self_care_completed.groupby('date').size()
+                        self_care_tasks_per_day = {str(date): int(count) for date, count in daily_counts.items()}
+            
+            # Get work/play time per day
+            work_play_time_per_day = {}
+            if not tasks_df.empty and 'task_type' in tasks_df.columns:
+                completed_with_type = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+                completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+                completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+                
+                # Parse dates and group by date and task type
+                completed_with_type['completed_at_dt'] = pd.to_datetime(completed_with_type['completed_at'], errors='coerce')
+                completed_with_type = completed_with_type[completed_with_type['completed_at_dt'].notna()]
+                completed_with_type['date'] = completed_with_type['completed_at_dt'].dt.date
+                completed_with_type['duration_numeric'] = pd.to_numeric(completed_with_type['duration_minutes'], errors='coerce').fillna(0.0)
+                
+                for date, group in completed_with_type.groupby('date'):
+                    date_str = str(date)
+                    work_time = group[group['task_type_normalized'] == 'work']['duration_numeric'].sum()
+                    play_time = group[group['task_type_normalized'] == 'play']['duration_numeric'].sum()
+                    work_play_time_per_day[date_str] = {
+                        'work_time': float(work_time),
+                        'play_time': float(play_time)
+                    }
+            
+            # Calculate productivity scores for completed tasks
+            productivity_scores = []
+            for _, row in completed.iterrows():
+                try:
+                    prod_score = self.calculate_productivity_score(
+                        row=row,
+                        self_care_tasks_per_day=self_care_tasks_per_day,
+                        work_play_time_per_day=work_play_time_per_day
+                    )
+                    if prod_score > 0:  # Only include positive scores
+                        productivity_scores.append(prod_score)
+                except Exception:
+                    pass
+            
+            if productivity_scores:
+                avg_base_productivity = sum(productivity_scores) / len(productivity_scores)
+        
+        # Calculate volumetric productivity score (integrates volume into productivity)
+        volumetric_productivity = self.calculate_volumetric_productivity_score(
+            base_productivity_score=avg_base_productivity,
+            work_volume_score=work_volume_score
+        )
+        
+        # Calculate average efficiency score for productivity potential (legacy, still used)
         efficiency_summary = self.get_efficiency_summary()
         avg_efficiency_score = efficiency_summary.get('avg_efficiency', 0.0)
         
-        # Calculate productivity potential (target: 6 hours/day = 360 minutes)
+        # Get target hours from user settings
+        target_hours_per_day = self.get_target_hours_per_day("default_user")
+        target_hours_per_day_decimal = target_hours_per_day / 60.0  # Convert to hours
+        
+        # Calculate target volume score based on target hours
+        # Volume score formula: 0-2h (0-25), 2-4h (25-50), 4-6h (50-75), 6-8h+ (75-100)
+        target_minutes = target_hours_per_day
+        if target_minutes <= 120:
+            target_volume_score = (target_minutes / 120) * 25
+        elif target_minutes <= 240:
+            target_volume_score = 25 + ((target_minutes - 120) / 120) * 25
+        elif target_minutes <= 360:
+            target_volume_score = 50 + ((target_minutes - 240) / 120) * 25
+        else:
+            target_volume_score = 75 + min(25, ((target_minutes - 360) / 120) * 25)
+        target_volume_score = max(0.0, min(100.0, target_volume_score))
+        
+        # Calculate productivity potential using volumetric productivity
+        # Potential = volumetric productivity at target volume
+        volumetric_potential = self.calculate_volumetric_productivity_score(
+            base_productivity_score=avg_base_productivity,
+            work_volume_score=target_volume_score
+        )
+        
+        # Calculate productivity potential - uses goal setting
         productivity_potential = self.calculate_productivity_potential(
             avg_efficiency_score=avg_efficiency_score,
             avg_daily_work_time=avg_daily_work_time,
-            target_hours_per_day=360.0
+            target_hours_per_day=target_hours_per_day,
+            user_id="default_user"
         )
         
-        # Calculate composite productivity score
+        # Update potential score to use volumetric potential
+        productivity_potential['potential_score'] = volumetric_potential
+        productivity_potential['current_score'] = volumetric_productivity
+        
+        # Calculate composite productivity score using volumetric productivity
+        # Normalize volumetric productivity to 0-100 range for composite
+        normalized_volumetric = min(100.0, volumetric_productivity / 7.5) if volumetric_productivity > 0 else 0.0
         composite_productivity = self.calculate_composite_productivity_score(
-            efficiency_score=avg_efficiency_score,
+            efficiency_score=normalized_volumetric * 2.0,  # Convert back to efficiency-like scale
             volume_score=work_volume_score,
             consistency_score=work_consistency_score
         )
+        
+        # Calculate thoroughness/notetaking score
+        thoroughness_score = self.calculate_thoroughness_score(user_id='default', days=30)
+        thoroughness_factor = self.calculate_thoroughness_factor(user_id='default', days=30)
         
         # Calculate daily self care tasks metrics
         from .task_manager import TaskManager
@@ -1382,7 +2235,7 @@ class Analytics:
             # Filter to self care tasks
             self_care_tasks = completed_with_type[
                 completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
-            ]
+            ].copy()
             
             if not self_care_tasks.empty:
                 # Parse completed_at dates
@@ -1465,6 +2318,8 @@ class Analytics:
                 'avg_aversion': round(avg_aversion_completed, 1),
                 'adjusted_wellbeing': round(adjusted_wellbeing, 2),
                 'adjusted_wellbeing_normalized': round(adjusted_wellbeing_normalized, 2),
+                'thoroughness_score': round(thoroughness_score, 1),
+                'thoroughness_factor': round(thoroughness_factor, 3),
             },
             'time': {
                 'median_duration': _median(df['duration_minutes']),
@@ -1482,6 +2337,9 @@ class Analytics:
                 'productivity_potential_score': round(productivity_potential.get('potential_score', 0.0), 1),
                 'work_volume_gap': round(productivity_potential.get('gap_hours', 0.0), 1),
                 'composite_productivity_score': round(composite_productivity, 1),
+                'avg_base_productivity': round(avg_base_productivity, 1),
+                'volumetric_productivity_score': round(volumetric_productivity, 1),
+                'volumetric_potential_score': round(volumetric_potential, 1),
             },
         }
         return metrics
@@ -1597,14 +2455,31 @@ class Analytics:
     def get_daily_work_volume_metrics(self, days: int = 30) -> Dict[str, any]:
         """Calculate daily work volume metrics including average work time, volume score, and consistency.
         
+        Uses work time history data to calculate metrics. Includes all days in the period
+        (with 0 for days with no work) for accurate consistency calculation.
+        
         Args:
             days: Number of days to analyze (default 30)
             
         Returns:
-            Dict with avg_daily_work_time, work_volume_score (0-100), work_consistency_score (0-100),
-            daily_work_times (list of daily work times), and work_days_count
+            Dict with:
+            - avg_daily_work_time: Average work time per day (only counting days with work)
+            - work_volume_score: Volume score (0-100)
+            - work_consistency_score: Consistency score (0-100, based on variance)
+            - daily_work_times: List of daily work times (only days with work > 0)
+            - daily_work_times_history: List of all daily work times (including 0s for no-work days)
+            - work_days_count: Number of days with work > 0
+            - total_days: Total days in period
+            - variance: Calculated variance value
+            - days_with_work: Same as work_days_count
         """
         df = self._load_instances()
+        
+        # Calculate date range for history (needed for all return cases)
+        cutoff_date = datetime.now() - timedelta(days=days)
+        date_range = pd.date_range(start=cutoff_date.date(), end=datetime.now().date(), freq='D')
+        all_dates = [d.date() for d in date_range]
+        empty_history = [0.0] * len(all_dates)  # Empty history for early returns
         
         if df.empty:
             return {
@@ -1612,7 +2487,11 @@ class Analytics:
                 'work_volume_score': 0.0,
                 'work_consistency_score': 50.0,
                 'daily_work_times': [],
+                'daily_work_times_history': empty_history,
                 'work_days_count': 0,
+                'variance': 0.0,
+                'days_with_work': 0,
+                'total_days': len(all_dates),
             }
         
         # Load tasks to get task_type
@@ -1626,7 +2505,11 @@ class Analytics:
                 'work_volume_score': 0.0,
                 'work_consistency_score': 50.0,
                 'daily_work_times': [],
+                'daily_work_times_history': empty_history,
                 'work_days_count': 0,
+                'variance': 0.0,
+                'days_with_work': 0,
+                'total_days': len(all_dates),
             }
         
         # Join instances with tasks to get task_type
@@ -1645,7 +2528,11 @@ class Analytics:
                 'work_volume_score': 0.0,
                 'work_consistency_score': 50.0,
                 'daily_work_times': [],
+                'daily_work_times_history': empty_history,
                 'work_days_count': 0,
+                'variance': 0.0,
+                'days_with_work': 0,
+                'total_days': len(all_dates),
             }
         
         # Fill missing task_type with 'Work' as default
@@ -1664,7 +2551,11 @@ class Analytics:
                 'work_volume_score': 0.0,
                 'work_consistency_score': 50.0,
                 'daily_work_times': [],
+                'daily_work_times_history': empty_history,
                 'work_days_count': 0,
+                'variance': 0.0,
+                'days_with_work': 0,
+                'total_days': len(all_dates),
             }
         
         # Parse completed_at dates
@@ -1677,11 +2568,14 @@ class Analytics:
                 'work_volume_score': 0.0,
                 'work_consistency_score': 50.0,
                 'daily_work_times': [],
+                'daily_work_times_history': empty_history,
                 'work_days_count': 0,
+                'variance': 0.0,
+                'days_with_work': 0,
+                'total_days': len(all_dates),
             }
         
         # Filter to last N days
-        cutoff_date = datetime.now() - timedelta(days=days)
         recent_work = work_tasks[work_tasks['completed_at_dt'] >= cutoff_date].copy()
         
         if recent_work.empty:
@@ -1690,13 +2584,25 @@ class Analytics:
                 'work_volume_score': 0.0,
                 'work_consistency_score': 50.0,
                 'daily_work_times': [],
+                'daily_work_times_history': empty_history,
                 'work_days_count': 0,
+                'variance': 0.0,
+                'days_with_work': 0,
+                'total_days': len(all_dates),
             }
         
         # Group by date and sum work time per day
         recent_work['date'] = recent_work['completed_at_dt'].dt.date
         daily_work = recent_work.groupby('date')['duration_numeric'].sum()
         
+        # Create complete daily work times history (include 0 for days with no work)
+        # This is the "history" - all days in the period with their work times
+        # Use the all_dates already calculated above
+        daily_work_dict = {date: float(time) for date, time in daily_work.items()}
+        daily_work_times_history = [daily_work_dict.get(date, 0.0) for date in all_dates]
+        
+        # Also keep list of only days with work > 0 for volume calculation
+        # This is used for calculating average (only count days with actual work)
         daily_work_times = [float(time) for time in daily_work.values if time > 0]
         work_days_count = len(daily_work_times)
         
@@ -1706,10 +2612,14 @@ class Analytics:
                 'work_volume_score': 0.0,
                 'work_consistency_score': 50.0,
                 'daily_work_times': [],
+                'daily_work_times_history': daily_work_times_history,
                 'work_days_count': 0,
+                'variance': 0.0,
+                'days_with_work': 0,
+                'total_days': len(all_dates),
             }
         
-        # Calculate average daily work time
+        # Calculate average daily work time (only counting days with work)
         avg_daily_work_time = sum(daily_work_times) / work_days_count
         
         # Calculate work volume score (0-100)
@@ -1729,37 +2639,71 @@ class Analytics:
         work_volume_score = max(0.0, min(100.0, work_volume_score))
         
         # Calculate work consistency score (0-100)
-        # Lower variance = higher consistency score
-        if len(daily_work_times) > 1:
-            variance = np.var(daily_work_times)
+        # Use complete work time history (including 0s) for variance calculation
+        # This gives a better measure of consistency (penalizes days with no work)
+        variance = 0.0
+        if len(daily_work_times_history) > 1:
+            variance = np.var(daily_work_times_history)
             # Normalize variance: assume max reasonable variance is 4 hours (240 min) squared
             # Lower variance = higher score
             max_variance = 240.0 ** 2
             consistency_score = max(0.0, min(100.0, 100.0 * (1.0 - min(1.0, variance / max_variance))))
-        else:
+        elif len(daily_work_times_history) == 1:
             # Single day = perfect consistency
             consistency_score = 100.0
+            variance = 0.0
+        else:
+            # No data
+            consistency_score = 50.0
+            variance = 0.0
         
         return {
             'avg_daily_work_time': round(float(avg_daily_work_time), 1),
             'work_volume_score': round(float(work_volume_score), 1),
             'work_consistency_score': round(float(consistency_score), 1),
-            'daily_work_times': daily_work_times,
+            'daily_work_times': daily_work_times,  # Only days with work > 0
+            'daily_work_times_history': daily_work_times_history,  # All days including zeros
             'work_days_count': work_days_count,
+            'variance': round(float(variance), 2),
+            'days_with_work': work_days_count,
+            'total_days': len(daily_work_times_history),
         }
 
+    def get_target_hours_per_day(self, user_id: str = "default_user") -> float:
+        """Get target hours per day from goal hours per week setting.
+        
+        Converts weekly goal to daily target. Assumes 5 work days per week.
+        
+        Args:
+            user_id: User ID to get settings for
+            
+        Returns:
+            Target hours per day in minutes (default: 360 = 6 hours if goal is 30 hours/week)
+        """
+        goal_settings = UserStateManager().get_productivity_goal_settings(user_id)
+        goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)  # Default 30h/week = 6h/day
+        
+        # Convert weekly goal to daily target (assume 5 work days per week)
+        target_hours_per_day = (goal_hours_per_week / 5.0) * 60.0  # Convert to minutes
+        
+        return target_hours_per_day
+    
     def calculate_productivity_potential(self, avg_efficiency_score: float, avg_daily_work_time: float, 
-                                         target_hours_per_day: float = 360.0) -> Dict[str, any]:
+                                         target_hours_per_day: Optional[float] = None,
+                                         user_id: str = "default_user") -> Dict[str, any]:
         """Calculate productivity potential based on current efficiency and target work time.
         
         Args:
             avg_efficiency_score: Average efficiency score from completed tasks
             avg_daily_work_time: Current average daily work time in minutes
-            target_hours_per_day: Target work hours per day in minutes (default 360 = 6 hours)
+            target_hours_per_day: Target work hours per day in minutes (if None, uses goal setting)
+            user_id: User ID to get settings for (if target_hours_per_day is None)
             
         Returns:
             Dict with potential_score, current_score, multiplier, and gap_hours
         """
+        if target_hours_per_day is None:
+            target_hours_per_day = self.get_target_hours_per_day(user_id)
         if avg_daily_work_time <= 0:
             return {
                 'potential_score': 0.0,
@@ -2058,9 +3002,36 @@ class Analytics:
             'normalized_weights': {k: round(float(v), 3) for k, v in normalized_weights.items()},
         }
 
+    def calculate_volumetric_productivity_score(self, base_productivity_score: float, 
+                                                  work_volume_score: float) -> float:
+        """Calculate volumetric productivity score by integrating volume factor into base productivity.
+        
+        This addresses the limitation where productivity potential and composite productivity
+        may be misleading because the base productivity score doesn't account for volume.
+        
+        Args:
+            base_productivity_score: Base productivity score from calculate_productivity_score() (0-500+)
+            work_volume_score: Work volume score from get_daily_work_volume_metrics() (0-100)
+            
+        Returns:
+            Volumetric productivity score (0-750+ = base × 0.5-1.5x multiplier)
+        """
+        # Convert volume score (0-100) to multiplier (0.5x to 1.5x)
+        # Linear mapping: 0 volume = 0.5x, 50 volume = 1.0x, 100 volume = 1.5x
+        volume_multiplier = 0.5 + (work_volume_score / 100.0) * 1.0
+        
+        # Apply volume multiplier to base productivity score
+        volumetric_score = base_productivity_score * volume_multiplier
+        
+        return round(float(volumetric_score), 1)
+    
     def calculate_composite_productivity_score(self, efficiency_score: float, volume_score: float, 
                                                 consistency_score: float) -> float:
         """Calculate composite productivity score combining efficiency, volume, and consistency.
+        
+        NOTE: This method may be misleading because it combines efficiency (per-task) with
+        volume (aggregate) without integrating volume into the base productivity calculation.
+        Consider using volumetric_productivity_score for more accurate measurements.
         
         Args:
             efficiency_score: Per-task efficiency score (0-100+)
@@ -2085,12 +3056,23 @@ class Analytics:
         Returns a dictionary of component_name -> score_value that can be used
         with calculate_composite_score().
         
+        Cached for 5 minutes to improve performance (this is an expensive operation).
+        
         Args:
             days: Number of days to analyze for time-based metrics
             
         Returns:
             Dict with component_name -> score_value (0-100 range where applicable)
         """
+        import time as time_module
+        
+        # Check cache
+        current_time = time_module.time()
+        if (Analytics._composite_scores_cache is not None and 
+            Analytics._composite_scores_cache_time is not None and
+            (current_time - Analytics._composite_scores_cache_time) < Analytics._cache_ttl_seconds):
+            return Analytics._composite_scores_cache.copy()  # Return copy to prevent mutation
+        
         scores = {}
         
         # Get dashboard metrics
@@ -2131,7 +3113,237 @@ class Analytics:
         avg_self_care = float(counts.get('avg_daily_self_care_tasks', 0.0))
         scores['self_care_frequency'] = min(100.0, avg_self_care * 20.0)  # 5 tasks = 100 score
         
+        # Execution score (average of recent completed instances)
+        # NOTE: Execution score is calculated separately in chunks by the dashboard
+        # to allow UI to remain responsive. Use get_execution_score_chunked() instead.
+        scores['execution_score'] = 50.0  # Placeholder - will be updated by chunked calculation
+        
+        # Cache the result
+        Analytics._composite_scores_cache = scores.copy()
+        Analytics._composite_scores_cache_time = time_module.time()
+        
         return scores
+    
+    def get_execution_score_chunked(self, state: Dict[str, any], batch_size: int = 5, user_id: str = "default", persist: bool = True) -> Dict[str, any]:
+        """Calculate execution score in chunks to allow UI to remain responsive.
+        
+        This method processes instances in small batches, allowing the UI to respond
+        between batches. State is preserved between calls and can persist across page refreshes.
+        
+        Args:
+            state: Dictionary containing:
+                - 'instances': List of instances to process (set on first call or loaded from persistence)
+                - 'current_index': Current index in instances list (0 on first call or loaded from persistence)
+                - 'execution_scores': List of calculated scores (empty on first call or loaded from persistence)
+                - 'completed': Whether all instances have been processed
+            batch_size: Number of instances to process per chunk (default 5)
+            user_id: User ID for persistence (default "default")
+            persist: Whether to save state to user_state (default True)
+            
+        Returns:
+            Updated state dictionary with:
+                - 'completed': True if all instances processed, False otherwise
+                - 'avg_execution_score': Average score if completed, None otherwise
+        """
+        import time as time_module
+        from .user_state import UserStateManager
+        
+        # Try to load persisted state if state is empty
+        if not state or 'instances' not in state or state.get('instances') is None:
+            if persist:
+                user_state = UserStateManager()
+                persisted = user_state.get_execution_score_chunk_state(user_id)
+                if persisted:
+                    # Restore progress from persistence
+                    state['current_index'] = persisted.get('current_index', 0)
+                    state['execution_scores'] = persisted.get('execution_scores', [])
+                    state['completed'] = persisted.get('completed', False)
+                    # Reload instances list (not persisted due to size)
+                    # #region agent log
+                    load_instances_start = time_module.perf_counter()
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'loading instances via list_recent_completed', 'data': {'limit': 50}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    from .instance_manager import InstanceManager
+                    instance_manager = InstanceManager()
+                    state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    # #region agent log
+                    load_instances_duration = time_module.perf_counter() - load_instances_start
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'instances loaded', 'data': {'duration_seconds': load_instances_duration, 'instance_count': len(state['instances'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    # If we had progress, resume from where we left off
+                    if state['current_index'] > 0 and not state['completed']:
+                        # #region agent log
+                        try:
+                            import json as json_module
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'resuming chunked execution score calculation from persistence', 'data': {'resume_index': state['current_index'], 'total': len(state['instances']), 'scores_so_far': len(state['execution_scores'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                        except: pass
+                        # #endregion
+                        # Don't re-initialize, just continue processing
+                    else:
+                        # Fresh start
+                        state['current_index'] = 0
+                        state['execution_scores'] = []
+                        state['completed'] = False
+                else:
+                    # No persisted state - initialize fresh
+                    # #region agent log
+                    load_instances_start = time_module.perf_counter()
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'loading instances via list_recent_completed', 'data': {'limit': 50}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    from .instance_manager import InstanceManager
+                    instance_manager = InstanceManager()
+                    state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    # #region agent log
+                    load_instances_duration = time_module.perf_counter() - load_instances_start
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'instances loaded', 'data': {'duration_seconds': load_instances_duration, 'instance_count': len(state['instances'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
+                    state['current_index'] = 0
+                    state['execution_scores'] = []
+                    state['completed'] = False
+            else:
+                # Not persisting - initialize fresh
+                # #region agent log
+                load_instances_start = time_module.perf_counter()
+                try:
+                    import json as json_module
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'loading instances via list_recent_completed', 'data': {'limit': 50}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
+                from .instance_manager import InstanceManager
+                instance_manager = InstanceManager()
+                state['instances'] = instance_manager.list_recent_completed(limit=50)
+                # #region agent log
+                load_instances_duration = time_module.perf_counter() - load_instances_start
+                try:
+                    import json as json_module
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'instances loaded', 'data': {'duration_seconds': load_instances_duration, 'instance_count': len(state['instances'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
+                state['current_index'] = 0
+                state['execution_scores'] = []
+                state['completed'] = False
+            
+            # #region agent log
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'starting chunked execution score calculation', 'data': {'instance_count': len(state['instances']), 'batch_size': batch_size, 'resuming': state.get('current_index', 0) > 0}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+        
+        # Process a batch of instances
+        instances = state['instances']
+        current_index = state['current_index']
+        execution_scores = state['execution_scores']
+        
+        end_index = min(current_index + batch_size, len(instances))
+        
+        # #region agent log
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'processing batch', 'data': {'start_index': current_index, 'end_index': end_index, 'total': len(instances)}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # #region agent log
+        batch_start_time = time_module.perf_counter()
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'starting batch execution score calculation', 'data': {'batch_start': current_index, 'batch_end': end_index, 'batch_size': end_index - current_index}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        for idx in range(current_index, end_index):
+            # #region agent log
+            instance_start = time_module.perf_counter()
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H3', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'calculating execution score for instance', 'data': {'instance_index': idx, 'total_instances': len(instances)}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            try:
+                execution_score = self.calculate_execution_score(instances[idx])
+                # #region agent log
+                instance_duration = time_module.perf_counter() - instance_start
+                try:
+                    import json as json_module
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H3', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'execution score calculated for instance', 'data': {'instance_index': idx, 'duration_seconds': instance_duration, 'score': execution_score}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
+                if execution_score is not None:
+                    execution_scores.append(execution_score)
+            except Exception as e:
+                print(f"[Analytics] Error calculating execution score for instance {idx}: {e}")
+        
+        # #region agent log
+        batch_duration = time_module.perf_counter() - batch_start_time
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'batch execution score calculation completed', 'data': {'batch_size': end_index - current_index, 'total_duration_seconds': batch_duration, 'avg_per_instance': batch_duration / (end_index - current_index) if (end_index - current_index) > 0 else 0}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        state['current_index'] = end_index
+        state['execution_scores'] = execution_scores
+        
+        # Check if we're done
+        if end_index >= len(instances):
+            state['completed'] = True
+            avg_execution_score = sum(execution_scores) / len(execution_scores) if execution_scores else 50.0
+            state['avg_execution_score'] = avg_execution_score
+            
+            # Clear persisted state when completed
+            if persist:
+                try:
+                    user_state = UserStateManager()
+                    user_state.update_preference(user_id, "execution_score_chunk_state", "")  # Clear it
+                except Exception as e:
+                    print(f"[Analytics] Error clearing persisted chunk state: {e}")
+            
+            # #region agent log
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'chunked execution score calculation completed', 'data': {'total_instances': len(instances), 'score_count': len(execution_scores), 'avg_score': avg_execution_score}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+        else:
+            state['completed'] = False
+            state['avg_execution_score'] = None
+            
+            # Persist progress after each chunk
+            if persist:
+                try:
+                    user_state = UserStateManager()
+                    user_state.set_execution_score_chunk_state(state, user_id)
+                except Exception as e:
+                    print(f"[Analytics] Error persisting chunk state: {e}")
+        
+        return state
 
     def get_tracking_consistency_multiplier(self, days: int = 7) -> float:
         """Get tracking consistency score as a multiplier (0.0 to 1.0).
@@ -2149,9 +3361,1309 @@ class Analytics:
         score = tracking_data.get('tracking_consistency_score', 0.0)
         return max(0.0, min(1.0, score / 100.0))
 
-    def get_relief_summary(self) -> Dict[str, any]:
-        """Calculate relief points, productivity time, and relief statistics."""
+    def calculate_focus_factor(
+        self,
+        row: Union[pd.Series, Dict]
+    ) -> float:
+        """Calculate focus factor (0.0-1.0) based on emotion-based indicators only.
+        
+        Focus is a mental state (ability to concentrate), measured through emotions.
+        This is 100% emotion-based - no behavioral components.
+        
+        Focus-positive emotions: focused, concentrated, determined, engaged, present, mindful, etc.
+        Focus-negative emotions: distracted, scattered, unfocused, restless, anxious, overwhelmed, etc.
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual)
+        
+        Returns:
+            Focus factor (0.0-1.0), where 1.0 = high focus, 0.5 = neutral, 0.0 = low focus
+        """
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+        
+        # Emotion-Based Focus Score (100% of focus factor)
+        emotion_score = 0.5  # Default neutral
+        
+        try:
+            # Try actual emotions first, fallback to predicted
+            emotion_values = actual_dict.get('emotion_values', {}) or predicted_dict.get('emotion_values', {})
+            
+            if emotion_values and isinstance(emotion_values, dict):
+                focus_positive = ['focused', 'concentrated', 'determined', 'engaged', 'flow', 
+                                 'in the zone', 'present', 'mindful', 'attentive', 'alert', 'sharp', 'absorbed']
+                focus_negative = ['distracted', 'scattered', 'overwhelmed', 'frazzled', 
+                                  'unfocused', 'disengaged', 'zoned out', 'spaced out', 'restless', 'anxious']
+                
+                positive_score = 0.0
+                negative_score = 0.0
+                
+                for emotion, value in emotion_values.items():
+                    if not emotion or not value:
+                        continue
+                    try:
+                        emotion_lower = str(emotion).lower()
+                        value_float = float(value)
+                        
+                        # Check for focus-positive emotions (substring match)
+                        if any(pos in emotion_lower for pos in focus_positive):
+                            positive_score += max(0.0, min(100.0, value_float)) / 100.0
+                        # Check for focus-negative emotions
+                        elif any(neg in emotion_lower for neg in focus_negative):
+                            negative_score += max(0.0, min(100.0, value_float)) / 100.0
+                    except (ValueError, TypeError):
+                        continue
+                
+                # Net score: positive - negative, normalized to 0-1
+                # Cap individual contributions to prevent single emotion from dominating
+                positive_score = min(1.0, positive_score)
+                negative_score = min(1.0, negative_score)
+                emotion_score = 0.5 + (positive_score - negative_score) * 0.5
+                emotion_score = max(0.0, min(1.0, emotion_score))
+        except Exception as e:
+            # On error, use neutral
+            emotion_score = 0.5
+        
+        # Focus factor is 100% emotion-based
+        return emotion_score
+
+    def calculate_momentum_factor(
+        self,
+        row: Union[pd.Series, Dict],
+        lookback_hours: int = 24,
+        repetition_days: int = 7
+    ) -> float:
+        """Calculate momentum factor (0.0-1.0) based on behavioral patterns.
+        
+        Momentum measures building energy through repeated action (behavioral, not mental state).
+        Combines four components:
+        1. Task clustering (40%): Short gaps between completions
+        2. Task volume (30%): Many tasks completed recently
+        3. Template consistency (20%): Repeating same template
+        4. Acceleration (10%): Tasks getting faster over time
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual),
+                 completed_at, task_id, duration_minutes
+            lookback_hours: Hours to look back for clustering and volume (default: 24)
+            repetition_days: Days to look back for template consistency (default: 7)
+        
+        Returns:
+            Momentum factor (0.0-1.0), where 1.0 = high momentum, 0.5 = neutral, 0.0 = low momentum
+        """
+        import math
+        
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            duration_minutes = row.get('duration_minutes', 0)
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            duration_minutes = row.get('duration_minutes', 0)
+        
+        # Default to neutral if missing critical data
+        if not completed_at:
+            return 0.5
+        
+        # Parse completion time
+        try:
+            if isinstance(completed_at, str):
+                current_completion_time = pd.to_datetime(completed_at)
+            else:
+                current_completion_time = completed_at
+        except (ValueError, TypeError):
+            return 0.5
+        
+        # 1. Task Clustering Score (40% weight)
+        clustering_score = 0.5  # Default neutral
+        
+        try:
+            df = self._load_instances()
+            if not df.empty:
+                # Get completed tasks only
+                completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                
+                if not completed.empty:
+                    # Parse completed_at timestamps
+                    completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                    completed = completed.dropna(subset=['completed_at_dt'])
+                    
+                    # Get recent completions within lookback window
+                    cutoff_time = current_completion_time - timedelta(hours=lookback_hours)
+                    recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                    recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                    
+                    # Sort by completion time
+                    recent = recent.sort_values('completed_at_dt')
+                    
+                    if len(recent) >= 2:
+                        # Calculate average gap between completions
+                        gaps = []
+                        for i in range(1, len(recent)):
+                            gap_minutes = (recent.iloc[i]['completed_at_dt'] - 
+                                         recent.iloc[i-1]['completed_at_dt']).total_seconds() / 60.0
+                            gaps.append(gap_minutes)
+                        
+                        if gaps:
+                            avg_gap = sum(gaps) / len(gaps)
+                            
+                            # Normalize: shorter gaps = higher score
+                            if avg_gap <= 15:
+                                clustering_score = 1.0
+                            elif avg_gap <= 60:
+                                # Linear: 15 min → 1.0, 60 min → 0.5
+                                clustering_score = 1.0 - ((avg_gap - 15) / 45.0) * 0.5
+                            elif avg_gap <= 240:
+                                # Exponential decay: 60 min → 0.5, 240 min → 0.25
+                                clustering_score = 0.5 * (1.0 / (avg_gap / 60.0))
+                            else:
+                                clustering_score = 0.1  # Floor for very long gaps
+        except Exception as e:
+            # On error, use neutral
+            clustering_score = 0.5
+        
+        # 2. Task Volume Score (30% weight)
+        volume_score = 0.5  # Default neutral
+        
+        try:
+            df = self._load_instances()
+            if not df.empty:
+                # Get completed tasks only
+                completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                
+                if not completed.empty:
+                    # Parse completed_at timestamps
+                    completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                    completed = completed.dropna(subset=['completed_at_dt'])
+                    
+                    # Get recent completions within lookback window
+                    cutoff_time = current_completion_time - timedelta(hours=lookback_hours)
+                    recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                    recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                    
+                    total_recent_completions = len(recent)
+                    
+                    # Volume bonus: 1 task = 0.5, 3 tasks = 0.7, 5 tasks = 0.85, 10+ tasks = 1.0
+                    if total_recent_completions <= 1:
+                        volume_score = 0.5
+                    elif total_recent_completions <= 3:
+                        # Linear: 1 → 0.5, 3 → 0.7
+                        volume_score = 0.5 + (total_recent_completions - 1) / 2.0 * 0.2
+                    elif total_recent_completions <= 5:
+                        # Linear: 3 → 0.7, 5 → 0.85
+                        volume_score = 0.7 + (total_recent_completions - 3) / 2.0 * 0.15
+                    elif total_recent_completions <= 10:
+                        # Linear: 5 → 0.85, 10 → 1.0
+                        volume_score = 0.85 + (total_recent_completions - 5) / 5.0 * 0.15
+                    else:
+                        volume_score = 1.0  # Max at 10+ tasks
+        except Exception as e:
+            # On error, use neutral
+            volume_score = 0.5
+        
+        # 3. Template Consistency Score (20% weight)
+        consistency_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                df = self._load_instances()
+                if not df.empty:
+                    # Get completed tasks only
+                    completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                    
+                    if not completed.empty:
+                        # Parse completed_at timestamps
+                        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                        completed = completed.dropna(subset=['completed_at_dt'])
+                        
+                        # Get recent completions within repetition window
+                        cutoff_time = current_completion_time - timedelta(days=repetition_days)
+                        recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                        recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                        
+                        # Count completions of this template
+                        same_template_count = len(recent[recent['task_id'] == task_id])
+                        
+                        # Template consistency: 1 instance = 0.5, 2-5 instances = 0.5→0.8, 6-10 instances = 0.8→1.0, 10+ = 1.0
+                        if same_template_count <= 1:
+                            consistency_score = 0.5  # Neutral for first completion
+                        elif same_template_count <= 5:
+                            # Linear: 1 → 0.5, 5 → 0.8
+                            consistency_score = 0.5 + (same_template_count - 1) / 4.0 * 0.3
+                        elif same_template_count <= 10:
+                            # Linear: 5 → 0.8, 10 → 1.0
+                            consistency_score = 0.8 + (same_template_count - 5) / 5.0 * 0.2
+                        else:
+                            consistency_score = 1.0  # Max at 10+ completions
+        except Exception as e:
+            # On error, use neutral
+            consistency_score = 0.5
+        
+        # 4. Acceleration Score (10% weight) - Tasks getting faster over time
+        acceleration_score = 0.5  # Default neutral
+        
+        try:
+            df = self._load_instances()
+            if not df.empty and duration_minutes:
+                # Get completed tasks only
+                completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                
+                if not completed.empty:
+                    # Parse completed_at timestamps and durations
+                    completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                    completed = completed.dropna(subset=['completed_at_dt'])
+                    completed['duration_numeric'] = pd.to_numeric(completed.get('duration_minutes', 0), errors='coerce')
+                    completed = completed.dropna(subset=['duration_numeric'])
+                    
+                    # Get recent completions within lookback window
+                    cutoff_time = current_completion_time - timedelta(hours=lookback_hours)
+                    recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                    recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                    
+                    if len(recent) >= 3:  # Need at least 3 tasks to measure acceleration
+                        # Sort by completion time
+                        recent = recent.sort_values('completed_at_dt')
+                        
+                        # Split into earlier half and later half
+                        mid_point = len(recent) // 2
+                        earlier = recent.iloc[:mid_point]
+                        later = recent.iloc[mid_point:]
+                        
+                        earlier_avg_duration = earlier['duration_numeric'].mean()
+                        later_avg_duration = later['duration_numeric'].mean()
+                        
+                        if earlier_avg_duration > 0:
+                            # Calculate acceleration: negative = getting faster (good), positive = getting slower (bad)
+                            duration_change_ratio = (later_avg_duration - earlier_avg_duration) / earlier_avg_duration
+                            
+                            # Normalize: -0.5 (50% faster) = 1.0, 0 (no change) = 0.5, +0.5 (50% slower) = 0.0
+                            if duration_change_ratio <= -0.5:
+                                acceleration_score = 1.0  # Max acceleration
+                            elif duration_change_ratio <= 0:
+                                # Getting faster: -0.5 → 1.0, 0 → 0.5
+                                acceleration_score = 0.5 + (abs(duration_change_ratio) / 0.5) * 0.5
+                            elif duration_change_ratio <= 0.5:
+                                # Getting slower: 0 → 0.5, 0.5 → 0.0
+                                acceleration_score = 0.5 - (duration_change_ratio / 0.5) * 0.5
+                            else:
+                                acceleration_score = 0.0  # Floor for very slow
+        except Exception as e:
+            # On error, use neutral
+            acceleration_score = 0.5
+        
+        # Combined Momentum Factor
+        momentum_factor = (
+            clustering_score * 0.4 +      # Task clustering
+            volume_score * 0.3 +           # Task volume
+            consistency_score * 0.2 +     # Template consistency
+            acceleration_score * 0.1      # Acceleration
+        )
+        
+        # Clamp to valid range
+        return max(0.0, min(1.0, momentum_factor))
+
+    def calculate_persistence_factor(
+        self,
+        row: Union[pd.Series, Dict],
+        task_completion_counts: Optional[Dict[str, int]] = None,
+        lookback_days: int = 30
+    ) -> float:
+        """Calculate persistence factor (0.0-1.0) based on continuing despite obstacles.
+        
+        Persistence measures historical patterns of sticking with difficult tasks.
+        Combines four components (user-specified weights):
+        1. Obstacle overcoming (40% - highest): Completing despite high cognitive/emotional load
+        2. Aversion resistance (30%): Completing despite high aversion
+        3. Task repetition (20%): Completing same task multiple times
+        4. Consistency (10%): Regular completion patterns over time
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual),
+                 completed_at, task_id, cognitive_load, emotional_load, initial_aversion
+            task_completion_counts: Optional dict mapping task_id to completion count
+            lookback_days: Days to look back for historical patterns (default: 30)
+        
+        Returns:
+            Persistence factor (0.0-1.0), where 1.0 = high persistence, 0.5 = neutral, 0.0 = low persistence
+        """
+        import math
+        import numpy as np
+        
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            cognitive_load = row.get('cognitive_load', 0)
+            emotional_load = row.get('emotional_load', 0)
+            initial_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion') or 0
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            cognitive_load = row.get('cognitive_load', 0)
+            emotional_load = row.get('emotional_load', 0)
+            initial_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion') or 0
+        
+        # Default to neutral if missing critical data
+        if not completed_at:
+            return 0.5
+        
+        # Parse completion time
+        try:
+            if isinstance(completed_at, str):
+                current_completion_time = pd.to_datetime(completed_at)
+            else:
+                current_completion_time = completed_at
+        except (ValueError, TypeError):
+            return 0.5
+        
+        # 1. Obstacle Overcoming Score (40% weight - highest)
+        obstacle_score = 0.5  # Default neutral
+        
+        try:
+            # Get cognitive and emotional load (obstacles)
+            cognitive = pd.to_numeric(cognitive_load, errors='coerce') or 0.0
+            emotional = pd.to_numeric(emotional_load, errors='coerce') or 0.0
+            
+            # Combined load (obstacle level)
+            combined_load = (cognitive + emotional) / 2.0
+            
+            # Completion rate: if task was completed, rate = 1.0
+            completion_rate = 1.0  # This task was completed, so rate is 1.0
+            
+            # Obstacle score: higher load + completion = higher persistence
+            # Formula: completion_rate * (load / 100.0)
+            # High load (80) + completion = 0.8, Low load (20) + completion = 0.2
+            if combined_load > 0:
+                obstacle_score = completion_rate * (combined_load / 100.0)
+                # Normalize: 0-100 load maps to 0.0-1.0 score, but we want to reward high load
+                # So: load 0-50 = 0.0-0.5, load 50-100 = 0.5-1.0
+                if combined_load <= 50:
+                    obstacle_score = combined_load / 100.0  # 0-50 → 0.0-0.5
+                else:
+                    obstacle_score = 0.5 + ((combined_load - 50) / 50.0) * 0.5  # 50-100 → 0.5-1.0
+            else:
+                obstacle_score = 0.5  # No load = neutral
+        except Exception as e:
+            # On error, use neutral
+            obstacle_score = 0.5
+        
+        # 2. Aversion Resistance Score (30% weight)
+        aversion_score = 0.5  # Default neutral
+        
+        try:
+            # Get initial aversion
+            aversion = pd.to_numeric(initial_aversion, errors='coerce') or 0.0
+            
+            # Completion rate: if task was completed, rate = 1.0
+            completion_rate = 1.0  # This task was completed
+            
+            # Aversion score: higher aversion + completion = higher persistence
+            # Formula: completion_rate * (aversion / 100.0)
+            # High aversion (80) + completion = 0.8, Low aversion (20) + completion = 0.2
+            if aversion > 0:
+                aversion_score = completion_rate * (aversion / 100.0)
+                # Normalize: 0-100 aversion maps to 0.0-1.0 score
+                # So: aversion 0-50 = 0.0-0.5, aversion 50-100 = 0.5-1.0
+                if aversion <= 50:
+                    aversion_score = aversion / 100.0  # 0-50 → 0.0-0.5
+                else:
+                    aversion_score = 0.5 + ((aversion - 50) / 50.0) * 0.5  # 50-100 → 0.5-1.0
+            else:
+                aversion_score = 0.5  # No aversion = neutral
+        except Exception as e:
+            # On error, use neutral
+            aversion_score = 0.5
+        
+        # 3. Task Repetition Score (20% weight)
+        repetition_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                # Use provided completion counts if available, otherwise calculate
+                if task_completion_counts and task_id in task_completion_counts:
+                    completion_count = task_completion_counts[task_id]
+                else:
+                    # Calculate from data
+                    df = self._load_instances()
+                    if not df.empty:
+                        # Get completed tasks only
+                        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                        
+                        if not completed.empty:
+                            # Parse completed_at timestamps
+                            completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                            completed = completed.dropna(subset=['completed_at_dt'])
+                            
+                            # Get recent completions within lookback window
+                            cutoff_time = current_completion_time - timedelta(days=lookback_days)
+                            recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                            recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                            
+                            # Count completions of this template
+                            completion_count = len(recent[recent['task_id'] == task_id])
+                    else:
+                        completion_count = 1  # This is the first completion
+                
+                # Repetition score: 1 completion = 0.5, 2-5 = 0.5→0.8, 6-10 = 0.8→1.0, 10+ = 1.0
+                if completion_count <= 1:
+                    repetition_score = 0.5  # Neutral for first completion
+                elif completion_count <= 5:
+                    # Linear: 1 → 0.5, 5 → 0.8
+                    repetition_score = 0.5 + (completion_count - 1) / 4.0 * 0.3
+                elif completion_count <= 10:
+                    # Linear: 5 → 0.8, 10 → 1.0
+                    repetition_score = 0.8 + (completion_count - 5) / 5.0 * 0.2
+                else:
+                    repetition_score = 1.0  # Max at 10+ completions
+        except Exception as e:
+            # On error, use neutral
+            repetition_score = 0.5
+        
+        # 4. Consistency Score (10% weight) - Regular completion patterns over time
+        consistency_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                df = self._load_instances()
+                if not df.empty:
+                    # Get completed tasks only
+                    completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                    
+                    if not completed.empty:
+                        # Parse completed_at timestamps
+                        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                        completed = completed.dropna(subset=['completed_at_dt'])
+                        
+                        # Get recent completions of this template within lookback window
+                        cutoff_time = current_completion_time - timedelta(days=lookback_days)
+                        recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                        recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                        recent = recent[recent['task_id'] == task_id].copy()
+                        
+                        if len(recent) >= 3:  # Need at least 3 completions to measure consistency
+                            # Sort by completion time
+                            recent = recent.sort_values('completed_at_dt')
+                            
+                            # Calculate time differences between completions
+                            time_diffs = []
+                            for i in range(1, len(recent)):
+                                diff_days = (recent.iloc[i]['completed_at_dt'] - 
+                                           recent.iloc[i-1]['completed_at_dt']).total_seconds() / (24 * 3600)
+                                time_diffs.append(diff_days)
+                            
+                            if time_diffs:
+                                # Calculate variance in time differences (lower variance = more consistent)
+                                variance = np.var(time_diffs) if len(time_diffs) > 1 else 0.0
+                                
+                                # Normalize: lower variance = higher consistency
+                                # Assume max reasonable variance is 30 days (completions spread over a month)
+                                max_variance = 900.0  # 30 days squared
+                                consistency_score = 1.0 - min(1.0, variance / max_variance)
+                                # Clamp to reasonable range
+                                consistency_score = max(0.0, min(1.0, consistency_score))
+        except Exception as e:
+            # On error, use neutral
+            consistency_score = 0.5
+        
+        # Combined Persistence Factor
+        persistence_factor = (
+            obstacle_score * 0.4 +        # Obstacle overcoming (highest weight)
+            aversion_score * 0.3 +        # Aversion resistance
+            repetition_score * 0.2 +      # Task repetition
+            consistency_score * 0.1       # Consistency
+        )
+        
+        # Clamp to valid range
+        return max(0.0, min(1.0, persistence_factor))
+
+    def calculate_daily_scores(self, target_date: Optional[datetime] = None) -> Dict[str, float]:
+        """Calculate daily aggregated scores for a specific date.
+        
+        Calculates average scores for all tasks completed on that date:
+        - Productivity score (average)
+        - Execution score (average)
+        - Grit score (average)
+        - Composite score (if available)
+        
+        Args:
+            target_date: Date to calculate scores for (default: yesterday)
+        
+        Returns:
+            Dict with 'productivity_score', 'execution_score', 'grit_score', 'composite_score'
+        """
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        
+        # Get date string for filtering
+        target_date_str = target_date.strftime('%Y-%m-%d')
+        
         df = self._load_instances()
+        if df.empty:
+            return {
+                'productivity_score': 0.0,
+                'execution_score': 0.0,
+                'grit_score': 0.0,
+                'composite_score': 0.0
+            }
+        
+        # Get completed tasks only
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty:
+            return {
+                'productivity_score': 0.0,
+                'execution_score': 0.0,
+                'grit_score': 0.0,
+                'composite_score': 0.0
+            }
+        
+        # Parse completed_at timestamps
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed.dropna(subset=['completed_at_dt'])
+        
+        # Filter to target date
+        completed['completed_date'] = completed['completed_at_dt'].dt.date
+        target_date_obj = target_date.date() if isinstance(target_date, datetime) else target_date
+        day_completions = completed[completed['completed_date'] == target_date_obj].copy()
+        
+        if day_completions.empty:
+            return {
+                'productivity_score': 0.0,
+                'execution_score': 0.0,
+                'grit_score': 0.0,
+                'composite_score': 0.0
+            }
+        
+        # Calculate task completion counts for grit score
+        from collections import Counter
+        task_completion_counts = Counter(day_completions['task_id'].tolist())
+        task_completion_counts_dict = dict(task_completion_counts)
+        
+        # Calculate scores for each completion
+        productivity_scores = []
+        execution_scores = []
+        grit_scores = []
+        
+        # Get self-care tasks per day for productivity score
+        self_care_per_day = {}
+        for date_str, group in day_completions.groupby(day_completions['completed_at_dt'].dt.date):
+            date_key = date_str.strftime('%Y-%m-%d')
+            task_types = group.get('task_type', pd.Series(['Work'] * len(group)))
+            self_care_count = len(task_types[task_types.astype(str).str.lower().isin(['self care', 'selfcare', 'self-care'])])
+            self_care_per_day[date_key] = self_care_count
+        
+        # Calculate work/play time per day for productivity score
+        work_play_time = {}
+        for date_str, group in day_completions.groupby(day_completions['completed_at_dt'].dt.date):
+            date_key = date_str.strftime('%Y-%m-%d')
+            task_types = group.get('task_type', pd.Series(['Work'] * len(group)))
+            durations = pd.to_numeric(group.get('duration_minutes', 0), errors='coerce').fillna(0)
+            
+            work_time = durations[task_types.astype(str).str.lower() == 'work'].sum()
+            play_time = durations[task_types.astype(str).str.lower() == 'play'].sum()
+            work_play_time[date_key] = {'work_time': work_time, 'play_time': play_time}
+        
+        # Calculate weekly average time for productivity score
+        weekly_avg_time = 0.0
+        try:
+            work_volume_metrics = self.get_daily_work_volume_metrics(days=7)
+            weekly_avg_time = work_volume_metrics.get('avg_daily_work_time', 0.0) * 7.0
+        except Exception:
+            pass
+        
+        for _, row in day_completions.iterrows():
+            try:
+                # Productivity score
+                prod_score = self.calculate_productivity_score(
+                    row=row,
+                    self_care_tasks_per_day=self_care_per_day,
+                    weekly_avg_time=weekly_avg_time,
+                    work_play_time_per_day=work_play_time
+                )
+                productivity_scores.append(prod_score)
+                
+                # Execution score
+                exec_score = self.calculate_execution_score(
+                    row=row,
+                    task_completion_counts=task_completion_counts_dict
+                )
+                execution_scores.append(exec_score)
+                
+                # Grit score
+                grit_score = self.calculate_grit_score(
+                    row=row,
+                    task_completion_counts=task_completion_counts_dict
+                )
+                grit_scores.append(grit_score)
+            except Exception:
+                # Skip if calculation fails
+                continue
+        
+        # Calculate averages
+        avg_productivity = sum(productivity_scores) / len(productivity_scores) if productivity_scores else 0.0
+        avg_execution = sum(execution_scores) / len(execution_scores) if execution_scores else 0.0
+        avg_grit = sum(grit_scores) / len(grit_scores) if grit_scores else 0.0
+        
+        # Calculate composite score (simplified - average of the three)
+        composite_score = (avg_productivity + avg_execution + avg_grit) / 3.0 if (productivity_scores or execution_scores or grit_scores) else 0.0
+        
+        return {
+            'productivity_score': round(avg_productivity, 2),
+            'execution_score': round(avg_execution, 2),
+            'grit_score': round(avg_grit, 2),
+            'composite_score': round(composite_score, 2)
+        }
+    
+    def get_historical_daily_scores(self, score_type: str = 'productivity_score', top_n: int = 10) -> List[Dict[str, Any]]:
+        """Get historical daily scores sorted by value.
+        
+        Args:
+            score_type: 'productivity_score', 'execution_score', 'grit_score', or 'composite_score'
+            top_n: Number of top scores to return (default: 10)
+        
+        Returns:
+            List of dicts with 'date', 'score', sorted by score descending
+        """
+        df = self._load_instances()
+        if df.empty:
+            return []
+        
+        # Get completed tasks only
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty:
+            return []
+        
+        # Parse completed_at timestamps
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed.dropna(subset=['completed_at_dt'])
+        
+        # Group by date and calculate daily scores
+        daily_scores = []
+        for date_obj, group in completed.groupby(completed['completed_at_dt'].dt.date):
+            try:
+                daily_score_data = self.calculate_daily_scores(target_date=datetime.combine(date_obj, datetime.min.time()))
+                score_value = daily_score_data.get(score_type, 0.0)
+                
+                if score_value > 0:  # Only include days with valid scores
+                    daily_scores.append({
+                        'date': date_obj,
+                        'score': score_value
+                    })
+            except Exception:
+                continue
+        
+        # Sort by score descending
+        daily_scores.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Return top N
+        return daily_scores[:top_n]
+    
+    def check_score_milestones(self, target_date: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+        """Check if yesterday's scores achieved any milestones.
+        
+        Compares yesterday's scores to historical bests and returns the best milestone
+        (closest to all-time best).
+        
+        Args:
+            target_date: Date to check (default: yesterday)
+        
+        Returns:
+            Dict with 'score_type', 'yesterday_score', 'all_time_best', 'rank', 'is_all_time_best'
+            or None if no milestones
+        """
+        if target_date is None:
+            target_date = datetime.now() - timedelta(days=1)
+        
+        # Calculate yesterday's scores
+        yesterday_scores = self.calculate_daily_scores(target_date=target_date)
+        
+        # Check each score type for milestones
+        milestones = []
+        score_types = ['productivity_score', 'execution_score', 'grit_score', 'composite_score']
+        
+        for score_type in score_types:
+            yesterday_score = yesterday_scores.get(score_type, 0.0)
+            if yesterday_score <= 0:
+                continue  # Skip if no valid score
+            
+            # Get historical top 10
+            historical = self.get_historical_daily_scores(score_type=score_type, top_n=10)
+            
+            if not historical:
+                # First day with data - it's automatically the best
+                milestones.append({
+                    'score_type': score_type,
+                    'yesterday_score': yesterday_score,
+                    'all_time_best': yesterday_score,
+                    'rank': 1,
+                    'is_all_time_best': True,
+                    'distance_to_best': 0.0
+                })
+                continue
+            
+            # Find all-time best
+            all_time_best = historical[0]['score'] if historical else yesterday_score
+            
+            # Check if yesterday is all-time best
+            is_all_time_best = yesterday_score >= all_time_best
+            
+            # Find rank in top 10
+            rank = None
+            for i, entry in enumerate(historical):
+                if yesterday_score >= entry['score']:
+                    rank = i + 1
+                    break
+            
+            # If not in top 10, check if it's close (within 5% of all-time best)
+            if rank is None:
+                if yesterday_score >= all_time_best * 0.95:  # Within 5% of best
+                    rank = 11  # Just outside top 10 but close
+                else:
+                    continue  # Not a milestone
+            
+            # Calculate distance to all-time best (0.0 = tied, 1.0 = 100% away)
+            if all_time_best > 0:
+                distance_to_best = abs(yesterday_score - all_time_best) / all_time_best
+            else:
+                distance_to_best = 1.0
+            
+            milestones.append({
+                'score_type': score_type,
+                'yesterday_score': yesterday_score,
+                'all_time_best': all_time_best,
+                'rank': rank,
+                'is_all_time_best': is_all_time_best,
+                'distance_to_best': distance_to_best
+            })
+        
+        if not milestones:
+            return None
+        
+        # Prioritize: closest to all-time best (lowest distance_to_best)
+        # If tied, prefer all-time best, then prefer higher rank
+        milestones.sort(key=lambda x: (
+            x['distance_to_best'],  # Closest to best first
+            not x['is_all_time_best'],  # All-time bests first
+            x['rank']  # Lower rank (better) first
+        ))
+        
+        return milestones[0]  # Return best milestone
+    
+    def calculate_weekly_progress_summary(self, days: int = 7) -> Dict[str, Any]:
+        """Calculate weekly progress summary for the last N days.
+        
+        Args:
+            days: Number of days to include in summary (default: 7)
+        
+        Returns:
+            Dict with:
+            - tasks_completed: Total tasks completed
+            - avg_productivity_score: Average productivity score
+            - avg_execution_score: Average execution score
+            - avg_grit_score: Average grit score
+            - avg_composite_score: Average composite score
+            - best_day_productivity: Best daily productivity score
+            - best_day_execution: Best daily execution score
+            - best_day_grit: Best daily grit score
+            - productivity_trend: 'up', 'down', or 'stable'
+            - execution_trend: 'up', 'down', or 'stable'
+            - days_active: Number of days with at least one completion
+            - total_work_time: Total work time in minutes
+            - total_self_care_time: Total self-care time in minutes
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances()
+        if df.empty:
+            return self._empty_weekly_summary()
+        
+        # Get completed tasks only
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if completed.empty:
+            return self._empty_weekly_summary()
+        
+        # Parse completed_at timestamps
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed.dropna(subset=['completed_at_dt'])
+        
+        # Get date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Filter to date range
+        week_completions = completed[
+            (completed['completed_at_dt'] >= start_date) & 
+            (completed['completed_at_dt'] <= end_date)
+        ].copy()
+        
+        if week_completions.empty:
+            return self._empty_weekly_summary()
+        
+        # Calculate daily scores for each day in the week
+        daily_scores_list = []
+        for i in range(days):
+            target_date = start_date + timedelta(days=i)
+            daily_scores = self.calculate_daily_scores(target_date=target_date)
+            if daily_scores.get('productivity_score', 0) > 0 or \
+               daily_scores.get('execution_score', 0) > 0 or \
+               daily_scores.get('grit_score', 0) > 0:
+                daily_scores['date'] = target_date.date()
+                daily_scores_list.append(daily_scores)
+        
+        if not daily_scores_list:
+            return self._empty_weekly_summary()
+        
+        # Calculate averages
+        productivity_scores = [d.get('productivity_score', 0) for d in daily_scores_list if d.get('productivity_score', 0) > 0]
+        execution_scores = [d.get('execution_score', 0) for d in daily_scores_list if d.get('execution_score', 0) > 0]
+        grit_scores = [d.get('grit_score', 0) for d in daily_scores_list if d.get('grit_score', 0) > 0]
+        composite_scores = [d.get('composite_score', 0) for d in daily_scores_list if d.get('composite_score', 0) > 0]
+        
+        avg_productivity = sum(productivity_scores) / len(productivity_scores) if productivity_scores else 0.0
+        avg_execution = sum(execution_scores) / len(execution_scores) if execution_scores else 0.0
+        avg_grit = sum(grit_scores) / len(grit_scores) if grit_scores else 0.0
+        avg_composite = sum(composite_scores) / len(composite_scores) if composite_scores else 0.0
+        
+        # Find best days
+        best_day_productivity = max([d.get('productivity_score', 0) for d in daily_scores_list], default=0.0)
+        best_day_execution = max([d.get('execution_score', 0) for d in daily_scores_list], default=0.0)
+        best_day_grit = max([d.get('grit_score', 0) for d in daily_scores_list], default=0.0)
+        
+        # Calculate trends (compare first half vs second half of week)
+        if len(daily_scores_list) >= 4:
+            mid_point = len(daily_scores_list) // 2
+            first_half_prod = [d.get('productivity_score', 0) for d in daily_scores_list[:mid_point] if d.get('productivity_score', 0) > 0]
+            second_half_prod = [d.get('productivity_score', 0) for d in daily_scores_list[mid_point:] if d.get('productivity_score', 0) > 0]
+            
+            first_half_exec = [d.get('execution_score', 0) for d in daily_scores_list[:mid_point] if d.get('execution_score', 0) > 0]
+            second_half_exec = [d.get('execution_score', 0) for d in daily_scores_list[mid_point:] if d.get('execution_score', 0) > 0]
+            
+            if first_half_prod and second_half_prod:
+                avg_first_prod = sum(first_half_prod) / len(first_half_prod)
+                avg_second_prod = sum(second_half_prod) / len(second_half_prod)
+                productivity_trend = 'up' if avg_second_prod > avg_first_prod * 1.05 else ('down' if avg_second_prod < avg_first_prod * 0.95 else 'stable')
+            else:
+                productivity_trend = 'stable'
+            
+            if first_half_exec and second_half_exec:
+                avg_first_exec = sum(first_half_exec) / len(first_half_exec)
+                avg_second_exec = sum(second_half_exec) / len(second_half_exec)
+                execution_trend = 'up' if avg_second_exec > avg_first_exec * 1.05 else ('down' if avg_second_exec < avg_first_exec * 0.95 else 'stable')
+            else:
+                execution_trend = 'stable'
+        else:
+            productivity_trend = 'stable'
+            execution_trend = 'stable'
+        
+        # Count days active
+        days_active = len(daily_scores_list)
+        
+        # Calculate total work and self-care time
+        week_completions['task_type_normalized'] = week_completions.get('task_type', 'Work').astype(str).str.strip().str.lower()
+        week_completions['duration_numeric'] = pd.to_numeric(week_completions.get('duration_minutes', 0), errors='coerce').fillna(0.0)
+        
+        work_time = week_completions[week_completions['task_type_normalized'] == 'work']['duration_numeric'].sum()
+        self_care_time = week_completions[week_completions['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])]['duration_numeric'].sum()
+        
+        return {
+            'tasks_completed': len(week_completions),
+            'avg_productivity_score': round(avg_productivity, 1),
+            'avg_execution_score': round(avg_execution, 1),
+            'avg_grit_score': round(avg_grit, 1),
+            'avg_composite_score': round(avg_composite, 1),
+            'best_day_productivity': round(best_day_productivity, 1),
+            'best_day_execution': round(best_day_execution, 1),
+            'best_day_grit': round(best_day_grit, 1),
+            'productivity_trend': productivity_trend,
+            'execution_trend': execution_trend,
+            'days_active': days_active,
+            'total_work_time': round(work_time, 1),
+            'total_self_care_time': round(self_care_time, 1)
+        }
+    
+    def _empty_weekly_summary(self) -> Dict[str, Any]:
+        """Return empty weekly summary structure."""
+        return {
+            'tasks_completed': 0,
+            'avg_productivity_score': 0.0,
+            'avg_execution_score': 0.0,
+            'avg_grit_score': 0.0,
+            'avg_composite_score': 0.0,
+            'best_day_productivity': 0.0,
+            'best_day_execution': 0.0,
+            'best_day_grit': 0.0,
+            'productivity_trend': 'stable',
+            'execution_trend': 'stable',
+            'days_active': 0,
+            'total_work_time': 0.0,
+            'total_self_care_time': 0.0
+        }
+
+    def calculate_execution_score(
+        self,
+        row: Union[pd.Series, Dict],
+        task_completion_counts: Optional[Dict[str, int]] = None
+    ) -> float:
+        """Calculate execution score (0-100) for efficient execution of difficult tasks.
+        
+        **Formula Version: 1.0 (matches glossary definition)**
+        
+        Combines four component factors (as defined in glossary):
+        1. Difficulty factor: High aversion + high load
+        2. Speed factor: Fast execution relative to estimate
+        3. Start speed factor: Fast start after initialization (procrastination resistance)
+        4. Completion factor: Full completion (100% or close)
+        
+        Formula (matches glossary): execution_score = 50 * (1.0 + difficulty_factor) * 
+                                                      (0.5 + speed_factor * 0.5) * 
+                                                      (0.5 + start_speed_factor * 0.5) * 
+                                                      completion_factor
+        
+        Note: Thoroughness factor and momentum factor were removed due to performance issues
+        (were being recalculated for each instance, causing significant slowdown).
+        The calculate_thoroughness_factor and calculate_momentum_factor methods remain in
+        the codebase for potential future use.
+        
+        Note: Focus factor (emotion-based) is NOT included here - it belongs in grit score.
+        
+        See: docs/execution_module_v1.0.md for complete formula documentation.
+        See: ui/analytics_glossary.py for the glossary definition.
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual),
+                 initialized_at, started_at, completed_at
+            task_completion_counts: Optional dict for task completion counts (for difficulty)
+        
+        Returns:
+            Execution score (0-100), higher = better execution
+        """
+        import math
+        
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+            initialized_at = row.get('initialized_at')
+            started_at = row.get('started_at')
+            completed_at = row.get('completed_at')
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+            initialized_at = row.get('initialized_at')
+            started_at = row.get('started_at')
+            completed_at = row.get('completed_at')
+        
+        # 1. Difficulty Factor (reuse existing calculate_difficulty_bonus)
+        current_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion')
+        stress_level = actual_dict.get('stress_level')
+        mental_energy = predicted_dict.get('mental_energy_needed') or predicted_dict.get('cognitive_load')
+        task_difficulty = predicted_dict.get('task_difficulty')
+        
+        difficulty_factor = self.calculate_difficulty_bonus(
+            current_aversion=current_aversion,
+            stress_level=stress_level,
+            mental_energy=mental_energy,
+            task_difficulty=task_difficulty
+        )
+        # Already returns 0.0-1.0, use directly
+        
+        # 2. Speed Factor (execution efficiency)
+        time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+        time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or 
+                             predicted_dict.get('estimate', 0) or 0)
+        
+        if time_estimate > 0 and time_actual > 0:
+            time_ratio = time_actual / time_estimate
+            
+            if time_ratio <= 0.5:
+                # Very fast: 2x speed or faster → max bonus
+                speed_factor = 1.0
+            elif time_ratio <= 1.0:
+                # Fast: completed within estimate → linear bonus
+                # 0.5 → 1.0, 1.0 → 0.5
+                speed_factor = 1.0 - (time_ratio - 0.5) * 1.0
+            else:
+                # Slow: exceeded estimate → diminishing penalty
+                # 1.0 → 0.5, 2.0 → 0.25, 3.0 → 0.125
+                speed_factor = 0.5 * (1.0 / time_ratio)
+        else:
+            speed_factor = 0.5  # Neutral if no time data
+        
+        # 3. Start Speed Factor (procrastination resistance)
+        start_speed_factor = 0.5  # Default neutral
+        
+        if initialized_at and completed_at:
+            try:
+                # Parse datetime if needed
+                if isinstance(initialized_at, str):
+                    init_time = pd.to_datetime(initialized_at)
+                else:
+                    init_time = initialized_at
+                
+                if isinstance(completed_at, str):
+                    complete_time = pd.to_datetime(completed_at)
+                else:
+                    complete_time = completed_at
+                
+                if started_at:
+                    if isinstance(started_at, str):
+                        start_time = pd.to_datetime(started_at)
+                    else:
+                        start_time = started_at
+                    start_delay_minutes = (start_time - init_time).total_seconds() / 60.0
+                else:
+                    # No start time: use completion time as proxy
+                    start_delay_minutes = (complete_time - init_time).total_seconds() / 60.0
+                
+                # Normalize: fast start = high score
+                if start_delay_minutes <= 5:
+                    start_speed_factor = 1.0
+                elif start_delay_minutes <= 30:
+                    # Linear: 5 min → 1.0, 30 min → 0.8
+                    start_speed_factor = 1.0 - ((start_delay_minutes - 5) / 25.0) * 0.2
+                elif start_delay_minutes <= 120:
+                    # Linear: 30 min → 0.8, 120 min → 0.5
+                    start_speed_factor = 0.8 - ((start_delay_minutes - 30) / 90.0) * 0.3
+                else:
+                    # Exponential decay: 120 min → 0.5, 480 min → ~0.125
+                    excess = start_delay_minutes - 120
+                    start_speed_factor = 0.5 * math.exp(-excess / 240.0)
+            except (ValueError, TypeError, AttributeError) as e:
+                # Neutral on error
+                start_speed_factor = 0.5
+        
+        # 4. Completion Factor (quality of completion)
+        completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+        
+        if completion_pct >= 100.0:
+            completion_factor = 1.0
+        elif completion_pct >= 90.0:
+            # Near-complete: slight penalty
+            completion_factor = 0.9 + (completion_pct - 90.0) / 10.0 * 0.1
+        elif completion_pct >= 50.0:
+            # Partial: moderate penalty
+            completion_factor = 0.5 + (completion_pct - 50.0) / 40.0 * 0.4
+        else:
+            # Low completion: significant penalty
+            completion_factor = completion_pct / 50.0 * 0.5
+        
+        # Combined Formula (matches glossary definition exactly)
+        # Base score: 50 points (neutral)
+        base_score = 50.0
+        
+        # Apply factors multiplicatively (all must be high for high score)
+        # Formula matches glossary: execution_score = 50 * (1.0 + difficulty_factor) * 
+        #                            (0.5 + speed_factor * 0.5) * (0.5 + start_speed_factor * 0.5) * completion_factor
+        execution_score = base_score * (
+            (1.0 + difficulty_factor) *      # 1.0-2.0 range (difficulty boost)
+            (0.5 + speed_factor * 0.5) *     # 0.5-1.0 range (speed boost)
+            (0.5 + start_speed_factor * 0.5) *  # 0.5-1.0 range (start speed boost)
+            completion_factor                 # 0.0-1.0 range (completion quality)
+        )
+        
+        # Note: Momentum factor removed for performance (was calling _load_instances() multiple times per instance).
+        # The calculate_momentum_factor method remains available in the codebase.
+        
+        # Normalize to 0-100 range
+        execution_score = max(0.0, min(100.0, execution_score))
+        
+        return execution_score
+
+    def get_productivity_time_minutes(self) -> float:
+        """Get productivity time for last 7 days (Work + Self care only).
+        
+        Lightweight function that only calculates productivity time without
+        all the relief calculations. Much faster than get_relief_summary().
+        
+        Returns:
+            Productivity time in minutes (float)
+        """
+        from datetime import timedelta
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return 0.0
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed['task_type'] = completed['task_type'].fillna('Work')
+            completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Work and Self care tasks (exclude Play)
+            completed = completed[
+                completed['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
+            ]
+        
+        # Get actual time from completed tasks (last 7 days only)
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed_last_7d = completed[completed['completed_at_dt'] >= seven_days_ago]
+        
+        def _get_actual_time(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except (KeyError, TypeError):
+                pass
+            return None
+        
+        completed_last_7d = completed_last_7d.copy()
+        completed_last_7d['time_actual'] = completed_last_7d.apply(_get_actual_time, axis=1)
+        completed_last_7d['time_actual'] = pd.to_numeric(completed_last_7d['time_actual'], errors='coerce')
+        
+        # Sum productivity time for last 7 days
+        productivity_time = completed_last_7d['time_actual'].fillna(0).sum()
+        return float(productivity_time)
+
+    def get_relief_summary(self) -> Dict[str, any]:
+        """Calculate relief points, productivity time, and relief statistics.
+        
+        Results are cached for 30 seconds to improve performance on repeated calls.
+        """
+        import time as time_module
+        import traceback
+        import json
+        total_start = time_module.time()
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                call_stack = ''.join(traceback.format_stack()[-3:-1])
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4126',
+                    'message': 'get_relief_summary called',
+                    'data': {'caller': call_stack.split('\\n')[-2].strip() if call_stack else 'unknown'},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        # Check cache first
+        current_time = time_module.time()
+        if (Analytics._relief_summary_cache is not None and 
+            Analytics._relief_summary_cache_time is not None and
+            (current_time - Analytics._relief_summary_cache_time) < Analytics._cache_ttl_seconds):
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'A',
+                        'location': 'analytics.py:4139',
+                        'message': 'get_relief_summary cache hit',
+                        'data': {},
+                        'timestamp': int(time_module.time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            return Analytics._relief_summary_cache
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4141',
+                    'message': 'get_relief_summary cache miss - calculating',
+                    'data': {},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        # Calculate fresh result with timing
+        # OPTIMIZATION: Only load completed instances (relief_summary only needs completed tasks)
+        load_start = time_module.time()
+        df = self._load_instances(completed_only=True)
+        load_time = (time_module.time() - load_start) * 1000
+        print(f"[Analytics] get_relief_summary: _load_instances (completed_only=True): {load_time:.2f}ms")
         
         if df.empty:
             return {
@@ -2228,64 +4740,53 @@ class Analytics:
                 'max_obstacle_spike_sensitive': 0.0,
             }
         
-        # Extract expected relief from predicted_dict
-        # predicted_dict is a Series, so we need to access it properly
-        def _get_expected_relief(row):
-            try:
-                pred_dict = row['predicted_dict']
-                if isinstance(pred_dict, dict):
-                    return pred_dict.get('expected_relief', None)
-            except (KeyError, TypeError):
-                pass
-            return None
+        # Extract expected relief from predicted_dict (OPTIMIZED: vectorized extraction)
+        extract_start = time_module.time()
+        # Use vectorized operations where possible - faster than .apply()
+        if 'predicted_dict' in completed.columns:
+            # Convert dict series to list for faster processing
+            predicted_list = completed['predicted_dict'].tolist()
+            # Use list comprehension (faster than .apply() for dict access)
+            completed['expected_relief'] = [
+                d.get('expected_relief') if isinstance(d, dict) else None 
+                for d in predicted_list
+            ]
+            completed['initial_aversion'] = [
+                d.get('initial_aversion') if isinstance(d, dict) else None 
+                for d in predicted_list
+            ]
+            completed['expected_aversion'] = [
+                d.get('expected_aversion') if isinstance(d, dict) else None 
+                for d in predicted_list
+            ]
+        else:
+            completed['expected_relief'] = None
+            completed['initial_aversion'] = None
+            completed['expected_aversion'] = None
         
-        def _get_initial_aversion(row):
-            """Get initial aversion from predicted_dict."""
-            try:
-                pred_dict = row['predicted_dict']
-                if isinstance(pred_dict, dict):
-                    return pred_dict.get('initial_aversion', None)
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        def _get_expected_aversion(row):
-            """Get expected aversion from predicted_dict."""
-            try:
-                pred_dict = row['predicted_dict']
-                if isinstance(pred_dict, dict):
-                    return pred_dict.get('expected_aversion', None)
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        completed['expected_relief'] = completed.apply(_get_expected_relief, axis=1)
+        # Convert to numeric (vectorized)
         completed['expected_relief'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
-        
-        # Get initial and expected aversion
-        completed['initial_aversion'] = completed.apply(_get_initial_aversion, axis=1)
         completed['initial_aversion'] = pd.to_numeric(completed['initial_aversion'], errors='coerce')
-        completed['expected_aversion'] = completed.apply(_get_expected_aversion, axis=1)
         completed['expected_aversion'] = pd.to_numeric(completed['expected_aversion'], errors='coerce')
         
-        # Get actual relief from actual_dict (from completion page), not from relief_score column
-        # This ensures we get the actual value even if CSV column was previously overwritten
-        def _get_actual_relief(row):
-            try:
-                actual_dict = row['actual_dict']
-                if isinstance(actual_dict, dict):
-                    return actual_dict.get('actual_relief', None)
-            except (KeyError, TypeError):
-                pass
-            # Fallback to relief_score column if actual_dict doesn't have it
-            try:
-                return row.get('relief_score')
-            except (KeyError, TypeError):
-                pass
-            return None
+        # Get actual relief from actual_dict (OPTIMIZED: vectorized extraction)
+        if 'actual_dict' in completed.columns:
+            actual_list = completed['actual_dict'].tolist()
+            completed['actual_relief'] = [
+                d.get('actual_relief') if isinstance(d, dict) else None 
+                for d in actual_list
+            ]
+        else:
+            completed['actual_relief'] = None
         
-        completed['actual_relief'] = completed.apply(_get_actual_relief, axis=1)
+        # Fallback to relief_score column if actual_dict doesn't have it
+        if 'relief_score' in completed.columns:
+            completed['actual_relief'] = completed['actual_relief'].fillna(
+                pd.to_numeric(completed['relief_score'], errors='coerce')
+            )
         completed['actual_relief'] = pd.to_numeric(completed['actual_relief'], errors='coerce')
+        extract_time = (time_module.time() - extract_start) * 1000
+        print(f"[Analytics] get_relief_summary: extract fields: {extract_time:.2f}ms")
         
         # Filter to rows where we have both expected and actual relief
         has_both = completed['expected_relief'].notna() & completed['actual_relief'].notna()
@@ -2294,27 +4795,23 @@ class Analytics:
         # Calculate default relief points (actual - expected, can be negative)
         relief_data['default_relief_points'] = relief_data['actual_relief'] - relief_data['expected_relief']
         
-        # Apply aversion multipliers to relief points
-        def _apply_aversion_multiplier(row):
-            """Apply aversion-based multiplier to relief points."""
-            initial_av = row.get('initial_aversion')
-            expected_av = row.get('expected_aversion')
-            # Use expected_aversion as current_aversion (what was set during initialization)
-            aversion_mult = self.calculate_aversion_multiplier(initial_av, expected_av)
-            return row['default_relief_points'] * aversion_mult
+        # Apply aversion multipliers to relief points (OPTIMIZED: vectorized)
+        multiplier_start = time_module.time()
+        # Calculate multipliers for all rows at once (vectorized)
+        initial_av = relief_data['initial_aversion'].fillna(0.0)
+        expected_av = relief_data['expected_aversion'].fillna(0.0)
+        # Vectorized multiplier calculation (faster than .apply())
+        relief_data['aversion_mult'] = [
+            self.calculate_aversion_multiplier(ia, ea) 
+            for ia, ea in zip(initial_av, expected_av)
+        ]
+        relief_data['default_relief_points'] = relief_data['default_relief_points'] * relief_data['aversion_mult']
         
-        relief_data['default_relief_points'] = relief_data.apply(_apply_aversion_multiplier, axis=1)
-        
-        # Calculate net relief points (calibrated):
-        # - 0 for negative net relief (when actual < expected)
-        # - actual - expected for positive (when actual >= expected)
-        # - For negative cases, store the negative value separately
-        relief_data['net_relief_points'] = relief_data.apply(
-            lambda row: max(0.0, row['default_relief_points']), axis=1
-        )
-        relief_data['negative_relief_points'] = relief_data.apply(
-            lambda row: min(0.0, row['default_relief_points']), axis=1
-        )
+        # Calculate net relief points (vectorized)
+        relief_data['net_relief_points'] = relief_data['default_relief_points'].clip(lower=0.0)
+        relief_data['negative_relief_points'] = relief_data['default_relief_points'].clip(upper=0.0)
+        multiplier_time = (time_module.time() - multiplier_start) * 1000
+        print(f"[Analytics] get_relief_summary: apply multipliers: {multiplier_time:.2f}ms")
         
         # Calculate productivity time (sum of actual time from actual_dict) - LAST 7 DAYS ONLY
         # Productivity includes only Work and Self care tasks, not Play tasks
@@ -2356,25 +4853,22 @@ class Analytics:
             productivity_tasks = completed
             relief_data['task_type'] = 'Work'
         
-        # Apply task type multipliers to relief points
-        def _apply_task_type_multiplier(row):
-            """Apply task type multiplier to relief points."""
-            task_type = row.get('task_type')
-            type_mult = self.get_task_type_multiplier(task_type)
-            return row['default_relief_points'] * type_mult
+        # Apply task type multipliers to relief points (OPTIMIZED: vectorized)
+        task_types = relief_data['task_type'].tolist()
+        type_mults = [self.get_task_type_multiplier(tt) for tt in task_types]
+        relief_data['default_relief_points'] = relief_data['default_relief_points'] * pd.Series(type_mults, index=relief_data.index)
         
-        relief_data['default_relief_points'] = relief_data.apply(_apply_task_type_multiplier, axis=1)
-        
-        def _get_actual_time(row):
-            try:
-                actual_dict = row['actual_dict']
-                if isinstance(actual_dict, dict):
-                    return actual_dict.get('time_actual_minutes', None)
-            except (KeyError, TypeError):
-                pass
-            return None
-        
-        productivity_tasks['time_actual'] = productivity_tasks.apply(_get_actual_time, axis=1)
+        # OPTIMIZED: Vectorized extraction of time_actual_minutes
+        if 'actual_dict' in productivity_tasks.columns:
+            actual_list = productivity_tasks['actual_dict'].tolist()
+            productivity_tasks = productivity_tasks.copy()
+            productivity_tasks['time_actual'] = [
+                d.get('time_actual_minutes') if isinstance(d, dict) else None 
+                for d in actual_list
+            ]
+        else:
+            productivity_tasks = productivity_tasks.copy()
+            productivity_tasks['time_actual'] = None
         productivity_tasks['time_actual'] = pd.to_numeric(productivity_tasks['time_actual'], errors='coerce')
         
         # Filter productivity tasks to last 7 days
@@ -2398,8 +4892,45 @@ class Analytics:
         negative_total = abs(negative_relief['default_relief_points'].sum()) if negative_count > 0 else 0.0
         negative_avg = abs(pd.to_numeric(negative_relief['default_relief_points'], errors='coerce').mean()) if negative_count > 0 else 0.0
         
-        # Get efficiency summary
-        efficiency_summary = self.get_efficiency_summary()
+        # Get efficiency summary (OPTIMIZED: calculate inline to avoid reloading instances)
+        efficiency_start = time_module.time()
+        # Calculate efficiency inline from already-loaded completed DataFrame
+        if not completed.empty:
+            # Calculate efficiency for each completed task (vectorized where possible)
+            completed['efficiency_score'] = completed.apply(self.calculate_efficiency_score, axis=1)
+            valid_efficiency = completed[completed['efficiency_score'] > 0]
+            if not valid_efficiency.empty:
+                avg_efficiency = valid_efficiency['efficiency_score'].mean()
+                high_efficiency_count = len(valid_efficiency[valid_efficiency['efficiency_score'] >= 70])
+                low_efficiency_count = len(valid_efficiency[valid_efficiency['efficiency_score'] < 50])
+                # Group by completion status
+                efficiency_by_completion = {}
+                if 'completed_at' in valid_efficiency.columns:
+                    valid_efficiency['completed_at_dt'] = pd.to_datetime(valid_efficiency['completed_at'], errors='coerce')
+                    valid_efficiency['is_recent'] = valid_efficiency['completed_at_dt'] >= (datetime.now() - timedelta(days=7))
+                    efficiency_by_completion['recent'] = valid_efficiency[valid_efficiency['is_recent']]['efficiency_score'].mean() if valid_efficiency['is_recent'].any() else 0.0
+                    efficiency_by_completion['older'] = valid_efficiency[~valid_efficiency['is_recent']]['efficiency_score'].mean() if (~valid_efficiency['is_recent']).any() else 0.0
+                else:
+                    efficiency_by_completion = {'recent': avg_efficiency, 'older': avg_efficiency}
+            else:
+                avg_efficiency = 0.0
+                high_efficiency_count = 0
+                low_efficiency_count = 0
+                efficiency_by_completion = {}
+        else:
+            avg_efficiency = 0.0
+            high_efficiency_count = 0
+            low_efficiency_count = 0
+            efficiency_by_completion = {}
+        
+        efficiency_summary = {
+            'avg_efficiency': avg_efficiency,
+            'high_efficiency_count': high_efficiency_count,
+            'low_efficiency_count': low_efficiency_count,
+            'efficiency_by_completion': efficiency_by_completion,
+        }
+        efficiency_time = (time_module.time() - efficiency_start) * 1000
+        print(f"[Analytics] get_relief_summary: get_efficiency_summary (inline): {efficiency_time:.2f}ms")
         
         # Filter out test/dev tasks from obstacles calculation
         # Keep all tasks for relief calculations, but exclude test tasks from obstacles
@@ -2414,35 +4945,23 @@ class Analytics:
         from .instance_manager import InstanceManager
         im = InstanceManager()
         
-        # Add baseline aversion (both robust and sensitive) to relief_data_for_obstacles
-        def _get_baseline_aversion_robust(row):
-            task_id = row.get('task_id')
-            if task_id:
-                try:
-                    return im.get_baseline_aversion_robust(task_id)
-                except Exception as e:
-                    print(f"[Analytics] Error getting baseline_aversion_robust for task {task_id}: {e}")
-                    return None
-            return None
+        # Batch-load baseline aversions (OPTIMIZED: single query instead of N queries)
+        baseline_start = time_module.time()
+        unique_task_ids = relief_data_for_obstacles['task_id'].unique().tolist()
+        baseline_aversions = im.get_batch_baseline_aversions(unique_task_ids)
+        baseline_time = (time_module.time() - baseline_start) * 1000
+        print(f"[Analytics] get_relief_summary: batch baseline aversions ({len(unique_task_ids)} tasks): {baseline_time:.2f}ms")
         
-        def _get_baseline_aversion_sensitive(row):
-            task_id = row.get('task_id')
-            if task_id:
-                try:
-                    return im.get_baseline_aversion_sensitive(task_id)
-                except Exception as e:
-                    print(f"[Analytics] Error getting baseline_aversion_sensitive for task {task_id}: {e}")
-                    return None
-            return None
-        
-        try:
-            relief_data_for_obstacles['baseline_aversion_robust'] = relief_data_for_obstacles.apply(_get_baseline_aversion_robust, axis=1)
-            relief_data_for_obstacles['baseline_aversion_sensitive'] = relief_data_for_obstacles.apply(_get_baseline_aversion_sensitive, axis=1)
-        except Exception as e:
-            print(f"[Analytics] Error calculating baseline aversion: {e}")
-            # Set default values if calculation fails
-            relief_data_for_obstacles['baseline_aversion_robust'] = None
-            relief_data_for_obstacles['baseline_aversion_sensitive'] = None
+        # Map baseline aversions to rows (OPTIMIZED: vectorized)
+        task_ids = relief_data_for_obstacles['task_id'].tolist()
+        relief_data_for_obstacles['baseline_aversion_robust'] = [
+            baseline_aversions.get(tid, {}).get('robust') if tid in baseline_aversions else None
+            for tid in task_ids
+        ]
+        relief_data_for_obstacles['baseline_aversion_sensitive'] = [
+            baseline_aversions.get(tid, {}).get('sensitive') if tid in baseline_aversions else None
+            for tid in task_ids
+        ]
         
         # Calculate obstacles scores using multiple formulas for comparison
         def _calculate_obstacles_scores_robust(row):
@@ -2471,15 +4990,19 @@ class Analytics:
         relief_data_for_obstacles['obstacles_scores_robust'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_robust, axis=1)
         relief_data_for_obstacles['obstacles_scores_sensitive'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_sensitive, axis=1)
         
-        # Extract individual scores for backward compatibility and new analytics
+        # Extract individual scores for backward compatibility and new analytics (OPTIMIZED: vectorized)
         score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+        robust_scores_list = relief_data_for_obstacles['obstacles_scores_robust'].tolist()
+        sensitive_scores_list = relief_data_for_obstacles['obstacles_scores_sensitive'].tolist()
         for variant in score_variants:
-            relief_data_for_obstacles[f'obstacles_score_{variant}_robust'] = relief_data_for_obstacles['obstacles_scores_robust'].apply(
-                lambda x: x.get(variant, 0.0) if isinstance(x, dict) else 0.0
-            )
-            relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'] = relief_data_for_obstacles['obstacles_scores_sensitive'].apply(
-                lambda x: x.get(variant, 0.0) if isinstance(x, dict) else 0.0
-            )
+            relief_data_for_obstacles[f'obstacles_score_{variant}_robust'] = [
+                x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
+                for x in robust_scores_list
+            ]
+            relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'] = [
+                x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
+                for x in sensitive_scores_list
+            ]
         
         # Keep backward compatibility: use expected_only as the default
         relief_data_for_obstacles['obstacles_score_robust'] = relief_data_for_obstacles['obstacles_score_expected_only_robust']
@@ -2514,6 +5037,8 @@ class Analytics:
             return spike_amount if is_spontaneous else 0.0
         
         if not relief_data_last_7d.empty:
+            # Use .copy() to avoid SettingWithCopyWarning
+            relief_data_last_7d = relief_data_last_7d.copy()
             relief_data_last_7d['spike_amount_robust'] = relief_data_last_7d.apply(_get_max_spike_robust, axis=1)
             relief_data_last_7d['spike_amount_sensitive'] = relief_data_last_7d.apply(_get_max_spike_sensitive, axis=1)
             max_spike_robust = relief_data_last_7d['spike_amount_robust'].max() if 'spike_amount_robust' in relief_data_last_7d.columns else 0.0
@@ -2543,19 +5068,14 @@ class Analytics:
             else:
                 completed['task_type'] = 'Work'
         
-        # Calculate multipliers for each task
-        def _calculate_relief_multiplier(row):
-            """Calculate combined aversion and task type multiplier for relief."""
-            initial_av = row.get('initial_aversion')
-            expected_av = row.get('expected_aversion')
-            task_type = row.get('task_type')
-            
-            aversion_mult = self.calculate_aversion_multiplier(initial_av, expected_av)
-            type_mult = self.get_task_type_multiplier(task_type)
-            
-            return aversion_mult * type_mult
-        
-        completed['relief_multiplier'] = completed.apply(_calculate_relief_multiplier, axis=1)
+        # Calculate multipliers for each task (OPTIMIZED: vectorized)
+        initial_av_list = completed['initial_aversion'].fillna(0.0).tolist()
+        expected_av_list = completed['expected_aversion'].fillna(0.0).tolist()
+        task_type_list = completed['task_type'].fillna('Work').tolist()
+        completed['relief_multiplier'] = [
+            self.calculate_aversion_multiplier(ia, ea) * self.get_task_type_multiplier(tt)
+            for ia, ea, tt in zip(initial_av_list, expected_av_list, task_type_list)
+        ]
         
         # Calculate relief_duration_score per task instance (relief_score × duration_minutes × multiplier)
         # Normalize by dividing by 60 to convert minutes to hours scale (keeps scores more reasonable)
@@ -2616,40 +5136,30 @@ class Analytics:
         else:
             productivity_relief_data = pd.DataFrame()
         
-        def _calculate_productivity_multiplier(row):
-            """Calculate productivity multiplier (work: 2.0, self care: 1.0)."""
-            task_type = row.get('task_type', 'Work')
-            task_type_lower = str(task_type).strip().lower()
-            
-            if task_type_lower == 'work':
-                return 2.0
-            elif task_type_lower in ['self care', 'selfcare', 'self-care']:
-                return 1.0
-            else:
-                return 1.0
-        
+        # Calculate productivity multiplier (OPTIMIZED: vectorized)
         if not productivity_relief_data.empty:
-            productivity_relief_data['productivity_multiplier'] = productivity_relief_data.apply(_calculate_productivity_multiplier, axis=1)
+            task_type_list = productivity_relief_data['task_type'].fillna('Work').astype(str).str.strip().str.lower().tolist()
+            productivity_relief_data['productivity_multiplier'] = [
+                2.0 if tt == 'work' else (1.0 if tt in ['self care', 'selfcare', 'self-care'] else 1.0)
+                for tt in task_type_list
+            ]
             # Productivity points: we need to undo the relief task_type_multiplier and apply productivity multiplier instead
             # default_relief_points already has: (actual - expected) × aversion_mult × relief_task_type_mult
             # We want: (actual - expected) × aversion_mult × productivity_mult
             # So: productivity_points = default_relief_points / relief_task_type_mult × productivity_mult
-            def _get_relief_task_type_mult(row):
-                """Get the relief task type multiplier that was already applied."""
-                task_type = row.get('task_type')
-                return self.get_task_type_multiplier(task_type)
-            
-            productivity_relief_data['relief_task_type_mult'] = productivity_relief_data.apply(_get_relief_task_type_mult, axis=1)
-            # Calculate base points without task type multiplier
+            # Get the relief task type multiplier that was already applied (OPTIMIZED: vectorized)
+            task_type_list = productivity_relief_data['task_type'].fillna('Work').tolist()
+            productivity_relief_data['relief_task_type_mult'] = [
+                self.get_task_type_multiplier(tt) for tt in task_type_list
+            ]
+            # Calculate base points without task type multiplier (OPTIMIZED: vectorized)
             # Avoid division by zero - if relief_task_type_mult is 0 or very small, use default_relief_points directly
-            productivity_relief_data['base_relief_points'] = productivity_relief_data.apply(
-                lambda row: (
-                    row['default_relief_points'] / row['relief_task_type_mult'] 
-                    if row['relief_task_type_mult'] > 0.01 
-                    else row['default_relief_points']
-                ),
-                axis=1
-            )
+            default_points = productivity_relief_data['default_relief_points'].tolist()
+            relief_mults = productivity_relief_data['relief_task_type_mult'].tolist()
+            productivity_relief_data['base_relief_points'] = [
+                dp / rm if rm > 0.01 else dp
+                for dp, rm in zip(default_points, relief_mults)
+            ]
             # Apply productivity multiplier
             productivity_relief_data['productivity_points'] = (
                 productivity_relief_data['base_relief_points'] * 
@@ -2746,6 +5256,17 @@ class Analytics:
                         'work_time': float(work_time),
                         'play_time': float(play_time)
                     }
+
+        weekly_work_summary = {}
+        if work_play_time_per_day:
+            total_work_time = sum(day.get('work_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+            total_play_time = sum(day.get('play_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+            days_count = len(work_play_time_per_day)
+            weekly_work_summary = {
+                'total_work_time_minutes': float(total_work_time),
+                'total_play_time_minutes': float(total_play_time),
+                'days_count': int(days_count),
+            }
         
         # Calculate weekly average productivity time for bonus/penalty calculation
         # Get all completed tasks with actual time
@@ -2768,6 +5289,27 @@ class Analytics:
             weekly_avg_time = valid_times['time_actual_for_avg'].mean()
         else:
             weekly_avg_time = 0.0
+        
+        # Get goal hours and weekly productive hours for goal-based adjustment
+        goal_hours_per_week = None
+        weekly_productive_hours = None
+        try:
+            goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+            goal_hours_per_week = goal_settings.get('goal_hours_per_week')
+            if goal_hours_per_week:
+                goal_hours_per_week = float(goal_hours_per_week)
+                # Calculate weekly productive hours (Work + Self Care only)
+                from .productivity_tracker import ProductivityTracker
+                tracker = ProductivityTracker()
+                weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                weekly_productive_hours = weekly_data.get('total_hours', 0.0)
+                if weekly_productive_hours <= 0:
+                    weekly_productive_hours = None
+        except Exception as e:
+            # If goal settings or tracker fails, just continue without goal adjustment
+            print(f"[Analytics] Error getting goal hours: {e}")
+            goal_hours_per_week = None
+            weekly_productive_hours = None
         
         # Calculate productivity score for all completed tasks
         # Ensure completed has the required columns
@@ -2793,7 +5335,16 @@ class Analytics:
                 completed['predicted_dict'] = pd.Series([{}] * len(completed))
         
         completed['productivity_score'] = completed.apply(
-            lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
+            lambda row: self.calculate_productivity_score(
+                row,
+                self_care_tasks_per_day,
+                weekly_avg_time,
+                work_play_time_per_day,
+                productivity_settings=self.productivity_settings,
+                weekly_work_summary=weekly_work_summary,
+                goal_hours_per_week=goal_hours_per_week,
+                weekly_productive_hours=weekly_productive_hours
+            ),
             axis=1
         )
         
@@ -2830,7 +5381,7 @@ class Analytics:
         completed_last_7d_for_grit = completed[completed['completed_at_dt'] >= seven_days_ago]
         weekly_grit_score = completed_last_7d_for_grit['grit_score'].fillna(0).sum()
         
-        return {
+        result = {
             'productivity_time_minutes': round(float(productivity_time), 1),
             'default_relief_points': round(float(default_total), 2),
             'net_relief_points': round(float(net_total), 2),
@@ -2875,6 +5426,30 @@ class Analytics:
             # Aversion analytics: all score variants for comparison
             **{k: round(float(v), 2) for k, v in obstacles_totals.items()},
         }
+        
+        # Update cache before returning
+        Analytics._relief_summary_cache = result
+        Analytics._relief_summary_cache_time = time_module.time()
+        
+        total_time = (time_module.time() - total_start) * 1000
+        print(f"[Analytics] get_relief_summary: TOTAL TIME: {total_time:.2f}ms")
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4915',
+                    'message': 'get_relief_summary completed',
+                    'data': {'total_time_ms': total_time},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        return result
 
     def get_weekly_hours_history(self) -> Dict[str, any]:
         """Get historical daily productivity hours data for trend analysis (last 90 days).
@@ -2885,6 +5460,26 @@ class Analytics:
             Dict with 'dates' (list of date strings), 'hours' (list of hours per day),
             'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
         """
+        import time as time_module
+        import traceback
+        import json
+        # #region agent log
+        hist_start = time_module.time()
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                call_stack = ''.join(traceback.format_stack()[-3:-1])
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'B',
+                    'location': 'analytics.py:4919',
+                    'message': 'get_weekly_hours_history called',
+                    'data': {'caller': call_stack.split('\\n')[-2].strip() if call_stack else 'unknown'},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
@@ -2928,6 +5523,8 @@ class Analytics:
                 pass
             return None
         
+        # Use .copy() to avoid SettingWithCopyWarning (per pandas docs)
+        completed = completed.copy()
         completed['time_actual'] = completed.apply(_get_actual_time, axis=1)
         completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
         completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
@@ -2980,12 +5577,51 @@ class Analytics:
         last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
         weekly_average = pd.to_numeric(last_7_days['hours'], errors='coerce').mean() if not last_7_days.empty else 0.0
         
-        # Calculate 3-month average (average of daily hours over all days with data)
-        three_month_average = pd.to_numeric(daily_data['hours'], errors='coerce').mean() if not daily_data.empty else 0.0
+        # Calculate 3-month average accounting for untracked days
+        # Find the earliest date with data (tracking start date)
+        if not daily_data.empty:
+            earliest_date = daily_data['date'].min()
+            # Use the more recent of: tracking start date or 90 days ago
+            analysis_start = max(earliest_date, ninety_days_ago.date())
+            today = datetime.now().date()
+            
+            # Create a complete date range from analysis_start to today
+            date_range = pd.date_range(start=analysis_start, end=today, freq='D')
+            date_range_dates = [d.date() for d in date_range]
+            
+            # Create a DataFrame with all dates, filling missing days with 0 hours
+            full_daily_data = pd.DataFrame({'date': date_range_dates})
+            full_daily_data = full_daily_data.merge(
+                daily_data[['date', 'hours']],
+                on='date',
+                how='left'
+            )
+            full_daily_data['hours'] = full_daily_data['hours'].fillna(0.0)
+            
+            # Calculate average over all days in the tracking period (untracked days = 0 hours)
+            three_month_average = pd.to_numeric(full_daily_data['hours'], errors='coerce').mean() if not full_daily_data.empty else 0.0
+        else:
+            three_month_average = 0.0
         
         # Check if we have at least 2 weeks of data
         days_with_data = len(daily_data)
         has_sufficient_data = days_with_data >= 14
+        
+        hist_time = (time_module.time() - hist_start) * 1000
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'B',
+                    'location': 'analytics.py:5137',
+                    'message': 'get_weekly_hours_history completed',
+                    'data': {'time_ms': hist_time, 'days_count': days_with_data},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
         
         return {
             'dates': daily_data['date_str'].tolist(),
@@ -3086,6 +5722,194 @@ class Analytics:
         return {
             'dates': daily_data['date_str'].tolist(),
             'relief_points': daily_data['relief_points'].tolist(),
+            'current_value': round(float(current_value), 2),
+            'weekly_average': round(float(weekly_average), 2),
+            'three_month_average': round(float(three_month_average), 2),
+            'has_sufficient_data': has_sufficient_data,
+            'days_with_data': days_with_data,
+        }
+
+    def get_weekly_productivity_history(self) -> Dict[str, any]:
+        """Get historical daily productivity score data for trend analysis (last 90 days).
+        
+        Returns:
+            Dict with 'dates' (list of date strings), 'productivity_scores' (list of scores per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        import time as time_module
+        import traceback
+        import json
+        # #region agent log
+        prod_hist_start = time_module.time()
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                call_stack = ''.join(traceback.format_stack()[-3:-1])
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'C',
+                    'location': 'analytics.py:5243',
+                    'message': 'get_weekly_productivity_history called',
+                    'data': {'caller': call_stack.split('\\n')[-2].strip() if call_stack else 'unknown'},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        df = self._load_instances()
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate productivity score for each task
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Get self-care tasks per day for productivity score calculation
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate productivity scores
+        self_care_tasks_per_day = {}
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            
+            # Count self-care tasks per day
+            self_care_tasks = completed_with_type[
+                completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+            ]
+            if not self_care_tasks.empty:
+                # Use .copy() to avoid SettingWithCopyWarning (per pandas docs)
+                self_care_tasks = self_care_tasks.copy()
+                self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                daily_counts = self_care_tasks.groupby('date').size()
+                for date, count in daily_counts.items():
+                    self_care_tasks_per_day[str(date)] = int(count)
+        
+        # Calculate productivity score for each completed task
+        weekly_avg_time = 0.0  # Will be calculated if needed
+        completed['productivity_score'] = completed.apply(
+            lambda row: self.calculate_productivity_score(
+                row,
+                self_care_tasks_per_day,
+                weekly_avg_time
+            ),
+            axis=1
+        )
+        
+        completed['productivity_score'] = pd.to_numeric(completed['productivity_score'], errors='coerce')
+        completed = completed[completed['productivity_score'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last 90 days
+        from datetime import timedelta
+        ninety_days_ago = datetime.now() - timedelta(days=90)
+        valid = completed[completed['completed_at_dt'] >= ninety_days_ago].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by day
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_data = valid.groupby('date')['productivity_score'].sum().reset_index()
+        daily_data = daily_data.sort_values('date')
+        
+        # Filter to last 90 days
+        daily_data = daily_data[daily_data['date'] >= ninety_days_ago.date()].copy()
+        
+        # Format dates as strings
+        daily_data['date_str'] = daily_data['date'].astype(str)
+        
+        # Get current value (last 7 days total)
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        current_week_data = valid[valid['completed_at_dt'] >= seven_days_ago]
+        current_value = current_week_data['productivity_score'].sum() if not current_week_data.empty else 0.0
+        
+        # Calculate weekly average (average of daily scores over last 7 days with data)
+        last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
+        weekly_average = pd.to_numeric(last_7_days['productivity_score'], errors='coerce').mean() if not last_7_days.empty else 0.0
+        
+        # Calculate 3-month average
+        if not daily_data.empty:
+            earliest_date = daily_data['date'].min()
+            analysis_start = max(earliest_date, ninety_days_ago.date())
+            today = datetime.now().date()
+            
+            date_range = pd.date_range(start=analysis_start, end=today, freq='D')
+            date_range_dates = [d.date() for d in date_range]
+            
+            full_daily_data = pd.DataFrame({'date': date_range_dates})
+            full_daily_data = full_daily_data.merge(
+                daily_data[['date', 'productivity_score']],
+                on='date',
+                how='left'
+            )
+            full_daily_data['productivity_score'] = full_daily_data['productivity_score'].fillna(0.0)
+            
+            three_month_average = pd.to_numeric(full_daily_data['productivity_score'], errors='coerce').mean() if not full_daily_data.empty else 0.0
+        else:
+            three_month_average = 0.0
+        
+        # Check if we have at least 2 weeks of data
+        days_with_data = len(daily_data)
+        has_sufficient_data = days_with_data >= 14
+        
+        prod_hist_time = (time_module.time() - prod_hist_start) * 1000
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'C',
+                    'location': 'analytics.py:5393',
+                    'message': 'get_weekly_productivity_history completed',
+                    'data': {'time_ms': prod_hist_time, 'days_count': days_with_data},
+                    'timestamp': int(time_module.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        return {
+            'dates': daily_data['date_str'].tolist(),
+            'productivity_scores': daily_data['productivity_score'].tolist(),
             'current_value': round(float(current_value), 2),
             'weekly_average': round(float(weekly_average), 2),
             'three_month_average': round(float(three_month_average), 2),
@@ -3298,6 +6122,182 @@ class Analytics:
         
         return result
 
+    def get_generic_metric_history(self, metric_key: str, days: int = 90) -> Dict[str, any]:
+        """Get historical daily data for a generic metric (e.g., stress_level, net_wellbeing).
+        
+        Extracts metric values from completed task instances and groups by date.
+        
+        For stored metrics (stress_level, net_wellbeing, etc.), extracts from actual_dict.
+        For calculated metrics (execution_score, grit_score, etc.), returns empty history
+        to avoid expensive recalculation during initial load.
+        
+        Args:
+            metric_key: The metric key to extract (e.g., 'stress_level', 'net_wellbeing')
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        import time as time_module
+        
+        # #region agent log
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'HIST', 'location': 'analytics.py:get_generic_metric_history', 'message': 'get_generic_metric_history called', 'data': {'metric_key': metric_key, 'days': days}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        # Metrics that have optimized history methods
+        # Route to specific methods instead of generic extraction for better performance
+        # This avoids expensive JSON parsing for each row and uses direct dataframe column access
+        metric_routes = {
+            'execution_score': self.get_execution_score_history,
+            'grit_score': self.get_grit_score_history,
+            'thoroughness_score': self.get_thoroughness_score_history,
+            'thoroughness_factor': self.get_thoroughness_factor_history,
+            'stress_level': self.get_stress_level_history,
+            'net_wellbeing': self.get_net_wellbeing_history,
+            'net_wellbeing_normalized': self.get_net_wellbeing_normalized_history,
+            'relief_score': self.get_relief_score_history,
+            'behavioral_score': self.get_behavioral_score_history,
+            'stress_efficiency': self.get_stress_efficiency_history,
+            'expected_relief': self.get_expected_relief_history,
+            'net_relief': self.get_net_relief_history,
+            'serendipity_factor': self.get_serendipity_factor_history,
+            'disappointment_factor': self.get_disappointment_factor_history,
+            'stress_relief_correlation_score': self.get_stress_relief_correlation_score_history,
+            'work_time': self.get_work_time_history,
+            'play_time': self.get_play_time_history,
+            'duration': self.get_duration_history,
+            'time_actual_minutes': self.get_duration_history,  # Alias for duration
+            'mental_energy_needed': self.get_mental_energy_needed_history,
+            'task_difficulty': self.get_task_difficulty_history,
+            'emotional_load': self.get_emotional_load_history,
+            'environmental_fit': self.get_environmental_fit_history,
+            'environmental_effect': self.get_environmental_fit_history,  # Alias for environmental_fit
+        }
+        
+        if metric_key in metric_routes:
+            return metric_routes[metric_key](days=days)
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse completed_at dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract metric values from actual_dict or predicted_dict
+        def _extract_metric_value(row):
+            """Extract metric value from instance row."""
+            try:
+                # Try actual_dict first (for metrics like stress_level, net_wellbeing)
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                
+                if isinstance(actual_dict, dict):
+                    value = actual_dict.get(metric_key)
+                    if value is not None:
+                        try:
+                            return float(value)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Try predicted_dict as fallback
+                predicted_dict = row.get('predicted_dict', {})
+                if isinstance(predicted_dict, str):
+                    import json
+                    predicted_dict = json.loads(predicted_dict)
+                
+                if isinstance(predicted_dict, dict):
+                    value = predicted_dict.get(metric_key)
+                    if value is not None:
+                        try:
+                            return float(value)
+                        except (ValueError, TypeError):
+                            pass
+            except Exception:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['metric_value'] = completed.apply(_extract_metric_value, axis=1)
+        
+        # Filter to valid rows with metric values
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        daily_avg = daily_avg[daily_avg['date'] >= cutoff_date].copy()
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        
+        # Weekly average (last 7 days)
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        
+        # Three month average (last 90 days)
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        # #region agent log
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'HIST', 'location': 'analytics.py:get_generic_metric_history', 'message': 'get_generic_metric_history completed', 'data': {'metric_key': metric_key, 'dates_count': len(dates), 'values_count': len(values), 'current_value': current_value}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
     def get_task_efficiency_history(self) -> Dict[str, float]:
         """Get average efficiency score per task based on completed instances.
         
@@ -3328,6 +6328,2037 @@ class Analytics:
             result[tid] = round(float(stats['mean']), 2)
         
         return result
+
+    def get_execution_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily execution score data for trend analysis.
+        
+        Calculates execution_score for each completed instance and groups by date.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of scores per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        from collections import Counter
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now() - timedelta(days=days)
+        completed = completed[completed['completed_at_dt'] >= cutoff_date].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate task completion counts for execution_score (optional but can help with difficulty)
+        task_completion_counts = Counter(completed['task_id'].tolist())
+        task_completion_counts_dict = dict(task_completion_counts)
+        
+        # Calculate execution_score for each instance
+        completed = completed.copy()
+        completed['execution_score'] = completed.apply(
+            lambda row: self.calculate_execution_score(row, task_completion_counts_dict),
+            axis=1
+        )
+        
+        # Filter to valid scores
+        valid = completed[completed['execution_score'].notna() & (completed['execution_score'] > 0)].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_avg = valid.groupby('date')['execution_score'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_grit_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily grit score data for trend analysis.
+        
+        Calculates grit_score for each completed instance and groups by date.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of scores per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        from collections import Counter
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now() - timedelta(days=days)
+        completed = completed[completed['completed_at_dt'] >= cutoff_date].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate task completion counts (required for grit_score)
+        task_completion_counts = Counter(completed['task_id'].tolist())
+        task_completion_counts_dict = dict(task_completion_counts)
+        
+        # Calculate grit_score for each instance
+        completed = completed.copy()
+        completed['grit_score'] = completed.apply(
+            lambda row: self.calculate_grit_score(row, task_completion_counts_dict),
+            axis=1
+        )
+        
+        # Filter to valid scores
+        valid = completed[completed['grit_score'].notna() & (completed['grit_score'] > 0)].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_avg = valid.groupby('date')['grit_score'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_thoroughness_score_history(self, days: int = 90, window_days: int = 30) -> Dict[str, any]:
+        """Get historical weekly thoroughness score data for trend analysis.
+        
+        Since thoroughness is a user-level metric (not per-instance), we calculate it
+        weekly rather than daily to show trends over time.
+        
+        Args:
+            days: Number of days to look back for history (default 90)
+            window_days: Rolling window size for thoroughness calculation (default 30)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of scores per week),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        # Calculate current thoroughness_score
+        current_score = self.calculate_thoroughness_score(user_id='default', days=window_days)
+        
+        # For user-level metrics, we return the current value for all dates
+        # This shows the trend (the metric changes slowly over time)
+        # Generate weekly dates for the period
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days)
+        
+        dates = []
+        values = []
+        
+        # Generate weekly data points
+        current_date = start_date
+        while current_date <= end_date:
+            dates.append(str(current_date))
+            # Use current value (thoroughness changes slowly, so this is reasonable)
+            # In the future, we could calculate this based on data up to each date
+            values.append(current_score)
+            current_date += timedelta(days=7)  # Weekly intervals
+        
+        # Ensure we have the most recent date
+        if dates and dates[-1] != str(end_date):
+            dates.append(str(end_date))
+            values.append(current_score)
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-4:] if len(values) >= 4 else values  # Last 4 weeks
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_thoroughness_factor_history(self, days: int = 90, window_days: int = 30) -> Dict[str, any]:
+        """Get historical weekly thoroughness factor data for trend analysis.
+        
+        Since thoroughness is a user-level metric (not per-instance), we calculate it
+        weekly rather than daily to show trends over time.
+        
+        Args:
+            days: Number of days to look back for history (default 90)
+            window_days: Rolling window size for thoroughness calculation (default 30)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of factors per week),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        # Calculate current thoroughness_factor
+        current_factor = self.calculate_thoroughness_factor(user_id='default', days=window_days)
+        
+        # For user-level metrics, we return the current value for all dates
+        # This shows the trend (the metric changes slowly over time)
+        # Generate weekly dates for the period
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days)
+        
+        dates = []
+        values = []
+        
+        # Generate weekly data points
+        current_date = start_date
+        while current_date <= end_date:
+            dates.append(str(current_date))
+            # Use current value (thoroughness changes slowly, so this is reasonable)
+            # In the future, we could calculate this based on data up to each date
+            values.append(current_factor)
+            current_date += timedelta(days=7)  # Weekly intervals
+        
+        # Ensure we have the most recent date
+        if dates and dates[-1] != str(end_date):
+            dates.append(str(end_date))
+            values.append(current_factor)
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-4:] if len(values) >= 4 else values  # Last 4 weeks
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_stress_level_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily stress_level data for trend analysis.
+        
+        Optimized method that extracts stress_level directly from dataframe columns
+        instead of parsing JSON, providing significant performance improvement.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'stress_level' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract stress_level directly from dataframe (already calculated)
+        completed['metric_value'] = pd.to_numeric(completed['stress_level'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_net_wellbeing_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily net_wellbeing data for trend analysis.
+        
+        Optimized method that extracts net_wellbeing directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'net_wellbeing' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract net_wellbeing directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['net_wellbeing'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_net_wellbeing_normalized_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily net_wellbeing_normalized data for trend analysis.
+        
+        Optimized method that extracts net_wellbeing_normalized directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'net_wellbeing_normalized' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract net_wellbeing_normalized directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['net_wellbeing_normalized'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_relief_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily relief_score data for trend analysis.
+        
+        Optimized method that extracts relief_score directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract relief_score - try relief_score_numeric first (calculated), then relief_score column
+        if 'relief_score_numeric' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['relief_score_numeric'], errors='coerce')
+        elif 'relief_score' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+        else:
+            # Fallback: try to extract from actual_dict
+            def _extract_relief(row):
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, str):
+                        import json
+                        actual_dict = json.loads(actual_dict)
+                    if isinstance(actual_dict, dict):
+                        return actual_dict.get('relief_score') or actual_dict.get('actual_relief')
+                except:
+                    pass
+                return None
+            completed['metric_value'] = completed.apply(_extract_relief, axis=1)
+            completed['metric_value'] = pd.to_numeric(completed['metric_value'], errors='coerce')
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_behavioral_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily behavioral_score data for trend analysis.
+        
+        Optimized method that extracts behavioral_score directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'behavioral_score' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract behavioral_score directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['behavioral_score'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_stress_efficiency_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily stress_efficiency data for trend analysis.
+        
+        Optimized method that extracts stress_efficiency directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'stress_efficiency' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract stress_efficiency directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['stress_efficiency'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_expected_relief_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily expected_relief data for trend analysis.
+        
+        Optimized method that extracts expected_relief directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'expected_relief' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract expected_relief directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_net_relief_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily net_relief data for trend analysis.
+        
+        Optimized method that extracts net_relief directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract net_relief - try column first, then calculate from relief_score and expected_relief
+        if 'net_relief' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['net_relief'], errors='coerce')
+        else:
+            # Calculate from relief_score_numeric and expected_relief
+            relief_score = pd.to_numeric(completed.get('relief_score_numeric', completed.get('relief_score', 0)), errors='coerce').fillna(0.0)
+            expected_relief = pd.to_numeric(completed.get('expected_relief', 0), errors='coerce').fillna(0.0)
+            completed['metric_value'] = relief_score - expected_relief
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_serendipity_factor_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily serendipity_factor data for trend analysis.
+        
+        Optimized method that extracts serendipity_factor directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract serendipity_factor - try column first, then calculate from net_relief
+        if 'serendipity_factor' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['serendipity_factor'], errors='coerce')
+        else:
+            # Calculate from net_relief (positive values only)
+            net_relief = pd.to_numeric(completed.get('net_relief', 0), errors='coerce').fillna(0.0)
+            completed['metric_value'] = net_relief.apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_disappointment_factor_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily disappointment_factor data for trend analysis.
+        
+        Optimized method that extracts disappointment_factor directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract disappointment_factor - try column first, then calculate from net_relief
+        if 'disappointment_factor' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['disappointment_factor'], errors='coerce')
+        else:
+            # Calculate from net_relief (negative values only, made positive)
+            net_relief = pd.to_numeric(completed.get('net_relief', 0), errors='coerce').fillna(0.0)
+            completed['metric_value'] = net_relief.apply(lambda x: max(0.0, -float(x)) if pd.notna(x) else 0.0)
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_stress_relief_correlation_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily stress_relief_correlation_score data for trend analysis.
+        
+        Optimized method that extracts stress_relief_correlation_score directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract stress_relief_correlation_score - try column first, then calculate
+        if 'stress_relief_correlation_score' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['stress_relief_correlation_score'], errors='coerce')
+        else:
+            # Calculate from stress_level and relief_score
+            stress_norm = pd.to_numeric(completed.get('stress_level', 50), errors='coerce').fillna(50.0)
+            relief_norm = pd.to_numeric(completed.get('relief_score_numeric', completed.get('relief_score', 50)), errors='coerce').fillna(50.0)
+            correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
+            completed['metric_value'] = correlation_raw.clip(0.0, 100.0).round(2)
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_work_time_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily work_time data for trend analysis.
+        
+        Calculates work_time by summing time_actual_minutes for Work and Self care tasks.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of minutes per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join instances with tasks to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Work and Self care tasks (exclude Play)
+            completed = completed_with_type[
+                completed_with_type['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
+            ]
+        
+        # Extract time_actual_minutes from actual_dict
+        def _get_time_actual(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['time_actual'] = completed.apply(_get_time_actual, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows
+        valid = completed[completed['time_actual'].notna() & completed['completed_at_dt'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and sum work time
+        daily_sum = valid.groupby('date')['time_actual'].sum().reset_index()
+        daily_sum.columns = ['date', 'total_minutes']
+        daily_sum = daily_sum.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_sum['date'].tolist()]
+        values = daily_sum['total_minutes'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_play_time_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily play_time data for trend analysis.
+        
+        Calculates play_time by summing time_actual_minutes for Play tasks.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of minutes per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join instances with tasks to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Play tasks
+            completed = completed_with_type[
+                completed_with_type['task_type_normalized'] == 'play'
+            ]
+        
+        # Extract time_actual_minutes from actual_dict
+        def _get_time_actual(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['time_actual'] = completed.apply(_get_time_actual, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows
+        valid = completed[completed['time_actual'].notna() & completed['completed_at_dt'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and sum play time
+        daily_sum = valid.groupby('date')['time_actual'].sum().reset_index()
+        daily_sum.columns = ['date', 'total_minutes']
+        daily_sum = daily_sum.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_sum['date'].tolist()]
+        values = daily_sum['total_minutes'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_duration_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily duration (time_actual_minutes) data for trend analysis.
+        
+        Extracts time_actual_minutes from actual_dict for all completed tasks.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of average minutes per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract time_actual_minutes from actual_dict
+        def _get_time_actual(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['time_actual'] = completed.apply(_get_time_actual, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows
+        valid = completed[completed['time_actual'].notna() & completed['completed_at_dt'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['time_actual'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_mental_energy_needed_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily mental_energy_needed data for trend analysis.
+        
+        Optimized method that extracts mental_energy_needed directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract mental_energy_needed directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed.get('mental_energy_needed', completed.get('mental_energy_numeric')), errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_task_difficulty_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily task_difficulty data for trend analysis.
+        
+        Optimized method that extracts task_difficulty directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract task_difficulty directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed.get('task_difficulty', completed.get('task_difficulty_numeric')), errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_emotional_load_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily emotional_load data for trend analysis.
+        
+        Optimized method that extracts emotional_load directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract emotional_load directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed.get('emotional_load', completed.get('emotional_load_numeric')), errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_environmental_fit_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily environmental_fit data for trend analysis.
+        
+        Optimized method that extracts environmental_fit (or environmental_effect) from dataframe.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract environmental_fit or environmental_effect from dataframe
+        # Try both column names for compatibility
+        if 'environmental_fit' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['environmental_fit'], errors='coerce')
+        elif 'environmental_effect' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['environmental_effect'], errors='coerce')
+        else:
+            # Try to extract from actual_dict
+            def _extract_env_fit(row):
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, str):
+                        import json
+                        actual_dict = json.loads(actual_dict)
+                    if isinstance(actual_dict, dict):
+                        return actual_dict.get('environmental_fit') or actual_dict.get('environmental_effect')
+                except:
+                    pass
+                return None
+            completed['metric_value'] = completed.apply(_extract_env_fit, axis=1)
+            completed['metric_value'] = pd.to_numeric(completed['metric_value'], errors='coerce')
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
 
     def get_task_performance_ranking(self, metric: str = 'relief', top_n: int = 5) -> List[Dict[str, any]]:
         """Get top/bottom performing tasks by various metrics.
@@ -3471,7 +8502,6 @@ class Analytics:
         from .task_manager import TaskManager
         
         filters = {**self.default_filters(), **(filters or {})}
-        print(f"[Analytics] recommendations called with filters: {filters}")
         
         # Load all task templates
         task_manager = TaskManager()
@@ -3624,7 +8654,6 @@ class Analytics:
         from .task_manager import TaskManager
         
         filters = {**self.default_filters(), **(filters or {})}
-        print(f"[Analytics] recommendations_by_category called with metrics: {metrics}, limit: {limit}, filters: {filters}")
         
         # Normalize metrics input
         if metrics is None:
@@ -3825,11 +8854,28 @@ class Analytics:
             scores.append(score_total)
         candidates_df['score'] = scores
         
+        # Normalize scores to 0-100 range
+        # Use absolute normalization based on max possible score, not relative to candidates
+        # This ensures meaningful scores even with only one candidate
+        if len(scores) > 0:
+            num_metrics = len(metrics) if metrics else 1
+            max_possible_score = num_metrics * 100.0  # Each metric can contribute up to 100
+            
+            if max_possible_score > 0:
+                # Normalize: (score / max_possible) * 100
+                candidates_df['score_normalized'] = (candidates_df['score'] / max_possible_score) * 100.0
+                # Clamp to 0-100 range
+                candidates_df['score_normalized'] = candidates_df['score_normalized'].clip(0.0, 100.0)
+            else:
+                candidates_df['score_normalized'] = 50.0
+        else:
+            candidates_df['score_normalized'] = 50.0
+        
         # Sort by score descending and take top N
         top_n = candidates_df.sort_values('score', ascending=False).head(limit)
         
         ranked = []
-        for _, row in top_n.iterrows():
+        for idx, (_, row) in enumerate(top_n.iterrows()):
             # Collect only the metrics the user selected
             metric_values = {}
             for metric in metrics:
@@ -3842,8 +8888,386 @@ class Analytics:
                 'title': "Recommendation",
                 'task_id': row.get('task_id'),
                 'task_name': row.get('task_name'),
-                'score': round(float(row.get('score', 0.0)), 1),
+                'description': row.get('description', '') if 'description' in row else '',
+                'score': round(float(row.get('score_normalized', 0.0)), 1),
                 'metric_values': metric_values,
+                # Include all sub-scores for tooltip
+                'sub_scores': {
+                    'relief_score': row.get('relief_score'),
+                    'cognitive_load': row.get('cognitive_load'),
+                    'emotional_load': row.get('emotional_load'),
+                    'physical_load': row.get('physical_load'),
+                    'stress_level': row.get('stress_level'),
+                    'behavioral_score': row.get('behavioral_score'),
+                    'net_wellbeing_normalized': row.get('net_wellbeing_normalized'),
+                    'net_load': row.get('net_load'),
+                    'net_relief_proxy': row.get('net_relief_proxy'),
+                    'mental_energy_needed': row.get('mental_energy_needed'),
+                    'task_difficulty': row.get('task_difficulty'),
+                    'historical_efficiency': row.get('historical_efficiency'),
+                    'duration_minutes': row.get('duration_minutes'),
+                },
+                'duration': row.get('duration_minutes'),
+                'relief': row.get('relief_score'),
+                'cognitive_load': row.get('cognitive_load'),
+                'emotional_load': row.get('emotional_load'),
+            })
+        
+        return ranked
+
+    def recommendations_from_instances(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3) -> List[Dict[str, str]]:
+        """Generate recommendations from initialized (non-completed) task instances.
+        
+        Similar to recommendations_by_category but works with active instances instead of templates.
+        
+        Args:
+            metrics: Single metric name or list of metrics to rank by
+            filters: Optional filters (min_duration, max_duration, task_type, etc.)
+            limit: Maximum number of recommendations to return
+        
+        Returns:
+            List of recommendation dicts with instance_id, task_name, score, and metric_values
+        """
+        from .instance_manager import InstanceManager
+        
+        filters = {**self.default_filters(), **(filters or {})}
+        
+        # Normalize metrics input
+        if metrics is None:
+            metrics = []
+        if isinstance(metrics, str):
+            metrics = [metrics]
+        metrics = [m for m in metrics if m] or ["relief_score"]
+        
+        # Which metrics are better when low
+        low_is_good = {
+            "cognitive_load",
+            "emotional_load",
+            "net_load",
+            "duration_minutes",
+            "stress_level",
+            "physical_load",
+        }
+        
+        # Get all active (non-completed) instances
+        instance_manager = InstanceManager()
+        active_instances = instance_manager.list_active_instances()
+        
+        if not active_instances:
+            return []
+        
+        # Load task templates to get task metadata
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Parse filters
+        max_duration_filter = None
+        if filters.get('max_duration'):
+            try:
+                max_duration_filter = float(filters['max_duration'])
+            except (ValueError, TypeError):
+                max_duration_filter = None
+        
+        min_duration_filter = None
+        if filters.get('min_duration'):
+            try:
+                min_duration_filter = float(filters['min_duration'])
+            except (ValueError, TypeError):
+                min_duration_filter = None
+        
+        task_type_filter = filters.get('task_type')
+        is_recurring_filter = filters.get('is_recurring')
+        categories_filter = filters.get('categories')
+        
+        # Load historical instance data to get averages for relief_score fallback
+        instances_df = self._load_instances()
+        completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy() if not instances_df.empty else pd.DataFrame()
+        
+        # Calculate historical averages per task_id (for relief_score fallback)
+        task_stats = {}
+        if not completed.empty:
+            for task_id in completed['task_id'].unique():
+                task_completed = completed[completed['task_id'] == task_id]
+                if not task_completed.empty:
+                    relief_series = pd.to_numeric(task_completed['relief_score'], errors='coerce')
+                    task_stats[task_id] = {
+                        'avg_relief': relief_series.mean() if relief_series.notna().any() else None,
+                    }
+        
+        # Build recommendation candidates from active instances
+        candidates = []
+        
+        for instance in active_instances:
+            instance_id = instance.get('instance_id')
+            task_id = instance.get('task_id')
+            task_name = instance.get('task_name', '')
+            
+            # Get task template info for filtering
+            task_info = None
+            if not tasks_df.empty and task_id:
+                task_rows = tasks_df[tasks_df['task_id'] == task_id]
+                if not task_rows.empty:
+                    task_info = task_rows.iloc[0].to_dict()
+            
+            # Apply task_type filter
+            if task_type_filter and task_info:
+                task_type = task_info.get('task_type', '')
+                if str(task_type).strip() != str(task_type_filter).strip():
+                    continue
+            
+            # Apply is_recurring filter
+            if is_recurring_filter and task_info:
+                is_recurring = task_info.get('is_recurring', 'False')
+                is_recurring_str = str(is_recurring).strip().lower()
+                filter_str = str(is_recurring_filter).strip().lower()
+                if filter_str == 'true' and is_recurring_str != 'true':
+                    continue
+                elif filter_str == 'false' and is_recurring_str == 'true':
+                    continue
+            
+            # Apply categories filter
+            if categories_filter and task_info:
+                categories_query = str(categories_filter).strip().lower()
+                if categories_query:
+                    try:
+                        import json
+                        categories_str = task_info.get('categories', '[]')
+                        categories_list = json.loads(categories_str) if categories_str else []
+                        if not isinstance(categories_list, list):
+                            categories_list = []
+                        categories_match = any(
+                            categories_query in str(cat).lower() 
+                            for cat in categories_list
+                        )
+                        if not categories_match:
+                            continue
+                    except (json.JSONDecodeError, Exception):
+                        pass
+            
+            # Extract predicted data from instance (initialization values)
+            predicted_str = instance.get('predicted', '{}')
+            try:
+                import json
+                predicted = json.loads(predicted_str) if predicted_str else {}
+            except (json.JSONDecodeError, TypeError):
+                predicted = {}
+            
+            # Get task template defaults as backup
+            default_estimate = 0.0
+            if task_info:
+                default_estimate = float(task_info.get('default_estimate_minutes', 0) or 0)
+            
+            # Helper function to get value with fallback chain: predicted -> task default -> system default
+            def get_value(predicted_key, task_default_key=None, system_default=50.0):
+                """Get value from predicted, fallback to task default, then system default."""
+                # First try predicted field
+                if predicted_key in predicted and predicted[predicted_key] is not None:
+                    try:
+                        return float(predicted[predicted_key])
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Then try task template default
+                if task_default_key and task_info:
+                    task_val = task_info.get(task_default_key)
+                    if task_val is not None and task_val != '':
+                        try:
+                            return float(task_val)
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Finally use system default
+                return system_default
+            
+            # Extract values from initialization (predicted field) with fallbacks
+            # Duration: time_estimate_minutes from predicted, or task default_estimate_minutes
+            duration_minutes = get_value('time_estimate_minutes', 'default_estimate_minutes', 0.0)
+            if duration_minutes == 0.0 and default_estimate > 0:
+                duration_minutes = default_estimate
+            
+            # Mental energy and difficulty (used to calculate cognitive_load)
+            # First try to get them directly
+            expected_mental_energy = get_value('expected_mental_energy', None, None)
+            expected_difficulty = get_value('expected_difficulty', None, None)
+            
+            # If either is missing, try to get from expected_cognitive_load (backward compatibility)
+            expected_cognitive_load = get_value('expected_cognitive_load', None, None)
+            if expected_cognitive_load is not None:
+                # If we have cognitive_load but not the individual components, use it for both
+                if expected_mental_energy is None:
+                    expected_mental_energy = expected_cognitive_load
+                if expected_difficulty is None:
+                    expected_difficulty = expected_cognitive_load
+            
+            # Fallback to defaults if still None
+            if expected_mental_energy is None:
+                expected_mental_energy = 50.0
+            if expected_difficulty is None:
+                expected_difficulty = 50.0
+            
+            # Cognitive load: use expected_cognitive_load if available, otherwise calculate from components
+            if expected_cognitive_load is not None:
+                cognitive_load = expected_cognitive_load
+            else:
+                # Calculate from mental_energy and difficulty (average)
+                cognitive_load = (expected_mental_energy + expected_difficulty) / 2.0
+            
+            # Emotional load: from expected_emotional_load
+            emotional_load = get_value('expected_emotional_load', None, 50.0)
+            
+            # Physical load: from expected_physical_load
+            physical_load = get_value('expected_physical_load', None, 0.0)
+            
+            # Relief score: from expected_relief, or use historical average if available
+            expected_relief = get_value('expected_relief', None, None)
+            if expected_relief is not None:
+                relief_score = expected_relief
+            else:
+                # Try to get historical average for this task from completed instances
+                stats = task_stats.get(task_id, {}) if task_id else {}
+                avg_relief = stats.get('avg_relief')
+                relief_score = avg_relief if avg_relief is not None else 50.0
+            
+            # Expected aversion (for stress calculation)
+            expected_aversion = get_value('expected_aversion', 'default_initial_aversion', 0.0)
+            
+            # Calculate stress_level from components
+            stress_level = (
+                (expected_mental_energy * 0.5 + 
+                 expected_difficulty * 0.5 + 
+                 emotional_load + 
+                 physical_load + 
+                 expected_aversion * 2.0) / 5.0
+            )
+            
+            # Behavioral score: not typically in predicted, use default
+            behavioral_score = 50.0  # Default neutral
+            
+            # Net wellbeing: calculate from relief and stress
+            net_wellbeing = relief_score - stress_level
+            # Normalize to 0-100 scale (baseline-relative)
+            net_wellbeing_normalized = max(0.0, min(100.0, 50.0 + net_wellbeing))
+            
+            # Apply duration filters
+            if max_duration_filter is not None:
+                if duration_minutes > max_duration_filter:
+                    continue
+            if min_duration_filter is not None:
+                if duration_minutes < min_duration_filter:
+                    continue
+            
+            # Calculate derived metrics
+            net_load = cognitive_load + emotional_load
+            net_relief_proxy = relief_score - cognitive_load
+            
+            # Get historical efficiency if available
+            task_efficiency = self.get_task_efficiency_history()
+            historical_efficiency = task_efficiency.get(task_id, 0.0) if task_id else 0.0
+            
+            # Get initialization notes (description) from predicted field
+            description = predicted.get('description', '') or ''
+            if not description and task_info:
+                description = task_info.get('description', '') or ''
+            
+            candidates.append({
+                'instance_id': instance_id,
+                'task_id': task_id,
+                'task_name': task_name,
+                'description': description,
+                'relief_score': relief_score,
+                'cognitive_load': cognitive_load,
+                'emotional_load': emotional_load,
+                'duration_minutes': duration_minutes,
+                'historical_efficiency': historical_efficiency,
+                'stress_level': stress_level,
+                'behavioral_score': behavioral_score,
+                'net_wellbeing_normalized': net_wellbeing_normalized,
+                'physical_load': physical_load,
+                'net_load': net_load,
+                'net_relief_proxy': net_relief_proxy,
+                'mental_energy_needed': expected_mental_energy,
+                'task_difficulty': expected_difficulty,
+            })
+        
+        if not candidates:
+            return []
+        
+        candidates_df = pd.DataFrame(candidates)
+        
+        # Scoring helper: high-good adds value; low-good adds (100 - value)
+        def metric_score(metric_name: str, value: float) -> float:
+            try:
+                v = float(value) if value is not None else 0.0
+            except (ValueError, TypeError):
+                v = 0.0
+            if metric_name in low_is_good:
+                return max(0.0, 100.0 - v)
+            return v
+        
+        # Compute score per instance
+        scores = []
+        for _, row in candidates_df.iterrows():
+            score_total = 0.0
+            for metric in metrics:
+                score_total += metric_score(metric, row.get(metric))
+            scores.append(score_total)
+        candidates_df['score'] = scores
+        
+        # Normalize scores to 0-100 range
+        # Use absolute normalization based on max possible score, not relative to candidates
+        # This ensures meaningful scores even with only one candidate
+        if len(scores) > 0:
+            num_metrics = len(metrics) if metrics else 1
+            max_possible_score = num_metrics * 100.0  # Each metric can contribute up to 100
+            
+            if max_possible_score > 0:
+                # Normalize: (score / max_possible) * 100
+                candidates_df['score_normalized'] = (candidates_df['score'] / max_possible_score) * 100.0
+                # Clamp to 0-100 range
+                candidates_df['score_normalized'] = candidates_df['score_normalized'].clip(0.0, 100.0)
+            else:
+                candidates_df['score_normalized'] = 50.0
+        else:
+            candidates_df['score_normalized'] = 50.0
+        
+        # Sort by score descending and take top N
+        top_n = candidates_df.sort_values('score', ascending=False).head(limit)
+        
+        ranked = []
+        for idx, (_, row) in enumerate(top_n.iterrows()):
+            # Collect only the metrics the user selected
+            metric_values = {}
+            for metric in metrics:
+                try:
+                    metric_values[metric] = float(row.get(metric)) if row.get(metric) is not None else None
+                except (ValueError, TypeError):
+                    metric_values[metric] = None
+            
+            ranked.append({
+                'title': "Recommendation",
+                'instance_id': row.get('instance_id'),
+                'task_id': row.get('task_id'),
+                'task_name': row.get('task_name'),
+                'description': row.get('description', ''),
+                'score': round(float(row.get('score_normalized', 0.0)), 1),
+                'metric_values': metric_values,
+                # Include all sub-scores for tooltip
+                'sub_scores': {
+                    'relief_score': row.get('relief_score'),
+                    'cognitive_load': row.get('cognitive_load'),
+                    'emotional_load': row.get('emotional_load'),
+                    'physical_load': row.get('physical_load'),
+                    'stress_level': row.get('stress_level'),
+                    'behavioral_score': row.get('behavioral_score'),
+                    'net_wellbeing_normalized': row.get('net_wellbeing_normalized'),
+                    'net_load': row.get('net_load'),
+                    'net_relief_proxy': row.get('net_relief_proxy'),
+                    'mental_energy_needed': row.get('mental_energy_needed'),
+                    'task_difficulty': row.get('task_difficulty'),
+                    'historical_efficiency': row.get('historical_efficiency'),
+                    'duration_minutes': row.get('duration_minutes'),
+                },
                 'duration': row.get('duration_minutes'),
                 'relief': row.get('relief_score'),
                 'cognitive_load': row.get('cognitive_load'),
@@ -4080,6 +9504,16 @@ class Analytics:
                             'work_time': float(work_time),
                             'play_time': float(play_time)
                         }
+
+            weekly_work_summary = {}
+            if work_play_time_per_day:
+                total_work_time = sum(day.get('work_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                total_play_time = sum(day.get('play_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                weekly_work_summary = {
+                    'total_work_time_minutes': float(total_work_time),
+                    'total_play_time_minutes': float(total_play_time),
+                    'days_count': int(len(work_play_time_per_day)),
+                }
             
             # Calculate weekly average time
             def _get_actual_time_for_avg(row):
@@ -4096,9 +9530,37 @@ class Analytics:
             valid_times = completed[completed['time_actual_for_avg'].notna() & (completed['time_actual_for_avg'] > 0)]
             weekly_avg_time = valid_times['time_actual_for_avg'].mean() if not valid_times.empty else 0.0
             
+            # Get goal hours and weekly productive hours for goal-based adjustment
+            goal_hours_per_week = None
+            weekly_productive_hours = None
+            try:
+                goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+                goal_hours_per_week = goal_settings.get('goal_hours_per_week')
+                if goal_hours_per_week:
+                    goal_hours_per_week = float(goal_hours_per_week)
+                    from .productivity_tracker import ProductivityTracker
+                    tracker = ProductivityTracker()
+                    weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                    weekly_productive_hours = weekly_data.get('total_hours', 0.0)
+                    if weekly_productive_hours <= 0:
+                        weekly_productive_hours = None
+            except Exception as e:
+                print(f"[Analytics] Error getting goal hours: {e}")
+                goal_hours_per_week = None
+                weekly_productive_hours = None
+            
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
+                lambda row: self.calculate_productivity_score(
+                    row,
+                    self_care_tasks_per_day,
+                    weekly_avg_time,
+                    work_play_time_per_day,
+                    productivity_settings=self.productivity_settings,
+                    weekly_work_summary=weekly_work_summary,
+                    goal_hours_per_week=goal_hours_per_week,
+                    weekly_productive_hours=weekly_productive_hours
+                ),
                 axis=1
             )
         elif attribute_key == 'grit_score':
@@ -4186,6 +9648,23 @@ class Analytics:
             
             # If no self care tasks or no task_type, return empty
             return {'dates': [], 'values': [], 'aggregation': 'count'}
+        
+        # Ensure calculated metrics are available by calling _load_instances if needed
+        # This ensures stress_level, net_wellbeing, stress_efficiency, etc. are calculated
+        if attribute_key in ['stress_level', 'net_wellbeing', 'net_wellbeing_normalized', 
+                              'stress_efficiency', 'stress_relief_correlation_score', 'relief_score',
+                              'expected_relief', 'net_relief', 'serendipity_factor', 'disappointment_factor']:
+            # These metrics should already be calculated in _load_instances
+            # But ensure they exist by checking the dataframe
+            if attribute_key not in completed.columns:
+                # Recalculate if missing (shouldn't happen, but safety check)
+                completed = self._load_instances()
+                completed = completed[completed['completed_at'].astype(str).str.len() > 0].copy()
+                completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                completed = completed[completed['completed_at_dt'].notna()]
+                if days:
+                    cutoff = datetime.now() - timedelta(days=days)
+                    completed = completed[completed['completed_at_dt'] >= cutoff]
         
         if attribute_key not in completed.columns:
             return {'dates': [], 'values': [], 'aggregation': aggregation}
@@ -4515,6 +9994,16 @@ class Analytics:
                             'work_time': float(work_time),
                             'play_time': float(play_time)
                         }
+
+            weekly_work_summary = {}
+            if work_play_time_per_day:
+                total_work_time = sum(day.get('work_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                total_play_time = sum(day.get('play_time', 0.0) or 0.0 for day in work_play_time_per_day.values())
+                weekly_work_summary = {
+                    'total_work_time_minutes': float(total_work_time),
+                    'total_play_time_minutes': float(total_play_time),
+                    'days_count': int(len(work_play_time_per_day)),
+                }
             
             # Calculate weekly average time
             def _get_actual_time_for_avg(row):
@@ -4530,9 +10019,37 @@ class Analytics:
             valid_times = completed[completed['time_actual_for_avg'].notna() & (completed['time_actual_for_avg'] > 0)]
             weekly_avg_time = valid_times['time_actual_for_avg'].mean() if not valid_times.empty else 0.0
             
+            # Get goal hours and weekly productive hours for goal-based adjustment
+            goal_hours_per_week = None
+            weekly_productive_hours = None
+            try:
+                goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+                goal_hours_per_week = goal_settings.get('goal_hours_per_week')
+                if goal_hours_per_week:
+                    goal_hours_per_week = float(goal_hours_per_week)
+                    from .productivity_tracker import ProductivityTracker
+                    tracker = ProductivityTracker()
+                    weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                    weekly_productive_hours = weekly_data.get('total_hours', 0.0)
+                    if weekly_productive_hours <= 0:
+                        weekly_productive_hours = None
+            except Exception as e:
+                print(f"[Analytics] Error getting goal hours: {e}")
+                goal_hours_per_week = None
+                weekly_productive_hours = None
+            
             # Calculate productivity score
             completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(row, self_care_tasks_per_day, weekly_avg_time, work_play_time_per_day),
+                lambda row: self.calculate_productivity_score(
+                    row,
+                    self_care_tasks_per_day,
+                    weekly_avg_time,
+                    work_play_time_per_day,
+                    productivity_settings=self.productivity_settings,
+                    weekly_work_summary=weekly_work_summary,
+                    goal_hours_per_week=goal_hours_per_week,
+                    weekly_productive_hours=weekly_productive_hours
+                ),
                 axis=1
             )
         
@@ -4663,6 +10180,227 @@ class Analytics:
         if time_data:
             result['time_data'] = time_data
         return result
+
+    def get_emotional_flow_data(self) -> Dict[str, any]:
+        """Get comprehensive emotional flow data for analytics.
+        
+        Returns:
+            Dictionary containing:
+            - avg_emotional_load: Average emotional load across all tasks
+            - avg_relief: Average relief score
+            - spike_count: Number of emotional spikes detected
+            - emotion_relief_ratio: Ratio of relief to emotional load
+            - transitions: List of emotion transitions (initial -> final)
+            - load_relief_scatter: Data for emotional load vs relief scatter plot
+            - expected_actual_comparison: Expected vs actual emotional load data
+            - emotion_trends: Time series data for each emotion
+            - spikes: List of tasks with emotional spikes
+            - correlations: Correlation data for emotions with other metrics
+        """
+        df = self._load_instances()
+        if df.empty:
+            return {
+                'avg_emotional_load': 0,
+                'avg_relief': 0,
+                'spike_count': 0,
+                'emotion_relief_ratio': 0,
+                'transitions': [],
+                'load_relief_scatter': {},
+                'expected_actual_comparison': {},
+                'emotion_trends': {},
+                'spikes': [],
+                'correlations': {}
+            }
+        
+        # Filter to completed instances only
+        completed = df[df['status'] == 'completed'].copy()
+        if completed.empty:
+            return {
+                'avg_emotional_load': 0,
+                'avg_relief': 0,
+                'spike_count': 0,
+                'emotion_relief_ratio': 0,
+                'transitions': [],
+                'load_relief_scatter': {},
+                'expected_actual_comparison': {},
+                'emotion_trends': {},
+                'spikes': [],
+                'correlations': {}
+            }
+        
+        # Extract emotion data
+        transitions = []
+        load_relief_x = []
+        load_relief_y = []
+        load_relief_tasks = []
+        expected_actual_expected = []
+        expected_actual_actual = []
+        expected_actual_tasks = []
+        emotion_trends = {}
+        spikes = []
+        
+        def _parse_json_safe(json_data):
+            """Safely parse JSON, return empty dict on error."""
+            if isinstance(json_data, dict):
+                return json_data
+            if not json_data or not isinstance(json_data, str):
+                return {}
+            try:
+                return json.loads(json_data)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                return {}
+        
+        for _, row in completed.iterrows():
+            # Parse JSON data
+            predicted_dict = _parse_json_safe(row.get('predicted_dict', {}))
+            actual_dict = _parse_json_safe(row.get('actual_dict', {}))
+            
+            # Emotion transitions (initial vs final emotion_values)
+            initial_emotions = predicted_dict.get('emotion_values', {})
+            final_emotions = actual_dict.get('emotion_values', {})
+            
+            # Handle string JSON if needed
+            if isinstance(initial_emotions, str):
+                try:
+                    initial_emotions = json.loads(initial_emotions)
+                except (json.JSONDecodeError, TypeError):
+                    initial_emotions = {}
+            if isinstance(final_emotions, str):
+                try:
+                    final_emotions = json.loads(final_emotions)
+                except (json.JSONDecodeError, TypeError):
+                    final_emotions = {}
+            
+            # Ensure dicts
+            if not isinstance(initial_emotions, dict):
+                initial_emotions = {}
+            if not isinstance(final_emotions, dict):
+                final_emotions = {}
+            
+            # Track transitions for each emotion
+            all_emotions = set(list(initial_emotions.keys()) + list(final_emotions.keys()))
+            for emotion in all_emotions:
+                initial_val = initial_emotions.get(emotion) if isinstance(initial_emotions, dict) else None
+                final_val = final_emotions.get(emotion) if isinstance(final_emotions, dict) else None
+                
+                # Convert to numeric if needed
+                try:
+                    if initial_val is not None:
+                        initial_val = float(initial_val)
+                except (ValueError, TypeError):
+                    initial_val = None
+                try:
+                    if final_val is not None:
+                        final_val = float(final_val)
+                except (ValueError, TypeError):
+                    final_val = None
+                
+                if initial_val is not None or final_val is not None:
+                    transitions.append({
+                        'emotion': emotion,
+                        'initial_value': initial_val,
+                        'final_value': final_val,
+                        'task_name': str(row.get('task_name', 'Unknown')),
+                        'completed_at': str(row.get('completed_at', ''))
+                    })
+            
+            # Emotional load vs relief
+            emotional_load = actual_dict.get('actual_emotional')
+            if emotional_load is None:
+                emotional_load = pd.to_numeric(row.get('emotional_load'), errors='coerce')
+            
+            relief = actual_dict.get('actual_relief')
+            if relief is None:
+                relief = pd.to_numeric(row.get('relief_score'), errors='coerce')
+            
+            if emotional_load is not None and not pd.isna(emotional_load) and relief is not None and not pd.isna(relief):
+                load_relief_x.append(float(emotional_load))
+                load_relief_y.append(float(relief))
+                load_relief_tasks.append(str(row.get('task_name', 'Unknown')))
+            
+            # Expected vs actual
+            expected = predicted_dict.get('expected_emotional_load')
+            if expected is None:
+                expected = pd.to_numeric(row.get('emotional_load'), errors='coerce')
+            
+            actual = actual_dict.get('actual_emotional')
+            if actual is None:
+                actual = pd.to_numeric(row.get('emotional_load'), errors='coerce')
+            
+            if expected is not None and not pd.isna(expected) and actual is not None and not pd.isna(actual):
+                expected_actual_expected.append(float(expected))
+                expected_actual_actual.append(float(actual))
+                expected_actual_tasks.append(str(row.get('task_name', 'Unknown')))
+                
+                # Check for spikes (actual > expected + 30)
+                if actual > expected + 30:
+                    spikes.append({
+                        'task_name': str(row.get('task_name', 'Unknown')),
+                        'expected': float(expected),
+                        'actual': float(actual),
+                        'spike_amount': float(actual - expected),
+                        'completed_at': str(row.get('completed_at', ''))
+                    })
+            
+            # Emotion trends (time series)
+            if final_emotions and isinstance(final_emotions, dict):
+                completed_at = row.get('completed_at')
+                if completed_at:
+                    for emotion, value in final_emotions.items():
+                        try:
+                            value_float = float(value)
+                            if emotion not in emotion_trends:
+                                emotion_trends[emotion] = {'dates': [], 'values': []}
+                            emotion_trends[emotion]['dates'].append(str(completed_at))
+                            emotion_trends[emotion]['values'].append(value_float)
+                        except (ValueError, TypeError):
+                            pass
+        
+        # Calculate correlations (simplified - could be enhanced)
+        correlations = {}
+        if transitions:
+            # Group by emotion and calculate basic stats
+            emotion_groups = {}
+            for trans in transitions:
+                emotion = trans['emotion']
+                if emotion not in emotion_groups:
+                    emotion_groups[emotion] = {'final_values': [], 'relief_values': []}
+                if trans['final_value'] is not None:
+                    emotion_groups[emotion]['final_values'].append(trans['final_value'])
+            
+            # Match with relief values for correlation
+            for emotion in emotion_groups.keys():
+                # Simple placeholder correlation - could be enhanced with proper correlation calculation
+                correlations[emotion] = {
+                    'relief': 0.0,  # Placeholder
+                    'difficulty': 0.0  # Placeholder
+                }
+        
+        # Calculate summary metrics
+        avg_emotional_load = sum(expected_actual_actual) / len(expected_actual_actual) if expected_actual_actual else 0
+        avg_relief = sum(load_relief_y) / len(load_relief_y) if load_relief_y else 0
+        emotion_relief_ratio = avg_relief / avg_emotional_load if avg_emotional_load > 0 else 0
+        
+        return {
+            'avg_emotional_load': avg_emotional_load,
+            'avg_relief': avg_relief,
+            'spike_count': len(spikes),
+            'emotion_relief_ratio': emotion_relief_ratio,
+            'transitions': transitions,
+            'load_relief_scatter': {
+                'x': load_relief_x,
+                'y': load_relief_y,
+                'task_names': load_relief_tasks
+            },
+            'expected_actual_comparison': {
+                'expected': expected_actual_expected,
+                'actual': expected_actual_actual,
+                'task_names': expected_actual_tasks
+            },
+            'emotion_trends': emotion_trends,
+            'spikes': sorted(spikes, key=lambda x: x['spike_amount'], reverse=True),
+            'correlations': correlations
+        }
 
     # ------------------------------------------------------------------
     # Priority heuristics (used for legacy views)

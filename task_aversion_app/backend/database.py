@@ -8,8 +8,8 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text, Float, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.exc import OperationalError, IntegrityError
 
 # Base class for all models
@@ -41,6 +41,9 @@ else:
 # Session factory
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
+# Track if database has been initialized (to avoid duplicate print messages)
+_db_initialized = False
+
 
 def get_session():
     """Get a database session. Use as context manager or call close() manually."""
@@ -48,14 +51,21 @@ def get_session():
 
 
 def init_db():
-    """Initialize database by creating all tables."""
+    """Initialize database by creating all tables. Idempotent - safe to call multiple times."""
+    global _db_initialized
+    
     # Ensure data directory exists for SQLite
     if DATABASE_URL.startswith('sqlite'):
         db_path = DATABASE_URL.replace('sqlite:///', '')
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else '.', exist_ok=True)
     
+    # Create tables (idempotent operation)
     Base.metadata.create_all(engine)
-    print(f"[Database] Initialized database at {DATABASE_URL}")
+    
+    # Only print message once to avoid console spam
+    if not _db_initialized:
+        print(f"[Database] Initialized database at {DATABASE_URL}")
+        _db_initialized = True
 
 
 # ============================================================================
@@ -89,6 +99,16 @@ class Task(Base):
     task_type = Column(String, default='Work')  # Work, Self care, etc.
     default_initial_aversion = Column(String, default='')  # Optional default aversion value
     
+    # Routine scheduling fields
+    routine_frequency = Column(String, default='none')  # 'none', 'daily', 'weekly'
+    routine_days_of_week = Column(JSON, default=list)  # List of day numbers (0=Monday, 6=Sunday) for weekly
+    routine_time = Column(String, default='00:00')  # Time in HH:MM format (24-hour)
+    completion_window_hours = Column(Integer, default=None)  # Hours to complete task after initialization without penalty
+    completion_window_days = Column(Integer, default=None)  # Days to complete task after initialization without penalty
+    
+    # Shared notes field - notes are shared across all instances of this task template
+    notes = Column(Text, default='')  # Runtime notes (separate from description which is set at task creation)
+    
     def to_dict(self) -> dict:
         """Convert model instance to dictionary (compatible with CSV format)."""
         return {
@@ -102,16 +122,246 @@ class Task(Base):
             'categories': json.dumps(self.categories) if isinstance(self.categories, list) else (self.categories or '[]'),
             'default_estimate_minutes': str(self.default_estimate_minutes),
             'task_type': self.task_type or 'Work',
-            'default_initial_aversion': self.default_initial_aversion or ''
+            'default_initial_aversion': self.default_initial_aversion or '',
+            'routine_frequency': self.routine_frequency or 'none',
+            'routine_days_of_week': json.dumps(self.routine_days_of_week) if isinstance(self.routine_days_of_week, list) else (self.routine_days_of_week or '[]'),
+            'routine_time': self.routine_time or '00:00',
+            'completion_window_hours': str(self.completion_window_hours) if self.completion_window_hours is not None else '',
+            'completion_window_days': str(self.completion_window_days) if self.completion_window_days is not None else '',
+            'notes': self.notes or ''
         }
     
     def __repr__(self):
         return f"<Task(task_id='{self.task_id}', name='{self.name}')>"
 
 
+class TaskInstance(Base):
+    """
+    Task instance model (migrated from task_instances.csv).
+    Represents a single execution/attempt of a task.
+    """
+    __tablename__ = 'task_instances'
+    
+    # Primary key
+    instance_id = Column(String, primary_key=True)  # Format: i{timestamp}
+    
+    # Foreign key to Task (optional for now, can add constraint later)
+    task_id = Column(String, nullable=False, index=True)
+    task_name = Column(String, nullable=False)
+    task_version = Column(Integer, default=1)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    initialized_at = Column(DateTime, default=None, nullable=True)
+    started_at = Column(DateTime, default=None, nullable=True)
+    completed_at = Column(DateTime, default=None, nullable=True)
+    cancelled_at = Column(DateTime, default=None, nullable=True)
+    
+    # JSON data (raw data storage)
+    predicted = Column(JSON, default=dict)  # Predicted values as JSON
+    actual = Column(JSON, default=dict)  # Actual values as JSON
+    
+    # Scores
+    procrastination_score = Column(Float, default=None, nullable=True)
+    proactive_score = Column(Float, default=None, nullable=True)
+    behavioral_score = Column(Float, default=None, nullable=True)
+    net_relief = Column(Float, default=None, nullable=True)
+    behavioral_deviation = Column(Float, default=None, nullable=True)
+    
+    # Emotional factors (calculated from net_relief)
+    serendipity_factor = Column(Float, default=None, nullable=True)  # Positive net_relief (pleasant surprise)
+    disappointment_factor = Column(Float, default=None, nullable=True)  # Negative net_relief (disappointment)
+    
+    # Status flags
+    is_completed = Column(Boolean, default=False, index=True)
+    is_deleted = Column(Boolean, default=False, index=True)
+    status = Column(String, default='active', index=True)  # active, initialized, completed, cancelled
+    
+    # Extracted attributes (for analytics)
+    duration_minutes = Column(Float, default=None, nullable=True)
+    delay_minutes = Column(Float, default=None, nullable=True)
+    relief_score = Column(Float, default=None, nullable=True)
+    cognitive_load = Column(Float, default=None, nullable=True)
+    mental_energy_needed = Column(Float, default=None, nullable=True)
+    task_difficulty = Column(Float, default=None, nullable=True)
+    emotional_load = Column(Float, default=None, nullable=True)
+    environmental_effect = Column(Float, default=None, nullable=True)
+    skills_improved = Column(Text, default='')  # Comma-separated list stored as text
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary (compatible with CSV format)."""
+        def format_datetime(dt):
+            return dt.strftime("%Y-%m-%d %H:%M") if dt else ''
+        
+        return {
+            'instance_id': self.instance_id,
+            'task_id': self.task_id,
+            'task_name': self.task_name,
+            'task_version': str(self.task_version),
+            'created_at': format_datetime(self.created_at),
+            'initialized_at': format_datetime(self.initialized_at),
+            'started_at': format_datetime(self.started_at),
+            'completed_at': format_datetime(self.completed_at),
+            'cancelled_at': format_datetime(self.cancelled_at),
+            'predicted': json.dumps(self.predicted) if isinstance(self.predicted, dict) else (self.predicted or '{}'),
+            'actual': json.dumps(self.actual) if isinstance(self.actual, dict) else (self.actual or '{}'),
+            'procrastination_score': str(self.procrastination_score) if self.procrastination_score is not None else '',
+            'proactive_score': str(self.proactive_score) if self.proactive_score is not None else '',
+            'behavioral_score': str(self.behavioral_score) if self.behavioral_score is not None else '',
+            'net_relief': str(self.net_relief) if self.net_relief is not None else '',
+            'behavioral_deviation': str(self.behavioral_deviation) if self.behavioral_deviation is not None else '',
+            'is_completed': str(bool(self.is_completed)),
+            'is_deleted': str(bool(self.is_deleted)),
+            'status': self.status or 'active',
+            'duration_minutes': str(self.duration_minutes) if self.duration_minutes is not None else '',
+            'delay_minutes': str(self.delay_minutes) if self.delay_minutes is not None else '',
+            'relief_score': str(self.relief_score) if self.relief_score is not None else '',
+            'cognitive_load': str(self.cognitive_load) if self.cognitive_load is not None else '',
+            'mental_energy_needed': str(self.mental_energy_needed) if self.mental_energy_needed is not None else '',
+            'task_difficulty': str(self.task_difficulty) if self.task_difficulty is not None else '',
+            'emotional_load': str(self.emotional_load) if self.emotional_load is not None else '',
+            'environmental_effect': str(self.environmental_effect) if self.environmental_effect is not None else '',
+            'skills_improved': self.skills_improved or '',
+            'serendipity_factor': str(self.serendipity_factor) if self.serendipity_factor is not None else '',
+            'disappointment_factor': str(self.disappointment_factor) if self.disappointment_factor is not None else '',
+        }
+    
+    def __repr__(self):
+        return f"<TaskInstance(instance_id='{self.instance_id}', task_id='{self.task_id}', status='{self.status}')>"
+
+
+class Emotion(Base):
+    """
+    Emotion model (migrated from emotions.csv).
+    Stores a list of emotions that users can select from.
+    """
+    __tablename__ = 'emotions'
+    
+    # Primary key
+    emotion_id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # Emotion name (unique, case-insensitive matching handled in application logic)
+    emotion = Column(String, nullable=False, unique=True, index=True)
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary (compatible with CSV format)."""
+        return {
+            'emotion': self.emotion
+        }
+    
+    def __repr__(self):
+        return f"<Emotion(emotion='{self.emotion}')>"
+
+
+class PopupTrigger(Base):
+    """
+    Popup trigger state model.
+    Tracks per-trigger counts, cooldowns, and user responses for popup system.
+    """
+    __tablename__ = 'popup_triggers'
+    
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # User identifier (for future multi-user support, default to 'default')
+    user_id = Column(String, default='default', nullable=False, index=True)
+    
+    # Trigger identifier (e.g., '7.1', '1.1', '2.1')
+    trigger_id = Column(String, nullable=False, index=True)
+    
+    # Optional task_id for task-specific triggers
+    task_id = Column(String, default=None, nullable=True, index=True)
+    
+    # Count of times this trigger has fired
+    count = Column(Integer, default=0, nullable=False)
+    
+    # Last time this popup was shown
+    last_shown_at = Column(DateTime, default=None, nullable=True)
+    
+    # User feedback: was this popup helpful?
+    helpful = Column(Boolean, default=None, nullable=True)
+    
+    # Last response value (if applicable)
+    last_response = Column(String, default=None, nullable=True)
+    
+    # Last comment/feedback from user
+    last_comment = Column(Text, default=None, nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary."""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'trigger_id': self.trigger_id,
+            'task_id': self.task_id,
+            'count': self.count,
+            'last_shown_at': self.last_shown_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_shown_at else None,
+            'helpful': self.helpful,
+            'last_response': self.last_response,
+            'last_comment': self.last_comment,
+            'created_at': self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
+            'updated_at': self.updated_at.strftime("%Y-%m-%d %H:%M:%S") if self.updated_at else None,
+        }
+    
+    def __repr__(self):
+        return f"<PopupTrigger(trigger_id='{self.trigger_id}', count={self.count})>"
+
+
+class PopupResponse(Base):
+    """
+    Popup response log model.
+    Stores detailed logs of popup shows and user responses.
+    """
+    __tablename__ = 'popup_responses'
+    
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # User identifier
+    user_id = Column(String, default='default', nullable=False, index=True)
+    
+    # Trigger identifier
+    trigger_id = Column(String, nullable=False, index=True)
+    
+    # Optional task_id and instance_id for context
+    task_id = Column(String, default=None, nullable=True, index=True)
+    instance_id = Column(String, default=None, nullable=True, index=True)
+    
+    # Response data
+    response_value = Column(String, default=None, nullable=True)  # e.g., 'continue', 'edit', 'yes', 'no'
+    helpful = Column(Boolean, default=None, nullable=True)
+    comment = Column(Text, default=None, nullable=True)
+    
+    # Context data (JSON) - stores completion context, survey context, etc.
+    context = Column(JSON, default=dict)
+    
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary."""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'trigger_id': self.trigger_id,
+            'task_id': self.task_id,
+            'instance_id': self.instance_id,
+            'response_value': self.response_value,
+            'helpful': self.helpful,
+            'comment': self.comment,
+            'context': json.dumps(self.context) if isinstance(self.context, dict) else (self.context or '{}'),
+            'created_at': self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
+        }
+    
+    def __repr__(self):
+        return f"<PopupResponse(trigger_id='{self.trigger_id}', response='{self.response_value}')>"
+
+
 # Future models will be added here:
-# - TaskInstance (from task_instances.csv)
-# - Emotion (from emotions.csv)
 # - User (for future multi-user support)
 # - Survey (for future survey system)
 

@@ -1,0 +1,61 @@
+Add Task Editing Manager with chronological pagination and dual edit buttons
+
+This commit introduces a comprehensive Task Editing Manager system that
+replaces the separate cancelled tasks management interface. The new system
+allows users to edit both completed and cancelled tasks from a unified
+interface with chronological ordering, pagination, and direct navigation
+to initialization and completion editing pages.
+
+Changes:
+- Replaced "Manage Cancelled Tasks" button in settings with "Task Editing
+  Manager" button
+- Created new unified task editing interface showing completed and cancelled
+  tasks in chronological order (most recent first)
+- Added pagination support (25 tasks per page) with Previous/Next navigation
+- Completed tasks now have two edit buttons: "Edit Init" and "Edit Completion"
+- Cancelled tasks retain single edit button that opens cancellation dialog
+- Tasks are labeled with status badges (COMPLETED/CANCELLED) for clarity
+- Filter dropdown allows filtering by All/Completed/Cancelled status
+
+Technical Changes:
+- Created new task_editing_manager.py module with pagination logic and
+  chronological sorting
+- Added get_all_tasks_chronologically() function to combine and sort tasks
+  by completed_at/cancelled_at timestamps
+- Implemented PageState class for pagination state management
+- Updated initialize_task.py to support edit mode for completed tasks:
+  - Detects edit mode via query parameter
+  - Loads existing predicted values instead of defaults
+  - Skips popup evaluations in edit mode
+  - Marks task as edited and navigates back to editing manager
+- Updated complete_task.py to support edit mode for completed tasks:
+  - Loads all existing values including completion percentage and notes
+  - Allows full editing of all completion fields
+  - Uses update methods instead of complete_instance() to preserve status
+  - Marks task as edited and navigates back to editing manager
+- Added mark_instance_as_edited() function to track edited tasks with
+  timestamp in actual data (is_edited flag and edited_at timestamp)
+- Added helper functions _update_actual_data_csv() and _update_actual_data_db()
+  for updating instance actual data when editing completed tasks
+
+User Experience:
+- Unified interface for managing both completed and cancelled tasks
+- Chronological ordering provides better context of task history
+- Pagination improves performance with large task lists
+- Direct navigation buttons for completed tasks allow quick access to
+  edit initialization or completion data separately
+- Status badges make it easy to distinguish task types at a glance
+- Edited tasks are clearly marked with [EDITED] label and timestamp
+- Filter dropdown allows users to focus on specific task types
+
+Files Modified:
+- ui/settings_page.py: Changed button text and navigation target from
+  /cancelled-tasks to /task-editing-manager
+- ui/task_editing_manager.py: New file with complete editing interface,
+  pagination, and chronological sorting logic
+- ui/initialize_task.py: Added edit mode support with value loading,
+  skip popups, and navigation back to editing manager
+- ui/complete_task.py: Added edit mode support with full field editing,
+  completion percentage/notes loading, and navigation back to editing
+  manager
+- app.py: Registered new task_editing_manager module

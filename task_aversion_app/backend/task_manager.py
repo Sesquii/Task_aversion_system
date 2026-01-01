@@ -5,13 +5,29 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Optional
 
+from backend.performance_logger import get_perf_logger
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 TASKS_FILE = 'data/tasks.csv'
+perf_logger = get_perf_logger()
 
 class TaskManager:
     def __init__(self):
-        # Feature flag: Use database if DATABASE_URL is set, otherwise use CSV
-        self.use_db = bool(os.getenv('DATABASE_URL'))
+        # Default to database (SQLite) unless USE_CSV is explicitly set
+        # Check if CSV is explicitly requested
+        use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
+        
+        if use_csv:
+            # CSV backend (explicitly requested)
+            self.use_db = False
+        else:
+            # Database backend (default)
+            # Ensure DATABASE_URL is set to default SQLite if not already set
+            if not os.getenv('DATABASE_URL'):
+                # Use the same default as database.py
+                os.environ['DATABASE_URL'] = 'sqlite:///data/task_aversion.db'
+            self.use_db = True
+        
         # Strict mode: If DISABLE_CSV_FALLBACK is set, fail instead of falling back to CSV
         self.strict_mode = bool(os.getenv('DISABLE_CSV_FALLBACK', '').lower() in ('1', 'true', 'yes'))
         
@@ -34,11 +50,11 @@ class TaskManager:
                 self.use_db = False
                 self._init_csv()
         else:
-            # CSV backend (default)
+            # CSV backend (explicitly requested via USE_CSV)
             if self.strict_mode:
                 raise RuntimeError(
-                    "CSV backend is disabled (DISABLE_CSV_FALLBACK is set) but DATABASE_URL is not set.\n"
-                    "Please set DATABASE_URL to use the database backend, or unset DISABLE_CSV_FALLBACK."
+                    "CSV backend is disabled (DISABLE_CSV_FALLBACK is set) but USE_CSV is set.\n"
+                    "Please unset USE_CSV to use the database backend, or unset DISABLE_CSV_FALLBACK."
                 )
             self._init_csv()
             print("[TaskManager] Using CSV backend")
@@ -50,14 +66,19 @@ class TaskManager:
         os.makedirs(DATA_DIR, exist_ok=True)
         self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
         # task definition fields:
-        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type, default_initial_aversion
+        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days, notes
         if not os.path.exists(self.tasks_file):
-            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion']).to_csv(self.tasks_file, index=False)
+            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days','notes']).to_csv(self.tasks_file, index=False)
         self._reload()
     def _reload(self):
         """Reload data (CSV only)."""
         if not self.use_db:
             self._reload_csv()
+    
+    def _ensure_csv_initialized(self):
+        """Ensure CSV backend is initialized. Called before fallback to CSV methods."""
+        if not hasattr(self, 'tasks_file') or not hasattr(self, 'df'):
+            self._init_csv()
     
     def _reload_csv(self):
         """CSV-specific reload."""
@@ -73,6 +94,19 @@ class TaskManager:
         # ensure default_initial_aversion column exists (optional field, can be empty)
         if 'default_initial_aversion' not in self.df.columns:
             self.df['default_initial_aversion'] = ''
+        # ensure routine scheduling columns exist
+        if 'routine_frequency' not in self.df.columns:
+            self.df['routine_frequency'] = 'none'
+        if 'routine_days_of_week' not in self.df.columns:
+            self.df['routine_days_of_week'] = '[]'
+        if 'routine_time' not in self.df.columns:
+            self.df['routine_time'] = '00:00'
+        if 'completion_window_hours' not in self.df.columns:
+            self.df['completion_window_hours'] = ''
+        if 'completion_window_days' not in self.df.columns:
+            self.df['completion_window_days'] = ''
+        if 'notes' not in self.df.columns:
+            self.df['notes'] = ''
     
     def _save(self):
         """Save data (CSV only)."""
@@ -93,21 +127,24 @@ class TaskManager:
     
     def _get_task_csv(self, task_id):
         """CSV-specific get_task."""
-        self._reload_csv()
-        rows = self.df[self.df['task_id'] == task_id]
-        return rows.iloc[0].to_dict() if not rows.empty else None
+        with perf_logger.operation("_get_task_csv", task_id=task_id):
+            self._reload_csv()
+            rows = self.df[self.df['task_id'] == task_id]
+            return rows.iloc[0].to_dict() if not rows.empty else None
     
     def _get_task_db(self, task_id):
         """Database-specific get_task."""
         try:
-            with self.db_session() as session:
-                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
-                return task.to_dict() if task else None
+            with perf_logger.operation("_get_task_db", task_id=task_id):
+                with self.db_session() as session:
+                    task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                    return task.to_dict() if task else None
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in get_task and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in get_task: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._get_task_csv(task_id)
 
     def list_tasks(self) -> List[str]:
@@ -133,12 +170,14 @@ class TaskManager:
                 raise RuntimeError(f"Database error in list_tasks and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in list_tasks: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._list_tasks_csv()
 
     def save_initialization_entry(self, entry):
         """Save a task initialization entry."""
-        self.initialization_entries.append(entry)
-        print(f"Saved initialization entry: {entry}")
+        with perf_logger.operation("save_initialization_entry", instance_id=entry.get('instance_id')):
+            self.initialization_entries.append(entry)
+            print(f"Saved initialization entry: {entry}")
     def get_all(self):
         """Return all tasks as DataFrame (CSV) or list of dicts (database). Works with both backends."""
         if self.use_db:
@@ -158,34 +197,51 @@ class TaskManager:
                 tasks = session.query(self.Task).all()
                 if not tasks:
                     # Return empty DataFrame with expected columns
-                    return pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion'])
+                    return pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days'])
                 # Convert to list of dicts, then to DataFrame
                 task_dicts = [task.to_dict() for task in tasks]
                 return pd.DataFrame(task_dicts)
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_all and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in get_all: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._get_all_csv()
 
-    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None):
+    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
         """
         Creates a new task definition and returns task_id. Works with both CSV and database.
         
         Args:
             default_initial_aversion: Optional initial aversion value (0-100) to use as default when first initializing this task
+            routine_frequency: 'none', 'daily', or 'weekly'
+            routine_days_of_week: List of day numbers (0=Monday, 6=Sunday) for weekly frequency
+            routine_time: Time in HH:MM format (24-hour), default '00:00'
+            completion_window_hours: Hours to complete task after initialization without penalty
+            completion_window_days: Days to complete task after initialization without penalty
         """
+        if routine_days_of_week is None:
+            routine_days_of_week = []
         if self.use_db:
-            return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion)
+            return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
         else:
-            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion)
+            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
     
-    def _create_task_csv(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None):
+    def _create_task_csv(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
         """CSV-specific create_task."""
         self._reload_csv()
         # simple unique id using timestamp + name fragment
         task_id = f"t{int(datetime.now().timestamp())}"
         # Convert default_initial_aversion to string, or empty string if None
         aversion_str = str(int(default_initial_aversion)) if default_initial_aversion is not None else ''
+        # Convert routine_days_of_week to JSON string
+        if routine_days_of_week is None:
+            routine_days_of_week = []
+        routine_days_str = json.dumps(routine_days_of_week) if isinstance(routine_days_of_week, list) else (routine_days_of_week or '[]')
+        # Convert completion window values to strings or empty
+        completion_window_hours_str = str(int(completion_window_hours)) if completion_window_hours is not None else ''
+        completion_window_days_str = str(int(completion_window_days)) if completion_window_days is not None else ''
         row = {
             'task_id': task_id,
             'name': name,
@@ -197,19 +253,24 @@ class TaskManager:
             'categories': categories,
             'default_estimate_minutes': int(default_estimate_minutes),
             'task_type': task_type,
-            'default_initial_aversion': aversion_str
+            'default_initial_aversion': aversion_str,
+            'routine_frequency': routine_frequency or 'none',
+            'routine_days_of_week': routine_days_str,
+            'routine_time': routine_time or '00:00',
+            'completion_window_hours': completion_window_hours_str,
+            'completion_window_days': completion_window_days_str
         }
-        # Ensure task_type column exists in dataframe
-        if 'task_type' not in self.df.columns:
-            self.df['task_type'] = ''
-        # Ensure default_initial_aversion column exists
-        if 'default_initial_aversion' not in self.df.columns:
-            self.df['default_initial_aversion'] = ''
+        # Ensure all columns exist in dataframe
+        for col in ['task_type', 'default_initial_aversion', 'routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days']:
+            if col not in self.df.columns:
+                self.df[col] = '' if col != 'routine_frequency' else 'none'
+                if col == 'routine_time':
+                    self.df[col] = '00:00'
         self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
         self._save_csv()
         return task_id
     
-    def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None):
+    def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
         """Database-specific create_task."""
         try:
             # Parse categories JSON string
@@ -217,6 +278,17 @@ class TaskManager:
                 categories_list = json.loads(categories) if isinstance(categories, str) else (categories or [])
             except (json.JSONDecodeError, TypeError):
                 categories_list = []
+            
+            # Parse routine_days_of_week
+            if routine_days_of_week is None:
+                routine_days_list = []
+            elif isinstance(routine_days_of_week, str):
+                try:
+                    routine_days_list = json.loads(routine_days_of_week)
+                except (json.JSONDecodeError, TypeError):
+                    routine_days_list = []
+            else:
+                routine_days_list = routine_days_of_week
             
             # Convert default_initial_aversion to string, or empty string if None
             aversion_str = str(int(default_initial_aversion)) if default_initial_aversion is not None else ''
@@ -236,15 +308,23 @@ class TaskManager:
                     categories=categories_list,
                     default_estimate_minutes=int(default_estimate_minutes),
                     task_type=task_type or 'Work',
-                    default_initial_aversion=aversion_str
+                    default_initial_aversion=aversion_str,
+                    routine_frequency=routine_frequency or 'none',
+                    routine_days_of_week=routine_days_list,
+                    routine_time=routine_time or '00:00',
+                    completion_window_hours=completion_window_hours,
+                    completion_window_days=completion_window_days
                 )
                 session.add(task)
                 session.commit()
                 return task_id
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in create_task and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in create_task: {e}, falling back to CSV")
             self.use_db = False
-            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion)
+            self._ensure_csv_initialized()
+            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
 
     def update_task(self, task_id, **kwargs):
         """Update a task. Works with both CSV and database."""
@@ -265,6 +345,12 @@ class TaskManager:
         # Ensure default_initial_aversion column exists
         if 'default_initial_aversion' not in self.df.columns:
             self.df['default_initial_aversion'] = ''
+        # Ensure routine scheduling columns exist
+        for col in ['routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days']:
+            if col not in self.df.columns:
+                self.df[col] = '' if col != 'routine_frequency' else 'none'
+                if col == 'routine_time':
+                    self.df[col] = '00:00'
         for k,v in kwargs.items():
             if k in self.df.columns:
                 self.df.at[idx,k] = v
@@ -290,12 +376,21 @@ class TaskManager:
                                 v = json.loads(v)
                             except (json.JSONDecodeError, TypeError):
                                 v = []
+                        elif k == 'routine_days_of_week' and isinstance(v, str):
+                            try:
+                                v = json.loads(v)
+                            except (json.JSONDecodeError, TypeError):
+                                v = []
                         elif k == 'is_recurring' and isinstance(v, str):
                             v = v.lower() == 'true'
                         elif k == 'version' and isinstance(v, str):
                             v = int(v)
                         elif k == 'default_estimate_minutes' and isinstance(v, str):
                             v = int(v)
+                        elif k == 'completion_window_hours' and isinstance(v, str):
+                            v = int(v) if v.strip() else None
+                        elif k == 'completion_window_days' and isinstance(v, str):
+                            v = int(v) if v.strip() else None
                         setattr(task, k, v)
                 
                 # Bump version
@@ -305,8 +400,11 @@ class TaskManager:
                 session.commit()
                 return True
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in update_task and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in update_task: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._update_task_csv(task_id, **kwargs)
 
     def find_by_name(self, name):
@@ -329,8 +427,11 @@ class TaskManager:
                 task = session.query(self.Task).filter(self.Task.name == name).first()
                 return task.to_dict() if task else None
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in find_by_name and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in find_by_name: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._find_by_name_csv(name)
 
     def ensure_task_exists(self, name):
@@ -338,6 +439,118 @@ class TaskManager:
         if t:
             return t['task_id']
         return self.create_task(name)
+    
+    def append_task_notes(self, task_id: str, note: str):
+        """Append a note to a task template (shared across all instances). Works with both CSV and database.
+        
+        Args:
+            task_id: The task ID to append notes to
+            note: The note text to append (will be timestamped and separated with '---')
+        """
+        if self.use_db:
+            return self._append_task_notes_db(task_id, note)
+        else:
+            return self._append_task_notes_csv(task_id, note)
+    
+    def _append_task_notes_csv(self, task_id: str, note: str):
+        """CSV-specific append_task_notes."""
+        from datetime import datetime
+        self._reload_csv()
+        matches = self.df.index[self.df['task_id'] == task_id]
+        if len(matches) == 0:
+            raise ValueError(f"Task {task_id} not found")
+        
+        idx = matches[0]
+        
+        # Get existing notes or initialize
+        existing_notes = self.df.at[idx, 'notes'] if 'notes' in self.df.columns else ''
+        if pd.isna(existing_notes) or existing_notes == '':
+            existing_notes = ''
+        
+        # Append new note with timestamp and separator
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamped_note = f"[{timestamp}]\n{note}"
+        
+        if existing_notes:
+            new_notes = existing_notes + '\n\n---\n\n' + timestamped_note
+        else:
+            new_notes = timestamped_note
+        
+        self.df.at[idx, 'notes'] = new_notes
+        self._save_csv()
+    
+    def _append_task_notes_db(self, task_id: str, note: str):
+        """Database-specific append_task_notes."""
+        try:
+            from datetime import datetime
+            with self.db_session() as session:
+                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                if not task:
+                    raise ValueError(f"Task {task_id} not found")
+                
+                # Get existing notes or initialize
+                existing_notes = task.notes or ''
+                
+                # Append new note with timestamp and separator
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                timestamped_note = f"[{timestamp}]\n{note}"
+                
+                if existing_notes:
+                    new_notes = existing_notes + '\n\n---\n\n' + timestamped_note
+                else:
+                    new_notes = timestamped_note
+                
+                task.notes = new_notes
+                task.updated_at = datetime.now()
+                session.commit()
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in append_task_notes and CSV fallback is disabled: {e}") from e
+            print(f"[TaskManager] Database error in append_task_notes: {e}, falling back to CSV")
+            self.use_db = False
+            self._ensure_csv_initialized()
+            return self._append_task_notes_csv(task_id, note)
+    
+    def get_task_notes(self, task_id: str) -> str:
+        """Get notes for a task template. Works with both CSV and database.
+        
+        Args:
+            task_id: The task ID
+            
+        Returns:
+            Notes string (empty string if no notes)
+        """
+        if self.use_db:
+            return self._get_task_notes_db(task_id)
+        else:
+            return self._get_task_notes_csv(task_id)
+    
+    def _get_task_notes_csv(self, task_id: str) -> str:
+        """CSV-specific get_task_notes."""
+        self._reload_csv()
+        matches = self.df.index[self.df['task_id'] == task_id]
+        if len(matches) == 0:
+            return ''
+        
+        idx = matches[0]
+        notes = self.df.at[idx, 'notes'] if 'notes' in self.df.columns else ''
+        return notes if not pd.isna(notes) else ''
+    
+    def _get_task_notes_db(self, task_id: str) -> str:
+        """Database-specific get_task_notes."""
+        try:
+            with self.db_session() as session:
+                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                if not task:
+                    return ''
+                return task.notes or ''
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_task_notes and CSV fallback is disabled: {e}") from e
+            print(f"[TaskManager] Database error in get_task_notes: {e}, falling back to CSV")
+            self.use_db = False
+            self._ensure_csv_initialized()
+            return self._get_task_notes_csv(task_id)
 
 
 
@@ -374,8 +587,11 @@ class TaskManager:
                 print("[TaskManager] Task deleted successfully.")
                 return True
         except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in delete_by_id and CSV fallback is disabled: {e}") from e
             print(f"[TaskManager] Database error in delete_by_id: {e}, falling back to CSV")
             self.use_db = False
+            self._ensure_csv_initialized()
             return self._delete_by_id_csv(task_id)
 
 

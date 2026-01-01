@@ -1,0 +1,232 @@
+[TaskManager] Using CSV backend
+[InstanceManager] Using CSV backend
+
+[TEST SETUP] Created test task: t1767002802
+test_multiple_pauses_accumulate_time (__main__.TestPauseResumeTimeTracking.test_multiple_pauses_accumulate_time)
+Test that multiple pause/resume cycles accumulate time correctly. ... 
+=== Test 2: Multiple Pauses ===
+Created instance: i1767002802
+
+--- First Work Session ---
+
+[START DEBUG] Starting/resuming instance i1767002802 (CSV backend)
+[START DEBUG] Previous started_at: ''
+[START DEBUG] Previous status: 'active'
+[START DEBUG] Existing time_spent_before_pause: 0.0
+[START DEBUG] Full actual_data: {}
+[START DEBUG] Stored resume_started_at in actual: 2025-12-29T04:06:42.904912
+[START DEBUG] Setting started_at to: '2025-12-29 04:06:42.904912' (datetime: 2025-12-29 04:06:42.904912)
+[START DEBUG] Setting status to: 'active'
+[START DEBUG] Verified saved started_at: '2025-12-29 04:06:42.904912'
+[START DEBUG] Verified saved status: 'active'
+[START DEBUG] Verified resume_started_at in actual: 2025-12-29T04:06:42.904912
+[START DEBUG] Start/resume completed
+
+Started at: '2025-12-29 04:06:42.904912'
+
+[PAUSE DEBUG] Pausing instance i1767002802 (CSV backend)
+[PAUSE DEBUG] Raw actual JSON string: {"resume_started_at": "2025-12-29T04:06:42.904912"}
+[PAUSE DEBUG] Parsed actual_data: {'resume_started_at': '2025-12-29T04:06:42.904912'}
+[PAUSE DEBUG] Found resume_started_at in actual_data: 2025-12-29T04:06:42.904912
+[PAUSE DEBUG] Parsed resume_started_at: 2025-12-29 04:06:42.904912
+[PAUSE DEBUG] Current time: 2025-12-29 04:06:43.030459
+[PAUSE DEBUG] Elapsed seconds: 0.125547
+[PAUSE DEBUG] Time spent this session: 0.00 minutes
+[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: 0.0 (type: <class 'float'>)
+[PAUSE DEBUG] Total time calculation: 0.00 (existing) + 0.00 (this session) = 0.00 minutes
+[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = 0.00
+[PAUSE DEBUG] Final actual_data before saving: {'time_spent_before_pause': 0.00209245, 'pause_completion_percentage': 0.0, 'pause_reason': 'First pause', 'paused': True}
+[PAUSE DEBUG] Saved actual JSON to CSV: {"time_spent_before_pause": 0.00209245, "pause_completion_percentage": 0.0, "pause_reason": "First pause", "paused": true}
+[PAUSE DEBUG] CSV save completed
+
+Time after first pause: 0.00209245 minutes
+
+--- Second Work Session ---
+
+[START DEBUG] Starting/resuming instance i1767002802 (CSV backend)
+[START DEBUG] Previous started_at: ''
+[START DEBUG] Previous status: 'initialized'
+[START DEBUG] Existing time_spent_before_pause: 0.00209245
+[START DEBUG] Full actual_data: {'time_spent_before_pause': 0.00209245, 'pause_completion_percentage': 0.0, 'pause_reason': 'First pause', 'paused': True}
+[START DEBUG] Stored resume_started_at in actual: 2025-12-29T04:06:43.049194
+[START DEBUG] Setting started_at to: '2025-12-29 04:06:43.049194' (datetime: 2025-12-29 04:06:43.049194)
+[START DEBUG] Setting status to: 'active'
+[START DEBUG] Verified saved started_at: '2025-12-29 04:06:43.049194'
+[START DEBUG] Verified saved status: 'active'
+[START DEBUG] Verified resume_started_at in actual: 2025-12-29T04:06:43.049194
+[START DEBUG] Start/resume completed
+
+Started at: '2025-12-29 04:06:43.049194'
+Time before second session: 0.00209245 minutes
+
+[PAUSE DEBUG] Pausing instance i1767002802 (CSV backend)
+[PAUSE DEBUG] Raw actual JSON string: {"time_spent_before_pause": 0.00209245, "pause_completion_percentage": 0.0, "pause_reason": "First pause", "paused": true, "resume_started_at": "2025-12-29T04:06:43.049194"}
+[PAUSE DEBUG] Parsed actual_data: {'time_spent_before_pause': 0.00209245, 'pause_completion_percentage': 0.0, 'pause_reason': 'First pause', 'paused': True, 'resume_started_at': '2025-12-29T04:06:43.049194'}
+[PAUSE DEBUG] Found resume_started_at in actual_data: 2025-12-29T04:06:43.049194
+[PAUSE DEBUG] Parsed resume_started_at: 2025-12-29 04:06:43.049194
+[PAUSE DEBUG] Current time: 2025-12-29 04:06:43.172109
+[PAUSE DEBUG] Elapsed seconds: 0.122915
+[PAUSE DEBUG] Time spent this session: 0.00 minutes
+[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: 0.00209245 (type: <class 'float'>)
+[PAUSE DEBUG] Total time calculation: 0.00 (existing) + 0.00 (this session) = 0.00 minutes
+[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = 0.00
+[PAUSE DEBUG] Final actual_data before saving: {'time_spent_before_pause': 0.004141033333333334, 'pause_completion_percentage': 0.0, 'pause_reason': 'Second pause', 'paused': True}
+[PAUSE DEBUG] Saved actual JSON to CSV: {"time_spent_before_pause": 0.004141033333333334, "pause_completion_percentage": 0.0, "pause_reason": "Second pause", "paused": true}
+[PAUSE DEBUG] CSV save completed
+
+Time after second pause: 0.004141033333333334 minutes
+[PASS] Time increased from 0.00209245 to 0.004141033333333334 minutes
+
+--- Third Work Session ---
+
+[START DEBUG] Starting/resuming instance i1767002802 (CSV backend)
+[START DEBUG] Previous started_at: ''
+[START DEBUG] Previous status: 'initialized'
+[START DEBUG] Existing time_spent_before_pause: 0.004141033333333334
+[START DEBUG] Full actual_data: {'time_spent_before_pause': 0.004141033333333334, 'pause_completion_percentage': 0.0, 'pause_reason': 'Second pause', 'paused': True}
+[START DEBUG] Stored resume_started_at in actual: 2025-12-29T04:06:43.191520
+[START DEBUG] Setting started_at to: '2025-12-29 04:06:43.191520' (datetime: 2025-12-29 04:06:43.191520)
+[START DEBUG] Setting status to: 'active'
+[START DEBUG] Verified saved started_at: '2025-12-29 04:06:43.191520'
+[START DEBUG] Verified saved status: 'active'
+[START DEBUG] Verified resume_started_at in actual: 2025-12-29T04:06:43.191520
+[START DEBUG] Start/resume completed
+
+
+[PAUSE DEBUG] Pausing instance i1767002802 (CSV backend)
+[PAUSE DEBUG] Raw actual JSON string: {"time_spent_before_pause": 0.004141033333333334, "pause_completion_percentage": 0.0, "pause_reason": "Second pause", "paused": true, "resume_started_at": "2025-12-29T04:06:43.191520"}
+[PAUSE DEBUG] Parsed actual_data: {'time_spent_before_pause': 0.004141033333333334, 'pause_completion_percentage': 0.0, 'pause_reason': 'Second pause', 'paused': True, 'resume_started_at': '2025-12-29T04:06:43.191520'}
+[PAUSE DEBUG] Found resume_started_at in actual_data: 2025-12-29T04:06:43.191520
+[PAUSE DEBUG] Parsed resume_started_at: 2025-12-29 04:06:43.191520
+[PAUSE DEBUG] Current time: 2025-12-29 04:06:43.310403
+[PAUSE DEBUG] Elapsed seconds: 0.118883
+[PAUSE DEBUG] Time spent this session: 0.00 minutes
+[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: 0.004141033333333334 (type: <class 'float'>)
+[PAUSE DEBUG] Total time calculation: 0.00 (existing) + 0.00 (this session) = 0.01 minutes
+[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = 0.01
+[PAUSE DEBUG] Final actual_data before saving: {'time_spent_before_pause': 0.006122416666666667, 'pause_completion_percentage': 0.0, 'pause_reason': 'Third pause', 'paused': True}
+[PAUSE DEBUG] Saved actual JSON to CSV: {"time_spent_before_pause": 0.006122416666666667, "pause_completion_percentage": 0.0, "pause_reason": "Third pause", "paused": true}
+[PAUSE DEBUG] CSV save completed
+
+Time after third pause: 0.006122416666666667 minutes
+[PASS] Time increased from 0.004141033333333334 to 0.006122416666666667 minutes
+[PASS] Total accumulated time: 0.006122416666666667 minutes
+ok
+test_pause_without_start_has_zero_time (__main__.TestPauseResumeTimeTracking.test_pause_without_start_has_zero_time)
+Test that pausing without starting doesn't accumulate time. ... 
+=== Test 3: Pause Without Start ===
+Created instance: i1767002803 (not started)
+
+[PAUSE DEBUG] Pausing instance i1767002803 (CSV backend)
+[PAUSE DEBUG] Raw actual JSON string: {}
+[PAUSE DEBUG] Parsed actual_data: {}
+[PAUSE DEBUG] No resume_started_at, using started_at from CSV: ''
+[PAUSE DEBUG] No start time available (resume_started_at or started_at)
+[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: 0.0 (type: <class 'float'>)
+[PAUSE DEBUG] Total time calculation: 0.00 (existing) + 0.00 (this session) = 0.00 minutes
+[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = 0.00
+[PAUSE DEBUG] Final actual_data before saving: {'time_spent_before_pause': 0.0, 'pause_completion_percentage': 0.0, 'pause_reason': 'Pause without start', 'paused': True}
+[PAUSE DEBUG] Saved actual JSON to CSV: {"time_spent_before_pause": 0.0, "pause_completion_percentage": 0.0, "pause_reason": "Pause without start", "paused": true}
+[PAUSE DEBUG] CSV save completed
+
+time_spent_before_pause: 0.0 minutes
+[PASS] Time is 0.0 (expected 0 or very small)
+ok
+test_resume_preserves_accumulated_time (__main__.TestPauseResumeTimeTracking.test_resume_preserves_accumulated_time)
+Test that resuming preserves previously accumulated time. ... 
+=== Test 4: Resume Preserves Time ===
+
+[START DEBUG] Starting/resuming instance i1767002803 (CSV backend)
+[START DEBUG] Previous started_at: ''
+[START DEBUG] Previous status: 'initialized'
+[START DEBUG] Existing time_spent_before_pause: 0.0
+[START DEBUG] Full actual_data: {'time_spent_before_pause': 0.0, 'pause_completion_percentage': 0.0, 'pause_reason': 'Pause without start', 'paused': True}
+[START DEBUG] Stored resume_started_at in actual: 2025-12-29T04:06:43.375435
+[START DEBUG] Setting started_at to: '2025-12-29 04:06:43.375435' (datetime: 2025-12-29 04:06:43.375435)
+[START DEBUG] Setting status to: 'active'
+[START DEBUG] Verified saved started_at: '2025-12-29 04:06:43.375435'
+[START DEBUG] Verified saved status: 'active'
+[START DEBUG] Verified resume_started_at in actual: 2025-12-29T04:06:43.375435
+[START DEBUG] Start/resume completed
+
+
+[PAUSE DEBUG] Pausing instance i1767002803 (CSV backend)
+[PAUSE DEBUG] Raw actual JSON string: {"time_spent_before_pause": 0.0, "pause_completion_percentage": 0.0, "pause_reason": "Pause without start", "paused": true, "resume_started_at": "2025-12-29T04:06:43.375435"}
+[PAUSE DEBUG] Parsed actual_data: {'time_spent_before_pause': 0.0, 'pause_completion_percentage': 0.0, 'pause_reason': 'Pause without start', 'paused': True, 'resume_started_at': '2025-12-29T04:06:43.375435'}
+[PAUSE DEBUG] Found resume_started_at in actual_data: 2025-12-29T04:06:43.375435
+[PAUSE DEBUG] Parsed resume_started_at: 2025-12-29 04:06:43.375435
+[PAUSE DEBUG] Current time: 2025-12-29 04:06:43.495727
+[PAUSE DEBUG] Elapsed seconds: 0.120292
+[PAUSE DEBUG] Time spent this session: 0.00 minutes
+[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: 0.0 (type: <class 'float'>)
+[PAUSE DEBUG] Total time calculation: 0.00 (existing) + 0.00 (this session) = 0.00 minutes
+[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = 0.00
+[PAUSE DEBUG] Final actual_data before saving: {'time_spent_before_pause': 0.0020048666666666664, 'pause_completion_percentage': 0.0, 'pause_reason': 'Initial pause', 'paused': True}
+[PAUSE DEBUG] Saved actual JSON to CSV: {"time_spent_before_pause": 0.0020048666666666664, "pause_completion_percentage": 0.0, "pause_reason": "Initial pause", "paused": true}
+[PAUSE DEBUG] CSV save completed
+
+Initial accumulated time: 0.0020048666666666664 minutes
+
+[START DEBUG] Starting/resuming instance i1767002803 (CSV backend)
+[START DEBUG] Previous started_at: ''
+[START DEBUG] Previous status: 'initialized'
+[START DEBUG] Existing time_spent_before_pause: 0.0020048666666666664
+[START DEBUG] Full actual_data: {'time_spent_before_pause': 0.0020048666666666664, 'pause_completion_percentage': 0.0, 'pause_reason': 'Initial pause', 'paused': True}
+[START DEBUG] Stored resume_started_at in actual: 2025-12-29T04:06:43.516783
+[START DEBUG] Setting started_at to: '2025-12-29 04:06:43.516783' (datetime: 2025-12-29 04:06:43.516783)
+[START DEBUG] Setting status to: 'active'
+[START DEBUG] Verified saved started_at: '2025-12-29 04:06:43.516783'
+[START DEBUG] Verified saved status: 'active'
+[START DEBUG] Verified resume_started_at in actual: 2025-12-29T04:06:43.516783
+[START DEBUG] Start/resume completed
+
+Time after resume: 0.0020048666666666664 minutes
+[PASS] Time preserved: 0.0020048666666666664 == 0.0020048666666666664
+ok
+test_single_pause_accumulates_time (__main__.TestPauseResumeTimeTracking.test_single_pause_accumulates_time)
+Test that a single pause correctly calculates and stores time. ... 
+=== Test 1: Single Pause ===
+Created instance: i1767002803
+
+[START DEBUG] Starting/resuming instance i1767002803 (CSV backend)
+[START DEBUG] Previous started_at: '2025-12-29 04:06:43.516783'
+[START DEBUG] Previous status: 'active'
+[START DEBUG] Existing time_spent_before_pause: 0.0020048666666666664
+[START DEBUG] Full actual_data: {'time_spent_before_pause': 0.0020048666666666664, 'pause_completion_percentage': 0.0, 'pause_reason': 'Initial pause', 'paused': True, 'resume_started_at': '2025-12-29T04:06:43.516783'}
+[START DEBUG] Stored resume_started_at in actual: 2025-12-29T04:06:43.558380
+[START DEBUG] Setting started_at to: '2025-12-29 04:06:43.558380' (datetime: 2025-12-29 04:06:43.558380)
+[START DEBUG] Setting status to: 'active'
+[START DEBUG] Verified saved started_at: '2025-12-29 04:06:43.558380'
+[START DEBUG] Verified saved status: 'active'
+[START DEBUG] Verified resume_started_at in actual: 2025-12-29T04:06:43.558380
+[START DEBUG] Start/resume completed
+
+Started instance
+started_at after start: '2025-12-29 04:06:43.558380'
+
+[PAUSE DEBUG] Pausing instance i1767002803 (CSV backend)
+[PAUSE DEBUG] Raw actual JSON string: {"time_spent_before_pause": 0.0020048666666666664, "pause_completion_percentage": 0.0, "pause_reason": "Initial pause", "paused": true, "resume_started_at": "2025-12-29T04:06:43.558380"}
+[PAUSE DEBUG] Parsed actual_data: {'time_spent_before_pause': 0.0020048666666666664, 'pause_completion_percentage': 0.0, 'pause_reason': 'Initial pause', 'paused': True, 'resume_started_at': '2025-12-29T04:06:43.558380'}
+[PAUSE DEBUG] Found resume_started_at in actual_data: 2025-12-29T04:06:43.558380
+[PAUSE DEBUG] Parsed resume_started_at: 2025-12-29 04:06:43.558380
+[PAUSE DEBUG] Current time: 2025-12-29 04:06:43.683746
+[PAUSE DEBUG] Elapsed seconds: 0.125366
+[PAUSE DEBUG] Time spent this session: 0.00 minutes
+[PAUSE DEBUG] Existing time_spent_before_pause from actual_data: 0.0020048666666666664 (type: <class 'float'>)
+[PAUSE DEBUG] Total time calculation: 0.00 (existing) + 0.00 (this session) = 0.00 minutes
+[PAUSE DEBUG] Updated actual_data['time_spent_before_pause'] = 0.00
+[PAUSE DEBUG] Final actual_data before saving: {'time_spent_before_pause': 0.0040943, 'pause_completion_percentage': 0.0, 'pause_reason': 'Test pause', 'paused': True}
+[PAUSE DEBUG] Saved actual JSON to CSV: {"time_spent_before_pause": 0.0040943, "pause_completion_percentage": 0.0, "pause_reason": "Test pause", "paused": true}
+[PAUSE DEBUG] CSV save completed
+
+Paused instance
+actual JSON string: {"time_spent_before_pause": 0.0040943, "pause_completion_percentage": 0.0, "pause_reason": "Test pause", "paused": true}
+Parsed actual_data: {'time_spent_before_pause': 0.0040943, 'pause_completion_percentage': 0.0, 'pause_reason': 'Test pause', 'paused': True}
+time_spent_before_pause: 0.0040943
+[PASS] Time accumulated: 0.0040943 minutes
+ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.842s
+
+OK

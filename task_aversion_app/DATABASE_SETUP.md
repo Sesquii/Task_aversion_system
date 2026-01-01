@@ -20,6 +20,11 @@ start_with_sqlite.bat
 
 This automatically sets `DATABASE_URL` and starts the app.
 
+**Note for Phase 1 Migration:**
+- The script now allows CSV fallback (DISABLE_CSV_FALLBACK=false) since InstanceManager methods haven't been migrated yet
+- Database infrastructure will initialize, but methods still use CSV backend until Phase 2+
+- To test CSV-only mode, use `start_csv_only.ps1` or `start_csv_only.bat`
+
 ---
 
 ### Option 2: Set Environment Variable in PowerShell (Current Session)
@@ -65,16 +70,21 @@ python app.py
 ## How to Verify It's Working
 
 When you start the app, you should see in the console:
+
+**With DATABASE_URL set:**
 ```
+[Database] Initialized database at sqlite:///data/task_aversion.db
 [TaskManager] Using database backend
+[InstanceManager] Using database backend  (Phase 1+ only)
 ```
 
-If you see:
+**With CSV-only mode (no DATABASE_URL):**
 ```
 [TaskManager] Using CSV backend
+[InstanceManager] Using CSV backend
 ```
 
-Then the environment variable isn't set. Check your method above.
+**Phase 1 Note:** Even with database backend initialized, InstanceManager methods still use CSV until Phase 2+ migration completes. You'll see both backends initialized, but method calls go to CSV.
 
 ---
 

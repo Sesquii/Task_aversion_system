@@ -1,9 +1,7 @@
 ---
 description: Core SQL migration patterns for gradual CSV-to-database transition
-globs: ["backend/**/*.py", "backend/database.py"]
-alwaysApply: true
+alwaysApply: false
 ---
-
 # SQL Migration Core Rules
 
 ## Troubleshooting Rule Conflicts

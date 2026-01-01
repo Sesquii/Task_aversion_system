@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 
@@ -140,6 +140,426 @@ class UserStateManager:
         return self.update_preference(user_id, "composite_score_weights", weights_json)
 
     # -----------------------------
+    # Productivity score preferences
+    # -----------------------------
+    def get_productivity_settings(self, user_id: str) -> Dict[str, Any]:
+        """Get productivity scoring settings (curve + burnout thresholds)."""
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+
+        settings_json = prefs.get("productivity_settings", "")
+        if not settings_json:
+            return {}
+
+        try:
+            import json
+            return json.loads(settings_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_productivity_settings(self, user_id: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist productivity scoring settings."""
+        import json
+        settings_json = json.dumps(settings)
+        return self.update_preference(user_id, "productivity_settings", settings_json)
+    
+    def get_productivity_goal_settings(self, user_id: str) -> Dict[str, Any]:
+        """Get productivity goal tracking settings.
+        
+        Returns:
+            Dict with:
+            - goal_hours_per_week (float, default 40.0)
+            - starting_hours_per_week (float or None)
+            - initialization_method (str or None: 'auto', 'manual', 'hybrid')
+            - auto_estimate_factor (float, default 10.0)
+            - last_adjusted_at (ISO string or None)
+            - auto_adjusted_count (int, default 0)
+            - user_override_flag (bool, default False)
+            - week_calculation_mode (str, default 'rolling'): 'rolling' or 'monday_based'
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        goal_settings_json = prefs.get("productivity_goal_settings", "")
+        if not goal_settings_json:
+            return {}
+        
+        try:
+            import json
+            settings = json.loads(goal_settings_json)
+            # Ensure defaults
+            if 'goal_hours_per_week' not in settings:
+                settings['goal_hours_per_week'] = 40.0
+            if 'auto_estimate_factor' not in settings:
+                settings['auto_estimate_factor'] = 10.0
+            if 'auto_adjusted_count' not in settings:
+                settings['auto_adjusted_count'] = 0
+            if 'user_override_flag' not in settings:
+                settings['user_override_flag'] = False
+            if 'week_calculation_mode' not in settings:
+                settings['week_calculation_mode'] = 'rolling'  # Default to rolling 7-day
+            return settings
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_productivity_goal_settings(self, user_id: str, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist productivity goal tracking settings.
+        
+        Args:
+            user_id: User ID
+            settings: Dict with goal_hours_per_week, starting_hours_per_week, etc.
+        
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Validate and normalize settings
+        normalized = {}
+        if 'goal_hours_per_week' in settings:
+            normalized['goal_hours_per_week'] = float(settings['goal_hours_per_week'])
+        if 'starting_hours_per_week' in settings:
+            val = settings['starting_hours_per_week']
+            normalized['starting_hours_per_week'] = float(val) if val is not None else None
+        if 'initialization_method' in settings:
+            normalized['initialization_method'] = settings['initialization_method']
+        if 'auto_estimate_factor' in settings:
+            normalized['auto_estimate_factor'] = float(settings['auto_estimate_factor'])
+        if 'last_adjusted_at' in settings:
+            normalized['last_adjusted_at'] = settings['last_adjusted_at']
+        if 'auto_adjusted_count' in settings:
+            normalized['auto_adjusted_count'] = int(settings['auto_adjusted_count'])
+        if 'user_override_flag' in settings:
+            normalized['user_override_flag'] = bool(settings['user_override_flag'])
+        if 'week_calculation_mode' in settings:
+            mode = settings['week_calculation_mode']
+            if mode in ('rolling', 'monday_based'):
+                normalized['week_calculation_mode'] = mode
+        
+        settings_json = json.dumps(normalized)
+        return self.update_preference(user_id, "productivity_goal_settings", settings_json)
+    
+    def get_productivity_history(self, user_id: str) -> List[Dict[str, Any]]:
+        """Get historical productivity tracking data (weekly snapshots).
+        
+        Returns:
+            List of dicts, each containing:
+            - week_start (ISO date string: YYYY-MM-DD)
+            - goal_hours (float)
+            - actual_hours (float)
+            - productivity_score (float)
+            - productivity_points (float)
+            - recorded_at (ISO datetime string)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return []
+        
+        history_json = prefs.get("productivity_history", "")
+        if not history_json:
+            return []
+        
+        try:
+            import json
+            return json.loads(history_json)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    
+    def add_productivity_history_entry(
+        self,
+        user_id: str,
+        week_start: str,
+        goal_hours_per_week: float,
+        actual_hours: float,
+        productivity_score: float,
+        productivity_points: float
+    ) -> Dict[str, Any]:
+        """Add a weekly snapshot to productivity history.
+        
+        Args:
+            user_id: User ID
+            week_start: Week start date as ISO string (YYYY-MM-DD)
+            goal_hours_per_week: Goal hours for this week
+            actual_hours: Actual productive hours for this week
+            productivity_score: Total productivity score for this week
+            productivity_points: Total productivity points for this week
+        
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        from datetime import datetime
+        
+        # Get existing history
+        history = self.get_productivity_history(user_id)
+        
+        # Create new entry
+        new_entry = {
+            'week_start': week_start,
+            'goal_hours_per_week': float(goal_hours_per_week),
+            'actual_hours': float(actual_hours),
+            'productivity_score': float(productivity_score),
+            'productivity_points': float(productivity_points),
+            'recorded_at': datetime.utcnow().isoformat()
+        }
+        
+        # Check if entry for this week already exists, update it if so
+        existing_index = None
+        for i, entry in enumerate(history):
+            if entry.get('week_start') == week_start:
+                existing_index = i
+                break
+        
+        if existing_index is not None:
+            history[existing_index] = new_entry
+        else:
+            history.append(new_entry)
+        
+        # Sort by week_start (oldest first)
+        history.sort(key=lambda x: x.get('week_start', ''))
+        
+        # Keep only last 52 weeks (1 year) to prevent unbounded growth
+        if len(history) > 52:
+            history = history[-52:]
+        
+        history_json = json.dumps(history)
+        return self.update_preference(user_id, "productivity_history", history_json)
+
+    def get_persistent_emotions(self, user_id: str = "default") -> Dict[str, int]:
+        """Get persistent emotion values that persist across tasks.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Dict of emotion -> value (0-100)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        emotion_json = prefs.get("persistent_emotion_values", "")
+        if not emotion_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(emotion_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_persistent_emotions(self, emotion_values: Dict[str, int], user_id: str = "default") -> Dict[str, Any]:
+        """Set persistent emotion values that persist across tasks.
+        
+        Args:
+            emotion_values: Dict of emotion -> value (0-100)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Filter out zero values to keep data clean
+        filtered = {k: v for k, v in emotion_values.items() if v > 0}
+        emotion_json = json.dumps(filtered)
+        return self.update_preference(user_id, "persistent_emotion_values", emotion_json)
+
+    # -----------------------------
+    # Cancellation categories management
+    # -----------------------------
+    def get_cancellation_categories(self, user_id: str = "default") -> Dict[str, str]:
+        """Get custom cancellation categories for a user.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Dict of category_key -> category_label
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        categories_json = prefs.get("cancellation_categories", "")
+        if not categories_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(categories_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_cancellation_categories(self, categories: Dict[str, str], user_id: str = "default") -> Dict[str, Any]:
+        """Set custom cancellation categories for a user.
+        
+        Args:
+            categories: Dict of category_key -> category_label
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        categories_json = json.dumps(categories)
+        return self.update_preference(user_id, "cancellation_categories", categories_json)
+    
+    def add_cancellation_category(self, category_key: str, category_label: str, user_id: str = "default") -> Dict[str, str]:
+        """Add a new cancellation category.
+        
+        Args:
+            category_key: Unique key for the category (e.g., 'custom_reason_1')
+            category_label: Display label for the category
+            user_id: User ID
+            
+        Returns:
+            Updated categories dict
+        """
+        categories = self.get_cancellation_categories(user_id)
+        categories[category_key] = category_label
+        self.set_cancellation_categories(categories, user_id)
+        return categories
+    
+    def remove_cancellation_category(self, category_key: str, user_id: str = "default") -> Dict[str, str]:
+        """Remove a cancellation category.
+        
+        Args:
+            category_key: Key of the category to remove
+            user_id: User ID
+            
+        Returns:
+            Updated categories dict
+        """
+        categories = self.get_cancellation_categories(user_id)
+        if category_key in categories:
+            del categories[category_key]
+            self.set_cancellation_categories(categories, user_id)
+        return categories
+    
+    # -----------------------------
+    # Popup settings management
+    # -----------------------------
+    def get_popup_daily_cap(self, user_id: str = "default") -> Optional[int]:
+        """Get daily popup cap for a user.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Daily cap value (int) or None if not set
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return None
+        
+        cap_str = prefs.get("popup_daily_cap", "")
+        if not cap_str:
+            return None
+        
+        try:
+            return int(cap_str)
+        except (ValueError, TypeError):
+            return None
+    
+    def set_popup_daily_cap(self, daily_cap: int, user_id: str = "default") -> Dict[str, Any]:
+        """Set daily popup cap for a user.
+        
+        Args:
+            daily_cap: Maximum number of popups per day (must be >= 1)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        if daily_cap < 1:
+            raise ValueError("Daily cap must be >= 1")
+        
+        return self.update_preference(user_id, "popup_daily_cap", int(daily_cap))
+    
+    def get_weekly_summary_day(self, user_id: str = "default") -> int:
+        """Get the day of week for weekly summary popup (0=Monday, 6=Sunday).
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Day of week (0-6), default 0 (Monday)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return 0  # Default: Monday
+        
+        day_str = prefs.get("weekly_summary_day", "")
+        if not day_str:
+            return 0  # Default: Monday
+        
+        try:
+            day = int(day_str)
+            if 0 <= day <= 6:
+                return day
+            return 0  # Invalid, default to Monday
+        except (ValueError, TypeError):
+            return 0  # Default: Monday
+    
+    def set_weekly_summary_day(self, day_of_week: int, user_id: str = "default") -> Dict[str, Any]:
+        """Set the day of week for weekly summary popup.
+        
+        Args:
+            day_of_week: Day of week (0=Monday, 1=Tuesday, ..., 6=Sunday)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        if not (0 <= day_of_week <= 6):
+            raise ValueError("Day of week must be 0-6 (0=Monday, 6=Sunday)")
+        
+        return self.update_preference(user_id, "weekly_summary_day", int(day_of_week))
+
+    # -----------------------------
+    # Cancellation penalties management
+    # -----------------------------
+    def get_cancellation_penalties(self, user_id: str = "default") -> Dict[str, float]:
+        """Get cancellation penalty multipliers for each category.
+        
+        Args:
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Dict of category_key -> penalty_multiplier (0.0 to 1.0)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        penalties_json = prefs.get("cancellation_penalties", "")
+        if not penalties_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(penalties_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_cancellation_penalties(self, penalties: Dict[str, float], user_id: str = "default") -> Dict[str, Any]:
+        """Set cancellation penalty multipliers for each category.
+        
+        Args:
+            penalties: Dict of category_key -> penalty_multiplier (0.0 to 1.0)
+            user_id: User ID (defaults to "default" for single-user systems)
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Ensure all values are between 0.0 and 1.0
+        validated_penalties = {k: max(0.0, min(1.0, float(v))) for k, v in penalties.items()}
+        penalties_json = json.dumps(validated_penalties)
+        return self.update_preference(user_id, "cancellation_penalties", penalties_json)
+
+    # -----------------------------
     # JavaScript helpers
     # -----------------------------
     @staticmethod
@@ -191,4 +611,113 @@ class UserStateManager:
             }}
         }})();
         """
+    
+    # -----------------------------
+    # Monitored metrics configuration
+    # -----------------------------
+    def get_monitored_metrics_config(self, user_id: str = "default") -> Dict[str, Any]:
+        """Get monitored metrics configuration.
+        
+        Returns:
+            Dict with:
+            - selected_metrics: List of metric keys to display (default: ['productivity_time', 'productivity_score'])
+            - coloration_baseline: Baseline for coloration ('last_3_months', 'last_month', 'last_week', 'average', 'all_data')
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {
+                'selected_metrics': ['productivity_time', 'productivity_score'],
+                'coloration_baseline': 'last_3_months'
+            }
+        
+        config_json = prefs.get("monitored_metrics_config", "")
+        if not config_json:
+            return {
+                'selected_metrics': ['productivity_time', 'productivity_score'],
+                'coloration_baseline': 'last_3_months'
+            }
+        
+        try:
+            import json
+            config = json.loads(config_json)
+            # Ensure defaults
+            if 'selected_metrics' not in config:
+                config['selected_metrics'] = ['productivity_time', 'productivity_score']
+            if 'coloration_baseline' not in config:
+                config['coloration_baseline'] = 'last_3_months'
+            return config
+        except (json.JSONDecodeError, TypeError):
+            return {
+                'selected_metrics': ['productivity_time', 'productivity_score'],
+                'coloration_baseline': 'last_3_months'
+            }
+    
+    def get_execution_score_chunk_state(self, user_id: str = "default") -> Optional[Dict[str, Any]]:
+        """Get persisted execution score chunking state.
+        
+        Returns:
+            Dict with chunking state (instances, current_index, execution_scores, etc.)
+            or None if not found
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return None
+        
+        state_json = prefs.get("execution_score_chunk_state", "")
+        if not state_json:
+            return None
+        
+        try:
+            import json
+            return json.loads(state_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    
+    def set_execution_score_chunk_state(self, state: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
+        """Persist execution score chunking state.
+        
+        Args:
+            state: Dict with chunking state (instances, current_index, execution_scores, etc.)
+            user_id: User ID (default "default")
+            
+        Returns:
+            Updated user preferences
+        """
+        import json
+        # Don't persist instances list (can be large) - only persist progress indicators
+        # Reconstruct instances list on next load
+        persisted_state = {
+            'current_index': state.get('current_index', 0),
+            'execution_scores': state.get('execution_scores', []),
+            'completed': state.get('completed', False),
+            'avg_execution_score': state.get('avg_execution_score'),
+            'last_updated': datetime.utcnow().isoformat()
+        }
+        state_json = json.dumps(persisted_state)
+        return self.update_preference(user_id, "execution_score_chunk_state", state_json)
+    
+    def set_monitored_metrics_config(self, config: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
+        """Set monitored metrics configuration.
+        
+        Args:
+            config: Dict with selected_metrics and coloration_baseline
+            user_id: User ID
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        # Validate
+        validated = {}
+        if 'selected_metrics' in config:
+            validated['selected_metrics'] = list(config['selected_metrics'])
+        if 'coloration_baseline' in config:
+            baseline = config['coloration_baseline']
+            if baseline in ['last_3_months', 'last_month', 'last_week', 'average', 'all_data']:
+                validated['coloration_baseline'] = baseline
+            else:
+                validated['coloration_baseline'] = 'last_3_months'
+        
+        config_json = json.dumps(validated)
+        return self.update_preference(user_id, "monitored_metrics_config", config_json)
 

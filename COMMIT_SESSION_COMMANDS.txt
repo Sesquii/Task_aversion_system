@@ -1,0 +1,55 @@
+# Git Commit Command Sequence for This Session
+# Execute these commands in order to commit only files changed in this session
+
+# Step 1: Stage modified files
+git add task_aversion_app/app.py
+git add task_aversion_app/backend/analytics.py
+git add task_aversion_app/backend/user_state.py
+
+# Step 2: Stage new files
+git add task_aversion_app/backend/productivity_tracker.py
+git add task_aversion_app/ui/productivity_goals_experimental.py
+
+# Step 3: Verify what will be committed
+git status
+
+# Step 4: Review the staged changes (optional)
+git diff --cached
+
+# Step 5: Commit with message
+git commit -m "feat(productivity): add productivity goal tracking system
+
+Add productivity goal tracking feature with experimental UI and backend
+support for goal-based productivity score adjustments.
+
+Changes:
+- Add productivity goal settings management in UserStateManager
+  * get_productivity_goal_settings() - retrieve goal tracking settings
+  * set_productivity_goal_settings() - persist goal tracking settings
+  * Supports goal_hours_per_week, starting_hours_per_week, initialization
+    method, auto-adjustment tracking, and user override flags
+- Add productivity tracker backend module for goal calculations
+- Add experimental productivity goals UI page
+- Register experimental UI route in app.py
+- Update analytics.py to support goal-based productivity score adjustments
+  * Add goal_hours_per_week and weekly_productive_hours parameters to
+    calculate_productivity_score()
+  * Apply goal achievement multiplier (±20% max) based on weekly goal
+    completion ratio
+
+Files created:
+- task_aversion_app/backend/productivity_tracker.py
+- task_aversion_app/ui/productivity_goals_experimental.py
+
+Files modified:
+- task_aversion_app/app.py (add experimental UI import)
+- task_aversion_app/backend/analytics.py (goal-based score adjustments)
+- task_aversion_app/backend/user_state.py (goal settings management)
+
+Purpose:
+This feature enables users to set weekly productivity hour goals and
+receive score adjustments based on goal achievement. The system supports
+automatic initialization from historical data, manual setting, or hybrid
+approaches. Goal achievement ratios above 120% receive bonuses, while
+ratios below 80% receive penalties, encouraging consistent productivity
+goal adherence."

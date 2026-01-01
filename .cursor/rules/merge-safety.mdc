@@ -1,9 +1,7 @@
 ---
 description: Git merge direction safety rules to prevent merge mistakes
-globs: ["**/*"]
-alwaysApply: true
+alwaysApply: false
 ---
-
 # Git Merge Direction Safety Rules
 
 ## Critical: Always Verify Merge Direction

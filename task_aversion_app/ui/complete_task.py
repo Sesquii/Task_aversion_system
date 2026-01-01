@@ -1,10 +1,16 @@
 # ui/complete_task.py
+from typing import Optional
 from nicegui import ui
 from fastapi import Request
 from backend.instance_manager import InstanceManager
+from backend.user_state import UserStateManager
+from backend.popup_dispatcher import PopupDispatcher
+from ui.popup_modal import show_popup_modal
 import json
 
 im = InstanceManager()
+user_state = UserStateManager()
+popup_dispatcher = PopupDispatcher()
 
 def complete_task_page(task_manager, emotion_manager):
 
@@ -19,7 +25,9 @@ def complete_task_page(task_manager, emotion_manager):
 
         params = dict(request.query_params)
         instance_id = params.get("instance_id")
+        edit_mode = params.get("edit", "false").lower() == "true"
         print("[complete_task] instance_id from URL:", instance_id)
+        print("[complete_task] edit_mode:", edit_mode)
 
         # Get instance and predicted values if instance_id is available
         instance = None
@@ -76,17 +84,15 @@ def complete_task_page(task_manager, emotion_manager):
 
             inst_select.on('update:model-value', on_choose)
 
-        # Helper to get default value from predicted (initialization) values, scaling from 0-10 to 0-100 if needed
+        # Helper to get default value from predicted (initialization) values
         # IMPORTANT: This function copies initialization values even if they are zero. No fallback to task creation.
+        # Values are stored on 0-100 scale and should be used as-is (no scaling).
         def get_default_value(actual_key, predicted_key, default=0):
             # First check if current instance already has actual values (for editing)
             if actual_key in current_actual_data:
                 val = current_actual_data[actual_key]
                 try:
                     num_val = float(val)
-                    # Scale from 0-10 to 0-100 if value is <= 10
-                    if num_val <= 10 and num_val >= 0:
-                        num_val = num_val * 10
                     return int(round(num_val))
                 except (ValueError, TypeError):
                     pass
@@ -96,9 +102,6 @@ def complete_task_page(task_manager, emotion_manager):
                 val = predicted_data[predicted_key]
                 try:
                     num_val = float(val)
-                    # Scale from 0-10 to 0-100 if value is <= 10
-                    if num_val <= 10 and num_val >= 0:
-                        num_val = num_val * 10
                     return int(round(num_val))
                 except (ValueError, TypeError):
                     pass
@@ -122,16 +125,13 @@ def complete_task_page(task_manager, emotion_manager):
         # Use .get() with a sentinel value to distinguish between missing key and 0 value
         initialization_aversion = predicted_data.get('initialization_expected_aversion', None)
         
-        # Process the value: scale if needed and convert to int
+        # Process the value: convert to int (values are stored on 0-100 scale, use as-is)
         # Handle 0 as a valid value (0 is not None, so we check if the key exists)
         current_expected_aversion = 0
         if 'initialization_expected_aversion' in predicted_data:
             # Key exists, so process the value (even if it's 0)
             try:
                 current_expected_aversion = float(initialization_aversion)
-                # Scale from 0-10 to 0-100 if needed
-                if current_expected_aversion <= 10 and current_expected_aversion >= 0:
-                    current_expected_aversion = current_expected_aversion * 10
                 current_expected_aversion = int(round(current_expected_aversion))
             except (ValueError, TypeError):
                 current_expected_aversion = 0
@@ -149,12 +149,11 @@ def complete_task_page(task_manager, emotion_manager):
         ui.label("Actual Relief").classes("text-lg font-semibold")
         actual_relief = ui.slider(min=0, max=100, step=1, value=default_relief)
         # Show predicted value from initialization if available
+        # Values are stored on 0-100 scale and displayed as-is (no scaling)
         if 'expected_relief' in predicted_data:
             pred_val = predicted_data.get('expected_relief')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_relief:
                     ui.label(f"Initialized: {pred_val} (current: {default_relief})").classes("text-xs text-gray-500")
@@ -171,8 +170,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_mental_energy')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_mental_energy:
                     ui.label(f"Initialized: {pred_val} (current: {default_mental_energy})").classes("text-xs text-gray-500")
@@ -185,8 +182,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_cognitive_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 ui.label(f"Initialized (from old data): {pred_val}").classes("text-xs text-gray-500")
             except (ValueError, TypeError):
@@ -200,8 +195,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_difficulty')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_difficulty:
                     ui.label(f"Initialized: {pred_val} (current: {default_difficulty})").classes("text-xs text-gray-500")
@@ -214,8 +207,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_cognitive_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 ui.label(f"Initialized (from old data): {pred_val}").classes("text-xs text-gray-500")
             except (ValueError, TypeError):
@@ -229,8 +220,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_emotional_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_emotional:
                     ui.label(f"Initialized: {pred_val} (current: {default_emotional})").classes("text-xs text-gray-500")
@@ -246,8 +235,6 @@ def complete_task_page(task_manager, emotion_manager):
             pred_val = predicted_data.get('expected_physical_load')
             try:
                 pred_num = float(pred_val)
-                if pred_num <= 10 and pred_num >= 0:
-                    pred_num = pred_num * 10
                 pred_val = int(round(pred_num))
                 if pred_val != default_physical:
                     ui.label(f"Initialized: {pred_val} (current: {default_physical})").classes("text-xs text-gray-500")
@@ -257,7 +244,7 @@ def complete_task_page(task_manager, emotion_manager):
                 pass
 
         # ----- Emotion Tracking -----
-        ui.label("Emotional State After Completion").classes("text-lg font-semibold mt-4")
+        ui.label("Current Emotional State").classes("text-lg font-semibold mt-4")
         
         # Load initial emotion values from predicted data (from initialization)
         initial_emotion_values = predicted_data.get('emotion_values', {})
@@ -277,6 +264,10 @@ def complete_task_page(task_manager, emotion_manager):
                     initial_emotion_values = {emotion: 50 for emotion in old_emotions}
                 else:
                     initial_emotion_values = {}
+        
+        # If no initial emotions from this task, load persistent emotions
+        if not initial_emotion_values:
+            initial_emotion_values = user_state.get_persistent_emotions()
         
         # Load actual emotion values if they exist (for editing)
         actual_emotion_values = current_actual_data.get('emotion_values', {})
@@ -356,13 +347,14 @@ def complete_task_page(task_manager, emotion_manager):
         # Initialize emotion sliders
         update_emotion_sliders()
         
-        # Single input for emotions (comma-separated)
+        # Single input for emotions (comma-separated) - disabled in edit mode
         ui.label("Track emotions by listing them (comma-separated)").classes("text-xs text-gray-500 mt-4")
         emotions_input = ui.input(
             label="Emotions",
             value=", ".join(all_emotions) if all_emotions else "",
             placeholder="e.g., Excitement, Anxiety, Relief"
         )
+        # Edit mode allows full editing now
 
         def parse_emotions_input():
             raw = emotions_input.value or ''
@@ -383,13 +375,23 @@ def complete_task_page(task_manager, emotion_manager):
             all_emotions = parse_emotions_input()
             update_emotion_sliders()
 
-        ui.button("Update emotions", on_click=apply_emotion_input).classes("mb-4")
+        update_emotions_btn = ui.button("Update emotions", on_click=apply_emotion_input).classes("mb-4")
+        # Edit mode allows full editing now
 
         ui.label("Completion %").classes("text-lg font-semibold")
         ui.label("Enter percentage completed. Use values > 100% if you completed more work than expected.").classes("text-xs text-gray-500 mb-2")
+        # Load existing completion percentage if editing
+        default_completion_pct = 100
+        if edit_mode and instance:
+            completion_pct_from_actual = current_actual_data.get('completion_percent')
+            if completion_pct_from_actual is not None:
+                try:
+                    default_completion_pct = int(float(completion_pct_from_actual))
+                except (ValueError, TypeError):
+                    pass
         completion_pct = ui.number(
             label="Completion Percentage",
-            value=100,
+            value=default_completion_pct,
             min=0,
             precision=0
         )
@@ -402,29 +404,84 @@ def complete_task_page(task_manager, emotion_manager):
         default_duration = 0
         if instance:
             started_at = instance.get('started_at', '')
+            time_spent_before_pause = 0.0
+            
+            # Get time spent before pause (if task was paused and resumed)
+            actual_str = instance.get('actual', '{}')
+            if actual_str:
+                try:
+                    if isinstance(actual_str, str):
+                        actual_data = json.loads(actual_str) if actual_str else {}
+                    else:
+                        actual_data = actual_str if isinstance(actual_str, dict) else {}
+                    
+                    time_before = actual_data.get('time_spent_before_pause', 0.0)
+                    if isinstance(time_before, (int, float)):
+                        time_spent_before_pause = float(time_before)
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+            
             if started_at:
-                # Calculate duration from start time to now
+                # Calculate duration from start time to now, plus any time from previous sessions
                 from datetime import datetime
                 import pandas as pd
                 try:
                     started = pd.to_datetime(started_at)
                     now = datetime.now()
-                    default_duration = (now - started).total_seconds() / 60.0
+                    current_session_minutes = (now - started).total_seconds() / 60.0
+                    default_duration = current_session_minutes + time_spent_before_pause
                 except Exception:
-                    pass
+                    # If we can't calculate current session, use time_spent_before_pause if available
+                    default_duration = time_spent_before_pause
             else:
-                # Default to expected duration from predicted data
-                predicted_raw = instance.get('predicted') or '{}'
-                try:
-                    predicted_data = json.loads(predicted_raw) if predicted_raw else {}
-                    default_duration = float(predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0)
-                except (ValueError, TypeError, json.JSONDecodeError):
-                    pass
+                # Task not currently started, use time_spent_before_pause if available
+                if time_spent_before_pause > 0:
+                    default_duration = time_spent_before_pause
+                else:
+                    # Default to expected duration from predicted data
+                    predicted_raw = instance.get('predicted') or '{}'
+                    try:
+                        predicted_data = json.loads(predicted_raw) if predicted_raw else {}
+                        default_duration = float(predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0)
+                    except (ValueError, TypeError, json.JSONDecodeError):
+                        pass
 
         ui.label("Actual Time (minutes)").classes("text-lg font-semibold")
-        actual_time = ui.number(value=int(default_duration) if default_duration > 0 else 0)
+        # Load existing time if editing
+        default_actual_time = int(default_duration) if default_duration > 0 else 0
+        if edit_mode and instance:
+            time_actual_from_data = current_actual_data.get('time_actual_minutes')
+            if time_actual_from_data is not None:
+                try:
+                    default_actual_time = int(float(time_actual_from_data))
+                except (ValueError, TypeError):
+                    pass
+        actual_time = ui.number(value=default_actual_time)
 
-        notes = ui.textarea(label='Notes (optional)')
+        # Load existing completion notes (instance-specific completion notes, separate from shared instance notes)
+        existing_completion_notes = current_actual_data.get('completion_notes', '') or ''
+        
+        # Also show shared notes if they exist (for reference, not editable here)
+        shared_notes = current_actual_data.get('notes', '') or ''
+        
+        # Show edit mode indicator
+        if edit_mode:
+            with ui.card().classes("w-full p-3 bg-blue-50 border border-blue-200 mb-4"):
+                ui.label("[EDIT MODE] You are editing a completed task. All values can be edited.").classes("text-sm text-blue-800 font-semibold")
+                ui.label("Changes will be saved as edited version. You can navigate to the initialization page to edit initialization data as well.").classes("text-xs text-blue-600 mt-1")
+                
+                def go_to_init_edit():
+                    ui.navigate.to(f"/initialize-task?instance_id={instance_id}&edit=true")
+                
+                ui.button("← Edit Initialization Data", on_click=go_to_init_edit).classes("mt-2 bg-blue-500 text-white")
+        
+        # Show shared notes if they exist (read-only)
+        if shared_notes and not edit_mode:
+            ui.label("Shared notes from active task:").classes("text-xs text-gray-600 mt-2 mb-1")
+            ui.markdown(shared_notes).classes("text-xs text-gray-700 p-2 bg-gray-50 rounded border mb-2").style("max-height: 150px; overflow-y: auto; white-space: pre-wrap;")
+        
+        notes_label = 'Completion Notes (optional)' + (' - Instance-specific completion notes' if not edit_mode else '')
+        notes = ui.textarea(label=notes_label, value=existing_completion_notes if edit_mode else '')
 
         def submit_completion():
             print("[complete_task] submit clicked")
@@ -441,36 +498,156 @@ def complete_task_page(task_manager, emotion_manager):
                 ui.notify(f"Instance {iid} not found", color='negative')
                 return
 
+            # Check if sliders were adjusted (compare current values to defaults)
+            sliders_adjusted = False
+            
+            # Check relief slider
+            current_relief = int(actual_relief.value) if actual_relief.value is not None else 0
+            if current_relief != default_relief:
+                sliders_adjusted = True
+            
+            # Check mental energy slider
+            current_mental_energy = int(actual_mental_energy.value) if actual_mental_energy.value is not None else 0
+            if current_mental_energy != default_mental_energy:
+                sliders_adjusted = True
+            
+            # Check difficulty slider
+            current_difficulty = int(actual_difficulty.value) if actual_difficulty.value is not None else 0
+            if current_difficulty != default_difficulty:
+                sliders_adjusted = True
+            
+            # Check emotional slider
+            current_emotional = int(actual_emotional.value) if actual_emotional.value is not None else 0
+            if current_emotional != default_emotional:
+                sliders_adjusted = True
+            
+            # Check physical slider
+            current_physical = int(actual_physical.value) if actual_physical.value is not None else 0
+            if current_physical != default_physical:
+                sliders_adjusted = True
+            
+            # Check emotion sliders
+            for emotion in emotion_sliders.keys():
+                current_val = int(emotion_sliders[emotion].value)
+                default_val = get_emotion_default_value(emotion)
+                if current_val != default_val:
+                    sliders_adjusted = True
+                    break
+            
+            # Check aversion slider if it exists
+            if aversion_slider is not None:
+                current_aversion = int(aversion_slider.value) if aversion_slider.value is not None else 0
+                if current_aversion != current_expected_aversion:
+                    sliders_adjusted = True
+            
+            # Skip popup evaluation if editing a completed task
+            if edit_mode:
+                # Directly submit without popup
+                do_submit_completion()
+                return
+            
+            # Evaluate popup triggers (only for new completions)
+            completion_context = {
+                'event_type': 'complete',
+                'instance_id': iid,
+                'task_id': task_id,
+                'sliders_adjusted': sliders_adjusted
+            }
+            
+            popup = popup_dispatcher.evaluate_triggers(
+                completion_context=completion_context,
+                user_id='default'
+            )
+            
+            # If popup should show, display it and handle response
+            if popup:
+                def handle_popup_response(response_value: str, helpful: Optional[bool], comment: Optional[str]):
+                    # Log response
+                    popup_dispatcher.handle_popup_response(
+                        trigger_id=popup['trigger_id'],
+                        response_value=response_value,
+                        helpful=helpful,
+                        comment=comment,
+                        task_id=task_id,
+                        user_id='default'
+                    )
+                    
+                    if response_value == 'edit':
+                        # User wants to edit sliders, don't submit
+                        ui.notify("Please adjust your sliders before completing", color='info')
+                        return
+                    elif response_value == 'continue':
+                        # User wants to continue, proceed with submission
+                        do_submit_completion()
+                    elif response_value == 'break':
+                        # User wants to take a break, still submit but show break message
+                        ui.notify("Good idea to take a break! Task will be completed.", color='positive')
+                        do_submit_completion()
+                    elif response_value == 'view':
+                        # User wants to view scores, submit and navigate (if navigation available)
+                        ui.notify("Task completed. Check your analytics dashboard for score details.", color='info')
+                        do_submit_completion()
+                        # TODO: Navigate to analytics/scores view if available
+                    else:
+                        # Default: proceed with submission
+                        do_submit_completion()
+                
+                show_popup_modal(popup, on_response=handle_popup_response)
+                return  # Don't submit yet, wait for popup response
+            
+            # No popup, proceed with submission
+            do_submit_completion()
+        
+        def do_submit_completion():
+            """Internal function that actually performs the submission."""
+            iid = (inst_input.value or "").strip()
+
             # Collect emotion values from sliders
+            # Check all emotions that have sliders (even if not in all_emotions)
+            # This ensures we capture emotions that were in persistent state but removed from input
             # Filter out emotions with 0 values (0 means emotion is not present/not being tracked)
             # This keeps the data clean: if an emotion was initialized but set to 0 on completion,
             # it means the emotion is no longer present and won't clutter the data.
             # When loading, initialized emotions are still shown so users can see the full picture.
             emotion_values = {}
+            # Check all emotions that have sliders (including ones that might have been removed from input)
+            for emotion in emotion_sliders.keys():
+                value = int(emotion_sliders[emotion].value)
+                # Only store non-zero values (0 means emotion is not present and should be removed)
+                if value > 0:
+                    emotion_values[emotion] = value
+            
+            # Also include emotions in all_emotions that don't have sliders yet (new emotions)
             for emotion in all_emotions:
-                if emotion in emotion_sliders:
-                    value = int(emotion_sliders[emotion].value)
-                    # Only store non-zero values (0 means emotion is not present)
-                    if value > 0:
-                        emotion_values[emotion] = value
-                else:
+                if emotion not in emotion_sliders:
                     # Fallback to default if slider doesn't exist
                     default_val = get_emotion_default_value(emotion)
                     # Only store if > 0
                     if default_val > 0:
                         emotion_values[emotion] = default_val
+            
+            # Save emotions to persistent state so they carry over to other tasks
+            # Setting to 0 removes the emotion from persistent state
+            user_state.set_persistent_emotions(emotion_values)
 
             # Get completion percentage, defaulting to 100 if not provided
             completion_value = completion_pct.value if completion_pct.value is not None else 100
             completion_value = float(completion_value) if completion_value else 100.0
             
-            # Combine notes with over-completion note if provided
-            combined_notes = notes.value or ""
+            # Completion notes are instance-specific (stored separately from task-level notes)
+            # Get existing completion notes
+            existing_completion_notes = current_actual_data.get('completion_notes', '') or ''
+            new_completion_notes = notes.value or "" if not edit_mode else notes.value or ""
+            
+            # Use the new completion notes (no merging needed since they're instance-specific)
+            combined_completion_notes = new_completion_notes
+            
+            # Add over-completion note if provided
             if over_completion_note.value and over_completion_note.value.strip():
-                if combined_notes:
-                    combined_notes += "\n\nOver-completion: " + over_completion_note.value.strip()
+                if combined_completion_notes:
+                    combined_completion_notes += "\n\nOver-completion: " + over_completion_note.value.strip()
                 else:
-                    combined_notes = "Over-completion: " + over_completion_note.value.strip()
+                    combined_completion_notes = "Over-completion: " + over_completion_note.value.strip()
             
             # Safely get slider values with fallbacks
             try:
@@ -502,7 +679,7 @@ def complete_task_page(task_manager, emotion_manager):
                 'actual_physical': physical_val,
                 'completion_percent': int(round(completion_value)),
                 'time_actual_minutes': int(actual_time.value or 0),
-                'notes': combined_notes,
+                'completion_notes': combined_completion_notes,  # Instance-specific completion notes
                 'emotion_values': emotion_values,  # Store actual emotion values
                 # Backward compatibility: also include old cognitive field
                 'actual_cognitive': int((mental_energy_val + difficulty_val) / 2),
@@ -511,39 +688,74 @@ def complete_task_page(task_manager, emotion_manager):
             print("[complete_task] actual payload:", actual)
 
             try:
-                result = im.complete_instance(iid, actual)
-                print("[complete_task] complete_instance result:", result)
-                
-                # If aversion slider exists, update the predicted aversion
-                # Note: We preserve initialization_expected_aversion so it always shows the original initialization value
-                if aversion_slider is not None:
-                    updated_aversion = int(aversion_slider.value)
-                    # Get current predicted data and update expected_aversion
+                # If editing, use update method instead of complete_instance to preserve completion status
+                if edit_mode:
+                    # Update the actual data directly
                     instance = im.get_instance(iid)
                     if instance:
-                        predicted_raw = instance.get('predicted') or '{}'
-                        try:
-                            predicted_dict = json.loads(predicted_raw) if predicted_raw else {}
-                            # Update expected_aversion but preserve initialization_expected_aversion
-                            predicted_dict['expected_aversion'] = updated_aversion
-                            # Preserve initialization_expected_aversion if it exists (don't overwrite it)
-                            if 'initialization_expected_aversion' not in predicted_dict:
-                                # If it doesn't exist, create it from current expected_aversion before update
-                                # This handles cases where the instance was initialized before this change
-                                original_aversion = predicted_dict.get('expected_aversion', updated_aversion)
-                                predicted_dict['initialization_expected_aversion'] = original_aversion
-                            # Update the instance with new predicted data
-                            im.add_prediction_to_instance(iid, predicted_dict)
-                            print(f"[complete_task] Updated expected_aversion to {updated_aversion}")
-                        except json.JSONDecodeError:
-                            pass
+                        # Update actual data
+                        from ui.task_editing_manager import _update_actual_data_db, _update_actual_data_csv
+                        if im.use_db:
+                            _update_actual_data_db(iid, actual)
+                        else:
+                            _update_actual_data_csv(iid, actual)
+                        
+                        # Update predicted aversion if slider exists
+                        if aversion_slider is not None:
+                            updated_aversion = int(aversion_slider.value)
+                            predicted_raw = instance.get('predicted') or '{}'
+                            try:
+                                predicted_dict = json.loads(predicted_raw) if predicted_raw else {}
+                                predicted_dict['expected_aversion'] = updated_aversion
+                                if 'initialization_expected_aversion' not in predicted_dict:
+                                    original_aversion = predicted_dict.get('expected_aversion', updated_aversion)
+                                    predicted_dict['initialization_expected_aversion'] = original_aversion
+                                im.add_prediction_to_instance(iid, predicted_dict)
+                            except json.JSONDecodeError:
+                                pass
+                else:
+                    result = im.complete_instance(iid, actual)
+                    print("[complete_task] complete_instance result:", result)
+                    
+                    # If aversion slider exists, update the predicted aversion
+                    # Note: We preserve initialization_expected_aversion so it always shows the original initialization value
+                    if aversion_slider is not None:
+                        updated_aversion = int(aversion_slider.value)
+                        # Get current predicted data and update expected_aversion
+                        instance = im.get_instance(iid)
+                        if instance:
+                            predicted_raw = instance.get('predicted') or '{}'
+                            try:
+                                predicted_dict = json.loads(predicted_raw) if predicted_raw else {}
+                                # Update expected_aversion but preserve initialization_expected_aversion
+                                predicted_dict['expected_aversion'] = updated_aversion
+                                # Preserve initialization_expected_aversion if it exists (don't overwrite it)
+                                if 'initialization_expected_aversion' not in predicted_dict:
+                                    # If it doesn't exist, create it from current expected_aversion before update
+                                    # This handles cases where the instance was initialized before this change
+                                    original_aversion = predicted_dict.get('expected_aversion', updated_aversion)
+                                    predicted_dict['initialization_expected_aversion'] = original_aversion
+                                # Update the instance with new predicted data
+                                im.add_prediction_to_instance(iid, predicted_dict)
+                                print(f"[complete_task] Updated expected_aversion to {updated_aversion}")
+                            except json.JSONDecodeError:
+                                pass
                 
             except Exception as e:
                 print("[complete_task] ERROR:", e)
                 ui.notify(str(e), color='negative')
                 return
 
-            ui.notify("Instance completed", color='positive')
-            ui.navigate.to('/')
+            # If editing a completed task, mark it as edited
+            if edit_mode:
+                from ui.task_editing_manager import mark_instance_as_edited
+                mark_instance_as_edited(iid)
+                ui.notify("Completion data updated!", color='positive')
+                # Navigate back to task editing manager
+                ui.navigate.to('/task-editing-manager')
+            else:
+                ui.notify("Instance completed", color='positive')
+                ui.navigate.to('/')
 
-        ui.button("Submit Completion", on_click=submit_completion)
+        button_text = "Save Changes" if edit_mode else "Submit Completion"
+        ui.button(button_text, on_click=submit_completion)

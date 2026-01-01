@@ -1,6 +1,8 @@
 from nicegui import ui
 import pandas as pd
 import plotly.express as px
+import time
+import json
 
 from backend.analytics import Analytics
 from backend.task_schema import TASK_ATTRIBUTES
@@ -16,15 +18,23 @@ NUMERIC_ATTRIBUTE_OPTIONS = [
 
 CALCULATED_METRICS = [
     {'label': 'Stress Level', 'value': 'stress_level'},
+    {'label': 'Relief Score (Actual)', 'value': 'relief_score'},
+    {'label': 'Expected Relief', 'value': 'expected_relief'},
+    {'label': 'Net Relief (Actual - Expected)', 'value': 'net_relief'},
+    {'label': 'Serendipity Factor', 'value': 'serendipity_factor'},
+    {'label': 'Disappointment Factor', 'value': 'disappointment_factor'},
     {'label': 'Net Wellbeing', 'value': 'net_wellbeing'},
     {'label': 'Net Wellbeing (Normalized)', 'value': 'net_wellbeing_normalized'},
     {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
+    {'label': 'Stress-Relief Correlation Score', 'value': 'stress_relief_correlation_score'},
     {'label': 'Productivity Score', 'value': 'productivity_score'},
     {'label': 'Grit Score', 'value': 'grit_score'},
-    {'label': 'Relief Duration Score', 'value': 'relief_duration_score'},
     {'label': "Today's self care tasks", 'value': 'daily_self_care_tasks'},
     {'label': 'Work Time (minutes)', 'value': 'work_time'},
     {'label': 'Play Time (minutes)', 'value': 'play_time'},
+    {'label': 'Thoroughness Score', 'value': 'thoroughness_score'},
+    {'label': 'Thoroughness Factor', 'value': 'thoroughness_factor'},
+    {'label': 'Execution Score', 'value': 'execution_score'},
 ]
 
 ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
@@ -36,6 +46,15 @@ def register_analytics_page():
     @ui.page('/analytics')
     def analytics_dashboard():
         build_analytics_page()
+    
+    @ui.page('/analytics/emotional-flow')
+    def emotional_flow_page():
+        build_emotional_flow_page()
+    
+    @ui.page('/analytics/factors-comparison')
+    def factors_comparison_page():
+        from ui.factors_comparison_analytics import build_factors_comparison_page
+        build_factors_comparison_page()
 
 
 def build_analytics_page():
@@ -44,9 +63,163 @@ def build_analytics_page():
     ui.label("Explore how task qualities evolve and prototype recommendation filters.").classes(
         "text-gray-500 mb-4"
     )
+    
+    # Analytics Module Navigation
+    with ui.card().classes("p-4 mb-4 bg-blue-50 border border-blue-200"):
+        ui.label("Analytics Modules").classes("text-lg font-semibold mb-2")
+        ui.label("Explore specialized analytics views for different aspects of your task data.").classes("text-sm text-gray-600 mb-3")
+        with ui.row().classes("gap-3 flex-wrap"):
+            ui.button("📊 Emotional Flow", on_click=lambda: ui.navigate.to('/analytics/emotional-flow')).classes("bg-purple-500 text-white")
+            ui.label("Track emotion changes and patterns").classes("text-xs text-gray-500 self-center")
+            ui.button("🔄 Relief Comparison", on_click=lambda: ui.navigate.to('/analytics/relief-comparison')).classes("bg-green-500 text-white")
+            ui.label("Compare expected vs actual relief").classes("text-xs text-gray-500 self-center")
+            ui.button("⚙️ Factors Comparison", on_click=lambda: ui.navigate.to('/analytics/factors-comparison')).classes("bg-teal-500 text-white")
+            ui.label("Analyze factors that influence scores").classes("text-xs text-gray-500 self-center")
+            ui.button("📋 Cancelled Tasks", on_click=lambda: ui.navigate.to('/cancelled-tasks')).classes("bg-orange-500 text-white")
+            ui.label("View cancelled task patterns and statistics").classes("text-xs text-gray-500 self-center")
+            ui.button("📈 Summary", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
+            ui.label("View overall performance score").classes("text-xs text-gray-500 self-center")
+            ui.button("📚 Analytics Glossary", on_click=lambda: ui.navigate.to('/analytics/glossary')).classes("bg-gray-500 text-white")
+            ui.label("Learn about metrics and formulas").classes("text-xs text-gray-500 self-center")
+    
+    # Composite Score Summary
+    from backend.user_state import UserStateManager
+    user_state = UserStateManager()
+    DEFAULT_USER_ID = "default_user"
+    
+    current_weights = user_state.get_score_weights(DEFAULT_USER_ID) or {}
+    
+    # Composite Score section - load asynchronously to avoid timeout
+    composite_container = ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200")
+    with composite_container:
+        loading_label = ui.label("Loading composite score...").classes("text-sm text-gray-500")
+        with ui.row().classes("items-center gap-4 w-full").style("display: none;") as composite_row:
+            ui.label("Composite Score").classes("text-lg font-semibold")
+            with ui.card().classes("p-3 bg-white border-2 border-indigo-300") as score_card:
+                score_label = ui.label("--").classes("text-3xl font-bold text-indigo-700")
+                ui.label("/ 100").classes("text-sm text-indigo-600")
+            ui.button("View Details", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
+            ui.button("Configure Weights", on_click=lambda: ui.navigate.to('/settings')).classes("bg-gray-500 text-white")
+    
+    def load_composite_score():
+        """Load composite score asynchronously."""
+        try:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'analytics_page.py:load_composite', 'message': 'calling get_all_scores_for_composite', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            get_scores_start = time.perf_counter()
+            all_scores = analytics_service.get_all_scores_for_composite(days=7)
+            get_scores_duration = (time.perf_counter() - get_scores_start) * 1000
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'analytics_page.py:load_composite', 'message': 'get_all_scores_for_composite completed', 'data': {'duration_ms': get_scores_duration, 'score_count': len(all_scores)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            
+            composite_result = analytics_service.calculate_composite_score(
+                components=all_scores,
+                weights=current_weights,
+                normalize_components=True
+            )
+            
+            # Update UI
+            loading_label.style("display: none;")
+            composite_row.style("display: flex;")
+            score_label.text = f"{composite_result['composite_score']:.1f}"
+        except Exception as e:
+            loading_label.text = f"Error loading composite score: {str(e)}"
+            loading_label.classes("text-red-500")
+    
+    # Load composite score asynchronously
+    ui.timer(0.1, load_composite_score, once=True)
 
+    # Time Tracking Consistency Section
+    with ui.card().classes("p-4 mb-4 bg-teal-50 border border-teal-200"):
+        ui.label("Time Tracking Consistency").classes("text-xl font-bold mb-2")
+        ui.label("Measures how well you track your time. Sleep up to 8 hours is rewarded. Untracked time is penalized.").classes(
+            "text-sm text-gray-600 mb-3"
+        )
+        
+        # Get time tracking details
+        tracking_data = analytics_service.calculate_time_tracking_consistency_score(days=7)
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Tracking Score").classes("text-xs text-gray-500")
+                ui.label(f"{tracking_data['tracking_consistency_score']:.1f}").classes(
+                    "text-2xl font-bold"
+                )
+                ui.label("/ 100").classes("text-xs text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Tracked Time").classes("text-xs text-gray-500")
+                tracked_hours = tracking_data['avg_tracked_time_minutes'] / 60.0
+                ui.label(f"{tracked_hours:.1f} hrs").classes("text-lg font-semibold")
+                ui.label(f"({tracking_data['avg_tracked_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Untracked Time").classes("text-xs text-gray-500")
+                untracked_hours = tracking_data['avg_untracked_time_minutes'] / 60.0
+                ui.label(f"{untracked_hours:.1f} hrs").classes("text-lg font-semibold text-orange-600")
+                ui.label(f"({tracking_data['avg_untracked_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Sleep Time").classes("text-xs text-gray-500")
+                sleep_hours = tracking_data['avg_sleep_time_minutes'] / 60.0
+                ui.label(f"{sleep_hours:.1f} hrs").classes("text-lg font-semibold")
+                ui.label(f"({tracking_data['avg_sleep_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Tracking Coverage").classes("text-xs text-gray-500")
+                coverage_pct = tracking_data['tracking_coverage'] * 100.0
+                ui.label(f"{coverage_pct:.1f}%").classes("text-lg font-semibold")
+                ui.label("of day tracked").classes("text-xs text-gray-600")
+        
+        ui.separator().classes("my-3")
+        ui.label(
+            "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
+            "Higher tracking consistency means more of your day is logged."
+        ).classes("text-sm text-gray-600")
+
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:105', 'message': 'analytics page calling get_dashboard_metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     metrics = analytics_service.get_dashboard_metrics()
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:106', 'message': 'analytics page calling get_relief_summary', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
+    get_relief_start = time.perf_counter()
     relief_summary = analytics_service.get_relief_summary()
+    get_relief_duration = (time.perf_counter() - get_relief_start) * 1000
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:106', 'message': 'analytics page get_relief_summary completed', 'data': {'duration_ms': get_relief_duration, 'has_data': bool(relief_summary)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+    except: pass
+    # #endregion
+    
     life_balance = metrics.get('life_balance', {})
     with ui.row().classes("gap-3 flex-wrap mb-4"):
         for title, value in [
@@ -78,16 +251,32 @@ def build_analytics_page():
             ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
             ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
             ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
+            ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
+            ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
         ]:
             with ui.card().classes("p-3 min-w-[150px]"):
                 ui.label(title).classes("text-xs text-gray-500")
                 ui.label(value).classes("text-xl font-bold")
+                # Add link to thoroughness glossary for thoroughness metrics
+                if title in ["Thoroughness Score", "Thoroughness Factor"]:
+                    ui.button("📚 Learn More", 
+                            on_click=lambda: ui.navigate.to('/analytics/glossary/thoroughness_factor')).classes(
+                        "text-xs bg-teal-500 text-white mt-1"
+                    )
+    
+    # Get target hours from settings for display
+    from backend.user_state import UserStateManager
+    user_state = UserStateManager()
+    goal_settings = user_state.get_productivity_goal_settings("default_user")
+    goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
+    target_hours_per_day = goal_hours_per_week / 5.0  # Assume 5 work days
     
     # Productivity Volume Section
     productivity_volume = metrics.get('productivity_volume', {})
     with ui.card().classes("p-4 mb-4"):
         ui.label("Productivity Volume Analysis").classes("text-xl font-bold mb-2")
         ui.label("Metrics that account for both efficiency and total work volume").classes("text-sm text-gray-500 mb-3")
+        ui.label(f"Goal: {goal_hours_per_week:.1f} hours/week ({target_hours_per_day:.1f} hours/day)").classes("text-xs text-blue-600 font-semibold mb-2")
         
         with ui.row().classes("gap-4 flex-wrap"):
             with ui.card().classes("p-3 min-w-[200px]"):
@@ -112,19 +301,56 @@ def build_analytics_page():
                 ui.label("Productivity Potential").classes("text-xs text-gray-500 font-semibold")
                 potential = productivity_volume.get('productivity_potential_score', 0.0)
                 ui.label(f"{potential:.1f}").classes("text-2xl font-bold text-blue-600")
-                ui.label("If you worked 6 hrs/day").classes("text-xs text-gray-400")
+                ui.label(f"If you worked {target_hours_per_day:.1f} hrs/day (Volumetric)").classes("text-xs text-gray-400")
             
             with ui.card().classes("p-3 min-w-[200px] border-2 border-orange-300"):
                 ui.label("Work Volume Gap").classes("text-xs text-gray-500 font-semibold")
                 gap = productivity_volume.get('work_volume_gap', 0.0)
                 ui.label(f"{gap:.1f} hours").classes("text-2xl font-bold text-orange-600")
-                ui.label("Gap to 6 hrs/day target").classes("text-xs text-gray-400")
+                ui.label(f"Gap to {target_hours_per_day:.1f} hrs/day target").classes("text-xs text-gray-400")
             
             with ui.card().classes("p-3 min-w-[200px] border-2 border-green-300"):
                 ui.label("Composite Productivity").classes("text-xs text-gray-500 font-semibold")
                 composite = productivity_volume.get('composite_productivity_score', 0.0)
                 ui.label(f"{composite:.1f}").classes("text-2xl font-bold text-green-600")
                 ui.label("Efficiency + Volume + Consistency").classes("text-xs text-gray-400")
+        
+        # Add glossary link
+        with ui.row().classes("mt-2"):
+            ui.button("View Volumetric Productivity Glossary", 
+                     on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
+                "text-xs bg-blue-500 text-white"
+            )
+        
+        # New Volumetric Productivity Section
+        ui.separator().classes("my-4")
+        with ui.row().classes("items-center gap-2 mb-2"):
+            ui.label("Volumetric Productivity (Volume-Integrated)").classes("text-lg font-semibold")
+            ui.button("View Glossary", 
+                     on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
+                "text-xs bg-green-500 text-white"
+            )
+        
+        ui.label("Productivity score that integrates volume factor to provide more accurate measurements.").classes("text-sm text-gray-500 mb-3")
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px] bg-gray-50"):
+                ui.label("Base Productivity (Avg)").classes("text-xs text-gray-500 font-semibold")
+                base_prod = productivity_volume.get('avg_base_productivity', 0.0)
+                ui.label(f"{base_prod:.1f}").classes("text-lg font-semibold")
+                ui.label("Per-task average").classes("text-xs text-gray-400 italic")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-green-100 border-2 border-green-300"):
+                ui.label("Volumetric Productivity").classes("text-xs text-gray-700 font-bold")
+                volumetric = productivity_volume.get('volumetric_productivity_score', 0.0)
+                ui.label(f"{volumetric:.1f}").classes("text-2xl font-bold text-green-700")
+                ui.label("Base × Volume Factor").classes("text-xs text-gray-600 italic")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-blue-100 border-2 border-blue-300"):
+                ui.label("Volumetric Potential").classes("text-xs text-gray-700 font-bold")
+                volumetric_pot = productivity_volume.get('volumetric_potential_score', 0.0)
+                ui.label(f"{volumetric_pot:.1f}").classes("text-2xl font-bold text-blue-700")
+                ui.label(f"At target volume ({target_hours_per_day:.1f} hrs/day)").classes("text-xs text-gray-600 italic")
     
     # Show warning if efficiency is high but volume is low
     avg_efficiency = metrics.get('quality', {}).get('avg_stress_efficiency')
@@ -134,7 +360,7 @@ def build_analytics_page():
                 ui.icon("warning", size="md").classes("text-yellow-600")
                 ui.label("High efficiency but low work volume detected").classes("font-semibold text-yellow-800")
             ui.label(f"You're highly efficient (efficiency: {avg_efficiency:.2f}) but only working {avg_work_time/60:.1f} hours/day on average.").classes("text-sm text-yellow-700 mt-1")
-            ui.label(f"Working more could significantly increase your productivity. Gap: {gap:.1f} hours/day to reach 6 hours/day target.").classes("text-sm text-yellow-700")
+            ui.label(f"Working more could significantly increase your productivity. Gap: {gap:.1f} hours/day to reach {target_hours_per_day:.1f} hours/day target.").classes("text-sm text-yellow-700")
     
     # Life Balance Section
     with ui.card().classes("p-4 mb-4"):
@@ -1196,4 +1422,334 @@ def _render_stress_efficiency_leaderboard():
                     ui.label(f"{task['avg_relief']:.1f}").classes("w-20 text-right")
                     ui.label(f"{task['avg_stress']:.1f}").classes("w-20 text-right")
                     ui.label(str(task['count'])).classes("w-16 text-right")
+
+
+def build_emotional_flow_page():
+    """Emotional Flow Analytics - tracks emotion changes and patterns."""
+    ui.add_head_html("<style>.analytics-grid { gap: 1rem; }</style>")
+    
+    # Navigation
+    with ui.row().classes("gap-2 mb-4"):
+        ui.button("← Back to Analytics", on_click=lambda: ui.navigate.to('/analytics')).props("outlined")
+        ui.label("Emotional Flow Analytics").classes("text-2xl font-bold")
+    
+    ui.label("Track how your emotions change from task start to completion, and discover patterns in your emotional responses.").classes(
+        "text-gray-500 mb-4"
+    )
+    
+    # Get emotional flow data
+    flow_data = analytics_service.get_emotional_flow_data()
+    
+    # Summary metrics
+    with ui.row().classes("gap-3 flex-wrap mb-4"):
+        for title, value in [
+            ("Avg Emotional Load", f"{flow_data.get('avg_emotional_load', 0):.1f}"),
+            ("Avg Relief", f"{flow_data.get('avg_relief', 0):.1f}"),
+            ("Emotional Spikes", flow_data.get('spike_count', 0)),
+            ("Emotion-Relief Ratio", f"{flow_data.get('emotion_relief_ratio', 0):.2f}"),
+        ]:
+            with ui.card().classes("p-3 min-w-[150px]"):
+                ui.label(title).classes("text-xs text-gray-500")
+                ui.label(value).classes("text-xl font-bold")
+    
+    # Emotion transition chart (initialization → completion)
+    _render_emotion_transitions(flow_data)
+    
+    # Emotional load vs relief scatter
+    _render_emotional_load_vs_relief(flow_data)
+    
+    # Expected vs actual emotional load
+    _render_expected_vs_actual_emotional(flow_data)
+    
+    # Emotion trends over time
+    _render_emotion_trends(flow_data)
+    
+    # Emotional spikes analysis
+    _render_emotional_spikes(flow_data)
+    
+    # Emotion correlations
+    _render_emotion_correlations(flow_data)
+
+
+def _render_emotion_transitions(flow_data):
+    """Show how emotions change from initialization to completion."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotion Transitions").classes("text-xl font-bold mb-2")
+        ui.label("How your emotions change from task start to completion").classes("text-sm text-gray-500 mb-3")
+        
+        transitions = flow_data.get('transitions', [])
+        if not transitions:
+            ui.label("No emotion transition data yet. Complete tasks with emotion tracking to see patterns.").classes("text-xs text-gray-500")
+            return
+        
+        # Create transition visualization
+        # Group by emotion and show average initial vs final values
+        emotion_data = {}
+        for trans in transitions:
+            emotion = trans.get('emotion')
+            if not emotion:
+                continue
+            if emotion not in emotion_data:
+                emotion_data[emotion] = {'initial': [], 'final': []}
+            
+            initial = trans.get('initial_value')
+            final = trans.get('final_value')
+            if initial is not None:
+                emotion_data[emotion]['initial'].append(initial)
+            if final is not None:
+                emotion_data[emotion]['final'].append(final)
+        
+        # Calculate averages
+        transition_df_data = []
+        for emotion, values in emotion_data.items():
+            avg_initial = sum(values['initial']) / len(values['initial']) if values['initial'] else 0
+            avg_final = sum(values['final']) / len(values['final']) if values['final'] else 0
+            transition_df_data.append({
+                'emotion': emotion,
+                'initial': avg_initial,
+                'final': avg_final,
+                'change': avg_final - avg_initial
+            })
+        
+        if transition_df_data:
+            df = pd.DataFrame(transition_df_data)
+            df = df.sort_values('change', ascending=False)
+            
+            # Bar chart showing initial vs final
+            import plotly.graph_objects as go
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=df['emotion'],
+                y=df['initial'],
+                name='Initial (Start)',
+                marker_color='#3498db'
+            ))
+            fig.add_trace(go.Bar(
+                x=df['emotion'],
+                y=df['final'],
+                name='Final (Completion)',
+                marker_color='#e74c3c'
+            ))
+            fig.update_layout(
+                title="Average Emotion Intensity: Start vs Completion",
+                xaxis_title="Emotion",
+                yaxis_title="Intensity (0-100)",
+                barmode='group',
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            ui.plotly(fig)
+            
+            # Show change summary
+            with ui.row().classes("gap-3 flex-wrap mt-3"):
+                increased = df[df['change'] > 5]
+                decreased = df[df['change'] < -5]
+                
+                if not increased.empty:
+                    with ui.card().classes("p-3 bg-red-50 border border-red-200"):
+                        ui.label("Emotions That Increased").classes("text-xs font-semibold text-red-700 mb-1")
+                        for _, row in increased.iterrows():
+                            ui.label(f"{row['emotion']}: +{row['change']:.1f}").classes("text-xs text-red-600")
+                
+                if not decreased.empty:
+                    with ui.card().classes("p-3 bg-green-50 border border-green-200"):
+                        ui.label("Emotions That Decreased").classes("text-xs font-semibold text-green-700 mb-1")
+                        for _, row in decreased.iterrows():
+                            ui.label(f"{row['emotion']}: {row['change']:.1f}").classes("text-xs text-green-600")
+
+
+def _render_emotional_load_vs_relief(flow_data):
+    """Scatter plot of emotional load vs relief."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotional Load vs Relief").classes("text-xl font-bold mb-2")
+        ui.label("How emotional intensity relates to relief after completion").classes("text-sm text-gray-500 mb-3")
+        
+        scatter_data = flow_data.get('load_relief_scatter', {})
+        if not scatter_data or not scatter_data.get('x'):
+            ui.label("No data yet. Complete tasks to see emotional load vs relief patterns.").classes("text-xs text-gray-500")
+            return
+        
+        df = pd.DataFrame({
+            'emotional_load': scatter_data['x'],
+            'relief': scatter_data['y'],
+            'task_name': scatter_data.get('task_names', [])
+        })
+        
+        fig = px.scatter(
+            df,
+            x='emotional_load',
+            y='relief',
+            hover_data=['task_name'],
+            labels={'emotional_load': 'Emotional Load (0-100)', 'relief': 'Relief (0-100)'},
+            title="Emotional Load vs Relief"
+        )
+        fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        ui.plotly(fig)
+        
+        # Add interpretation
+        with ui.card().classes("p-3 mt-3 bg-blue-50"):
+            ui.label("Interpretation").classes("text-xs font-semibold text-blue-700 mb-1")
+            ui.label("• High emotional load + High relief = Meaningful accomplishment despite difficulty").classes("text-xs text-blue-600")
+            ui.label("• High emotional load + Low relief = Tasks that were stressful but not rewarding").classes("text-xs text-blue-600")
+            ui.label("• Low emotional load + High relief = Easy wins that feel good").classes("text-xs text-blue-600")
+
+
+def _render_expected_vs_actual_emotional(flow_data):
+    """Compare expected vs actual emotional load."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Expected vs Actual Emotional Load").classes("text-xl font-bold mb-2")
+        ui.label("How well you predict emotional intensity").classes("text-sm text-gray-500 mb-3")
+        
+        comparison_data = flow_data.get('expected_actual_comparison', {})
+        if not comparison_data or not comparison_data.get('expected'):
+            ui.label("No comparison data yet.").classes("text-xs text-gray-500")
+            return
+        
+        df = pd.DataFrame({
+            'expected': comparison_data['expected'],
+            'actual': comparison_data['actual'],
+            'task_name': comparison_data.get('task_names', [])
+        })
+        
+        # Scatter plot
+        fig = px.scatter(
+            df,
+            x='expected',
+            y='actual',
+            hover_data=['task_name'],
+            labels={'expected': 'Expected Emotional Load', 'actual': 'Actual Emotional Load'},
+            title="Expected vs Actual Emotional Load"
+        )
+        # Add diagonal line (perfect prediction)
+        import plotly.graph_objects as go
+        fig.add_trace(go.Scatter(
+            x=[0, 100],
+            y=[0, 100],
+            mode='lines',
+            name='Perfect Prediction',
+            line=dict(dash='dash', color='gray')
+        ))
+        fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+        ui.plotly(fig)
+        
+        # Calculate prediction accuracy
+        if len(df) > 0:
+            df['difference'] = abs(df['actual'] - df['expected'])
+            avg_error = df['difference'].mean()
+            
+            with ui.row().classes("gap-3 mt-3"):
+                with ui.card().classes("p-3"):
+                    ui.label("Average Prediction Error").classes("text-xs text-gray-500")
+                    ui.label(f"{avg_error:.1f} points").classes("text-lg font-bold")
+                
+                spikes = len(df[df['actual'] > df['expected'] + 30])
+                with ui.card().classes("p-3"):
+                    ui.label("Unexpected Emotional Spikes").classes("text-xs text-gray-500")
+                    ui.label(f"{spikes} tasks").classes("text-lg font-bold")
+
+
+def _render_emotion_trends(flow_data):
+    """Time series of specific emotions."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotion Trends Over Time").classes("text-xl font-bold mb-2")
+        ui.label("Track how specific emotions evolve across tasks").classes("text-sm text-gray-500 mb-3")
+        
+        trends = flow_data.get('emotion_trends', {})
+        if not trends:
+            ui.label("No emotion trend data yet.").classes("text-xs text-gray-500")
+            return
+        
+        # Get available emotions
+        available_emotions = list(trends.keys())
+        if not available_emotions:
+            ui.label("No emotion data available.").classes("text-xs text-gray-500")
+            return
+        
+        # Emotion selector
+        emotion_select = ui.select(
+            options={emotion: emotion.title() for emotion in available_emotions},
+            value=available_emotions[0] if available_emotions else None,
+            label="Select Emotion"
+        ).props("dense outlined").classes("mb-3")
+        
+        chart_area = ui.column().classes("mt-3")
+        
+        def update_trend_chart():
+            chart_area.clear()
+            selected = emotion_select.value
+            if not selected or selected not in trends:
+                return
+            
+            trend_data = trends[selected]
+            dates = trend_data.get('dates', [])
+            values = trend_data.get('values', [])
+            
+            if not dates or not values:
+                with chart_area:
+                    ui.label("No trend data for this emotion.").classes("text-xs text-gray-500")
+                return
+            
+            df = pd.DataFrame({
+                'date': pd.to_datetime(dates),
+                'intensity': values
+            })
+            df = df.sort_values('date')
+            
+            fig = px.line(
+                df,
+                x='date',
+                y='intensity',
+                markers=True,
+                labels={'intensity': 'Intensity (0-100)', 'date': 'Date'},
+                title=f"{selected.title()} Over Time"
+            )
+            fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
+            with chart_area:
+                ui.plotly(fig)
+        
+        emotion_select.on('update:model-value', lambda e: update_trend_chart())
+        update_trend_chart()
+
+
+def _render_emotional_spikes(flow_data):
+    """Show tasks with unexpected emotional spikes."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotional Spikes").classes("text-xl font-bold mb-2")
+        ui.label("Tasks where emotional load was unexpectedly high").classes("text-sm text-gray-500 mb-3")
+        
+        spikes = flow_data.get('spikes', [])
+        if not spikes:
+            ui.label("No emotional spikes detected yet.").classes("text-xs text-gray-500")
+            return
+        
+        # Show top spikes
+        with ui.column().classes("gap-2"):
+            for spike in spikes[:10]:  # Top 10
+                with ui.card().classes("p-3 border-l-4 border-red-400"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label(spike.get('task_name', 'Unknown Task')).classes("font-semibold")
+                        ui.label(f"Expected: {spike.get('expected', 0):.0f}").classes("text-xs text-gray-500")
+                        ui.label(f"Actual: {spike.get('actual', 0):.0f}").classes("text-xs text-red-600 font-bold")
+                        ui.label(f"Spike: +{spike.get('spike_amount', 0):.0f}").classes("text-xs text-red-700")
+                    if spike.get('completed_at'):
+                        ui.label(f"Completed: {spike['completed_at']}").classes("text-xs text-gray-400")
+
+
+def _render_emotion_correlations(flow_data):
+    """Show how emotions correlate with other metrics."""
+    with ui.card().classes("p-4 w-full mb-4"):
+        ui.label("Emotion Correlations").classes("text-xl font-bold mb-2")
+        ui.label("How emotions relate to relief, difficulty, and other metrics").classes("text-sm text-gray-500 mb-3")
+        
+        correlations = flow_data.get('correlations', {})
+        if not correlations:
+            ui.label("No correlation data yet. More data needed for meaningful correlations.").classes("text-xs text-gray-500")
+            return
+        
+        # Display correlation info
+        with ui.row().classes("gap-3 flex-wrap"):
+            for emotion, corr_data in correlations.items():
+                with ui.card().classes("p-3 min-w-[200px]"):
+                    ui.label(emotion.title()).classes("text-sm font-semibold mb-2")
+                    for metric, value in corr_data.items():
+                        ui.label(f"{metric}: {value:.2f}").classes("text-xs")
 

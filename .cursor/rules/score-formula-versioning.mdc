@@ -1,0 +1,305 @@
+# Score Formula Versioning Rules
+
+## Overview
+
+All score and points formulas must be versioned once calibrated. This ensures:
+- Ability to track formula changes over time
+- Reference to previous formulas for optimization
+- Ability to rollback if needed
+- Clear documentation of formula evolution
+- Reproducibility of historical calculations
+
+## Versioning Requirements
+
+### 1. Formula Version Storage
+
+**Location:** `backend/score_formulas.py` or `backend/score_weights.py`
+
+**Structure:**
+```python
+SCORE_FORMULA_VERSIONS = {
+    'productivity_score': {
+        'v1.0': {
+            'created': '2025-01-15',
+            'formula': '...',
+            'weights': {...},
+            'rationale': '...',
+            'test_scenarios': [...],
+            'deprecated': False
+        },
+        'v1.1': {
+            'created': '2025-01-20',
+            'formula': '...',
+            'weights': {...},
+            'rationale': '...',
+            'test_scenarios': [...],
+            'deprecated': False,
+            'changes_from': 'v1.0',
+            'change_rationale': '...'
+        }
+    },
+    # ... other scores
+}
+```
+
+### 2. Version Numbering
+
+**Format:** `v{MAJOR}.{MINOR}`
+
+- **Major version (v1.0 → v2.0):** Significant formula changes (e.g., changing core calculation logic)
+- **Minor version (v1.0 → v1.1):** Weight adjustments, parameter tuning, minor improvements
+
+**Examples:**
+- `v1.0` - Initial calibrated formula
+- `v1.1` - Adjusted work multiplier from 3.0-5.0 to 3.5-5.5
+- `v2.0` - Changed from linear to exponential scaling
+
+### 3. Formula Logging
+
+**Create Formula Log File:** `docs/score_formulas/formula_history.md`
+
+**Format:**
+```markdown
+# Score Formula History
+
+## Productivity Score
+
+### v1.0 (2025-01-15)
+- **Formula:** `completion_pct * multiplier * bonus`
+- **Weights:**
+  - work_multiplier_min: 3.0
+  - work_multiplier_max: 5.0
+  - play_penalty_rate: -0.003
+- **Rationale:** Initial calibration based on test scenarios
+- **Test Scenarios:** [link to test scenarios]
+- **Status:** Active
+
+### v1.1 (2025-01-20)
+- **Changes from v1.0:**
+  - Adjusted work_multiplier_min: 3.0 → 3.5
+  - Adjusted work_multiplier_max: 5.0 → 5.5
+- **Rationale:** User feedback indicated work tasks were under-rewarded
+- **Test Scenarios:** [updated scenarios]
+- **Status:** Active
+- **Deprecated:** v1.0 (2025-01-20)
+```
+
+### 4. Database Storage
+
+**Table:** `score_formula_versions`
+
+```python
+class ScoreFormulaVersion(Base):
+    __tablename__ = 'score_formula_versions'
+    
+    id = Column(Integer, primary_key=True)
+    score_name = Column(String, nullable=False)  # 'productivity_score', 'grit_score', etc.
+    version = Column(String, nullable=False)  # 'v1.0', 'v1.1', etc.
+    formula_code = Column(Text, nullable=False)  # Python code or formula description
+    weights = Column(JSON, nullable=False)  # Weight configuration
+    created_at = Column(DateTime, default=datetime.utcnow)
+    deprecated_at = Column(DateTime, nullable=True)
+    rationale = Column(Text, nullable=True)
+    test_scenarios = Column(JSON, nullable=True)
+    change_rationale = Column(Text, nullable=True)
+    
+    __table_args__ = (
+        Index('idx_score_version', 'score_name', 'version'),
+    )
+```
+
+### 5. Version Management Methods
+
+**In `backend/score_weights.py` or `backend/analytics.py`:**
+
+```python
+def get_current_formula_version(score_name: str) -> str:
+    """Get current active version for a score."""
+    # Return latest non-deprecated version
+
+def get_formula_version(score_name: str, version: str) -> Dict:
+    """Get specific version of a formula."""
+    # Return formula configuration for that version
+
+def deprecate_formula_version(score_name: str, version: str, new_version: str):
+    """Mark a version as deprecated when new version is created."""
+    # Set deprecated_at timestamp
+
+def list_formula_versions(score_name: str) -> List[Dict]:
+    """List all versions of a formula."""
+    # Return all versions with metadata
+```
+
+## Implementation Workflow
+
+### When Calibrating a Score:
+
+1. **Document Current Version**
+   - If first calibration: Create v1.0
+   - If updating: Create new minor version (v1.0 → v1.1)
+
+2. **Store Formula**
+   - Save formula code/description
+   - Save weight configuration
+   - Save test scenarios
+   - Save rationale
+
+3. **Update Formula Log**
+   - Add entry to `formula_history.md`
+   - Document changes from previous version
+   - Include test scenario results
+
+4. **Deprecate Old Version** (if applicable)
+   - Mark previous version as deprecated
+   - Set deprecated_at timestamp
+   - Keep for reference
+
+### When Implementing Points:
+
+1. **Version Points Formula Separately**
+   - Points formulas can have different versions than scores
+   - Track points formula versions independently
+   - Document relationship to score version
+
+2. **Link Points to Score Version**
+   - Document which score version the points formula is based on
+   - Track points formula changes separately
+
+## Formula Documentation Template
+
+**For Each Version:**
+
+```markdown
+### {version} ({date})
+- **Formula:** [formula description or code]
+- **Weights:**
+  - weight_name: value (rationale)
+  - ...
+- **Parameters:**
+  - param_name: value (rationale)
+  - ...
+- **Rationale:** [why this version]
+- **Test Scenarios:** [link or description]
+- **Changes from {previous_version}:** [what changed and why]
+- **Status:** Active | Deprecated ({deprecated_date})
+- **Performance:** [query time, accuracy metrics, etc.]
+```
+
+## Code Pattern
+
+### Storing Formula Version
+
+```python
+# When calibrating a score
+def save_formula_version(
+    score_name: str,
+    version: str,
+    formula_code: str,
+    weights: Dict,
+    rationale: str,
+    test_scenarios: List[Dict],
+    change_rationale: Optional[str] = None,
+    previous_version: Optional[str] = None
+):
+    """Save a new formula version."""
+    
+    # Store in database
+    formula_version = ScoreFormulaVersion(
+        score_name=score_name,
+        version=version,
+        formula_code=formula_code,
+        weights=weights,
+        rationale=rationale,
+        test_scenarios=test_scenarios,
+        change_rationale=change_rationale
+    )
+    session.add(formula_version)
+    
+    # Deprecate previous version if exists
+    if previous_version:
+        deprecate_formula_version(score_name, previous_version, version)
+    
+    session.commit()
+    
+    # Update formula log file
+    update_formula_log(score_name, version, {
+        'formula': formula_code,
+        'weights': weights,
+        'rationale': rationale,
+        'test_scenarios': test_scenarios,
+        'changes_from': previous_version,
+        'change_rationale': change_rationale
+    })
+```
+
+### Using Versioned Formula
+
+```python
+def calculate_productivity_score(self, row, ...):
+    """Calculate productivity score using current version."""
+    
+    # Get current version
+    current_version = get_current_formula_version('productivity_score')
+    formula_config = get_formula_version('productivity_score', current_version)
+    
+    # Use weights from current version
+    weights = formula_config['weights']
+    
+    # Calculate using versioned formula
+    # ...
+```
+
+## File Structure
+
+```
+task_aversion_app/
+├── backend/
+│   ├── score_formulas.py          # Formula version storage and management
+│   ├── score_weights.py           # Current weights (references versions)
+│   └── analytics.py                # Uses versioned formulas
+├── docs/
+│   └── score_formulas/
+│       ├── formula_history.md      # Human-readable formula log
+│       ├── productivity_score_versions.md
+│       ├── grit_score_versions.md
+│       └── ... (one per score)
+└── SQLite_migration/
+    └── 007_add_formula_versioning.py  # Migration for formula versions table
+```
+
+## Best Practices
+
+1. **Version on Calibration:** Always create new version when calibrating
+2. **Document Changes:** Always document what changed and why
+3. **Keep History:** Never delete old versions, only deprecate
+4. **Test Scenarios:** Include test scenarios with each version
+5. **Link Related Versions:** Link points versions to score versions
+6. **Performance Tracking:** Track performance metrics per version
+7. **Review Periodically:** Review old versions for optimization opportunities
+
+## Migration Strategy
+
+1. **Initial Versioning:**
+   - Create v1.0 for all existing scores
+   - Document current formulas as v1.0
+   - Create formula history files
+
+2. **Ongoing Versioning:**
+   - Create new version when calibrating
+   - Update formula log
+   - Store in database
+   - Deprecate old version
+
+3. **Reference:**
+   - Use version numbers in code comments
+   - Reference versions in documentation
+   - Link test scenarios to versions
+
+## Benefits
+
+- **Traceability:** Know exactly which formula was used when
+- **Optimization:** Compare versions to find improvements
+- **Rollback:** Can revert to previous version if needed
+- **Documentation:** Clear history of formula evolution
+- **Reproducibility:** Can reproduce historical calculations
+- **Learning:** Understand what changes improved metrics

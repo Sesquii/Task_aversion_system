@@ -1,0 +1,121 @@
+# Graphic Aids for Analytics Modules
+
+## Overview
+
+All analytics modules in the glossary system should include graphic aids that help users understand both the theoretical formulas and their actual data patterns.
+
+## Requirements
+
+### 1. Two Types of Visualizations
+
+Every module component that has a `graphic_script` must provide:
+
+1. **Theoretical Visualization** - Shows how the formula works with example data
+   - File: `scripts/graphic_aids/{module_name}_{component_name}.py`
+   - Output: `assets/graphic_aids/{module_name}_{component_name}.png`
+   - Purpose: Educational - explains the formula
+
+2. **Data-Driven Visualization** - Shows actual user data patterns
+   - File: `scripts/graphic_aids/generate_data_driven.py` (add function)
+   - Output: `assets/graphic_aids/{module_name}_{component_name}_data.png`
+   - Purpose: Personal insights - shows user's actual patterns
+
+### 2. Automatic Display
+
+Graphic aids should be displayed **automatically** in the glossary UI:
+- **NO buttons** required to view them
+- Use `ui.expansion()` components to allow collapsing
+- Data-driven visualizations should be expanded by default (`value=True`)
+- Theoretical visualizations should be collapsed by default (`value=False`)
+
+### 3. Implementation Pattern
+
+#### For New Modules:
+
+1. **Add theoretical generator** in `scripts/graphic_aids/generate_all.py`:
+   ```python
+   def generate_{module}_{component}_image(output_path=None):
+       """Generate theoretical visualization."""
+       # ... implementation
+   ```
+
+2. **Add data-driven generator** in `scripts/graphic_aids/generate_data_driven.py`:
+   ```python
+   def generate_{module}_{component}_data_image(output_path=None):
+       """Generate data-driven visualization with user's actual data."""
+       # Load user instances
+       instances, analytics = get_user_instances()
+       # Extract relevant data
+       # Create visualizations showing actual patterns
+       # ... implementation
+   ```
+
+3. **Register in module definition** (`ui/analytics_glossary.py`):
+   ```python
+   'components': [
+       {
+           'name': 'Component Name',
+           'description': '...',
+           'formula': '...',
+           'range': '...',
+           'graphic_script': '{module}_{component}.py'  # Required
+       }
+   ]
+   ```
+
+4. **Update DATA_DRIVEN_GENERATORS** mapping:
+   ```python
+   DATA_DRIVEN_GENERATORS = {
+       '{module}_{component}_data.png': generate_{module}_{component}_data_image,
+       # ... other generators
+   }
+   ```
+
+### 4. Data Loading Pattern
+
+All data-driven generators should:
+- Use `get_user_instances()` from `generate_data_driven.py`
+- Handle missing data gracefully (return None if insufficient data)
+- Show meaningful visualizations even with limited data
+- Include both scatter plots (actual data) and theoretical curves for comparison
+
+### 5. UI Integration
+
+In `ui/analytics_glossary.py`, the component display should automatically include:
+
+```python
+# Theoretical visualization (collapsed by default)
+with ui.expansion("Theoretical Formula", icon="functions", value=False):
+    ui.image(theoretical_web_path).classes("w-full max-w-4xl")
+
+# Data-driven visualization (expanded by default)
+with ui.expansion("Your Data", icon="bar_chart", value=True):
+    ui.image(data_web_path).classes("w-full max-w-4xl")
+```
+
+### 6. Error Handling
+
+- If theoretical image generation fails: Show error message
+- If data image generation fails due to insufficient data: Show friendly message encouraging more task completion
+- If data image generation fails due to error: Log error, show fallback message
+
+### 7. File Naming Convention
+
+- Theoretical: `{module}_{component}.png`
+- Data-driven: `{module}_{component}_data.png`
+- Scripts: `{module}_{component}.py` (theoretical) and function in `generate_data_driven.py` (data)
+
+## Examples
+
+See existing implementation:
+- `execution_score_difficulty_factor.py` - Theoretical
+- `generate_difficulty_factor_data_image()` - Data-driven
+- Display in `ui/analytics_glossary.py` - Automatic expansion
+
+## Benefits
+
+1. **Educational**: Users understand how formulas work
+2. **Personal**: Users see their actual patterns
+3. **Automatic**: No button clicking required
+4. **Consistent**: Same pattern for all modules
+5. **Insightful**: Data visualizations reveal personal trends
