@@ -3915,6 +3915,9 @@ def build_dashboard(task_manager):
                 ui.button("Analytics",
                           on_click=lambda: ui.navigate.to('/analytics'),
                           icon="bar_chart").classes("text-xl py-3 px-6").props('id="tas-analytics-link" data-tooltip-id="analytics_link"')
+                ui.button("Goals",
+                          on_click=lambda: ui.navigate.to('/goals'),
+                          icon="target").classes("text-xl py-3 px-6").props('id="tas-goals-link" data-tooltip-id="goals_link"')
                 ui.button("Experimental",
                           on_click=lambda: ui.navigate.to('/experimental'),
                           icon="science").classes("text-xl py-3 px-6").props('id="tas-experimental-link" data-tooltip-id="experimental_link"')

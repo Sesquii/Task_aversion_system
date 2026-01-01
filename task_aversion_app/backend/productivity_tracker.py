@@ -23,6 +23,37 @@ class ProductivityTracker:
         self.user_state = UserStateManager()
         self.default_user_id = "default_user"
     
+    def calculate_rolling_7day_productivity_hours(
+        self,
+        user_id: str,
+        end_date: Optional[date] = None
+    ) -> Dict[str, Any]:
+        """Calculate rolling 7-day productive hours (last 7 days from end_date).
+        
+        Args:
+            user_id: User ID
+            end_date: End date for rolling window (default: today)
+            
+        Returns:
+            Dict with:
+            - total_hours (float)
+            - total_minutes (float)
+            - days_with_data (int)
+            - daily_averages (List[Dict[str, Any]])
+            - task_count (int)
+            - breakdown_by_type (Dict[str, float])
+            - calculation_mode (str): 'rolling_7day'
+        """
+        if end_date is None:
+            end_date = date.today()
+        
+        start_date = end_date - timedelta(days=7)
+        
+        # Use the same calculation logic as weekly but with rolling dates
+        return self._calculate_productivity_hours_in_range(
+            user_id, start_date, end_date, calculation_mode='rolling_7day'
+        )
+    
     def calculate_weekly_productivity_hours(
         self, 
         user_id: str,
@@ -42,6 +73,7 @@ class ProductivityTracker:
             - daily_averages (List[Dict[str, Any]])
             - task_count (int)
             - breakdown_by_type (Dict[str, float])
+            - calculation_mode (str): 'weekly'
         """
         if week_start_date is None:
             # Start from Monday of current week
@@ -50,6 +82,29 @@ class ProductivityTracker:
             week_start_date = today - timedelta(days=days_since_monday)
         
         week_end_date = week_start_date + timedelta(days=7)
+        
+        return self._calculate_productivity_hours_in_range(
+            user_id, week_start_date, week_end_date, calculation_mode='weekly'
+        )
+    
+    def _calculate_productivity_hours_in_range(
+        self,
+        user_id: str,
+        start_date: date,
+        end_date: date,
+        calculation_mode: str = 'weekly'
+    ) -> Dict[str, Any]:
+        """Calculate productive hours within a date range.
+        
+        Args:
+            user_id: User ID
+            start_date: Start date (inclusive)
+            end_date: End date (exclusive)
+            calculation_mode: Mode string for identification
+            
+        Returns:
+            Dict with productivity hours data
+        """
         
         # Get all completed instances in the date range
         instances_df = self._get_completed_instances(user_id)
@@ -60,26 +115,28 @@ class ProductivityTracker:
                 'days_with_data': 0,
                 'daily_averages': [],
                 'task_count': 0,
-                'breakdown_by_type': {'work': 0.0, 'self_care': 0.0}
+                'breakdown_by_type': {'work': 0.0, 'self_care': 0.0},
+                'calculation_mode': calculation_mode
             }
         
         # Filter by date range and productive task types
         instances_df['completed_at_dt'] = pd.to_datetime(instances_df['completed_at'], errors='coerce')
         instances_df['completed_date'] = instances_df['completed_at_dt'].dt.date
         
-        week_instances = instances_df[
-            (instances_df['completed_date'] >= week_start_date) &
-            (instances_df['completed_date'] < week_end_date)
+        range_instances = instances_df[
+            (instances_df['completed_date'] >= start_date) &
+            (instances_df['completed_date'] < end_date)
         ].copy()
         
-        if week_instances.empty:
+        if range_instances.empty:
             return {
                 'total_hours': 0.0,
                 'total_minutes': 0.0,
                 'days_with_data': 0,
                 'daily_averages': [],
                 'task_count': 0,
-                'breakdown_by_type': {'work': 0.0, 'self_care': 0.0}
+                'breakdown_by_type': {'work': 0.0, 'self_care': 0.0},
+                'calculation_mode': calculation_mode
             }
         
         # Get task types
@@ -92,10 +149,10 @@ class ProductivityTracker:
                 task_type_map[task_id] = str(task_type).strip().lower()
         
         # Filter to productive tasks (Work and Self Care)
-        week_instances['task_type'] = week_instances['task_id'].map(task_type_map).fillna('work')
+        range_instances['task_type'] = range_instances['task_id'].map(task_type_map).fillna('work')
         productive_types = ['work', 'self care', 'selfcare', 'self-care']
-        productive_instances = week_instances[
-            week_instances['task_type'].isin(productive_types)
+        productive_instances = range_instances[
+            range_instances['task_type'].isin(productive_types)
         ].copy()
         
         # Extract time_actual_minutes
@@ -121,7 +178,8 @@ class ProductivityTracker:
                 'days_with_data': 0,
                 'daily_averages': [],
                 'task_count': 0,
-                'breakdown_by_type': {'work': 0.0, 'self_care': 0.0}
+                'breakdown_by_type': {'work': 0.0, 'self_care': 0.0},
+                'calculation_mode': calculation_mode
             }
         
         # Calculate totals
@@ -154,7 +212,65 @@ class ProductivityTracker:
             'days_with_data': days_with_data,
             'daily_averages': daily_averages,
             'task_count': len(productive_instances),
-            'breakdown_by_type': breakdown_by_type
+            'breakdown_by_type': breakdown_by_type,
+            'calculation_mode': calculation_mode
+        }
+    
+    def calculate_monday_week_pace(
+        self,
+        user_id: str,
+        goal_hours_per_week: float,
+        week_start_date: Optional[date] = None
+    ) -> Dict[str, Any]:
+        """Calculate projected weekly pace for Monday-based week with extrapolation.
+        
+        Args:
+            user_id: User ID
+            goal_hours_per_week: Goal hours for the week
+            week_start_date: Start date of the week (default: current Monday)
+            
+        Returns:
+            Dict with:
+            - actual_hours (float): Hours completed so far this week
+            - projected_hours (float): Projected hours for full week based on current pace
+            - days_elapsed (int): Days since week start (0-6)
+            - days_remaining (int): Days remaining in week
+            - pace_hours_per_day (float): Current pace (hours per day)
+            - on_pace (bool): Whether current pace meets goal
+        """
+        if week_start_date is None:
+            today = date.today()
+            days_since_monday = today.weekday()  # Monday is 0
+            week_start_date = today - timedelta(days=days_since_monday)
+        
+        today = date.today()
+        days_elapsed = (today - week_start_date).days + 1  # +1 to include today
+        days_elapsed = max(1, min(days_elapsed, 7))  # Clamp to 1-7
+        days_remaining = 7 - days_elapsed
+        
+        # Get current week data
+        weekly_data = self.calculate_weekly_productivity_hours(user_id, week_start_date)
+        actual_hours = weekly_data['total_hours']
+        
+        # Calculate pace: hours per day so far
+        if days_elapsed > 0:
+            pace_hours_per_day = actual_hours / days_elapsed
+            projected_hours = pace_hours_per_day * 7.0
+        else:
+            pace_hours_per_day = 0.0
+            projected_hours = 0.0
+        
+        goal_hours_per_day = goal_hours_per_week / 7.0
+        on_pace = pace_hours_per_day >= goal_hours_per_day if days_elapsed > 0 else False
+        
+        return {
+            'actual_hours': round(actual_hours, 2),
+            'projected_hours': round(projected_hours, 2),
+            'days_elapsed': days_elapsed,
+            'days_remaining': days_remaining,
+            'pace_hours_per_day': round(pace_hours_per_day, 2),
+            'goal_hours_per_day': round(goal_hours_per_day, 2),
+            'on_pace': on_pace
         }
     
     def _get_completed_instances(self, user_id: str) -> pd.DataFrame:
@@ -327,16 +443,37 @@ class ProductivityTracker:
         
         return round(estimated_weekly, 2)
     
+    def get_current_week_performance(
+        self,
+        user_id: str,
+        use_rolling: bool = True
+    ) -> Dict[str, Any]:
+        """Get current week performance using rolling 7-day or Monday-based calculation.
+        
+        Args:
+            user_id: User ID
+            use_rolling: If True, use rolling 7-day; if False, use Monday-based week
+            
+        Returns:
+            Dict with productivity hours data (includes calculation_mode)
+        """
+        if use_rolling:
+            return self.calculate_rolling_7day_productivity_hours(user_id)
+        else:
+            return self.calculate_weekly_productivity_hours(user_id)
+    
     def compare_to_goal(
         self,
         user_id: str,
-        week_start_date: Optional[date] = None
+        week_start_date: Optional[date] = None,
+        use_rolling: bool = True
     ) -> Dict[str, Any]:
         """Compare actual weekly productivity to goal.
         
         Args:
             user_id: User ID
-            week_start_date: Start date of week (default: current Monday)
+            week_start_date: Start date of week (for Monday-based, default: current Monday)
+            use_rolling: If True, use rolling 7-day; if False, use Monday-based week
             
         Returns:
             Dict with:
@@ -345,10 +482,15 @@ class ProductivityTracker:
             - difference (float, actual - goal)
             - percentage_of_goal (float, 0-100+)
             - status (str: 'above', 'on_track', 'below', 'no_goal', 'no_data')
+            - calculation_mode (str): 'rolling_7day' or 'weekly'
         """
-        # Get actual hours
-        weekly_data = self.calculate_weekly_productivity_hours(user_id, week_start_date)
+        # Get actual hours based on mode
+        if use_rolling:
+            weekly_data = self.calculate_rolling_7day_productivity_hours(user_id)
+        else:
+            weekly_data = self.calculate_weekly_productivity_hours(user_id, week_start_date)
         actual_hours = weekly_data['total_hours']
+        calculation_mode = weekly_data.get('calculation_mode', 'weekly')
         
         # Get goal hours
         goal_settings = self.user_state.get_productivity_goal_settings(user_id)
@@ -360,7 +502,8 @@ class ProductivityTracker:
                 'goal_hours': 0.0,
                 'difference': actual_hours,
                 'percentage_of_goal': 0.0,
-                'status': 'no_goal'
+                'status': 'no_goal',
+                'calculation_mode': calculation_mode
             }
         
         if actual_hours <= 0:
@@ -369,7 +512,8 @@ class ProductivityTracker:
                 'goal_hours': goal_hours,
                 'difference': -goal_hours,
                 'percentage_of_goal': 0.0,
-                'status': 'no_data'
+                'status': 'no_data',
+                'calculation_mode': calculation_mode
             }
         
         difference = actual_hours - goal_hours
@@ -387,7 +531,8 @@ class ProductivityTracker:
             'goal_hours': goal_hours,
             'difference': round(difference, 2),
             'percentage_of_goal': round(percentage, 1),
-            'status': status
+            'status': status,
+            'calculation_mode': calculation_mode
         }
     
     def calculate_productivity_points_target(
@@ -681,6 +826,111 @@ class ProductivityTracker:
         
         # Record current week if not found
         return self.record_weekly_snapshot(user_id, current_week_start)
+    
+    def get_daily_productivity_data(
+        self,
+        user_id: str,
+        days: int = 90
+    ) -> List[Dict[str, Any]]:
+        """Get daily productivity data for the last N days.
+        
+        Args:
+            user_id: User ID
+            days: Number of days to retrieve (default 90)
+            
+        Returns:
+            List of dicts, each containing:
+            - date (ISO date string: YYYY-MM-DD)
+            - hours (float): Productive hours for that day
+            - minutes (float): Productive minutes for that day
+            - task_count (int): Number of productive tasks completed
+            - work_hours (float): Work task hours
+            - self_care_hours (float): Self-care task hours
+        """
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days - 1)  # Include today
+        
+        # Get all completed instances
+        instances_df = self._get_completed_instances(user_id)
+        if instances_df.empty:
+            return []
+        
+        # Filter by date range
+        instances_df['completed_at_dt'] = pd.to_datetime(instances_df['completed_at'], errors='coerce')
+        instances_df = instances_df[instances_df['completed_at_dt'].notna()]
+        instances_df['completed_date'] = instances_df['completed_at_dt'].dt.date
+        
+        range_instances = instances_df[
+            (instances_df['completed_date'] >= start_date) &
+            (instances_df['completed_date'] <= end_date)
+        ].copy()
+        
+        if range_instances.empty:
+            return []
+        
+        # Get task types
+        tasks_df = self.task_manager.get_all()
+        task_type_map = {}
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            for _, row in tasks_df.iterrows():
+                task_id = row.get('task_id', '')
+                task_type = row.get('task_type', 'Work')
+                task_type_map[task_id] = str(task_type).strip().lower()
+        
+        # Filter to productive tasks
+        range_instances['task_type'] = range_instances['task_id'].map(task_type_map).fillna('work')
+        productive_types = ['work', 'self care', 'selfcare', 'self-care']
+        productive_instances = range_instances[
+            range_instances['task_type'].isin(productive_types)
+        ].copy()
+        
+        # Extract time_actual_minutes
+        def _get_time_minutes(row):
+            actual_dict = row.get('actual_dict', {})
+            if isinstance(actual_dict, dict):
+                return float(actual_dict.get('time_actual_minutes', 0) or 0)
+            return 0.0
+        
+        productive_instances['time_minutes'] = productive_instances.apply(_get_time_minutes, axis=1)
+        productive_instances = productive_instances[productive_instances['time_minutes'] > 0]
+        
+        # Group by date and calculate daily totals
+        daily_data = {}
+        for _, row in productive_instances.iterrows():
+            day = row['completed_date']
+            minutes = row['time_minutes']
+            task_type = row['task_type']
+            
+            if day not in daily_data:
+                daily_data[day] = {
+                    'minutes': 0.0,
+                    'work_minutes': 0.0,
+                    'self_care_minutes': 0.0,
+                    'task_count': 0
+                }
+            
+            daily_data[day]['minutes'] += minutes
+            daily_data[day]['task_count'] += 1
+            
+            if task_type == 'work':
+                daily_data[day]['work_minutes'] += minutes
+            else:
+                daily_data[day]['self_care_minutes'] += minutes
+        
+        # Convert to list and format
+        result = []
+        for day in sorted(daily_data.keys()):
+            data = daily_data[day]
+            result.append({
+                'date': day.isoformat(),
+                'hours': round(data['minutes'] / 60.0, 2),
+                'minutes': round(data['minutes'], 1),
+                'task_count': data['task_count'],
+                'work_hours': round(data['work_minutes'] / 60.0, 2),
+                'self_care_hours': round(data['self_care_minutes'] / 60.0, 2)
+            })
+        
+        return result
     
     def calculate_baseline_productivity_score(
         self,

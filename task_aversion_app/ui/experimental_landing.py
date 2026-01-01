@@ -16,21 +16,6 @@ def experimental_landing_page():
     with ui.card().classes("w-full max-w-4xl p-6"):
         ui.label("Available Experimental Features").classes("text-xl font-semibold mb-4")
         
-        # Productivity Hours Goal Tracking System
-        with ui.card().classes("p-4 mb-4 border border-gray-300"):
-            with ui.row().classes("w-full items-center justify-between"):
-                with ui.column().classes("flex-1 gap-2"):
-                    ui.label("Productivity Hours Goal Tracking").classes("text-lg font-semibold")
-                    ui.label(
-                        "Track weekly productivity hours vs goals, set productivity targets, "
-                        "and see how goal achievement affects productivity scores. Includes "
-                        "hybrid initialization (auto-estimate with manual adjustment)."
-                    ).classes("text-sm text-gray-700")
-                ui.button(
-                    "Open",
-                    on_click=lambda: ui.navigate.to("/experimental/productivity-hours-goal-tracking-system")
-                ).classes("bg-blue-500 text-white ml-4")
-        
         # Formula Baseline Charts
         with ui.card().classes("p-4 mb-4 border border-gray-300"):
             with ui.row().classes("w-full items-center justify-between"):

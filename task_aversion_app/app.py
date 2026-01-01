@@ -24,7 +24,8 @@ from ui import productivity_settings_page  # registers /settings/productivity-se
 # from ui import data_guide_page  # registers /data-guide - TODO: Re-enable when data guide is updated for local setup
 from ui import composite_score_page  # registers /composite-score
 from ui import summary_page  # registers /summary
-from ui import productivity_goals_experimental  # registers /experimental/productivity-hours-goal-tracking-system
+from ui import productivity_goals_experimental  # registers /goals/productivity-hours
+from ui import goals_page  # registers /goals
 from ui import productivity_module  # registers /productivity-module
 from ui import experimental_landing  # registers /experimental
 from ui.formula_baseline_charts import register_formula_baseline_charts  # registers /experimental/formula-baseline-charts

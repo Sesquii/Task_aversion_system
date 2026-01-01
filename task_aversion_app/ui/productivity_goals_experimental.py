@@ -1,7 +1,7 @@
-"""Experimental productivity hours goal tracking system UI.
+"""Productivity hours goal tracking system UI.
 
-This is an experimental implementation of the productivity hours goal tracking system.
-Access at /experimental/productivity-hours-goal-tracking-system
+Productivity Hours Goal Tracking system for tracking weekly productivity hours vs goals.
+Access at /productivity-hours-goal-tracking
 """
 from nicegui import ui
 from backend.user_state import UserStateManager
@@ -15,12 +15,12 @@ DEFAULT_USER_ID = "default_user"
 tracker = ProductivityTracker()
 
 
-@ui.page("/experimental/productivity-hours-goal-tracking-system")
-def productivity_goals_experimental_page():
-    """Experimental productivity hours goal tracking page."""
+@ui.page("/goals/productivity-hours")
+def productivity_goals_page():
+    """Productivity hours goal tracking page."""
     
-    ui.label("Productivity Hours Goal Tracking (Experimental)").classes("text-3xl font-bold mb-4")
-    ui.label("This is an experimental feature for tracking weekly productivity hours vs goals.").classes("text-gray-600 mb-6")
+    ui.label("Productivity Hours Goal Tracking").classes("text-3xl font-bold mb-4")
+    ui.label("Track weekly productivity hours vs goals with rolling 7-day or Monday-based week calculations.").classes("text-gray-600 mb-6")
     
     # Goal Settings Card
     with ui.card().classes("w-full max-w-7xl p-4 mb-4"):
@@ -63,7 +63,7 @@ def productivity_goals_experimental_page():
                 user_state.set_productivity_goal_settings(DEFAULT_USER_ID, settings)
                 ui.notify("Goals saved!", color="positive")
                 # Refresh the page to update displays
-                ui.navigate.to("/experimental/productivity-hours-goal-tracking-system")
+                ui.navigate.to("/goals/productivity-hours")
             
             ui.button("Save Goals", on_click=save_goals).classes("bg-blue-500 text-white")
         
@@ -85,13 +85,44 @@ def productivity_goals_experimental_page():
     with ui.card().classes("w-full max-w-7xl p-4 mb-4"):
         ui.label("Current Week Performance").classes("text-xl font-semibold mb-4")
         
-        comparison = tracker.compare_to_goal(DEFAULT_USER_ID)
-        weekly_data = tracker.calculate_weekly_productivity_hours(DEFAULT_USER_ID)
+        # Get week calculation mode setting
+        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        week_calculation_mode = goal_settings.get('week_calculation_mode', 'rolling')
+        use_rolling = (week_calculation_mode == 'rolling')
+        
+        # Calculation mode selector
+        with ui.row().classes("mb-4 gap-4 items-center"):
+            ui.label("Calculation Mode:").classes("text-sm font-semibold")
+            mode_select = ui.select(
+                options={
+                    'rolling': 'Rolling 7-Day (Last 7 Days)',
+                    'monday_based': 'Monday-Based Week (with Pace)'
+                },
+                value=week_calculation_mode,
+                label="Mode"
+            ).props("dense outlined").classes("min-w-[250px]")
+            
+            def update_mode():
+                new_mode = mode_select.value
+                current_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+                current_settings['week_calculation_mode'] = new_mode
+                user_state.set_productivity_goal_settings(DEFAULT_USER_ID, current_settings)
+                ui.navigate.to("/goals/productivity-hours")
+            
+            mode_select.on('update:model-value', lambda e: update_mode())
+        
+        comparison = tracker.compare_to_goal(DEFAULT_USER_ID, use_rolling=use_rolling)
+        weekly_data = tracker.get_current_week_performance(DEFAULT_USER_ID, use_rolling=use_rolling)
         
         actual_hours = comparison.get('actual_hours', 0.0)
         goal_hours = comparison.get('goal_hours', 40.0)
         percentage = comparison.get('percentage_of_goal', 0.0)
         status = comparison.get('status', 'no_data')
+        
+        # Calculate pace for Monday-based mode
+        pace_data = None
+        if not use_rolling:
+            pace_data = tracker.calculate_monday_week_pace(DEFAULT_USER_ID, goal_hours)
         
         # Calculate productivity points target
         points_target = tracker.calculate_productivity_points_target(DEFAULT_USER_ID, goal_hours)
@@ -103,15 +134,44 @@ def productivity_goals_experimental_page():
             with ui.column().classes("flex-1"):
                 ui.label("Actual Hours").classes("text-sm text-gray-600")
                 ui.label(f"{actual_hours:.1f}").classes("text-3xl font-bold")
+                if use_rolling:
+                    ui.label("(Rolling 7-Day)").classes("text-xs text-gray-500")
+                else:
+                    ui.label("(This Week)").classes("text-xs text-gray-500")
             
             with ui.column().classes("flex-1"):
                 ui.label("Goal Hours").classes("text-sm text-gray-600")
                 ui.label(f"{goal_hours:.1f}").classes("text-3xl font-bold text-blue-600")
+                if not use_rolling and pace_data:
+                    projected = pace_data.get('projected_hours', 0.0)
+                    ui.label(f"Projected: {projected:.1f}h").classes("text-xs text-gray-500")
             
             with ui.column().classes("flex-1"):
                 ui.label("Percentage of Goal").classes("text-sm text-gray-600")
                 color_class = "text-green-600" if percentage >= 100 else "text-yellow-600" if percentage >= 85 else "text-red-600"
                 ui.label(f"{percentage:.1f}%").classes(f"text-3xl font-bold {color_class}")
+        
+        # Pace information for Monday-based mode
+        if not use_rolling and pace_data:
+            ui.separator().classes("my-4")
+            ui.label("Weekly Pace (Monday-Based)").classes("text-lg font-semibold mb-2")
+            with ui.row().classes("w-full gap-6 items-center"):
+                with ui.column().classes("flex-1"):
+                    ui.label("Days Elapsed").classes("text-sm text-gray-600")
+                    ui.label(f"{pace_data.get('days_elapsed', 0)} / 7").classes("text-xl font-bold")
+                with ui.column().classes("flex-1"):
+                    ui.label("Current Pace").classes("text-sm text-gray-600")
+                    pace_hours = pace_data.get('pace_hours_per_day', 0.0)
+                    goal_hours_per_day = pace_data.get('goal_hours_per_day', 0.0)
+                    ui.label(f"{pace_hours:.1f} h/day").classes("text-xl font-bold")
+                    ui.label(f"(Goal: {goal_hours_per_day:.1f} h/day)").classes("text-xs text-gray-500")
+                with ui.column().classes("flex-1"):
+                    ui.label("Projected Total").classes("text-sm text-gray-600")
+                    projected = pace_data.get('projected_hours', 0.0)
+                    on_pace = pace_data.get('on_pace', False)
+                    pace_color = "text-green-600" if on_pace else "text-yellow-600"
+                    ui.label(f"{projected:.1f}h").classes(f"text-xl font-bold {pace_color}")
+                    ui.label("(if pace continues)").classes("text-xs text-gray-500")
         
         # Progress bar
         progress_value = min(percentage / 100.0, 1.0) if percentage > 0 else 0.0
@@ -170,279 +230,125 @@ def productivity_goals_experimental_page():
     
     # Historical Trends Section
     with ui.card().classes("w-full max-w-7xl p-4 mb-4"):
-        ui.label("Historical Trends").classes("text-xl font-semibold mb-4")
+        ui.label("Historical Trends (Daily)").classes("text-xl font-semibold mb-4")
         
-        # Get historical data (last 12 weeks)
-        history = tracker.get_productivity_history(DEFAULT_USER_ID, weeks=12)
+        # Get daily productivity data (last 90 days)
+        daily_data = tracker.get_daily_productivity_data(DEFAULT_USER_ID, days=90)
         
-        if history:
+        # Get goal hours for reference line
+        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        goal_hours_per_week = goal_settings.get('goal_hours_per_week', 40.0)
+        goal_hours_per_day = goal_hours_per_week / 7.0
+        
+        if daily_data:
             # Parse dates and prepare data
-            history_data = []
-            for entry in history:
-                    try:
-                        week_start = date.fromisoformat(entry['week_start'])
-                        history_data.append({
-                            'week_start': week_start,
-                            'week_label': week_start.strftime('%m/%d'),
-                            'goal_hours': entry.get('goal_hours', entry.get('goal_hours_per_week', 0.0)),
-                            'actual_hours': entry.get('actual_hours', 0.0),
-                            'productivity_score': entry.get('productivity_score', 0.0),
-                            'productivity_points': entry.get('productivity_points', 0.0)
-                        })
-                    except (ValueError, KeyError):
-                        continue
+            dates = [date.fromisoformat(d['date']) for d in daily_data]
+            hours_values = [d['hours'] for d in daily_data]
+            date_labels = [d.strftime('%m/%d') for d in dates]
             
-            if history_data:
-                # Limit to last 12 weeks for display
-                history_data = sorted(history_data, key=lambda x: x['week_start'], reverse=True)[:12]
-                history_data.reverse()  # Oldest to newest for chart
-                
-                # Hours Trend Chart
-                ui.label("Hours Trend (Last 12 Weeks)").classes("text-lg font-semibold mb-2")
-                fig_hours = go.Figure()
-                
-                goal_values = [w['goal_hours'] for w in history_data]
-                actual_values = [w['actual_hours'] for w in history_data]
-                week_labels = [w['week_label'] for w in history_data]
-                
-                fig_hours.add_trace(go.Scatter(
-                    x=week_labels,
-                    y=goal_values,
-                    mode='lines+markers',
-                    name='Goal Hours',
-                    line=dict(color='blue', dash='dash', width=2),
-                    marker=dict(size=6)
-                ))
-                
-                fig_hours.add_trace(go.Scatter(
-                    x=week_labels,
-                    y=actual_values,
-                    mode='lines+markers',
-                    name='Actual Hours',
-                    line=dict(color='green', width=2),
-                    marker=dict(size=6)
-                ))
-                
-                fig_hours.update_layout(
-                    title="Weekly Productivity Hours",
-                    xaxis_title="Week Starting",
-                    yaxis_title="Hours",
-                    hovermode='x unified',
-                    height=300,
-                    showlegend=True,
-                    font=dict(size=10),
-                    title_font=dict(size=12),
-                    xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                    yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                    legend=dict(font=dict(size=9))
-                )
-                
-                ui.plotly(fig_hours).classes("w-full mb-6")
-                
-                # Configurable Productivity Metrics Chart
-                ui.label("Productivity Metrics Trend (Last 12 Weeks)").classes("text-lg font-semibold mb-2")
-                
-                # Chart view selector
-                with ui.row().classes("mb-4 gap-4 items-center"):
-                    ui.label("View:").classes("text-sm font-semibold")
-                    view_select = ui.select(
-                        options={
-                            'points': 'Productivity Points',
-                            'score': 'Productivity Score',
-                            'hours': 'Hours',
-                            'normalized': 'All 3 (Normalized to Goal)'
-                        },
-                        value='points',
-                        label="Metric View"
-                    ).props("dense outlined").classes("min-w-[250px]")
-                
-                # Chart container
-                chart_area = ui.column().classes("w-full")
-                
-                def update_metrics_chart():
-                    """Update the metrics chart based on selected view."""
-                    chart_area.clear()
-                    view = view_select.value or 'points'
-                    
-                    # Get average goal hours for normalization (use first non-zero goal, or 40 as default)
-                    avg_goal_hours = 40.0
-                    if history_data:
-                        goal_values = [w['goal_hours'] for w in history_data if w['goal_hours'] > 0]
-                        if goal_values:
-                            avg_goal_hours = sum(goal_values) / len(goal_values)
-                    
-                    # Get average score/points for normalization (calculate from non-zero values)
-                    avg_score = 1.0
-                    avg_points = 1.0
-                    if history_data:
-                        score_values = [w['productivity_score'] for w in history_data if w['productivity_score'] > 0]
-                        points_values = [w['productivity_points'] for w in history_data if w['productivity_points'] > 0]
-                        if score_values:
-                            avg_score = sum(score_values) / len(score_values)
-                        if points_values:
-                            avg_points = sum(points_values) / len(points_values)
-                    
-                    fig = go.Figure()
-                    
-                    if view == 'points':
-                        points_values = [w['productivity_points'] for w in history_data]
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=points_values,
-                            mode='lines+markers',
-                            name='Productivity Points',
-                            line=dict(color='orange', width=2),
-                            marker=dict(size=6)
-                        ))
-                        fig.update_layout(
-                            title="Weekly Productivity Points",
-                            yaxis_title="Points",
-                            font=dict(size=10),
-                            title_font=dict(size=12),
-                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            legend=dict(font=dict(size=9))
-                        )
-                        
-                    elif view == 'score':
-                        score_values = [w['productivity_score'] for w in history_data]
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=score_values,
-                            mode='lines+markers',
-                            name='Productivity Score',
-                            line=dict(color='purple', width=2),
-                            marker=dict(size=6)
-                        ))
-                        fig.update_layout(
-                            title="Weekly Productivity Score",
-                            yaxis_title="Score",
-                            font=dict(size=10),
-                            title_font=dict(size=12),
-                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            legend=dict(font=dict(size=9))
-                        )
-                        
-                    elif view == 'hours':
-                        actual_values = [w['actual_hours'] for w in history_data]
-                        goal_values = [w['goal_hours'] for w in history_data]
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=goal_values,
-                            mode='lines+markers',
-                            name='Goal Hours',
-                            line=dict(color='blue', dash='dash', width=2),
-                            marker=dict(size=6)
-                        ))
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=actual_values,
-                            mode='lines+markers',
-                            name='Actual Hours',
-                            line=dict(color='green', width=2),
-                            marker=dict(size=6)
-                        ))
-                        fig.update_layout(
-                            title="Weekly Productivity Hours",
-                            yaxis_title="Hours",
-                            font=dict(size=10),
-                            title_font=dict(size=12),
-                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            legend=dict(font=dict(size=9))
-                        )
-                        
-                    elif view == 'normalized':
-                        # Normalize all three metrics to their respective goals/averages
-                        # Hours normalized to goal hours, Score and Points normalized to their averages
-                        normalized_hours = []
-                        normalized_scores = []
-                        normalized_points = []
-                        
-                        for w in history_data:
-                            goal_h = w['goal_hours'] if w['goal_hours'] > 0 else avg_goal_hours
-                            normalized_hours.append(w['actual_hours'] / goal_h if goal_h > 0 else 0)
-                            
-                            avg_s = avg_score if avg_score > 0 else 1.0
-                            normalized_scores.append(w['productivity_score'] / avg_s if avg_s > 0 else 0)
-                            
-                            avg_p = avg_points if avg_points > 0 else 1.0
-                            normalized_points.append(w['productivity_points'] / avg_p if avg_p > 0 else 0)
-                        
-                        # Add goal line at 1.0 (100%)
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=[1.0] * len(week_labels),
-                            mode='lines',
-                            name='Goal (100%)',
-                            line=dict(color='gray', dash='dash', width=1),
-                            showlegend=True
-                        ))
-                        
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=normalized_hours,
-                            mode='lines+markers',
-                            name='Hours (normalized)',
-                            line=dict(color='green', width=2),
-                            marker=dict(size=6)
-                        ))
-                        
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=normalized_scores,
-                            mode='lines+markers',
-                            name='Score (normalized)',
-                            line=dict(color='purple', width=2),
-                            marker=dict(size=6)
-                        ))
-                        
-                        fig.add_trace(go.Scatter(
-                            x=week_labels,
-                            y=normalized_points,
-                            mode='lines+markers',
-                            name='Points (normalized)',
-                            line=dict(color='orange', width=2),
-                            marker=dict(size=6)
-                        ))
-                        
-                        fig.update_layout(
-                            title="All Metrics Normalized to Goal/Average",
-                            yaxis_title="Ratio (1.0 = Goal/Average)",
-                            font=dict(size=10),
-                            title_font=dict(size=12),
-                            xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                            legend=dict(font=dict(size=9))
-                        )
-                    
-                    # Common layout settings
-                    fig.update_layout(
-                        xaxis_title="Week Starting",
-                        hovermode='x unified',
-                        height=350,
-                        showlegend=True,
-                        margin=dict(l=60, r=20, t=50, b=40),
-                        font=dict(size=10),
-                        title_font=dict(size=12),
-                        xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                        yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
-                        legend=dict(font=dict(size=9))
-                    )
-                    
-                    with chart_area:
-                        ui.plotly(fig).classes("w-full")
-                
-                # Set up event handler for view selector
-                view_select.on('update:model-value', lambda e: update_metrics_chart())
-                
-                # Initial render
-                update_metrics_chart()
-            else:
-                ui.label("No valid historical data available.").classes("text-gray-500")
+            # Hours Trend Chart (Daily)
+            ui.label("Hours Trend (Daily - Last 90 Days)").classes("text-lg font-semibold mb-2")
+            fig_hours = go.Figure()
+            
+            # Add goal line (daily goal hours)
+            fig_hours.add_trace(go.Scatter(
+                x=date_labels,
+                y=[goal_hours_per_day] * len(date_labels),
+                mode='lines',
+                name='Daily Goal',
+                line=dict(color='blue', dash='dash', width=2),
+                marker=dict(size=4)
+            ))
+            
+            fig_hours.add_trace(go.Scatter(
+                x=date_labels,
+                y=hours_values,
+                mode='lines+markers',
+                name='Actual Hours',
+                line=dict(color='green', width=1.5),
+                marker=dict(size=4)
+            ))
+            
+            fig_hours.update_layout(
+                title="Daily Productivity Hours",
+                xaxis_title="Date",
+                yaxis_title="Hours",
+                hovermode='x unified',
+                height=300,
+                showlegend=True,
+                font=dict(size=10),
+                title_font=dict(size=12),
+                xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                legend=dict(font=dict(size=9))
+            )
+            
+            ui.plotly(fig_hours).classes("w-full mb-6")
+            
+            # Productivity Metrics Trend Chart (Daily)
+            ui.label("Productivity Metrics Trend (Daily - Last 90 Days)").classes("text-lg font-semibold mb-2")
+            
+            # Calculate 7-day rolling average for smoother trend
+            rolling_avg_hours = []
+            window_size = 7
+            for i in range(len(hours_values)):
+                start_idx = max(0, i - window_size + 1)
+                window_values = hours_values[start_idx:i+1]
+                if window_values:
+                    rolling_avg_hours.append(sum(window_values) / len(window_values))
+                else:
+                    rolling_avg_hours.append(0.0)
+            
+            fig_metrics = go.Figure()
+            
+            # Add goal line
+            fig_metrics.add_trace(go.Scatter(
+                x=date_labels,
+                y=[goal_hours_per_day] * len(date_labels),
+                mode='lines',
+                name='Daily Goal',
+                line=dict(color='blue', dash='dash', width=2),
+                marker=dict(size=4)
+            ))
+            
+            # Add actual hours
+            fig_metrics.add_trace(go.Scatter(
+                x=date_labels,
+                y=hours_values,
+                mode='markers',
+                name='Daily Hours',
+                marker=dict(color='green', size=4, opacity=0.6),
+                showlegend=True
+            ))
+            
+            # Add 7-day rolling average
+            fig_metrics.add_trace(go.Scatter(
+                x=date_labels,
+                y=rolling_avg_hours,
+                mode='lines',
+                name='7-Day Avg',
+                line=dict(color='orange', width=2),
+                marker=dict(size=4)
+            ))
+            
+            fig_metrics.update_layout(
+                title="Daily Productivity Hours with 7-Day Rolling Average",
+                xaxis_title="Date",
+                yaxis_title="Hours",
+                hovermode='x unified',
+                height=350,
+                showlegend=True,
+                margin=dict(l=60, r=20, t=50, b=40),
+                font=dict(size=10),
+                title_font=dict(size=12),
+                xaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                yaxis=dict(title_font=dict(size=10), tickfont=dict(size=9)),
+                legend=dict(font=dict(size=9))
+            )
+            
+            ui.plotly(fig_metrics).classes("w-full")
         else:
-            ui.label("No historical data yet. Historical tracking will begin after you complete tasks this week.").classes("text-gray-500")
+            ui.label("No daily data yet. Data will appear as you complete productive tasks.").classes("text-gray-500")
     
     # Information Card
     with ui.card().classes("w-full max-w-7xl p-4 mb-4 bg-blue-50"):

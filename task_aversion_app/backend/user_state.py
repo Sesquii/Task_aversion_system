@@ -176,6 +176,7 @@ class UserStateManager:
             - last_adjusted_at (ISO string or None)
             - auto_adjusted_count (int, default 0)
             - user_override_flag (bool, default False)
+            - week_calculation_mode (str, default 'rolling'): 'rolling' or 'monday_based'
         """
         prefs = self.get_user_preferences(user_id)
         if not prefs:
@@ -197,6 +198,8 @@ class UserStateManager:
                 settings['auto_adjusted_count'] = 0
             if 'user_override_flag' not in settings:
                 settings['user_override_flag'] = False
+            if 'week_calculation_mode' not in settings:
+                settings['week_calculation_mode'] = 'rolling'  # Default to rolling 7-day
             return settings
         except (json.JSONDecodeError, TypeError):
             return {}
@@ -229,6 +232,10 @@ class UserStateManager:
             normalized['auto_adjusted_count'] = int(settings['auto_adjusted_count'])
         if 'user_override_flag' in settings:
             normalized['user_override_flag'] = bool(settings['user_override_flag'])
+        if 'week_calculation_mode' in settings:
+            mode = settings['week_calculation_mode']
+            if mode in ('rolling', 'monday_based'):
+                normalized['week_calculation_mode'] = mode
         
         settings_json = json.dumps(normalized)
         return self.update_preference(user_id, "productivity_goal_settings", settings_json)
