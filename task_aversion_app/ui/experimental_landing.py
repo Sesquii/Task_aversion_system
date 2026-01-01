@@ -89,6 +89,31 @@ def experimental_landing_page():
                     on_click=lambda: ui.navigate.to("/experimental/productivity-grit-tradeoff")
                 ).classes("bg-blue-500 text-white ml-4")
         
+        # Productivity Settings - Advanced Configuration
+        with ui.card().classes("p-4 mb-4 border border-gray-300 bg-yellow-50"):
+            with ui.row().classes("w-full items-center justify-between"):
+                with ui.column().classes("flex-1 gap-2"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("Productivity Settings - Advanced Configuration").classes("text-lg font-semibold")
+                        ui.badge("Usefulness: 2", color="red").classes("text-xs")
+                        ui.badge("Potential: 7.5", color="green").classes("text-xs")
+                    ui.label(
+                        "Advanced weight configuration system for productivity score components and curve strengths. "
+                        "Allows saving multiple configurations and comparing their effects on productivity scores over time. "
+                        "Includes real-time chart updates and multi-configuration comparison."
+                    ).classes("text-sm text-gray-700")
+                    with ui.card().classes("mt-2 p-2 bg-orange-50 border border-orange-200"):
+                        ui.label(
+                            "Note: Has significant potential but current implementation needs refactoring. "
+                            "The concept of comparing weight configurations is valuable, but the UI/UX and performance "
+                            "optimization need improvement. Chart updates are slow and the configuration management flow "
+                            "could be more intuitive."
+                        ).classes("text-xs text-orange-800 italic")
+                ui.button(
+                    "Open",
+                    on_click=lambda: ui.navigate.to("/settings/productivity-settings")
+                ).classes("bg-blue-500 text-white ml-4")
+        
         # Placeholder for future experimental systems
         with ui.card().classes("p-4 bg-gray-50 border border-gray-200"):
             ui.label("More experimental features coming soon...").classes("text-sm text-gray-500 italic")

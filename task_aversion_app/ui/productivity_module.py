@@ -2,6 +2,9 @@
 
 Allows manual parameter selection with tooltips explaining each parameter's effect.
 Prioritizes baseline formula with optional enhancements.
+
+⚠️ FLAGGED FOR REMOVAL AFTER REVIEW ⚠️
+This page appears to be redundant/useless. Review and remove if confirmed.
 """
 from nicegui import ui
 from backend.productivity_tracker import ProductivityTracker
@@ -200,7 +203,11 @@ def create_parameter_control(param_name: str, param_info: dict, value_callback=N
 
 @ui.page("/productivity-module")
 def productivity_module_page():
-    """Interactive productivity module with parameter controls."""
+    """Interactive productivity module with parameter controls.
+    
+    ⚠️ FLAGGED FOR REMOVAL AFTER REVIEW ⚠️
+    This page appears to be redundant/useless. Review and remove if confirmed.
+    """
     
     ui.add_head_html("""
     <style>

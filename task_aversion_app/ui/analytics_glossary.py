@@ -182,7 +182,7 @@ ANALYTICS_MODULES = {
             'Penalizes excessive play time (play tasks)',
             'Optional enhancements provide context-aware adjustments'
         ],
-        'interactive_module': '/productivity-module'
+        'interactive_module': '/productivity-module'  # ⚠️ FLAGGED FOR REMOVAL: Remove when productivity_module page is removed
     },
     'volumetric_productivity': {
         'title': 'Volumetric Productivity',

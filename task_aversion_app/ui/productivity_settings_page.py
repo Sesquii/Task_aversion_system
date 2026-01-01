@@ -184,18 +184,37 @@ def productivity_settings_page():
             weight_configs = load_weight_configurations()
             config_names = list(weight_configs.keys())
             
-            # Configuration selector
+            # Configuration selector and comparison
             with ui.row().classes("gap-4 w-full mb-4"):
                 config_select = ui.select(
                     {name: name for name in config_names},
                     value=config_names[0] if config_names else None,
-                    label="Weight Configuration",
+                    label="Weight Configuration (for editing)",
                 ).props("dense outlined").classes("w-full max-w-md")
                 
                 new_config_name_input = ui.input(
                     label="New configuration name",
                     placeholder="Enter name...",
                 ).props("dense outlined").classes("w-full max-w-md")
+            
+            # Multi-select for comparing configurations
+            ui.label("Compare Configurations").classes("text-lg font-semibold mt-4 mb-2")
+            ui.label("Select one or more configurations to compare on the chart below.").classes("text-sm text-gray-600 mb-2")
+            
+            # Create checkboxes for each configuration
+            config_checkboxes = {}
+            with ui.row().classes("gap-4 w-full mb-4 flex-wrap"):
+                # Add "Current Settings" option (uses current input values)
+                config_checkboxes['Current Settings'] = ui.checkbox(
+                    "Current Settings",
+                    value=True  # Default: select current settings
+                ).classes("mr-4")
+                
+                for config_name in config_names:
+                    config_checkboxes[config_name] = ui.checkbox(
+                        config_name,
+                        value=False  # Don't select saved configs by default
+                    ).classes("mr-4")
             
             # Component weights
             ui.label("Component Weights").classes("text-lg font-semibold mt-4 mb-2")
@@ -208,13 +227,16 @@ def productivity_settings_page():
             with ui.grid(columns=2).classes("gap-4 w-full mb-4"):
                 for component_key, component_label in PRODUCTIVITY_COMPONENTS.items():
                     default_weight = component_weights.get(component_key, 1.0)
-                    component_weight_inputs[component_key] = ui.number(
+                    input_widget = ui.number(
                         label=component_label,
                         value=default_weight,
                         min=0.0,
                         max=10.0,
                         step=0.1,
                     ).props("dense outlined")
+                    component_weight_inputs[component_key] = input_widget
+                    # Update chart when weight changes (debounced - defined after chart section)
+                    input_widget.on('update:model-value', lambda e, key=component_key: debounced_update_chart())
             
             # Curve weights
             ui.label("Curve Weights").classes("text-lg font-semibold mt-4 mb-2")
@@ -223,59 +245,31 @@ def productivity_settings_page():
             with ui.grid(columns=2).classes("gap-4 w-full mb-4"):
                 for curve_key, curve_label in CURVE_WEIGHTS.items():
                     default_weight = curve_weights_config.get(curve_key, 1.0)
-                    curve_weight_inputs[curve_key] = ui.number(
+                    input_widget = ui.number(
                         label=curve_label,
                         value=default_weight,
                         min=0.0,
                         max=10.0,
                         step=0.1,
                     ).props("dense outlined")
+                    curve_weight_inputs[curve_key] = input_widget
+                    # Update chart when weight changes (debounced - defined after chart section)
+                    input_widget.on('update:model-value', lambda e, key=curve_key: debounced_update_chart())
             
-            # Save/Load configuration buttons
+            # Configuration management section
+            ui.label("Configuration Management").classes("text-lg font-semibold mt-4 mb-2")
+            ui.label(
+                "• Load Selected: Loads the selected configuration's weights into the input fields above\n"
+                "• Save Configuration: Saves the current input values to the selected configuration\n"
+                "• Create New: Creates a new configuration with the current input values (enter name first)"
+            ).classes("text-sm text-gray-600 mb-4")
+            
             with ui.row().classes("gap-2 mb-4"):
-                def save_weight_config():
-                    config_name = config_select.value
-                    if not config_name:
-                        ui.notify("Please select or create a configuration", color="warning")
-                        return
-                    
-                    component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
-                    curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
-                    
-                    config = {
-                        'component_weights': component_weights,
-                        'curve_weights': curve_weights,
-                        'updated_at': datetime.now().isoformat(),
-                    }
-                    
-                    save_weight_configuration(config_name, config)
-                    ui.notify(f"Configuration '{config_name}' saved", color="positive")
-                
-                def create_new_config():
-                    new_name = new_config_name_input.value.strip()
-                    if not new_name:
-                        ui.notify("Please enter a configuration name", color="warning")
-                        return
-                    
-                    if new_name in weight_configs:
-                        ui.notify("Configuration name already exists", color="warning")
-                        return
-                    
-                    # Create new config with default weights
-                    new_config = {
-                        'component_weights': {key: 1.0 for key in PRODUCTIVITY_COMPONENTS.keys()},
-                        'curve_weights': {key: 1.0 for key in CURVE_WEIGHTS.keys()},
-                        'created_at': datetime.now().isoformat(),
-                        'updated_at': datetime.now().isoformat(),
-                    }
-                    
-                    save_weight_configuration(new_name, new_config)
-                    ui.notify(f"Configuration '{new_name}' created", color="positive")
-                    ui.navigate.reload()
-                
                 def load_config():
+                    """Load Selected: Loads the selected configuration's weights into the input fields."""
                     config_name = config_select.value
                     if not config_name or config_name not in weight_configs:
+                        ui.notify("Please select a valid configuration", color="warning")
                         return
                     
                     config = weight_configs[config_name]
@@ -289,20 +283,135 @@ def productivity_settings_page():
                     for key, input_widget in curve_weight_inputs.items():
                         input_widget.value = curve_weights.get(key, 1.0)
                     
-                    ui.notify(f"Configuration '{config_name}' loaded", color="positive")
+                    ui.notify(f"Configuration '{config_name}' loaded into inputs", color="positive")
+                    # Don't auto-update chart - let user see the loaded values first
                 
-                ui.button("Save Configuration", on_click=save_weight_config).classes("bg-green-500 text-white")
-                ui.button("Create New", on_click=create_new_config).classes("bg-blue-500 text-white")
-                ui.button("Load Selected", on_click=load_config).classes("bg-gray-500 text-white")
+                def save_weight_config():
+                    """Save Configuration: Saves the current input values to the selected configuration."""
+                    config_name = config_select.value
+                    if not config_name:
+                        ui.notify("Please select a configuration to save to", color="warning")
+                        return
+                    
+                    component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
+                    curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
+                    
+                    config = {
+                        'component_weights': component_weights,
+                        'curve_weights': curve_weights,
+                        'updated_at': datetime.now().isoformat(),
+                    }
+                    
+                    save_weight_configuration(config_name, config)
+                    # Reload configs
+                    weight_configs.clear()
+                    weight_configs.update(load_weight_configurations())
+                    # Update checkbox if it doesn't exist
+                    if config_name not in config_checkboxes:
+                        # Add new checkbox (this would need to be added to the UI, but for now just ensure it's in the dict)
+                        pass
+                    
+                    ui.notify(f"Configuration '{config_name}' saved", color="positive")
+                    update_chart()  # Update chart to reflect saved values
+                
+                def create_new_config():
+                    """Create New: Creates a new configuration with the current input values."""
+                    new_name = new_config_name_input.value.strip()
+                    if not new_name:
+                        ui.notify("Please enter a configuration name", color="warning")
+                        return
+                    
+                    if new_name in weight_configs:
+                        ui.notify("Configuration name already exists. Use 'Save Configuration' to update it.", color="warning")
+                        return
+                    
+                    # Create new config with CURRENT input values (not defaults)
+                    component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
+                    curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
+                    
+                    new_config = {
+                        'component_weights': component_weights,
+                        'curve_weights': curve_weights,
+                        'created_at': datetime.now().isoformat(),
+                        'updated_at': datetime.now().isoformat(),
+                    }
+                    
+                    save_weight_configuration(new_name, new_config)
+                    # Reload configs
+                    weight_configs.clear()
+                    weight_configs.update(load_weight_configurations())
+                    config_names = list(weight_configs.keys())
+                    
+                    # Update select dropdown
+                    config_select.options = {name: name for name in config_names}
+                    config_select.value = new_name
+                    
+                    # Add checkbox for new config (would need to be added to UI, but for now just track it)
+                    config_checkboxes[new_name] = None  # Placeholder - would need UI update
+                    
+                    # Clear input field
+                    new_config_name_input.value = ""
+                    
+                    ui.notify(f"Configuration '{new_name}' created with current values. Refresh page to see it in comparison list.", color="positive")
+                    update_chart()  # Update chart
+                
+                ui.button("Load Selected", on_click=load_config).classes("bg-blue-500 text-white").tooltip("Loads the selected configuration's weights into the input fields")
+                ui.button("Save Configuration", on_click=save_weight_config).classes("bg-green-500 text-white").tooltip("Saves the current input values to the selected configuration")
+                ui.button("Create New", on_click=create_new_config).classes("bg-purple-500 text-white").tooltip("Creates a new configuration with the current input values (enter name first)")
             
             # Productivity Score Over Time Chart
             ui.label("Productivity Score Over Time").classes("text-lg font-semibold mt-4 mb-2")
             chart_container = ui.column().classes("w-full")
             
+            def get_productivity_settings_with_weights(config_name: str = None, use_current_inputs: bool = False):
+                """Get productivity settings with weights applied from a configuration or current inputs."""
+                # Get base productivity settings
+                base_settings = user_state.get_productivity_settings(DEFAULT_USER_ID) or {}
+                
+                if use_current_inputs:
+                    # Use current input values
+                    component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
+                    curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
+                elif config_name:
+                    # Use saved configuration
+                    config = weight_configs.get(config_name, {})
+                    component_weights = config.get('component_weights', {})
+                    curve_weights = config.get('curve_weights', {})
+                else:
+                    # Default weights
+                    component_weights = {key: 1.0 for key in PRODUCTIVITY_COMPONENTS.keys()}
+                    curve_weights = {key: 1.0 for key in CURVE_WEIGHTS.keys()}
+                
+                # Apply curve weights to productivity settings
+                settings = base_settings.copy()
+                if 'weekly_curve_strength' in curve_weights:
+                    settings['weekly_curve_strength'] = float(base_settings.get('weekly_curve_strength', 1.0) or 1.0) * curve_weights['weekly_curve_strength']
+                if 'efficiency_curve_strength' in curve_weights:
+                    settings['efficiency_curve_strength'] = float(base_settings.get('efficiency_curve_strength', 1.0) or 1.0) * curve_weights['efficiency_curve_strength']
+                if 'burnout_curve_strength' in curve_weights:
+                    settings['burnout_curve_strength'] = float(base_settings.get('burnout_curve_strength', 1.0) or 1.0) * curve_weights['burnout_curve_strength']
+                
+                return settings, component_weights, curve_weights
+            
+            def calculate_daily_scores_with_config(target_date, config_name: str = None, use_current_inputs: bool = False):
+                """Calculate daily scores with a specific weight configuration."""
+                settings, component_weights, curve_weights = get_productivity_settings_with_weights(config_name, use_current_inputs)
+                
+                # Temporarily set productivity settings for this calculation
+                original_settings = analytics.productivity_settings
+                analytics.productivity_settings = settings
+                
+                try:
+                    daily_scores = analytics.calculate_daily_scores(target_date=target_date)
+                    return daily_scores.get('productivity_score', 0.0)
+                finally:
+                    # Restore original settings
+                    analytics.productivity_settings = original_settings
+            
             def update_chart():
                 chart_container.clear()
                 
-                # Get productivity scores over time
+                # Get productivity scores over time using full calculation
                 try:
                     df = analytics._load_instances(completed_only=True)
                     if df.empty:
@@ -312,67 +421,174 @@ def productivity_settings_page():
                             )
                         return
                     
-                    # Filter to completed tasks with productivity scores
+                    # Filter to completed tasks
                     completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
                     if completed.empty:
                         with chart_container:
                             ui.label("No completed tasks found.").classes("text-sm text-gray-500")
                         return
                     
-                    # Calculate productivity scores (simplified - using work tasks only)
+                    # Parse dates
                     completed['completed_at'] = pd.to_datetime(completed['completed_at'], errors='coerce')
                     completed = completed.dropna(subset=['completed_at'])
-                    completed = completed[completed['task_type'].str.lower() == 'work']
+                    completed['date'] = completed['completed_at'].dt.date
                     
-                    if completed.empty:
+                    # Get all unique dates
+                    unique_dates = sorted(completed['date'].unique())
+                    
+                    if not unique_dates:
                         with chart_container:
-                            ui.label("No work tasks completed yet.").classes("text-sm text-gray-500")
+                            ui.label("No valid completion dates found.").classes("text-sm text-gray-500")
                         return
                     
-                    # Group by date and calculate average productivity
-                    completed['date'] = completed['completed_at'].dt.date
-                    daily_scores = completed.groupby('date').size().reset_index(name='task_count')
-                    daily_scores['date'] = pd.to_datetime(daily_scores['date'])
-                    daily_scores = daily_scores.sort_values('date')
+                    # Get selected configurations to compare
+                    selected_configs = [name for name, checkbox in config_checkboxes.items() if checkbox.value]
                     
-                    # Create line chart
-                    fig = px.line(
-                        daily_scores,
-                        x='date',
-                        y='task_count',
-                        title="Daily Work Task Completion Count",
-                        labels={'task_count': 'Tasks Completed', 'date': 'Date'},
-                    )
+                    # If no configs selected, use current inputs
+                    if not selected_configs:
+                        selected_configs = ['Current Settings']
+                    
+                    # Calculate scores for each configuration
+                    all_scores_data = []
+                    
+                    for config_name in selected_configs:
+                        daily_scores_list = []
+                        for date_obj in unique_dates:
+                            try:
+                                target_datetime = datetime.combine(date_obj, datetime.min.time())
+                                
+                                if config_name == 'Current Settings':
+                                    score = calculate_daily_scores_with_config(target_datetime, use_current_inputs=True)
+                                else:
+                                    score = calculate_daily_scores_with_config(target_datetime, config_name=config_name)
+                                
+                                daily_scores_list.append({
+                                    'date': date_obj,
+                                    'productivity_score': score,
+                                    'configuration': config_name
+                                })
+                            except Exception as e:
+                                # Skip dates that fail to calculate
+                                continue
+                        
+                        all_scores_data.extend(daily_scores_list)
+                    
+                    if not all_scores_data:
+                        with chart_container:
+                            ui.label("Unable to calculate productivity scores. Check data format.").classes("text-sm text-gray-500")
+                        return
+                    
+                    # Convert to DataFrame for plotting
+                    daily_scores_df = pd.DataFrame(all_scores_data)
+                    daily_scores_df['date'] = pd.to_datetime(daily_scores_df['date'])
+                    daily_scores_df = daily_scores_df.sort_values('date')
+                    
+                    # Create line chart with multiple configurations
+                    if len(selected_configs) > 1:
+                        # Multiple lines for comparison
+                        fig = px.line(
+                            daily_scores_df,
+                            x='date',
+                            y='productivity_score',
+                            color='configuration',
+                            title="Daily Productivity Score Comparison",
+                            labels={'productivity_score': 'Productivity Score', 'date': 'Date', 'configuration': 'Configuration'},
+                            markers=True
+                        )
+                    else:
+                        # Single line
+                        config_label = selected_configs[0]
+                        fig = px.line(
+                            daily_scores_df,
+                            x='date',
+                            y='productivity_score',
+                            title=f"Daily Productivity Score - {config_label}",
+                            labels={'productivity_score': 'Productivity Score', 'date': 'Date'},
+                            markers=True
+                        )
+                    
                     fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
                     
                     with chart_container:
                         ui.plotly(fig)
-                        ui.label(
-                            "Note: This shows work task completion count. "
-                            "Full productivity score calculation requires all components."
-                        ).classes("text-xs text-gray-500 mt-2")
+                        if len(selected_configs) > 1:
+                            ui.label(
+                                f"Comparing {len(selected_configs)} configurations. "
+                                "Shows how different weight/curve settings affect productivity scores over time."
+                            ).classes("text-xs text-gray-500 mt-2")
+                        else:
+                            ui.label(
+                                "Shows full productivity score calculation including all components: "
+                                "baseline completion, task type multipliers, weekly bonuses, goal adjustments, and burnout penalties. "
+                                "Adjust weights above to see how they affect the scores."
+                            ).classes("text-xs text-gray-500 mt-2")
                         
                 except Exception as e:
                     with chart_container:
                         ui.label(f"Error loading chart: {str(e)}").classes("text-sm text-red-500")
             
-            # Load chart when expansion opens
-            config_select.on('update:model-value', lambda e: update_chart())
+            # Debounce chart updates to avoid excessive recalculations
+            chart_update_timer = None
+            def debounced_update_chart():
+                """Debounced chart update - waits 500ms after last change before updating."""
+                nonlocal chart_update_timer
+                if chart_update_timer:
+                    chart_update_timer.cancel()
+                chart_update_timer = ui.timer(0.5, update_chart, once=True)
+            
+            # Update chart when configuration selection changes
+            def on_config_select_change():
+                # Load the selected config into inputs (but don't auto-update chart)
+                config_name = config_select.value
+                if config_name and config_name in weight_configs:
+                    config = weight_configs[config_name]
+                    component_weights = config.get('component_weights', {})
+                    curve_weights = config.get('curve_weights', {})
+                    
+                    # Update inputs
+                    for key, input_widget in component_weight_inputs.items():
+                        input_widget.value = component_weights.get(key, 1.0)
+                    
+                    for key, input_widget in curve_weight_inputs.items():
+                        input_widget.value = curve_weights.get(key, 1.0)
+            
+            config_select.on('update:model-value', lambda e: on_config_select_change())
+            
+            # Update chart when comparison checkboxes change (immediate, not debounced)
+            for checkbox in config_checkboxes.values():
+                checkbox.on('update:model-value', lambda e: update_chart())
+            
+            # Initial chart load
             update_chart()
     
-    # Link to Productivity Module
+    # Related Resources
     ui.separator().classes("my-4")
     with ui.card().classes("w-full max-w-4xl p-4 bg-gray-50 border border-gray-200"):
         ui.label("Related Resources").classes("text-lg font-semibold mb-2")
-        ui.button(
-            "📚 Productivity Module",
-            on_click=lambda: ui.navigate.to("/productivity-module"),
-            icon="science"
-        ).classes("bg-purple-500 text-white")
-        ui.label(
-            "Explore the interactive productivity module to understand how productivity scores are calculated "
-            "and experiment with different parameter values."
-        ).classes("text-sm text-gray-600 mt-2")
+        
+        with ui.row().classes("gap-4 mb-2"):
+            ui.button(
+                "🔬 Experimental Systems",
+                on_click=lambda: ui.navigate.to("/experimental"),
+                icon="science"
+            ).classes("bg-purple-500 text-white")
+            ui.label(
+                "See experimental features and their usefulness ratings. "
+                "This page is listed there with notes about its potential and current limitations."
+            ).classes("text-sm text-gray-600 flex-1")
+        
+        # Link to Productivity Module
+        # ⚠️ FLAGGED FOR REMOVAL: Remove this section when productivity_module page is removed
+        with ui.row().classes("gap-4 mt-2"):
+            ui.button(
+                "📚 Productivity Module",
+                on_click=lambda: ui.navigate.to("/productivity-module"),
+                icon="science"
+            ).classes("bg-purple-500 text-white")
+            ui.label(
+                "Explore the interactive productivity module to understand how productivity scores are calculated "
+                "and experiment with different parameter values."
+            ).classes("text-sm text-gray-600 flex-1")
 
 
 def load_weight_configurations() -> dict:

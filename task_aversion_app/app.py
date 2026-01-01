@@ -26,7 +26,7 @@ from ui import composite_score_page  # registers /composite-score
 from ui import summary_page  # registers /summary
 from ui import productivity_goals_experimental  # registers /goals/productivity-hours
 from ui import goals_page  # registers /goals
-from ui import productivity_module  # registers /productivity-module
+from ui import productivity_module  # registers /productivity-module - ⚠️ FLAGGED FOR REMOVAL AFTER REVIEW
 from ui import experimental_landing  # registers /experimental
 from ui.formula_baseline_charts import register_formula_baseline_charts  # registers /experimental/formula-baseline-charts
 from ui import formula_control_system  # registers /experimental/formula-control-system/productivity-score
