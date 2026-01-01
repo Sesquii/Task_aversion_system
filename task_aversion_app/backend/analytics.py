@@ -950,6 +950,15 @@ class Analytics:
         Returns:
             Thoroughness factor (0.5 to 1.3), where 1.0 = baseline thoroughness
         """
+        # #region agent log
+        import time as time_module
+        thoroughness_func_start = time_module.perf_counter()
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor entry', 'data': {'user_id': user_id, 'days': days}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
         try:
             from .task_manager import TaskManager
             from .database import get_session, PopupTrigger
@@ -1049,10 +1058,27 @@ class Analytics:
             # Clamp to reasonable range (0.5 to 1.3)
             thoroughness_factor = max(0.5, min(1.3, thoroughness_factor))
             
+            # #region agent log
+            thoroughness_func_duration = time_module.perf_counter() - thoroughness_func_start
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor exit', 'data': {'duration_seconds': thoroughness_func_duration, 'factor_value': thoroughness_factor}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
+            
             return float(thoroughness_factor)
         
         except Exception as e:
             print(f"[Analytics] Error calculating thoroughness factor: {e}")
+            # #region agent log
+            thoroughness_func_duration = time_module.perf_counter() - thoroughness_func_start
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor error', 'data': {'duration_seconds': thoroughness_func_duration, 'error': str(e)}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
             return 1.0  # Default neutral factor on error
     
     def calculate_thoroughness_score(self, user_id: str = 'default', days: int = 30) -> float:
@@ -2905,9 +2931,25 @@ class Analytics:
                     state['execution_scores'] = persisted.get('execution_scores', [])
                     state['completed'] = persisted.get('completed', False)
                     # Reload instances list (not persisted due to size)
+                    # #region agent log
+                    load_instances_start = time_module.perf_counter()
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'loading instances via list_recent_completed', 'data': {'limit': 50}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
                     from .instance_manager import InstanceManager
                     instance_manager = InstanceManager()
                     state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    # #region agent log
+                    load_instances_duration = time_module.perf_counter() - load_instances_start
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'instances loaded', 'data': {'duration_seconds': load_instances_duration, 'instance_count': len(state['instances'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
                     # If we had progress, resume from where we left off
                     if state['current_index'] > 0 and not state['completed']:
                         # #region agent log
@@ -2925,17 +2967,49 @@ class Analytics:
                         state['completed'] = False
                 else:
                     # No persisted state - initialize fresh
+                    # #region agent log
+                    load_instances_start = time_module.perf_counter()
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'loading instances via list_recent_completed', 'data': {'limit': 50}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
                     from .instance_manager import InstanceManager
                     instance_manager = InstanceManager()
                     state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    # #region agent log
+                    load_instances_duration = time_module.perf_counter() - load_instances_start
+                    try:
+                        import json as json_module
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'instances loaded', 'data': {'duration_seconds': load_instances_duration, 'instance_count': len(state['instances'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                    except: pass
+                    # #endregion
                     state['current_index'] = 0
                     state['execution_scores'] = []
                     state['completed'] = False
             else:
                 # Not persisting - initialize fresh
+                # #region agent log
+                load_instances_start = time_module.perf_counter()
+                try:
+                    import json as json_module
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'loading instances via list_recent_completed', 'data': {'limit': 50}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
                 from .instance_manager import InstanceManager
                 instance_manager = InstanceManager()
                 state['instances'] = instance_manager.list_recent_completed(limit=50)
+                # #region agent log
+                load_instances_duration = time_module.perf_counter() - load_instances_start
+                try:
+                    import json as json_module
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'LOAD', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'instances loaded', 'data': {'duration_seconds': load_instances_duration, 'instance_count': len(state['instances'])}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
                 state['current_index'] = 0
                 state['execution_scores'] = []
                 state['completed'] = False
@@ -2963,13 +3037,47 @@ class Analytics:
         except: pass
         # #endregion
         
+        # #region agent log
+        batch_start_time = time_module.perf_counter()
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'starting batch execution score calculation', 'data': {'batch_start': current_index, 'batch_end': end_index, 'batch_size': end_index - current_index}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
+        
         for idx in range(current_index, end_index):
+            # #region agent log
+            instance_start = time_module.perf_counter()
+            try:
+                import json as json_module
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H3', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'calculating execution score for instance', 'data': {'instance_index': idx, 'total_instances': len(instances)}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+            except: pass
+            # #endregion
             try:
                 execution_score = self.calculate_execution_score(instances[idx])
+                # #region agent log
+                instance_duration = time_module.perf_counter() - instance_start
+                try:
+                    import json as json_module
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H3', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'execution score calculated for instance', 'data': {'instance_index': idx, 'duration_seconds': instance_duration, 'score': execution_score}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+                except: pass
+                # #endregion
                 if execution_score is not None:
                     execution_scores.append(execution_score)
             except Exception as e:
                 print(f"[Analytics] Error calculating execution score for instance {idx}: {e}")
+        
+        # #region agent log
+        batch_duration = time_module.perf_counter() - batch_start_time
+        try:
+            import json as json_module
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'analytics.py:get_execution_score_chunked', 'message': 'batch execution score calculation completed', 'data': {'batch_size': end_index - current_index, 'total_duration_seconds': batch_duration, 'avg_per_instance': batch_duration / (end_index - current_index) if (end_index - current_index) > 0 else 0}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
+        except: pass
+        # #endregion
         
         state['current_index'] = end_index
         state['execution_scores'] = execution_scores
@@ -4026,27 +4134,28 @@ class Analytics:
     ) -> float:
         """Calculate execution score (0-100) for efficient execution of difficult tasks.
         
-        **Formula Version: 1.2**
+        **Formula Version: 1.0 (matches glossary definition)**
         
-        Combines six component factors:
+        Combines four component factors (as defined in glossary):
         1. Difficulty factor: High aversion + high load
         2. Speed factor: Fast execution relative to estimate
         3. Start speed factor: Fast start after initialization (procrastination resistance)
         4. Completion factor: Full completion (100% or close)
-        5. Thoroughness factor: Note-taking and attention to detail (v1.2)
-        6. Momentum factor: Building energy through repeated action (v1.2)
         
-        Formula: execution_score = base_score * (1.0 + difficulty_factor) * 
-                                   (0.5 + speed_factor * 0.5) * 
-                                   (0.5 + start_speed_factor * 0.5) * 
-                                   completion_factor *
-                                   thoroughness_factor *
-                                   (0.5 + momentum_factor * 0.5)
+        Formula (matches glossary): execution_score = 50 * (1.0 + difficulty_factor) * 
+                                                      (0.5 + speed_factor * 0.5) * 
+                                                      (0.5 + start_speed_factor * 0.5) * 
+                                                      completion_factor
+        
+        Note: Thoroughness factor and momentum factor were removed due to performance issues
+        (were being recalculated for each instance, causing significant slowdown).
+        The calculate_thoroughness_factor and calculate_momentum_factor methods remain in
+        the codebase for potential future use.
         
         Note: Focus factor (emotion-based) is NOT included here - it belongs in grit score.
         
         See: docs/execution_module_v1.0.md for complete formula documentation.
-        See: docs/focus_momentum_persistence_final_design.md for factor details.
+        See: ui/analytics_glossary.py for the glossary definition.
         
         Args:
             row: Task instance row (pandas Series from CSV or dict from database)
@@ -4180,28 +4289,22 @@ class Analytics:
             # Low completion: significant penalty
             completion_factor = completion_pct / 50.0 * 0.5
         
-        # 5. Thoroughness Factor (note-taking and attention to detail)
-        thoroughness_factor = self.calculate_thoroughness_factor(user_id='default', days=30)
-        # Returns 0.5-1.3 range, use directly
-        
-        # 6. Momentum Factor (building energy through repeated action)
-        momentum_factor = self.calculate_momentum_factor(row)
-        # Returns 0.0-1.0, scale to 0.5-1.0 range to provide boost rather than penalty
-        momentum_factor_scaled = 0.5 + momentum_factor * 0.5
-        
-        # Combined Formula
+        # Combined Formula (matches glossary definition exactly)
         # Base score: 50 points (neutral)
         base_score = 50.0
         
         # Apply factors multiplicatively (all must be high for high score)
+        # Formula matches glossary: execution_score = 50 * (1.0 + difficulty_factor) * 
+        #                            (0.5 + speed_factor * 0.5) * (0.5 + start_speed_factor * 0.5) * completion_factor
         execution_score = base_score * (
             (1.0 + difficulty_factor) *      # 1.0-2.0 range (difficulty boost)
             (0.5 + speed_factor * 0.5) *     # 0.5-1.0 range (speed boost)
             (0.5 + start_speed_factor * 0.5) *  # 0.5-1.0 range (start speed boost)
-            completion_factor *             # 0.0-1.0 range (completion quality)
-            thoroughness_factor *            # 0.5-1.3 range (thoroughness boost)
-            momentum_factor_scaled           # 0.5-1.0 range (momentum boost)
+            completion_factor                 # 0.0-1.0 range (completion quality)
         )
+        
+        # Note: Momentum factor removed for performance (was calling _load_instances() multiple times per instance).
+        # The calculate_momentum_factor method remains available in the codebase.
         
         # Normalize to 0-100 range
         execution_score = max(0.0, min(100.0, execution_score))
@@ -5796,6 +5899,10 @@ class Analytics:
         
         Extracts metric values from completed task instances and groups by date.
         
+        For stored metrics (stress_level, net_wellbeing, etc.), extracts from actual_dict.
+        For calculated metrics (execution_score, grit_score, etc.), returns empty history
+        to avoid expensive recalculation during initial load.
+        
         Args:
             metric_key: The metric key to extract (e.g., 'stress_level', 'net_wellbeing')
             days: Number of days to look back (default 90)
@@ -5814,6 +5921,39 @@ class Analytics:
                 f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'HIST', 'location': 'analytics.py:get_generic_metric_history', 'message': 'get_generic_metric_history called', 'data': {'metric_key': metric_key, 'days': days}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
         except: pass
         # #endregion
+        
+        # Metrics that have optimized history methods
+        # Route to specific methods instead of generic extraction for better performance
+        # This avoids expensive JSON parsing for each row and uses direct dataframe column access
+        metric_routes = {
+            'execution_score': self.get_execution_score_history,
+            'grit_score': self.get_grit_score_history,
+            'thoroughness_score': self.get_thoroughness_score_history,
+            'thoroughness_factor': self.get_thoroughness_factor_history,
+            'stress_level': self.get_stress_level_history,
+            'net_wellbeing': self.get_net_wellbeing_history,
+            'net_wellbeing_normalized': self.get_net_wellbeing_normalized_history,
+            'relief_score': self.get_relief_score_history,
+            'behavioral_score': self.get_behavioral_score_history,
+            'stress_efficiency': self.get_stress_efficiency_history,
+            'expected_relief': self.get_expected_relief_history,
+            'net_relief': self.get_net_relief_history,
+            'serendipity_factor': self.get_serendipity_factor_history,
+            'disappointment_factor': self.get_disappointment_factor_history,
+            'stress_relief_correlation_score': self.get_stress_relief_correlation_score_history,
+            'work_time': self.get_work_time_history,
+            'play_time': self.get_play_time_history,
+            'duration': self.get_duration_history,
+            'time_actual_minutes': self.get_duration_history,  # Alias for duration
+            'mental_energy_needed': self.get_mental_energy_needed_history,
+            'task_difficulty': self.get_task_difficulty_history,
+            'emotional_load': self.get_emotional_load_history,
+            'environmental_fit': self.get_environmental_fit_history,
+            'environmental_effect': self.get_environmental_fit_history,  # Alias for environmental_fit
+        }
+        
+        if metric_key in metric_routes:
+            return metric_routes[metric_key](days=days)
         
         df = self._load_instances(completed_only=True)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5960,6 +6100,2037 @@ class Analytics:
             result[tid] = round(float(stats['mean']), 2)
         
         return result
+
+    def get_execution_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily execution score data for trend analysis.
+        
+        Calculates execution_score for each completed instance and groups by date.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of scores per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        from collections import Counter
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now() - timedelta(days=days)
+        completed = completed[completed['completed_at_dt'] >= cutoff_date].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate task completion counts for execution_score (optional but can help with difficulty)
+        task_completion_counts = Counter(completed['task_id'].tolist())
+        task_completion_counts_dict = dict(task_completion_counts)
+        
+        # Calculate execution_score for each instance
+        completed = completed.copy()
+        completed['execution_score'] = completed.apply(
+            lambda row: self.calculate_execution_score(row, task_completion_counts_dict),
+            axis=1
+        )
+        
+        # Filter to valid scores
+        valid = completed[completed['execution_score'].notna() & (completed['execution_score'] > 0)].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_avg = valid.groupby('date')['execution_score'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_grit_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily grit score data for trend analysis.
+        
+        Calculates grit_score for each completed instance and groups by date.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of scores per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        from collections import Counter
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now() - timedelta(days=days)
+        completed = completed[completed['completed_at_dt'] >= cutoff_date].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Calculate task completion counts (required for grit_score)
+        task_completion_counts = Counter(completed['task_id'].tolist())
+        task_completion_counts_dict = dict(task_completion_counts)
+        
+        # Calculate grit_score for each instance
+        completed = completed.copy()
+        completed['grit_score'] = completed.apply(
+            lambda row: self.calculate_grit_score(row, task_completion_counts_dict),
+            axis=1
+        )
+        
+        # Filter to valid scores
+        valid = completed[completed['grit_score'].notna() & (completed['grit_score'] > 0)].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        valid['date'] = valid['completed_at_dt'].dt.date
+        daily_avg = valid.groupby('date')['grit_score'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_thoroughness_score_history(self, days: int = 90, window_days: int = 30) -> Dict[str, any]:
+        """Get historical weekly thoroughness score data for trend analysis.
+        
+        Since thoroughness is a user-level metric (not per-instance), we calculate it
+        weekly rather than daily to show trends over time.
+        
+        Args:
+            days: Number of days to look back for history (default 90)
+            window_days: Rolling window size for thoroughness calculation (default 30)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of scores per week),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        # Calculate current thoroughness_score
+        current_score = self.calculate_thoroughness_score(user_id='default', days=window_days)
+        
+        # For user-level metrics, we return the current value for all dates
+        # This shows the trend (the metric changes slowly over time)
+        # Generate weekly dates for the period
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days)
+        
+        dates = []
+        values = []
+        
+        # Generate weekly data points
+        current_date = start_date
+        while current_date <= end_date:
+            dates.append(str(current_date))
+            # Use current value (thoroughness changes slowly, so this is reasonable)
+            # In the future, we could calculate this based on data up to each date
+            values.append(current_score)
+            current_date += timedelta(days=7)  # Weekly intervals
+        
+        # Ensure we have the most recent date
+        if dates and dates[-1] != str(end_date):
+            dates.append(str(end_date))
+            values.append(current_score)
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-4:] if len(values) >= 4 else values  # Last 4 weeks
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_thoroughness_factor_history(self, days: int = 90, window_days: int = 30) -> Dict[str, any]:
+        """Get historical weekly thoroughness factor data for trend analysis.
+        
+        Since thoroughness is a user-level metric (not per-instance), we calculate it
+        weekly rather than daily to show trends over time.
+        
+        Args:
+            days: Number of days to look back for history (default 90)
+            window_days: Rolling window size for thoroughness calculation (default 30)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of factors per week),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        # Calculate current thoroughness_factor
+        current_factor = self.calculate_thoroughness_factor(user_id='default', days=window_days)
+        
+        # For user-level metrics, we return the current value for all dates
+        # This shows the trend (the metric changes slowly over time)
+        # Generate weekly dates for the period
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days)
+        
+        dates = []
+        values = []
+        
+        # Generate weekly data points
+        current_date = start_date
+        while current_date <= end_date:
+            dates.append(str(current_date))
+            # Use current value (thoroughness changes slowly, so this is reasonable)
+            # In the future, we could calculate this based on data up to each date
+            values.append(current_factor)
+            current_date += timedelta(days=7)  # Weekly intervals
+        
+        # Ensure we have the most recent date
+        if dates and dates[-1] != str(end_date):
+            dates.append(str(end_date))
+            values.append(current_factor)
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-4:] if len(values) >= 4 else values  # Last 4 weeks
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_stress_level_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily stress_level data for trend analysis.
+        
+        Optimized method that extracts stress_level directly from dataframe columns
+        instead of parsing JSON, providing significant performance improvement.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'stress_level' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract stress_level directly from dataframe (already calculated)
+        completed['metric_value'] = pd.to_numeric(completed['stress_level'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_net_wellbeing_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily net_wellbeing data for trend analysis.
+        
+        Optimized method that extracts net_wellbeing directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'net_wellbeing' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract net_wellbeing directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['net_wellbeing'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_net_wellbeing_normalized_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily net_wellbeing_normalized data for trend analysis.
+        
+        Optimized method that extracts net_wellbeing_normalized directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'net_wellbeing_normalized' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract net_wellbeing_normalized directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['net_wellbeing_normalized'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_relief_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily relief_score data for trend analysis.
+        
+        Optimized method that extracts relief_score directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract relief_score - try relief_score_numeric first (calculated), then relief_score column
+        if 'relief_score_numeric' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['relief_score_numeric'], errors='coerce')
+        elif 'relief_score' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['relief_score'], errors='coerce')
+        else:
+            # Fallback: try to extract from actual_dict
+            def _extract_relief(row):
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, str):
+                        import json
+                        actual_dict = json.loads(actual_dict)
+                    if isinstance(actual_dict, dict):
+                        return actual_dict.get('relief_score') or actual_dict.get('actual_relief')
+                except:
+                    pass
+                return None
+            completed['metric_value'] = completed.apply(_extract_relief, axis=1)
+            completed['metric_value'] = pd.to_numeric(completed['metric_value'], errors='coerce')
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_behavioral_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily behavioral_score data for trend analysis.
+        
+        Optimized method that extracts behavioral_score directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'behavioral_score' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract behavioral_score directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['behavioral_score'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_stress_efficiency_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily stress_efficiency data for trend analysis.
+        
+        Optimized method that extracts stress_efficiency directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'stress_efficiency' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract stress_efficiency directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['stress_efficiency'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_expected_relief_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily expected_relief data for trend analysis.
+        
+        Optimized method that extracts expected_relief directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty or 'expected_relief' not in completed.columns:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract expected_relief directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed['expected_relief'], errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_net_relief_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily net_relief data for trend analysis.
+        
+        Optimized method that extracts net_relief directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract net_relief - try column first, then calculate from relief_score and expected_relief
+        if 'net_relief' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['net_relief'], errors='coerce')
+        else:
+            # Calculate from relief_score_numeric and expected_relief
+            relief_score = pd.to_numeric(completed.get('relief_score_numeric', completed.get('relief_score', 0)), errors='coerce').fillna(0.0)
+            expected_relief = pd.to_numeric(completed.get('expected_relief', 0), errors='coerce').fillna(0.0)
+            completed['metric_value'] = relief_score - expected_relief
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_serendipity_factor_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily serendipity_factor data for trend analysis.
+        
+        Optimized method that extracts serendipity_factor directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract serendipity_factor - try column first, then calculate from net_relief
+        if 'serendipity_factor' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['serendipity_factor'], errors='coerce')
+        else:
+            # Calculate from net_relief (positive values only)
+            net_relief = pd.to_numeric(completed.get('net_relief', 0), errors='coerce').fillna(0.0)
+            completed['metric_value'] = net_relief.apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_disappointment_factor_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily disappointment_factor data for trend analysis.
+        
+        Optimized method that extracts disappointment_factor directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract disappointment_factor - try column first, then calculate from net_relief
+        if 'disappointment_factor' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['disappointment_factor'], errors='coerce')
+        else:
+            # Calculate from net_relief (negative values only, made positive)
+            net_relief = pd.to_numeric(completed.get('net_relief', 0), errors='coerce').fillna(0.0)
+            completed['metric_value'] = net_relief.apply(lambda x: max(0.0, -float(x)) if pd.notna(x) else 0.0)
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_stress_relief_correlation_score_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily stress_relief_correlation_score data for trend analysis.
+        
+        Optimized method that extracts stress_relief_correlation_score directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract stress_relief_correlation_score - try column first, then calculate
+        if 'stress_relief_correlation_score' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['stress_relief_correlation_score'], errors='coerce')
+        else:
+            # Calculate from stress_level and relief_score
+            stress_norm = pd.to_numeric(completed.get('stress_level', 50), errors='coerce').fillna(50.0)
+            relief_norm = pd.to_numeric(completed.get('relief_score_numeric', completed.get('relief_score', 50)), errors='coerce').fillna(50.0)
+            correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
+            completed['metric_value'] = correlation_raw.clip(0.0, 100.0).round(2)
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_work_time_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily work_time data for trend analysis.
+        
+        Calculates work_time by summing time_actual_minutes for Work and Self care tasks.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of minutes per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join instances with tasks to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Work and Self care tasks (exclude Play)
+            completed = completed_with_type[
+                completed_with_type['task_type_normalized'].isin(['work', 'self care', 'selfcare', 'self-care'])
+            ]
+        
+        # Extract time_actual_minutes from actual_dict
+        def _get_time_actual(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['time_actual'] = completed.apply(_get_time_actual, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows
+        valid = completed[completed['time_actual'].notna() & completed['completed_at_dt'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and sum work time
+        daily_sum = valid.groupby('date')['time_actual'].sum().reset_index()
+        daily_sum.columns = ['date', 'total_minutes']
+        daily_sum = daily_sum.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_sum['date'].tolist()]
+        values = daily_sum['total_minutes'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_play_time_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily play_time data for trend analysis.
+        
+        Calculates play_time by summing time_actual_minutes for Play tasks.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of minutes per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Load tasks to get task_type
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Join instances with tasks to get task_type
+        if not tasks_df.empty and 'task_type' in tasks_df.columns:
+            completed_with_type = completed.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+            # Filter to only Play tasks
+            completed = completed_with_type[
+                completed_with_type['task_type_normalized'] == 'play'
+            ]
+        
+        # Extract time_actual_minutes from actual_dict
+        def _get_time_actual(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['time_actual'] = completed.apply(_get_time_actual, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows
+        valid = completed[completed['time_actual'].notna() & completed['completed_at_dt'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and sum play time
+        daily_sum = valid.groupby('date')['time_actual'].sum().reset_index()
+        daily_sum.columns = ['date', 'total_minutes']
+        daily_sum = daily_sum.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_sum['date'].tolist()]
+        values = daily_sum['total_minutes'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_duration_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily duration (time_actual_minutes) data for trend analysis.
+        
+        Extracts time_actual_minutes from actual_dict for all completed tasks.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of average minutes per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract time_actual_minutes from actual_dict
+        def _get_time_actual(row):
+            try:
+                actual_dict = row.get('actual_dict', {})
+                if isinstance(actual_dict, str):
+                    import json
+                    actual_dict = json.loads(actual_dict)
+                if isinstance(actual_dict, dict):
+                    return actual_dict.get('time_actual_minutes', None)
+            except:
+                pass
+            return None
+        
+        completed = completed.copy()
+        completed['time_actual'] = completed.apply(_get_time_actual, axis=1)
+        completed['time_actual'] = pd.to_numeric(completed['time_actual'], errors='coerce')
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        
+        # Filter to valid rows
+        valid = completed[completed['time_actual'].notna() & completed['completed_at_dt'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['time_actual'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_mental_energy_needed_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily mental_energy_needed data for trend analysis.
+        
+        Optimized method that extracts mental_energy_needed directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract mental_energy_needed directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed.get('mental_energy_needed', completed.get('mental_energy_numeric')), errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_task_difficulty_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily task_difficulty data for trend analysis.
+        
+        Optimized method that extracts task_difficulty directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract task_difficulty directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed.get('task_difficulty', completed.get('task_difficulty_numeric')), errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_emotional_load_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily emotional_load data for trend analysis.
+        
+        Optimized method that extracts emotional_load directly from dataframe columns.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract emotional_load directly from dataframe
+        completed['metric_value'] = pd.to_numeric(completed.get('emotional_load', completed.get('emotional_load_numeric')), errors='coerce')
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
+    
+    def get_environmental_fit_history(self, days: int = 90) -> Dict[str, any]:
+        """Get historical daily environmental_fit data for trend analysis.
+        
+        Optimized method that extracts environmental_fit (or environmental_effect) from dataframe.
+        
+        Args:
+            days: Number of days to look back (default 90)
+            
+        Returns:
+            Dict with 'dates' (list of date strings), 'values' (list of values per day),
+            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        """
+        from datetime import datetime, timedelta
+        
+        df = self._load_instances(completed_only=True)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Parse dates and filter
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        
+        if completed.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Extract environmental_fit or environmental_effect from dataframe
+        # Try both column names for compatibility
+        if 'environmental_fit' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['environmental_fit'], errors='coerce')
+        elif 'environmental_effect' in completed.columns:
+            completed['metric_value'] = pd.to_numeric(completed['environmental_effect'], errors='coerce')
+        else:
+            # Try to extract from actual_dict
+            def _extract_env_fit(row):
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, str):
+                        import json
+                        actual_dict = json.loads(actual_dict)
+                    if isinstance(actual_dict, dict):
+                        return actual_dict.get('environmental_fit') or actual_dict.get('environmental_effect')
+                except:
+                    pass
+                return None
+            completed['metric_value'] = completed.apply(_extract_env_fit, axis=1)
+            completed['metric_value'] = pd.to_numeric(completed['metric_value'], errors='coerce')
+        
+        valid = completed[completed['metric_value'].notna()].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Filter to last N days
+        cutoff_date = datetime.now().date() - timedelta(days=days)
+        valid['date'] = valid['completed_at_dt'].dt.date
+        valid = valid[valid['date'] >= cutoff_date].copy()
+        
+        if valid.empty:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+        
+        # Group by date and calculate daily averages
+        daily_avg = valid.groupby('date')['metric_value'].mean().reset_index()
+        daily_avg.columns = ['date', 'avg_value']
+        daily_avg = daily_avg.sort_values('date')
+        
+        # Convert to lists
+        dates = [str(d) for d in daily_avg['date'].tolist()]
+        values = daily_avg['avg_value'].tolist()
+        
+        # Calculate averages
+        current_value = values[-1] if values else 0.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 0.0
+        three_month_average = sum(values) / len(values) if values else 0.0
+        
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
+        }
 
     def get_task_performance_ranking(self, metric: str = 'relief', top_n: int = 5) -> List[Dict[str, any]]:
         """Get top/bottom performing tasks by various metrics.
