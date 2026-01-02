@@ -1853,11 +1853,165 @@ def render_monitored_metrics_section(container):
                     'rendered': False
                 }
     
+    def get_targeted_metric_values(metrics_list, an):
+        """Get only the specific metric values needed, without calculating all metrics.
+        
+        This is much faster than calling get_relief_summary(), get_dashboard_metrics(), etc.
+        which calculate everything. Only calls the full functions if absolutely necessary.
+        
+        Returns:
+            dict with keys: 'relief_summary', 'quality_metrics', 'composite_scores'
+            Each contains only the values needed for the selected metrics.
+        """
+        result = {
+            'relief_summary': {},
+            'quality_metrics': {},
+            'composite_scores': {}
+        }
+        
+        # Metrics that come from relief_summary
+        relief_metrics = {'productivity_time', 'productivity_score'}
+        needs_productivity_time = 'productivity_time' in metrics_list
+        needs_productivity_score = 'productivity_score' in metrics_list
+        
+        if needs_productivity_time or needs_productivity_score:
+            # Use lightweight function for productivity_time
+            if needs_productivity_time:
+                if hasattr(an, 'get_productivity_time_minutes'):
+                    result['relief_summary']['productivity_time_minutes'] = an.get_productivity_time_minutes()
+                else:
+                    # Fallback: get from relief_summary (cached, so not too expensive)
+                    relief = an.get_relief_summary()
+                    result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
+            
+            if needs_productivity_score:
+                # For productivity_score, we need weekly_productivity_score from relief_summary
+                # Note: get_relief_summary() is cached, so if it was already called, this is fast
+                # If productivity_time was already loaded above, we might have the cache
+                if 'productivity_time_minutes' in result['relief_summary'] and hasattr(an, '_relief_summary_cache'):
+                    # Try to get from cache if available
+                    if an._relief_summary_cache is not None:
+                        result['relief_summary']['weekly_productivity_score'] = an._relief_summary_cache.get('weekly_productivity_score', 0.0)
+                    else:
+                        relief = an.get_relief_summary()
+                        result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
+                else:
+                    relief = an.get_relief_summary()
+                    result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
+                    # Also get productivity_time_minutes if we didn't already
+                    if needs_productivity_time and 'productivity_time_minutes' not in result['relief_summary']:
+                        result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
+        
+        # Metrics that come from quality_metrics (dashboard_metrics)
+        # Only get the specific metrics we need, not all dashboard metrics
+        quality_metric_keys = []
+        for metric in metrics_list:
+            if metric not in relief_metrics and metric != 'execution_score':
+                # Check if this metric is likely in quality_metrics
+                # Common quality metrics: avg_*, thoroughness_*, adjusted_wellbeing, etc.
+                if (metric.startswith('avg_') or 
+                    metric.startswith('thoroughness_') or 
+                    metric in ['adjusted_wellbeing', 'adjusted_wellbeing_normalized', 
+                              'general_aversion_score', 'expected_relief']):
+                    quality_metric_keys.append(metric)
+        
+        if quality_metric_keys:
+            # Build list of dashboard metric keys to request (format: 'category.key')
+            dashboard_metric_keys = []
+            for key in quality_metric_keys:
+                # Map metric keys to dashboard metric paths
+                if key.startswith('avg_'):
+                    dashboard_metric_keys.append(f'quality.{key}')
+                elif key in ['adjusted_wellbeing', 'adjusted_wellbeing_normalized', 'thoroughness_score', 'thoroughness_factor']:
+                    dashboard_metric_keys.append(f'quality.{key}')
+                elif key == 'general_aversion_score':
+                    dashboard_metric_keys.append(f'aversion.{key}')
+                elif key == 'expected_relief':
+                    dashboard_metric_keys.append('quality.avg_expected_relief')
+            
+            # Call get_dashboard_metrics() with selective calculation
+            metrics_data = an.get_dashboard_metrics(metrics=dashboard_metric_keys) if hasattr(an, 'get_dashboard_metrics') else {}
+            quality = metrics_data.get('quality', {})
+            aversion = metrics_data.get('aversion', {})
+            
+            # Extract only the metrics we need
+            for key in quality_metric_keys:
+                if key in quality:
+                    result['quality_metrics'][key] = quality[key]
+                elif f'avg_{key}' in quality:
+                    result['quality_metrics'][key] = quality[f'avg_{key}']
+                elif key in aversion:
+                    result['quality_metrics'][key] = aversion[key]
+                elif key == 'expected_relief' and 'avg_expected_relief' in quality:
+                    result['quality_metrics'][key] = quality['avg_expected_relief']
+        
+        # Metrics that come from composite_scores
+        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score', 
+                                   'work_volume_score', 'work_consistency_score', 'life_balance_score',
+                                   'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
+        composite_metric_keys = [m for m in metrics_list if m in known_composite_metrics and m != 'execution_score']
+        
+        if composite_metric_keys:
+            # Call get_all_scores_for_composite() with selective calculation
+            # (execution_score is handled separately in chunks)
+            all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys)) if hasattr(an, 'get_all_scores_for_composite') else {}
+            
+            # Extract only the metrics we need
+            for key in composite_metric_keys:
+                if key in all_composite:
+                    result['composite_scores'][key] = all_composite[key]
+        
+        return result
+    
+    def determine_needed_data_sources(metrics_list):
+        """Determine which data sources are needed based on selected metrics.
+        
+        Returns:
+            dict with keys: 'needs_relief', 'needs_quality', 'needs_composite', 'needs_execution_score'
+        """
+        # Metrics that need relief_summary
+        relief_metrics = {'productivity_time', 'productivity_score'}
+        needs_relief = any(m in relief_metrics for m in metrics_list)
+        
+        # Metrics that are known to be in composite_scores
+        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score', 
+                                   'work_volume_score', 'work_consistency_score', 'life_balance_score',
+                                   'completion_rate', 'self_care_frequency'}
+        needs_quality = False
+        needs_composite = False
+        needs_execution_score = False
+        
+        for metric in metrics_list:
+            if metric in relief_metrics:
+                continue  # Already handled by needs_relief
+            elif metric == 'execution_score':
+                needs_execution_score = True
+                needs_composite = True  # execution_score is part of composite
+            elif metric in known_composite_metrics:
+                needs_composite = True
+            else:
+                # Generic metric - could be in quality_metrics or composite_scores
+                # Load quality_metrics first (cheaper), but also load composite as fallback
+                # since get_value checks quality first, then composite
+                needs_quality = True
+                # Also load composite as fallback for generic metrics
+                needs_composite = True
+        
+        return {
+            'needs_relief': needs_relief,
+            'needs_quality': needs_quality,
+            'needs_composite': needs_composite,
+            'needs_execution_score': needs_execution_score
+        }
+    
     def load_and_render():
-        """Load metrics data incrementally using ui.timer to keep UI responsive (single-threaded)."""
+        """Load metrics data incrementally using ui.timer to keep UI responsive (single-threaded).
+        
+        Uses targeted loading to only calculate the specific metrics displayed, not all available metrics.
+        """
         # State for incremental loading - persists between timer calls
         load_state = {
-            'step': 0,  # 0=relief_summary, 1=dashboard_metrics, 2=composite_scores, 3=render
+            'step': 0,  # 0=targeted_load, 1=execution_score (if needed), 2=render
             'relief_summary': None,
             'quality_metrics': None,
             'composite_scores': None,
@@ -1865,47 +2019,46 @@ def render_monitored_metrics_section(container):
         }
         
         def process_next_step():
-            """Process one step of loading, then yield back to event loop."""
+            """Process one step of loading, then yield back to event loop.
+            
+            Uses targeted loading to only calculate metrics that are actually displayed.
+            """
             try:
                 if load_state['step'] == 0:
-                    # Step 1: Get relief summary (fast, usually cached)
+                    # Step 1: Get only the specific metric values we need (targeted loading)
                     # #region agent log
                     try:
                         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 0: calling get_relief_summary', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'TARGETED', 'location': 'dashboard.py:process_next_step', 'message': 'step 0: calling get_targeted_metric_values', 'data': {'selected_metrics': selected_metrics, 'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
                     except: pass
                     # #endregion
                     
                     try:
-                        with init_perf_logger.operation("get_relief_summary"):
-                            load_state['relief_summary'] = an.get_relief_summary()
+                        with init_perf_logger.operation("get_targeted_metric_values"):
+                            targeted_data = get_targeted_metric_values(selected_metrics, an)
+                            load_state['relief_summary'] = targeted_data.get('relief_summary', {})
+                            load_state['quality_metrics'] = targeted_data.get('quality_metrics', {})
+                            load_state['composite_scores'] = targeted_data.get('composite_scores', {})
                     except Exception as e:
-                        print(f"[Dashboard] Error getting relief summary: {e}")
-                        load_state['relief_summary'] = {
-                            'productivity_time_minutes': 0,
-                            'weekly_productivity_score': 0.0,
-                        }
-                    load_state['step'] = 1
-                    # Schedule next step - UI can process events between steps
-                    load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
-                    
-                elif load_state['step'] == 1:
-                    # Step 2: Get dashboard metrics (fast)
-                    # #region agent log
-                    try:
-                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 1: calling get_dashboard_metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-                    except: pass
-                    # #endregion
-                    
-                    try:
-                        metrics_data = an.get_dashboard_metrics() if hasattr(an, 'get_dashboard_metrics') else {}
-                        load_state['quality_metrics'] = metrics_data.get('quality', {})
-                    except Exception as e:
-                        print(f"[Dashboard] Error getting dashboard metrics: {e}")
+                        print(f"[Dashboard] Error getting targeted metric values: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        load_state['relief_summary'] = {}
                         load_state['quality_metrics'] = {}
-                    load_state['step'] = 2
-                    # Update metrics that depend on quality_metrics
+                        load_state['composite_scores'] = {}
+                    
+                    # Check if we need execution_score
+                    needs_execution_score = 'execution_score' in selected_metrics
+                    
+                    if needs_execution_score:
+                        # Initialize execution score chunked calculation state
+                        load_state['execution_score_state'] = {}
+                        load_state['step'] = 1
+                    else:
+                        # Skip execution score - not needed, go straight to render
+                        load_state['step'] = 2
+                    
+                    # Update metrics with loaded data (before execution_score if needed)
                     _update_metric_cards_incremental(
                         metric_cards,
                         selected_metrics,
@@ -1916,50 +2069,16 @@ def render_monitored_metrics_section(container):
                         an,
                         init_perf_logger
                     )
+                    
                     # Schedule next step
                     load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
                     
-                elif load_state['step'] == 2:
-                    # Step 3: Get composite scores (without execution score - that's done in chunks)
+                elif load_state['step'] == 1:
+                    # Step 2: Calculate execution score in chunks (only if needed)
                     # #region agent log
                     try:
                         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 2: calling get_all_scores_for_composite (without execution score)', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-                    except: pass
-                    # #endregion
-                    
-                    try:
-                        if hasattr(an, 'get_all_scores_for_composite'):
-                            load_state['composite_scores'] = an.get_all_scores_for_composite(days=7) or {}
-                        else:
-                            load_state['composite_scores'] = {}
-                    except Exception as e:
-                        print(f"[Dashboard] Error getting composite scores: {e}")
-                        load_state['composite_scores'] = {}
-                    
-                    # Initialize execution score chunked calculation state
-                    load_state['execution_score_state'] = {}
-                    load_state['step'] = 3
-                    # Update metrics that depend on composite_scores (without execution_score yet)
-                    _update_metric_cards_incremental(
-                        metric_cards,
-                        selected_metrics,
-                        load_state['relief_summary'],
-                        load_state['quality_metrics'],
-                        load_state['composite_scores'],
-                        coloration_baseline,
-                        an,
-                        init_perf_logger
-                    )
-                    # Schedule next step (execution score chunks)
-                    load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
-                    
-                elif load_state['step'] == 3:
-                    # Step 4: Calculate execution score in chunks (allows UI to remain responsive)
-                    # #region agent log
-                    try:
-                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'dashboard.py:process_next_step', 'message': 'step 3: processing execution score chunk', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'CHUNK', 'location': 'dashboard.py:process_next_step', 'message': 'step 1: processing execution score chunk', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
                     except: pass
                     # #endregion
                     
@@ -1988,7 +2107,7 @@ def render_monitored_metrics_section(container):
                                     an,
                                     init_perf_logger
                                 )
-                                load_state['step'] = 4
+                                load_state['step'] = 2
                             else:
                                 # More chunks to process - schedule next chunk
                                 load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
@@ -1996,22 +2115,22 @@ def render_monitored_metrics_section(container):
                         else:
                             # Fallback if chunked method doesn't exist
                             load_state['composite_scores']['execution_score'] = 50.0
-                            load_state['step'] = 4
+                            load_state['step'] = 2
                     except Exception as e:
                         print(f"[Dashboard] Error calculating execution score in chunks: {e}")
                         load_state['composite_scores']['execution_score'] = 50.0
-                        load_state['step'] = 4
+                        load_state['step'] = 2
                     
-                    # If we completed, schedule render step
-                    if load_state['step'] == 4:
+                    # Schedule render step
+                    if load_state['step'] == 2:
                         load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
                     
-                elif load_state['step'] == 4:
-                    # Step 5: Render metrics with all loaded data
+                elif load_state['step'] == 2:
+                    # Step 3: Final render - all data loaded
                     # #region agent log
                     try:
                         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'INC', 'location': 'dashboard.py:process_next_step', 'message': 'step 4: rendering metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'TARGETED', 'location': 'dashboard.py:process_next_step', 'message': 'step 2: final render', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
                     except: pass
                     # #endregion
                     
@@ -2019,7 +2138,7 @@ def render_monitored_metrics_section(container):
                     if load_state['timer']:
                         load_state['timer'].cancel()
                     
-                    # Update all metric cards with loaded data
+                    # Final update of all metric cards with loaded data
                     try:
                         _update_metric_cards_incremental(
                             metric_cards,

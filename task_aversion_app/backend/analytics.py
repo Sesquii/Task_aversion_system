@@ -2012,7 +2012,81 @@ class Analytics:
             'oldest_active': active['created_at'].min() if not active.empty else None,
         }
 
-    def get_dashboard_metrics(self) -> Dict[str, Dict[str, Optional[float]]]:
+    def _expand_metric_dependencies(self, requested_metrics: List[str]) -> set:
+        """Expand requested metrics to include all dependencies.
+        
+        Args:
+            requested_metrics: List of metric keys (can be 'category.key' or just 'key')
+        
+        Returns:
+            Set of expanded metric keys including dependencies
+        """
+        expanded = set()
+        
+        # Map of metric -> dependencies (metrics that must be calculated for this one)
+        dependencies = {
+            'adjusted_wellbeing': {'avg_net_wellbeing', 'general_aversion_score'},
+            'adjusted_wellbeing_normalized': {'adjusted_wellbeing', 'avg_net_wellbeing', 'general_aversion_score'},
+            'composite_productivity_score': {'work_volume_score', 'work_consistency_score', 'avg_base_productivity'},
+            'volumetric_productivity_score': {'avg_base_productivity', 'work_volume_score'},
+            'volumetric_potential_score': {'avg_base_productivity', 'work_volume_score'},
+            'productivity_potential_score': {'avg_base_productivity', 'work_volume_score', 'work_consistency_score'},
+        }
+        
+        # Normalize requested metrics (handle both 'category.key' and 'key' formats)
+        normalized = set()
+        for metric in requested_metrics:
+            if '.' in metric:
+                # Format: 'category.key'
+                parts = metric.split('.', 1)
+                normalized.add(parts[1])  # Just the key
+            else:
+                # Format: 'key'
+                normalized.add(metric)
+        
+        # Expand dependencies recursively
+        to_process = set(normalized)
+        while to_process:
+            current = to_process.pop()
+            if current not in expanded:
+                expanded.add(current)
+                # Add dependencies
+                if current in dependencies:
+                    for dep in dependencies[current]:
+                        if dep not in expanded:
+                            to_process.add(dep)
+        
+        return expanded
+    
+    def get_dashboard_metrics(self, metrics: Optional[List[str]] = None) -> Dict[str, Dict[str, Optional[float]]]:
+        """Get dashboard metrics, optionally calculating only specific metrics.
+        
+        Args:
+            metrics: Optional list of metric keys to calculate. If None, calculates all metrics.
+                    Metric keys can be in format 'category.key' (e.g., 'quality.avg_relief')
+                    or just 'key' (will search all categories).
+                    Examples:
+                    - ['quality.avg_relief', 'quality.avg_stress_level']
+                    - ['work_volume_score', 'completion_rate']
+        
+        Returns:
+            Dict with same structure as before, but only contains requested metrics (or all if metrics=None)
+        """
+        # Determine which metrics to calculate
+        if metrics is not None:
+            requested_metrics = self._expand_metric_dependencies(metrics)
+            
+            # Helper function to check if a metric is needed
+            def needs_metric(key: str) -> bool:
+                """Check if a metric key is in the requested set."""
+                return key in requested_metrics
+        else:
+            requested_metrics = None  # Calculate all
+            
+            # Helper function that always returns True when calculating all
+            def needs_metric(key: str) -> bool:
+                return True
+        
         df = self._load_instances()
         if df.empty:
             return {
@@ -2071,19 +2145,32 @@ class Analytics:
             # Calculate ratio: actual / estimate (1.0 = perfect, >1 = took longer, <1 = took less)
             time_accuracy = _avg(valid_time_comparisons['time_actual_num'] / valid_time_comparisons['time_estimate_num'])
         
-        # Calculate life balance
-        life_balance = self.get_life_balance()
+        # Calculate life balance (only if needed)
+        life_balance = {}
+        if needs_metric('life_balance_score') or needs_metric('balance_score'):
+            life_balance = self.get_life_balance()
+        else:
+            life_balance = {'balance_score': 50.0}  # Default value
         
-        # Calculate daily work volume metrics
-        work_volume_metrics = self.get_daily_work_volume_metrics(days=30)
-        avg_daily_work_time = work_volume_metrics.get('avg_daily_work_time', 0.0)
-        work_volume_score = work_volume_metrics.get('work_volume_score', 0.0)
-        work_consistency_score = work_volume_metrics.get('work_consistency_score', 50.0)
+        # Calculate daily work volume metrics (only if needed)
+        work_volume_metrics = {}
+        avg_daily_work_time = 0.0
+        work_volume_score = 0.0
+        work_consistency_score = 50.0
+        if (needs_metric('work_volume_score') or needs_metric('work_consistency_score') or 
+            needs_metric('avg_daily_work_time') or needs_metric('productivity_potential_score') or
+            needs_metric('composite_productivity_score') or needs_metric('volumetric_productivity_score')):
+            work_volume_metrics = self.get_daily_work_volume_metrics(days=30)
+            avg_daily_work_time = work_volume_metrics.get('avg_daily_work_time', 0.0)
+            work_volume_score = work_volume_metrics.get('work_volume_score', 0.0)
+            work_consistency_score = work_volume_metrics.get('work_consistency_score', 50.0)
         
-        # Calculate average base productivity score from completed tasks
+        # Calculate average base productivity score from completed tasks (only if needed)
         # This is needed for volumetric productivity calculation
         avg_base_productivity = 0.0
-        if not completed.empty:
+        if (needs_metric('avg_base_productivity') or needs_metric('volumetric_productivity_score') or
+            needs_metric('volumetric_potential_score') or needs_metric('productivity_potential_score') or
+            needs_metric('composite_productivity_score')) and not completed.empty:
             # Calculate productivity score for each completed task
             from .task_manager import TaskManager
             task_manager = TaskManager()
@@ -2155,110 +2242,126 @@ class Analytics:
             if productivity_scores:
                 avg_base_productivity = sum(productivity_scores) / len(productivity_scores)
         
-        # Calculate volumetric productivity score (integrates volume into productivity)
-        volumetric_productivity = self.calculate_volumetric_productivity_score(
-            base_productivity_score=avg_base_productivity,
-            work_volume_score=work_volume_score
-        )
+        # Calculate volumetric productivity score (only if needed)
+        volumetric_productivity = 0.0
+        volumetric_potential = 0.0
+        productivity_potential = {'potential_score': 0.0, 'gap_hours': 0.0}
+        composite_productivity = 0.0
         
-        # Calculate average efficiency score for productivity potential (legacy, still used)
-        efficiency_summary = self.get_efficiency_summary()
-        avg_efficiency_score = efficiency_summary.get('avg_efficiency', 0.0)
+        if (needs_metric('volumetric_productivity_score') or needs_metric('volumetric_potential_score') or
+            needs_metric('productivity_potential_score') or needs_metric('composite_productivity_score')):
+            # Calculate volumetric productivity score (integrates volume into productivity)
+            volumetric_productivity = self.calculate_volumetric_productivity_score(
+                base_productivity_score=avg_base_productivity,
+                work_volume_score=work_volume_score
+            )
+            
+            # Calculate average efficiency score for productivity potential (legacy, still used)
+            efficiency_summary = self.get_efficiency_summary()
+            avg_efficiency_score = efficiency_summary.get('avg_efficiency', 0.0)
+            
+            # Get target hours from user settings
+            target_hours_per_day = self.get_target_hours_per_day("default_user")
+            target_hours_per_day_decimal = target_hours_per_day / 60.0  # Convert to hours
+            
+            # Calculate target volume score based on target hours
+            # Volume score formula: 0-2h (0-25), 2-4h (25-50), 4-6h (50-75), 6-8h+ (75-100)
+            target_minutes = target_hours_per_day
+            if target_minutes <= 120:
+                target_volume_score = (target_minutes / 120) * 25
+            elif target_minutes <= 240:
+                target_volume_score = 25 + ((target_minutes - 120) / 120) * 25
+            elif target_minutes <= 360:
+                target_volume_score = 50 + ((target_minutes - 240) / 120) * 25
+            else:
+                target_volume_score = 75 + min(25, ((target_minutes - 360) / 120) * 25)
+            target_volume_score = max(0.0, min(100.0, target_volume_score))
+            
+            # Calculate productivity potential using volumetric productivity
+            # Potential = volumetric productivity at target volume
+            volumetric_potential = self.calculate_volumetric_productivity_score(
+                base_productivity_score=avg_base_productivity,
+                work_volume_score=target_volume_score
+            )
+            
+            # Calculate productivity potential - uses goal setting
+            productivity_potential = self.calculate_productivity_potential(
+                avg_efficiency_score=avg_efficiency_score,
+                avg_daily_work_time=avg_daily_work_time,
+                target_hours_per_day=target_hours_per_day,
+                user_id="default_user"
+            )
+            
+            # Update potential score to use volumetric potential
+            productivity_potential['potential_score'] = volumetric_potential
+            productivity_potential['current_score'] = volumetric_productivity
+            
+            # Calculate composite productivity score using volumetric productivity
+            # Normalize volumetric productivity to 0-100 range for composite
+            normalized_volumetric = min(100.0, volumetric_productivity / 7.5) if volumetric_productivity > 0 else 0.0
+            composite_productivity = self.calculate_composite_productivity_score(
+                efficiency_score=normalized_volumetric * 2.0,  # Convert back to efficiency-like scale
+                volume_score=work_volume_score,
+                consistency_score=work_consistency_score
+            )
         
-        # Get target hours from user settings
-        target_hours_per_day = self.get_target_hours_per_day("default_user")
-        target_hours_per_day_decimal = target_hours_per_day / 60.0  # Convert to hours
+        # Calculate thoroughness/notetaking score (only if needed)
+        thoroughness_score = 50.0
+        thoroughness_factor = 1.0
+        if needs_metric('thoroughness_score') or needs_metric('thoroughness_factor'):
+            thoroughness_score = self.calculate_thoroughness_score(user_id='default', days=30)
+            thoroughness_factor = self.calculate_thoroughness_factor(user_id='default', days=30)
         
-        # Calculate target volume score based on target hours
-        # Volume score formula: 0-2h (0-25), 2-4h (25-50), 4-6h (50-75), 6-8h+ (75-100)
-        target_minutes = target_hours_per_day
-        if target_minutes <= 120:
-            target_volume_score = (target_minutes / 120) * 25
-        elif target_minutes <= 240:
-            target_volume_score = 25 + ((target_minutes - 120) / 120) * 25
-        elif target_minutes <= 360:
-            target_volume_score = 50 + ((target_minutes - 240) / 120) * 25
-        else:
-            target_volume_score = 75 + min(25, ((target_minutes - 360) / 120) * 25)
-        target_volume_score = max(0.0, min(100.0, target_volume_score))
-        
-        # Calculate productivity potential using volumetric productivity
-        # Potential = volumetric productivity at target volume
-        volumetric_potential = self.calculate_volumetric_productivity_score(
-            base_productivity_score=avg_base_productivity,
-            work_volume_score=target_volume_score
-        )
-        
-        # Calculate productivity potential - uses goal setting
-        productivity_potential = self.calculate_productivity_potential(
-            avg_efficiency_score=avg_efficiency_score,
-            avg_daily_work_time=avg_daily_work_time,
-            target_hours_per_day=target_hours_per_day,
-            user_id="default_user"
-        )
-        
-        # Update potential score to use volumetric potential
-        productivity_potential['potential_score'] = volumetric_potential
-        productivity_potential['current_score'] = volumetric_productivity
-        
-        # Calculate composite productivity score using volumetric productivity
-        # Normalize volumetric productivity to 0-100 range for composite
-        normalized_volumetric = min(100.0, volumetric_productivity / 7.5) if volumetric_productivity > 0 else 0.0
-        composite_productivity = self.calculate_composite_productivity_score(
-            efficiency_score=normalized_volumetric * 2.0,  # Convert back to efficiency-like scale
-            volume_score=work_volume_score,
-            consistency_score=work_consistency_score
-        )
-        
-        # Calculate thoroughness/notetaking score
-        thoroughness_score = self.calculate_thoroughness_score(user_id='default', days=30)
-        thoroughness_factor = self.calculate_thoroughness_factor(user_id='default', days=30)
-        
-        # Calculate daily self care tasks metrics
-        from .task_manager import TaskManager
-        task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
-        
+        # Calculate daily self care tasks metrics (only if needed)
         daily_self_care_tasks = 0
         avg_daily_self_care_tasks = 0.0
-        
-        if not tasks_df.empty and 'task_type' in tasks_df.columns:
-            # Join completed tasks with task types
-            completed_with_type = completed.merge(
-                tasks_df[['task_id', 'task_type']],
-                on='task_id',
-                how='left'
-            )
-            completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
-            completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+        if needs_metric('daily_self_care_tasks') or needs_metric('avg_daily_self_care_tasks') or needs_metric('self_care_frequency'):
+            from .task_manager import TaskManager
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
             
-            # Filter to self care tasks
-            self_care_tasks = completed_with_type[
-                completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
-            ].copy()
-            
-            if not self_care_tasks.empty:
-                # Parse completed_at dates
-                self_care_tasks['completed_at_dt'] = pd.to_datetime(self_care_tasks['completed_at'], errors='coerce')
-                self_care_tasks = self_care_tasks[self_care_tasks['completed_at_dt'].notna()]
+            if not tasks_df.empty and 'task_type' in tasks_df.columns:
+                # Join completed tasks with task types
+                completed_with_type = completed.merge(
+                    tasks_df[['task_id', 'task_type']],
+                    on='task_id',
+                    how='left'
+                )
+                completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
+                completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
+                
+                # Filter to self care tasks
+                self_care_tasks = completed_with_type[
+                    completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+                ].copy()
                 
                 if not self_care_tasks.empty:
-                    self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                    # Parse completed_at dates
+                    self_care_tasks['completed_at_dt'] = pd.to_datetime(self_care_tasks['completed_at'], errors='coerce')
+                    self_care_tasks = self_care_tasks[self_care_tasks['completed_at_dt'].notna()]
                     
-                    # Count self care tasks for today
-                    today = datetime.now().date()
-                    today_self_care = self_care_tasks[self_care_tasks['date'] == today]
-                    daily_self_care_tasks = len(today_self_care)
-                    
-                    # Calculate average daily self care tasks over last 30 days
-                    thirty_days_ago = datetime.now() - timedelta(days=30)
-                    recent_self_care = self_care_tasks[
-                        self_care_tasks['completed_at_dt'] >= thirty_days_ago
-                    ]
-                    
-                    if not recent_self_care.empty:
-                        daily_counts = recent_self_care.groupby('date').size()
-                        avg_daily_self_care_tasks = round(float(daily_counts.mean()), 2) if not daily_counts.empty else 0.0
+                    if not self_care_tasks.empty:
+                        self_care_tasks['date'] = self_care_tasks['completed_at_dt'].dt.date
+                        
+                        # Count self care tasks for today
+                        today = datetime.now().date()
+                        today_self_care = self_care_tasks[self_care_tasks['date'] == today]
+                        daily_self_care_tasks = len(today_self_care)
+                        
+                        # Calculate average daily self care tasks over last 30 days
+                        thirty_days_ago = datetime.now() - timedelta(days=30)
+                        recent_self_care = self_care_tasks[
+                            self_care_tasks['completed_at_dt'] >= thirty_days_ago
+                        ]
+                        
+                        if not recent_self_care.empty:
+                            daily_counts = recent_self_care.groupby('date').size()
+                            avg_daily_self_care_tasks = round(float(daily_counts.mean()), 2) if not daily_counts.empty else 0.0
+        else:
+            # If not needed, we still need tasks_df for other calculations, but skip self-care
+            from .task_manager import TaskManager
+            task_manager = TaskManager()
+            tasks_df = task_manager.get_all()
         
         # Calculate average aversion from completed tasks (expected_aversion at time of completion)
         completed_aversion = completed['predicted_dict'].apply(
@@ -2298,51 +2401,91 @@ class Analytics:
         # Clamp to 0-100 range
         adjusted_wellbeing_normalized = max(0.0, min(100.0, adjusted_wellbeing_normalized))
         
-        metrics = {
-            'counts': {
+        # Build result dictionary
+        result = {}
+        
+        # Counts (always calculate basic ones, conditionally calculate self-care)
+        if requested_metrics is None or any(needs_metric(k) for k in ['active', 'completed_7d', 'total_created', 'total_completed', 'completion_rate', 'daily_self_care_tasks', 'avg_daily_self_care_tasks']):
+            result['counts'] = {
                 'active': int(len(active)),
                 'completed_7d': int(len(completed_7d)),
                 'total_created': int(total_created),
                 'total_completed': int(total_completed),
                 'completion_rate': round(completion_rate, 1),
-                'daily_self_care_tasks': daily_self_care_tasks,
-                'avg_daily_self_care_tasks': avg_daily_self_care_tasks,
-            },
-            'quality': {
-                'avg_relief': _avg(df['relief_score']),
-                'avg_cognitive_load': _avg(df['cognitive_load']),
-                'avg_stress_level': _avg(df['stress_level']),
-                'avg_net_wellbeing': _avg(df['net_wellbeing']),
-                'avg_net_wellbeing_normalized': _avg(df['net_wellbeing_normalized']),
-                'avg_stress_efficiency': _avg(df['stress_efficiency']),
-                'avg_aversion': round(avg_aversion_completed, 1),
-                'adjusted_wellbeing': round(adjusted_wellbeing, 2),
-                'adjusted_wellbeing_normalized': round(adjusted_wellbeing_normalized, 2),
-                'thoroughness_score': round(thoroughness_score, 1),
-                'thoroughness_factor': round(thoroughness_factor, 3),
-            },
-            'time': {
-                'median_duration': _median(df['duration_minutes']),
-                'avg_delay': _avg(df['delay_minutes']),
-                'estimation_accuracy': round(time_accuracy, 2),
-            },
-            'life_balance': life_balance,
-            'aversion': {
+            }
+            if needs_metric('daily_self_care_tasks') or needs_metric('avg_daily_self_care_tasks') or needs_metric('self_care_frequency'):
+                result['counts']['daily_self_care_tasks'] = daily_self_care_tasks
+                result['counts']['avg_daily_self_care_tasks'] = avg_daily_self_care_tasks
+        
+        # Quality metrics
+        if requested_metrics is None or any(needs_metric(k) for k in ['avg_relief', 'avg_cognitive_load', 'avg_stress_level', 'avg_net_wellbeing', 'avg_net_wellbeing_normalized', 'avg_stress_efficiency', 'avg_aversion', 'adjusted_wellbeing', 'adjusted_wellbeing_normalized', 'thoroughness_score', 'thoroughness_factor']):
+            result['quality'] = {}
+            if needs_metric('avg_relief'):
+                result['quality']['avg_relief'] = _avg(df['relief_score'])
+            if needs_metric('avg_cognitive_load'):
+                result['quality']['avg_cognitive_load'] = _avg(df['cognitive_load'])
+            if needs_metric('avg_stress_level'):
+                result['quality']['avg_stress_level'] = _avg(df['stress_level'])
+            if needs_metric('avg_net_wellbeing'):
+                result['quality']['avg_net_wellbeing'] = _avg(df['net_wellbeing'])
+            if needs_metric('avg_net_wellbeing_normalized'):
+                result['quality']['avg_net_wellbeing_normalized'] = _avg(df['net_wellbeing_normalized'])
+            if needs_metric('avg_stress_efficiency'):
+                result['quality']['avg_stress_efficiency'] = _avg(df['stress_efficiency'])
+            if needs_metric('avg_aversion'):
+                result['quality']['avg_aversion'] = round(avg_aversion_completed, 1)
+            if needs_metric('adjusted_wellbeing'):
+                result['quality']['adjusted_wellbeing'] = round(adjusted_wellbeing, 2)
+            if needs_metric('adjusted_wellbeing_normalized'):
+                result['quality']['adjusted_wellbeing_normalized'] = round(adjusted_wellbeing_normalized, 2)
+            if needs_metric('thoroughness_score'):
+                result['quality']['thoroughness_score'] = round(thoroughness_score, 1)
+            if needs_metric('thoroughness_factor'):
+                result['quality']['thoroughness_factor'] = round(thoroughness_factor, 3)
+        
+        # Time metrics
+        if requested_metrics is None or any(needs_metric(k) for k in ['median_duration', 'avg_delay', 'estimation_accuracy']):
+            result['time'] = {}
+            if needs_metric('median_duration'):
+                result['time']['median_duration'] = _median(df['duration_minutes'])
+            if needs_metric('avg_delay'):
+                result['time']['avg_delay'] = _avg(df['delay_minutes'])
+            if needs_metric('estimation_accuracy'):
+                result['time']['estimation_accuracy'] = round(time_accuracy, 2)
+        
+        # Life balance
+        if needs_metric('life_balance_score') or needs_metric('balance_score'):
+            result['life_balance'] = life_balance
+        
+        # Aversion
+        if needs_metric('general_aversion_score'):
+            result['aversion'] = {
                 'general_aversion_score': round(general_aversion_score, 1),
-            },
-            'productivity_volume': {
-                'avg_daily_work_time': round(avg_daily_work_time, 1),
-                'work_volume_score': round(work_volume_score, 1),
-                'work_consistency_score': round(work_consistency_score, 1),
-                'productivity_potential_score': round(productivity_potential.get('potential_score', 0.0), 1),
-                'work_volume_gap': round(productivity_potential.get('gap_hours', 0.0), 1),
-                'composite_productivity_score': round(composite_productivity, 1),
-                'avg_base_productivity': round(avg_base_productivity, 1),
-                'volumetric_productivity_score': round(volumetric_productivity, 1),
-                'volumetric_potential_score': round(volumetric_potential, 1),
-            },
-        }
-        return metrics
+            }
+        
+        # Productivity volume (only if needed)
+        if requested_metrics is None or any(needs_metric(k) for k in ['avg_daily_work_time', 'work_volume_score', 'work_consistency_score', 'productivity_potential_score', 'work_volume_gap', 'composite_productivity_score', 'avg_base_productivity', 'volumetric_productivity_score', 'volumetric_potential_score']):
+            result['productivity_volume'] = {}
+            if needs_metric('avg_daily_work_time'):
+                result['productivity_volume']['avg_daily_work_time'] = round(avg_daily_work_time, 1)
+            if needs_metric('work_volume_score'):
+                result['productivity_volume']['work_volume_score'] = round(work_volume_score, 1)
+            if needs_metric('work_consistency_score'):
+                result['productivity_volume']['work_consistency_score'] = round(work_consistency_score, 1)
+            if needs_metric('productivity_potential_score'):
+                result['productivity_volume']['productivity_potential_score'] = round(productivity_potential.get('potential_score', 0.0), 1)
+            if needs_metric('work_volume_gap'):
+                result['productivity_volume']['work_volume_gap'] = round(productivity_potential.get('gap_hours', 0.0), 1)
+            if needs_metric('composite_productivity_score'):
+                result['productivity_volume']['composite_productivity_score'] = round(composite_productivity, 1)
+            if needs_metric('avg_base_productivity'):
+                result['productivity_volume']['avg_base_productivity'] = round(avg_base_productivity, 1)
+            if needs_metric('volumetric_productivity_score'):
+                result['productivity_volume']['volumetric_productivity_score'] = round(volumetric_productivity, 1)
+            if needs_metric('volumetric_potential_score'):
+                result['productivity_volume']['volumetric_potential_score'] = round(volumetric_potential, 1)
+        
+        return result
 
     def get_life_balance(self) -> Dict[str, any]:
         """Calculate life balance metric comparing work and play task amounts.
@@ -3050,7 +3193,7 @@ class Analytics:
         
         return round(float(composite), 1)
 
-    def get_all_scores_for_composite(self, days: int = 7) -> Dict[str, float]:
+    def get_all_scores_for_composite(self, days: int = 7, metrics: Optional[List[str]] = None) -> Dict[str, float]:
         """Get all available scores, bonuses, and penalties for composite score calculation.
         
         Returns a dictionary of component_name -> score_value that can be used
@@ -3060,67 +3203,116 @@ class Analytics:
         
         Args:
             days: Number of days to analyze for time-based metrics
+            metrics: Optional list of metric keys to calculate. If None, calculates all metrics.
+                    Examples: ['avg_stress_level', 'work_volume_score', 'completion_rate']
             
         Returns:
             Dict with component_name -> score_value (0-100 range where applicable)
         """
         import time as time_module
         
-        # Check cache
-        current_time = time_module.time()
-        if (Analytics._composite_scores_cache is not None and 
-            Analytics._composite_scores_cache_time is not None and
-            (current_time - Analytics._composite_scores_cache_time) < Analytics._cache_ttl_seconds):
-            return Analytics._composite_scores_cache.copy()  # Return copy to prevent mutation
+        # Determine which metrics to calculate
+        if metrics is not None:
+            requested_metrics = set(metrics)
+            
+            # Helper function to check if a metric is needed
+            def needs_metric(key: str) -> bool:
+                return key in requested_metrics
+        else:
+            requested_metrics = None
+            
+            # Helper function that always returns True when calculating all
+            def needs_metric(key: str) -> bool:
+                return True
+        
+        # Check cache (only if calculating all metrics)
+        if requested_metrics is None:
+            current_time = time_module.time()
+            if (Analytics._composite_scores_cache is not None and 
+                Analytics._composite_scores_cache_time is not None and
+                (current_time - Analytics._composite_scores_cache_time) < Analytics._cache_ttl_seconds):
+                return Analytics._composite_scores_cache.copy()  # Return copy to prevent mutation
         
         scores = {}
         
-        # Get dashboard metrics
-        metrics = self.get_dashboard_metrics()
+        # Determine which dashboard metrics we need
+        dashboard_metric_keys = []
+        if requested_metrics is None:
+            # Need all dashboard metrics
+            dashboard_metric_keys = None
+        else:
+            # Map composite metric names to dashboard metric names
+            if needs_metric('avg_stress_level') or needs_metric('avg_net_wellbeing') or needs_metric('avg_stress_efficiency') or needs_metric('avg_relief'):
+                dashboard_metric_keys = ['quality.avg_stress_level', 'quality.avg_net_wellbeing_normalized', 'quality.avg_stress_efficiency', 'quality.avg_relief']
+            if needs_metric('work_volume_score') or needs_metric('work_consistency_score'):
+                dashboard_metric_keys.extend(['productivity_volume.work_volume_score', 'productivity_volume.work_consistency_score'])
+            if needs_metric('life_balance_score'):
+                dashboard_metric_keys.append('life_balance_score')
+            if needs_metric('completion_rate'):
+                dashboard_metric_keys.append('counts.completion_rate')
+            if needs_metric('self_care_frequency'):
+                dashboard_metric_keys.append('counts.avg_daily_self_care_tasks')
+        
+        # Get dashboard metrics (selectively if requested)
+        metrics_data = self.get_dashboard_metrics(metrics=dashboard_metric_keys)
         
         # Quality scores (0-100 range)
-        quality = metrics.get('quality', {})
-        scores['avg_stress_level'] = 100.0 - float(quality.get('avg_stress_level', 50.0))  # Invert: lower stress = higher score
-        scores['avg_net_wellbeing'] = float(quality.get('avg_net_wellbeing_normalized', 50.0))
-        scores['avg_stress_efficiency'] = float(quality.get('avg_stress_efficiency', 50.0)) if quality.get('avg_stress_efficiency') is not None else 50.0
-        scores['avg_relief'] = float(quality.get('avg_relief', 50.0))
+        if needs_metric('avg_stress_level') or needs_metric('avg_net_wellbeing') or needs_metric('avg_stress_efficiency') or needs_metric('avg_relief'):
+            quality = metrics_data.get('quality', {})
+            if needs_metric('avg_stress_level'):
+                scores['avg_stress_level'] = 100.0 - float(quality.get('avg_stress_level', 50.0))  # Invert: lower stress = higher score
+            if needs_metric('avg_net_wellbeing'):
+                scores['avg_net_wellbeing'] = float(quality.get('avg_net_wellbeing_normalized', 50.0))
+            if needs_metric('avg_stress_efficiency'):
+                scores['avg_stress_efficiency'] = float(quality.get('avg_stress_efficiency', 50.0)) if quality.get('avg_stress_efficiency') is not None else 50.0
+            if needs_metric('avg_relief'):
+                scores['avg_relief'] = float(quality.get('avg_relief', 50.0))
         
         # Productivity scores
-        productivity_volume = metrics.get('productivity_volume', {})
-        scores['work_volume_score'] = float(productivity_volume.get('work_volume_score', 0.0))
-        scores['work_consistency_score'] = float(productivity_volume.get('work_consistency_score', 50.0))
+        if needs_metric('work_volume_score') or needs_metric('work_consistency_score'):
+            productivity_volume = metrics_data.get('productivity_volume', {})
+            if needs_metric('work_volume_score'):
+                scores['work_volume_score'] = float(productivity_volume.get('work_volume_score', 0.0))
+            if needs_metric('work_consistency_score'):
+                scores['work_consistency_score'] = float(productivity_volume.get('work_consistency_score', 50.0))
         
         # Life balance
-        life_balance = metrics.get('life_balance', {})
-        scores['life_balance_score'] = float(life_balance.get('balance_score', 50.0))
+        if needs_metric('life_balance_score'):
+            life_balance = metrics_data.get('life_balance', {})
+            scores['life_balance_score'] = float(life_balance.get('balance_score', 50.0))
         
-        # Relief summary
-        relief_summary = self.get_relief_summary()
-        # Normalize weekly relief to 0-100 (assuming typical range 0-1000)
-        weekly_relief = float(relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0))
-        scores['weekly_relief_score'] = min(100.0, weekly_relief / 10.0)  # Scale down if needed
+        # Relief summary (only if needed)
+        if needs_metric('weekly_relief_score'):
+            relief_summary = self.get_relief_summary()
+            # Normalize weekly relief to 0-100 (assuming typical range 0-1000)
+            weekly_relief = float(relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0))
+            scores['weekly_relief_score'] = min(100.0, weekly_relief / 10.0)  # Scale down if needed
         
-        # Time tracking consistency score
-        tracking_data = self.calculate_time_tracking_consistency_score(days=days)
-        scores['tracking_consistency_score'] = float(tracking_data.get('tracking_consistency_score', 0.0))
+        # Time tracking consistency score (only if needed)
+        if needs_metric('tracking_consistency_score'):
+            tracking_data = self.calculate_time_tracking_consistency_score(days=days)
+            scores['tracking_consistency_score'] = float(tracking_data.get('tracking_consistency_score', 0.0))
         
         # Counts (normalize to 0-100)
-        counts = metrics.get('counts', {})
-        completion_rate = float(counts.get('completion_rate', 0.0))
-        scores['completion_rate'] = completion_rate  # Already 0-100
-        
-        # Self-care frequency (normalize: assume 0-5 tasks/day = 0-100)
-        avg_self_care = float(counts.get('avg_daily_self_care_tasks', 0.0))
-        scores['self_care_frequency'] = min(100.0, avg_self_care * 20.0)  # 5 tasks = 100 score
+        if needs_metric('completion_rate') or needs_metric('self_care_frequency'):
+            counts = metrics_data.get('counts', {})
+            if needs_metric('completion_rate'):
+                completion_rate = float(counts.get('completion_rate', 0.0))
+                scores['completion_rate'] = completion_rate  # Already 0-100
+            if needs_metric('self_care_frequency'):
+                avg_self_care = float(counts.get('avg_daily_self_care_tasks', 0.0))
+                scores['self_care_frequency'] = min(100.0, avg_self_care * 20.0)  # 5 tasks = 100 score
         
         # Execution score (average of recent completed instances)
         # NOTE: Execution score is calculated separately in chunks by the dashboard
         # to allow UI to remain responsive. Use get_execution_score_chunked() instead.
-        scores['execution_score'] = 50.0  # Placeholder - will be updated by chunked calculation
+        if needs_metric('execution_score'):
+            scores['execution_score'] = 50.0  # Placeholder - will be updated by chunked calculation
         
-        # Cache the result
-        Analytics._composite_scores_cache = scores.copy()
-        Analytics._composite_scores_cache_time = time_module.time()
+        # Cache the result (only if calculating all metrics)
+        if requested_metrics is None:
+            Analytics._composite_scores_cache = scores.copy()
+            Analytics._composite_scores_cache_time = time_module.time()
         
         return scores
     
