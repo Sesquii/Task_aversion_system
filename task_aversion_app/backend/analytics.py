@@ -851,6 +851,915 @@ class Analytics:
         except (KeyError, TypeError, ValueError, AttributeError):
             return 0.0
     
+    def calculate_grit_score_v1_3(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.3 with:
+        - Perseverance factor (continuing despite obstacles) - renamed from persistence_factor
+        - Persistence factor (completion count multiplier) - NEW, integrated into consistency
+        - Focus factor (current attention state, emotion-based)
+        - Passion factor (relief vs emotional load)
+        - Time bonus (taking longer, dedication)
+        
+        Changes from v1.2:
+        - Renamed persistence_factor → perseverance_factor (obstacle overcoming)
+        - Renamed persistence_multiplier → persistence_factor (completion count)
+        - Integrated persistence_factor into consistency component of perseverance_factor
+        - Adjusted weights in perseverance_factor calculation
+        
+        Grit = base_score * (perseverance * focus * passion * time_bonus)
+        
+        Returns:
+            Grit score (higher = more grit/persistence with passion), 0 on error.
+        """
+        import math
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_id = row.get('task_id', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
+            
+            # --- Persistence factor: completion count multiplier (power curve with familiarity decay) ---
+            # Raw growth: power curve to approximate anchors (2x~1.02, 10x~1.22, 25x~1.6, 50x~2.6, 100x~4.1)
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+            # Familiarity decay after 100+ completions: taper as it becomes routine
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)  # 300→0.5, 500→0.33, 1000→~0.18
+            else:
+                decay = 1.0
+            persistence_factor = max(1.0, min(5.0, raw_multiplier * decay))
+            
+            # --- Time bonus: difficulty-weighted, diminishing returns, fades after many reps ---
+            time_bonus = 1.0
+            if time_estimate > 0 and time_actual > 0:
+                time_ratio = time_actual / time_estimate
+                if time_ratio > 1.0:
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.8)  # up to 1.8x at 2x longer
+                    else:
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)  # diminishing beyond 2x
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    # Difficulty weighting (harder tasks get more credit)
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    # Fade time bonus after many repetitions (negligible after ~50)
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)  # 10→1.0, 50→0.5, 90→~0.31
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
+                else:
+                    time_bonus = 1.0
+            
+            # --- Passion factor: relief vs emotional load (balanced, modest range) ---
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm  # positive if relief outweighs emotional load
+            passion_factor = 1.0 + passion_delta * 0.5  # modest weighting
+            # If not fully completed, dampen passion a bit
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
+            
+            # Calculate perseverance factor (continuing despite obstacles) - v1.3 with persistence_factor integration
+            perseverance_factor = self.calculate_perseverance_factor_v1_3(
+                row=row,
+                task_completion_counts=task_completion_counts,
+                persistence_factor=persistence_factor
+            )
+            # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
+            perseverance_factor_scaled = 0.5 + perseverance_factor * 1.0
+            
+            # Calculate focus factor (current attention state, emotion-based)
+            focus_factor = self.calculate_focus_factor(row)
+            # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # Base score from completion percentage
+            base_score = completion_pct
+            
+            # Grit score = perseverance * focus * passion * time_bonus
+            grit_score = base_score * (
+                perseverance_factor_scaled *  # 0.5-1.5 range (perseverance boost)
+                focus_factor_scaled *         # 0.5-1.5 range (focus boost)
+                passion_factor *             # 0.5-1.5 range (passion factor)
+                time_bonus                   # 1.0+ range (time bonus)
+            )
+            
+            return float(grit_score)
+        
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return 0.0
+    
+    def calculate_grit_score_v1_4(self, row: pd.Series, task_completion_counts: Dict[str, int], 
+                                  perseverance_threshold: float = 0.75, 
+                                  persistence_threshold: float = 2.0,
+                                  synergy_strength: float = 0.15) -> float:
+        """Calculate grit score v1.4 with synergy multiplier for tasks with both high perseverance and persistence.
+        
+        Changes from v1.3:
+        - Added synergy multiplier for tasks with BOTH high perseverance AND high persistence
+        - Synergy multiplier: 1.0 + (perseverance_bonus * persistence_bonus * synergy_strength)
+        - Rewards the combination of obstacle overcoming AND repeated completion
+        
+        Grit = base_score * (perseverance * focus * passion * time_bonus * synergy_multiplier)
+        
+        Args:
+            row: Task instance row
+            task_completion_counts: Dict mapping task_id to completion count
+            perseverance_threshold: Threshold for "high" perseverance (default: 0.75, 75th percentile)
+            persistence_threshold: Threshold for "high" persistence (default: 2.0, approximately 25+ completions)
+            synergy_strength: Strength of synergy bonus (default: 0.15 = 15% max bonus)
+        
+        Returns:
+            Grit score (higher = more grit/persistence with passion), 0 on error.
+        """
+        import math
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_id = row.get('task_id', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
+            
+            # --- Persistence factor: completion count multiplier (power curve with familiarity decay) ---
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)
+            else:
+                decay = 1.0
+            persistence_factor = max(1.0, min(5.0, raw_multiplier * decay))
+            
+            # --- Time bonus: difficulty-weighted, diminishing returns, fades after many reps ---
+            time_bonus = 1.0
+            if time_estimate > 0 and time_actual > 0:
+                time_ratio = time_actual / time_estimate
+                if time_ratio > 1.0:
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.8)
+                    else:
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
+                else:
+                    time_bonus = 1.0
+            
+            # --- Passion factor: relief vs emotional load ---
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm
+            passion_factor = 1.0 + passion_delta * 0.5
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
+            
+            # Calculate perseverance factor (continuing despite obstacles) - v1.3 with persistence_factor integration
+            perseverance_factor = self.calculate_perseverance_factor_v1_3(
+                row=row,
+                task_completion_counts=task_completion_counts,
+                persistence_factor=persistence_factor
+            )
+            perseverance_factor_scaled = 0.5 + perseverance_factor * 1.0
+            
+            # Calculate focus factor (current attention state, emotion-based)
+            focus_factor = self.calculate_focus_factor(row)
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # --- NEW in v1.4: Synergy multiplier for tasks with BOTH high perseverance AND high persistence ---
+            synergy_multiplier = 1.0
+            
+            # Check if both are "high" (above thresholds)
+            is_high_perseverance = perseverance_factor >= perseverance_threshold
+            is_high_persistence = persistence_factor >= persistence_threshold
+            
+            if is_high_perseverance and is_high_persistence:
+                # Calculate bonuses (0.0-1.0 range) based on how far above threshold
+                # Perseverance: 0.0-1.0 range, threshold typically 0.75
+                perseverance_bonus = max(0.0, min(1.0, (perseverance_factor - perseverance_threshold) / (1.0 - perseverance_threshold)))
+                
+                # Persistence: 1.0-5.0 range, threshold typically 2.0
+                persistence_bonus = max(0.0, min(1.0, (persistence_factor - persistence_threshold) / (5.0 - persistence_threshold)))
+                
+                # Synergy multiplier: 1.0 + (bonus_product * strength)
+                # When both are maxed: 1.0 + (1.0 * 1.0 * 0.15) = 1.15 (15% bonus)
+                synergy_multiplier = 1.0 + (perseverance_bonus * persistence_bonus * synergy_strength)
+            
+            # Base score from completion percentage
+            base_score = completion_pct
+            
+            # Grit score = perseverance * focus * passion * time_bonus * synergy_multiplier
+            grit_score = base_score * (
+                perseverance_factor_scaled *  # 0.5-1.5 range (perseverance boost)
+                focus_factor_scaled *         # 0.5-1.5 range (focus boost)
+                passion_factor *              # 0.5-1.5 range (passion factor)
+                time_bonus *                  # 1.0+ range (time bonus)
+                synergy_multiplier            # 1.0-1.15 range (synergy bonus, NEW in v1.4)
+            )
+            
+            return float(grit_score)
+        
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return 0.0
+    
+    def _calculate_perseverance_persistence_stats(self, instances_df: Optional[pd.DataFrame] = None) -> Dict[str, Dict[str, float]]:
+        """Calculate statistics (mean, median, std) for perseverance and persistence factors.
+        
+        Used for dynamic threshold calculation and exponential bonus scaling.
+        
+        Args:
+            instances_df: Optional DataFrame of instances. If None, loads from database/CSV.
+        
+        Returns:
+            Dict with 'perseverance' and 'persistence' keys, each containing:
+            - 'mean': Mean value
+            - 'median': Median value
+            - 'std': Standard deviation
+            - 'count': Number of instances
+        """
+        try:
+            if instances_df is None:
+                from .instance_manager import InstanceManager
+                instance_manager = InstanceManager()
+                instances_df = instance_manager.get_all_instances()
+            
+            # Filter completed instances
+            completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy()
+            if completed.empty:
+                # Return defaults if no data
+                return {
+                    'perseverance': {'mean': 0.600, 'median': 0.600, 'std': 0.05, 'count': 0},
+                    'persistence': {'mean': 1.165, 'median': 1.165, 'std': 0.3, 'count': 0}
+                }
+            
+            # Calculate completion counts
+            completion_counts = {}
+            completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+            completed = completed.dropna(subset=['completed_at_dt'])
+            if not completed.empty:
+                counts = completed.groupby('task_id').size()
+                completion_counts = counts.to_dict()
+            
+            # Calculate factors for all completed instances
+            perseverance_values = []
+            persistence_values = []
+            
+            for idx, row in completed.iterrows():
+                try:
+                    task_id = row.get('task_id', '')
+                    completion_count = completion_counts.get(task_id, 1)
+                    
+                    # Calculate persistence_factor
+                    raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+                    if completion_count > 100:
+                        decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)
+                    else:
+                        decay = 1.0
+                    persistence_factor = max(1.0, min(5.0, raw_multiplier * decay))
+                    persistence_values.append(persistence_factor)
+                    
+                    # Calculate perseverance_factor
+                    perseverance_factor = self.calculate_perseverance_factor_v1_3(
+                        row=row,
+                        task_completion_counts=completion_counts,
+                        persistence_factor=persistence_factor
+                    )
+                    perseverance_values.append(perseverance_factor)
+                except Exception:
+                    continue
+            
+            # Calculate statistics
+            if perseverance_values:
+                perseverance_stats = {
+                    'mean': float(np.mean(perseverance_values)),
+                    'median': float(np.median(perseverance_values)),
+                    'std': float(np.std(perseverance_values)) if len(perseverance_values) > 1 else 0.05,
+                    'count': len(perseverance_values)
+                }
+            else:
+                perseverance_stats = {'mean': 0.600, 'median': 0.600, 'std': 0.05, 'count': 0}
+            
+            if persistence_values:
+                persistence_stats = {
+                    'mean': float(np.mean(persistence_values)),
+                    'median': float(np.median(persistence_values)),
+                    'std': float(np.std(persistence_values)) if len(persistence_values) > 1 else 0.3,
+                    'count': len(persistence_values)
+                }
+            else:
+                persistence_stats = {'mean': 1.165, 'median': 1.165, 'std': 0.3, 'count': 0}
+            
+            return {
+                'perseverance': perseverance_stats,
+                'persistence': persistence_stats
+            }
+        except Exception as e:
+            # Return defaults on error
+            return {
+                'perseverance': {'mean': 0.600, 'median': 0.600, 'std': 0.05, 'count': 0},
+                'persistence': {'mean': 1.165, 'median': 1.165, 'std': 0.3, 'count': 0}
+            }
+    
+    def _detect_suddenly_challenging(self, row: pd.Series, task_id: str, 
+                                     lookback_instances: int = 10) -> Tuple[bool, float]:
+        """Detect if this task instance represents a sudden challenge on a routine task.
+        
+        A "suddenly challenging" scenario occurs when:
+        1. Task has been completed many times (routine)
+        2. Current load is significantly higher than recent average
+        3. This represents overcoming an unexpected obstacle
+        
+        Args:
+            row: Current task instance row
+            task_id: Task identifier
+            lookback_instances: Number of recent instances to compare against
+        
+        Returns:
+            Tuple of (is_suddenly_challenging: bool, challenge_bonus: float)
+            challenge_bonus ranges from 0.0 (no bonus) to 0.25 (25% bonus for extreme challenge)
+        """
+        try:
+            actual_dict = row.get('actual_dict', {})
+            if isinstance(actual_dict, str):
+                actual_dict = json.loads(actual_dict)
+            
+            cognitive_load = float(actual_dict.get('cognitive_load', 0) or 0)
+            emotional_load = float(actual_dict.get('emotional_load', 0) or 0)
+            current_load = (cognitive_load + emotional_load) / 2.0
+            
+            if current_load < 50:  # Not challenging enough
+                return False, 0.0
+            
+            # Get recent instances of this task
+            from .instance_manager import InstanceManager
+            instance_manager = InstanceManager()
+            all_instances = instance_manager.get_all_instances()
+            
+            # Filter to this task, completed instances
+            task_instances = all_instances[
+                (all_instances['task_id'] == task_id) & 
+                (all_instances['completed_at'].astype(str).str.len() > 0)
+            ].copy()
+            
+            if len(task_instances) < 5:  # Need at least 5 completions to establish baseline
+                return False, 0.0
+            
+            # Get recent load values (excluding current)
+            recent_loads = []
+            for idx, inst_row in task_instances.iterrows():
+                if idx == row.name:  # Skip current instance
+                    continue
+                inst_actual = inst_row.get('actual_dict', {})
+                if isinstance(inst_actual, str):
+                    try:
+                        inst_actual = json.loads(inst_actual)
+                    except:
+                        continue
+                inst_cognitive = float(inst_actual.get('cognitive_load', 0) or 0)
+                inst_emotional = float(inst_actual.get('emotional_load', 0) or 0)
+                inst_load = (inst_cognitive + inst_emotional) / 2.0
+                recent_loads.append(inst_load)
+            
+            if len(recent_loads) < 3:  # Need at least 3 recent values
+                return False, 0.0
+            
+            # Calculate baseline (mean of recent loads)
+            baseline_load = np.mean(recent_loads)
+            baseline_std = np.std(recent_loads) if len(recent_loads) > 1 else 10.0
+            
+            # Check if current load is significantly higher (2+ standard deviations)
+            if current_load > baseline_load + (2.0 * baseline_std):
+                # Calculate challenge bonus based on how extreme the spike is
+                spike_amount = current_load - baseline_load
+                spike_sds = spike_amount / baseline_std if baseline_std > 0 else 0
+                
+                # Exponential bonus: 2 SD = 8%, 3 SD = 15%, 4 SD = 20%, 5+ SD = 25%
+                if spike_sds >= 5.0:
+                    challenge_bonus = 0.25
+                elif spike_sds >= 4.0:
+                    challenge_bonus = 0.20
+                elif spike_sds >= 3.0:
+                    challenge_bonus = 0.15
+                elif spike_sds >= 2.0:
+                    challenge_bonus = 0.08
+                else:
+                    challenge_bonus = 0.0
+                
+                return True, challenge_bonus
+            
+            return False, 0.0
+        except Exception:
+            return False, 0.0
+    
+    def calculate_grit_score_v1_5a_median(self, row: pd.Series, task_completion_counts: Dict[str, int],
+                                         stats_cache: Optional[Dict] = None) -> float:
+        """Calculate grit score v1.5a with median-based thresholds and exponential SD bonuses.
+        
+        Changes from v1.4:
+        - Uses median (not 75th percentile) for thresholds
+        - Exponential bonuses based on standard deviations above median
+        - Detects "suddenly challenging" scenarios (routine task with sudden high load)
+        - Dynamic recalibration from historical data
+        
+        Args:
+            row: Task instance row
+            task_completion_counts: Dict mapping task_id to completion count
+            stats_cache: Optional pre-calculated statistics (for performance)
+        
+        Returns:
+            Grit score (higher = more grit/persistence with passion), 0 on error.
+        """
+        import math
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_id = row.get('task_id', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
+            
+            # Calculate persistence_factor
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)
+            else:
+                decay = 1.0
+            persistence_factor = max(1.0, min(5.0, raw_multiplier * decay))
+            
+            # Calculate perseverance_factor
+            perseverance_factor = self.calculate_perseverance_factor_v1_3(
+                row=row,
+                task_completion_counts=task_completion_counts,
+                persistence_factor=persistence_factor
+            )
+            perseverance_factor_scaled = 0.5 + perseverance_factor * 1.0
+            
+            # Get statistics (median-based)
+            if stats_cache is None:
+                stats = self._calculate_perseverance_persistence_stats()
+            else:
+                stats = stats_cache
+            
+            perseverance_median = stats['perseverance']['median']
+            perseverance_std = stats['perseverance']['std']
+            persistence_median = stats['persistence']['median']
+            persistence_std = stats['persistence']['std']
+            
+            # Time bonus, passion factor, focus factor (same as v1.3)
+            time_bonus = 1.0
+            if time_estimate > 0 and time_actual > 0:
+                time_ratio = time_actual / time_estimate
+                if time_ratio > 1.0:
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.8)
+                    else:
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
+                else:
+                    time_bonus = 1.0
+            
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm
+            passion_factor = 1.0 + passion_delta * 0.5
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
+            
+            focus_factor = self.calculate_focus_factor(row)
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # --- v1.5a: Median-based exponential SD synergy bonus ---
+            synergy_multiplier = 1.0
+            
+            # Check if both are above median
+            is_high_perseverance = perseverance_factor >= perseverance_median
+            is_high_persistence = persistence_factor >= persistence_median
+            
+            if is_high_perseverance and is_high_persistence:
+                # Calculate standard deviations above median
+                perseverance_sds = (perseverance_factor - perseverance_median) / perseverance_std if perseverance_std > 0 else 0
+                persistence_sds = (persistence_factor - persistence_median) / persistence_std if persistence_std > 0 else 0
+                
+                # Exponential bonuses: 1 SD = 2%, 2 SD = 5%, 3 SD = 10%, 4+ SD = 15%
+                def sd_to_bonus(sds):
+                    if sds <= 0:
+                        return 0.0
+                    elif sds >= 4.0:
+                        return 0.15
+                    elif sds >= 3.0:
+                        return 0.10 + (sds - 3.0) * 0.05  # 10-15%
+                    elif sds >= 2.0:
+                        return 0.05 + (sds - 2.0) * 0.05  # 5-10%
+                    elif sds >= 1.0:
+                        return 0.02 + (sds - 1.0) * 0.03  # 2-5%
+                    else:
+                        return sds * 0.02  # 0-2%
+                
+                perseverance_bonus = sd_to_bonus(perseverance_sds)
+                persistence_bonus = sd_to_bonus(persistence_sds)
+                
+                # Synergy: multiplicative with exponential scaling
+                # Base synergy: 3% minimum
+                base_synergy = 0.03
+                synergy_component = (perseverance_bonus * persistence_bonus) ** 0.9  # Adjusted from 0.7 to 0.9
+                synergy_component = min(0.12, synergy_component)  # Cap at 12%
+                
+                # Load bonus (high load = more impressive)
+                cognitive_load = float(actual_dict.get('cognitive_load', 0) or 0)
+                emotional_load = float(actual_dict.get('emotional_load', 0) or 0)
+                combined_load = (cognitive_load + emotional_load) / 2.0
+                load_bonus = min(0.10, combined_load / 1000.0)  # Up to 10% for load=100
+                
+                # Detect "suddenly challenging" scenario
+                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id)
+                
+                # Calculate total bonus (all components)
+                total_bonus = base_synergy + synergy_component + load_bonus
+                if is_sudden_challenge:
+                    total_bonus += challenge_bonus
+                
+                # Cap total bonus at 25% for ALL factors combined
+                total_bonus = min(0.25, total_bonus)
+                synergy_multiplier = 1.0 + total_bonus
+            
+            base_score = completion_pct
+            
+            grit_score = base_score * (
+                perseverance_factor_scaled *
+                focus_factor_scaled *
+                passion_factor *
+                time_bonus *
+                synergy_multiplier
+            )
+            
+            return float(grit_score)
+        
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return 0.0
+    
+    def calculate_grit_score_v1_5b_mean(self, row: pd.Series, task_completion_counts: Dict[str, int],
+                                       stats_cache: Optional[Dict] = None) -> float:
+        """Calculate grit score v1.5b with mean-based thresholds and exponential SD bonuses.
+        
+        Same as v1.5a but uses mean instead of median for thresholds.
+        Mean is more sensitive to outliers, median is more robust.
+        
+        Args:
+            row: Task instance row
+            task_completion_counts: Dict mapping task_id to completion count
+            stats_cache: Optional pre-calculated statistics (for performance)
+        
+        Returns:
+            Grit score (higher = more grit/persistence with passion), 0 on error.
+        """
+        import math
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_id = row.get('task_id', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
+            
+            # Calculate persistence_factor
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)
+            else:
+                decay = 1.0
+            persistence_factor = max(1.0, min(5.0, raw_multiplier * decay))
+            
+            # Calculate perseverance_factor
+            perseverance_factor = self.calculate_perseverance_factor_v1_3(
+                row=row,
+                task_completion_counts=task_completion_counts,
+                persistence_factor=persistence_factor
+            )
+            perseverance_factor_scaled = 0.5 + perseverance_factor * 1.0
+            
+            # Get statistics (mean-based)
+            if stats_cache is None:
+                stats = self._calculate_perseverance_persistence_stats()
+            else:
+                stats = stats_cache
+            
+            perseverance_mean = stats['perseverance']['mean']
+            perseverance_std = stats['perseverance']['std']
+            persistence_mean = stats['persistence']['mean']
+            persistence_std = stats['persistence']['std']
+            
+            # Time bonus, passion factor, focus factor (same as v1.3)
+            time_bonus = 1.0
+            if time_estimate > 0 and time_actual > 0:
+                time_ratio = time_actual / time_estimate
+                if time_ratio > 1.0:
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.8)
+                    else:
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
+                else:
+                    time_bonus = 1.0
+            
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm
+            passion_factor = 1.0 + passion_delta * 0.5
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
+            
+            focus_factor = self.calculate_focus_factor(row)
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # --- v1.5b: Mean-based exponential SD synergy bonus ---
+            synergy_multiplier = 1.0
+            
+            # Check if both are above mean
+            is_high_perseverance = perseverance_factor >= perseverance_mean
+            is_high_persistence = persistence_factor >= persistence_mean
+            
+            if is_high_perseverance and is_high_persistence:
+                # Calculate standard deviations above mean
+                perseverance_sds = (perseverance_factor - perseverance_mean) / perseverance_std if perseverance_std > 0 else 0
+                persistence_sds = (persistence_factor - persistence_mean) / persistence_std if persistence_std > 0 else 0
+                
+                # Exponential bonuses: 1 SD = 2%, 2 SD = 5%, 3 SD = 10%, 4+ SD = 15%
+                def sd_to_bonus(sds):
+                    if sds <= 0:
+                        return 0.0
+                    elif sds >= 4.0:
+                        return 0.15
+                    elif sds >= 3.0:
+                        return 0.10 + (sds - 3.0) * 0.05  # 10-15%
+                    elif sds >= 2.0:
+                        return 0.05 + (sds - 2.0) * 0.05  # 5-10%
+                    elif sds >= 1.0:
+                        return 0.02 + (sds - 1.0) * 0.03  # 2-5%
+                    else:
+                        return sds * 0.02  # 0-2%
+                
+                perseverance_bonus = sd_to_bonus(perseverance_sds)
+                persistence_bonus = sd_to_bonus(persistence_sds)
+                
+                # Synergy: multiplicative with exponential scaling
+                base_synergy = 0.03
+                synergy_component = (perseverance_bonus * persistence_bonus) ** 0.9  # Adjusted from 0.7 to 0.9
+                synergy_component = min(0.12, synergy_component)
+                
+                # Load bonus
+                cognitive_load = float(actual_dict.get('cognitive_load', 0) or 0)
+                emotional_load = float(actual_dict.get('emotional_load', 0) or 0)
+                combined_load = (cognitive_load + emotional_load) / 2.0
+                load_bonus = min(0.10, combined_load / 1000.0)  # Up to 10% for load=100
+                
+                # Detect "suddenly challenging" scenario
+                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id)
+                
+                # Calculate total bonus (all components)
+                total_bonus = base_synergy + synergy_component + load_bonus
+                if is_sudden_challenge:
+                    total_bonus += challenge_bonus
+                
+                # Cap total bonus at 25% for ALL factors combined
+                total_bonus = min(0.25, total_bonus)
+                synergy_multiplier = 1.0 + total_bonus
+            
+            base_score = completion_pct
+            
+            grit_score = base_score * (
+                perseverance_factor_scaled *
+                focus_factor_scaled *
+                passion_factor *
+                time_bonus *
+                synergy_multiplier
+            )
+            
+            return float(grit_score)
+        
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return 0.0
+    
+    def calculate_grit_score_v1_5c_hybrid(self, row: pd.Series, task_completion_counts: Dict[str, int],
+                                          stats_cache: Optional[Dict] = None) -> float:
+        """Calculate grit score v1.5c with hybrid thresholds (persistence=median, perseverance=mean).
+        
+        Design Decision: 
+        - Persistence uses MEDIAN (robust to outliers, represents typical completion count)
+        - Perseverance uses MEAN (sensitive to improvements, captures gradual trends)
+        
+        Changes from v1.5a/v1.5b:
+        - Hybrid threshold approach (best of both)
+        - Synergy exponent: 0.9 (was 0.7)
+        - Suddenly challenging: up to 25% bonus (was 15%)
+        - Load bonus: up to 10% (was 5%)
+        - Total cap: 25% for ALL bonuses combined
+        
+        Args:
+            row: Task instance row
+            task_completion_counts: Dict mapping task_id to completion count
+            stats_cache: Optional pre-calculated statistics (for performance)
+        
+        Returns:
+            Grit score (higher = more grit/persistence with passion), 0 on error.
+        """
+        import math
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_id = row.get('task_id', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
+            
+            # Calculate persistence_factor
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)
+            else:
+                decay = 1.0
+            persistence_factor = max(1.0, min(5.0, raw_multiplier * decay))
+            
+            # Calculate perseverance_factor
+            perseverance_factor = self.calculate_perseverance_factor_v1_3(
+                row=row,
+                task_completion_counts=task_completion_counts,
+                persistence_factor=persistence_factor
+            )
+            perseverance_factor_scaled = 0.5 + perseverance_factor * 1.0
+            
+            # Get statistics (HYBRID: persistence=median, perseverance=mean)
+            if stats_cache is None:
+                stats = self._calculate_perseverance_persistence_stats()
+            else:
+                stats = stats_cache
+            
+            # HYBRID THRESHOLDS
+            perseverance_threshold = stats['perseverance']['mean']  # MEAN for perseverance
+            perseverance_std = stats['perseverance']['std']
+            persistence_threshold = stats['persistence']['median']  # MEDIAN for persistence
+            persistence_std = stats['persistence']['std']
+            
+            # Time bonus, passion factor, focus factor (same as v1.3)
+            time_bonus = 1.0
+            if time_estimate > 0 and time_actual > 0:
+                time_ratio = time_actual / time_estimate
+                if time_ratio > 1.0:
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.8)
+                    else:
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
+                else:
+                    time_bonus = 1.0
+            
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm
+            passion_factor = 1.0 + passion_delta * 0.5
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
+            
+            focus_factor = self.calculate_focus_factor(row)
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # --- v1.5c: Hybrid thresholds with exponential SD synergy bonus ---
+            synergy_multiplier = 1.0
+            
+            # Check if both are above their respective thresholds
+            is_high_perseverance = perseverance_factor >= perseverance_threshold  # MEAN threshold
+            is_high_persistence = persistence_factor >= persistence_threshold      # MEDIAN threshold
+            
+            if is_high_perseverance and is_high_persistence:
+                # Calculate standard deviations above threshold
+                perseverance_sds = (perseverance_factor - perseverance_threshold) / perseverance_std if perseverance_std > 0 else 0
+                persistence_sds = (persistence_factor - persistence_threshold) / persistence_std if persistence_std > 0 else 0
+                
+                # Exponential bonuses: 1 SD = 2%, 2 SD = 5%, 3 SD = 10%, 4+ SD = 15%
+                def sd_to_bonus(sds):
+                    if sds <= 0:
+                        return 0.0
+                    elif sds >= 4.0:
+                        return 0.15
+                    elif sds >= 3.0:
+                        return 0.10 + (sds - 3.0) * 0.05  # 10-15%
+                    elif sds >= 2.0:
+                        return 0.05 + (sds - 2.0) * 0.05  # 5-10%
+                    elif sds >= 1.0:
+                        return 0.02 + (sds - 1.0) * 0.03  # 2-5%
+                    else:
+                        return sds * 0.02  # 0-2%
+                
+                perseverance_bonus = sd_to_bonus(perseverance_sds)
+                persistence_bonus = sd_to_bonus(persistence_sds)
+                
+                # Synergy: multiplicative with exponential scaling (exponent = 0.9)
+                base_synergy = 0.03
+                synergy_component = (perseverance_bonus * persistence_bonus) ** 0.9  # 0.9 exponent
+                synergy_component = min(0.12, synergy_component)  # Cap at 12%
+                
+                # Load bonus (high load = more impressive) - up to 10%
+                cognitive_load = float(actual_dict.get('cognitive_load', 0) or 0)
+                emotional_load = float(actual_dict.get('emotional_load', 0) or 0)
+                combined_load = (cognitive_load + emotional_load) / 2.0
+                load_bonus = min(0.10, combined_load / 1000.0)  # Up to 10% for load=100
+                
+                # Detect "suddenly challenging" scenario - up to 25% bonus
+                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id)
+                
+                # Calculate total bonus (all components)
+                total_bonus = base_synergy + synergy_component + load_bonus
+                if is_sudden_challenge:
+                    total_bonus += challenge_bonus
+                
+                # Cap total bonus at 25% for ALL factors combined
+                total_bonus = min(0.25, total_bonus)
+                synergy_multiplier = 1.0 + total_bonus
+            
+            base_score = completion_pct
+            
+            grit_score = base_score * (
+                perseverance_factor_scaled *
+                focus_factor_scaled *
+                passion_factor *
+                time_bonus *
+                synergy_multiplier
+            )
+            
+            return float(grit_score)
+        
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return 0.0
+    
     @staticmethod
     def calculate_spontaneous_aversion_threshold(baseline_aversion: float) -> float:
         """Calculate progressive threshold for detecting spontaneous aversion.
@@ -4124,6 +5033,249 @@ class Analytics:
         
         # Clamp to valid range
         return max(0.0, min(1.0, persistence_factor))
+    
+    def calculate_perseverance_factor_v1_3(
+        self,
+        row: Union[pd.Series, Dict],
+        task_completion_counts: Optional[Dict[str, int]] = None,
+        persistence_factor: float = 1.0,
+        lookback_days: int = 30
+    ) -> float:
+        """Calculate perseverance factor v1.3 (0.0-1.0) based on continuing despite obstacles.
+        
+        Perseverance measures historical patterns of sticking with difficult tasks.
+        Combines four components with adjusted weights:
+        1. Obstacle overcoming (40% - highest): Completing despite high cognitive/emotional load
+        2. Aversion resistance (30%): Completing despite high aversion
+        3. Task repetition (20%): Completing same task multiple times
+        4. Consistency (10%): Regular completion patterns over time, scaled by persistence_factor
+        
+        Changes from v1.2:
+        - Renamed from persistence_factor to perseverance_factor
+        - Integrated persistence_factor (completion count multiplier) into consistency component
+        - Consistency now requires more completions to max out (scaled by persistence_factor)
+        
+        Args:
+            row: Task instance row (pandas Series from CSV or dict from database)
+                 Must contain: predicted_dict/actual_dict (or predicted/actual),
+                 completed_at, task_id, cognitive_load, emotional_load, initial_aversion
+            task_completion_counts: Optional dict mapping task_id to completion count
+            persistence_factor: Completion count multiplier (1.0-5.0 range) to scale consistency
+            lookback_days: Days to look back for historical patterns (default: 30)
+        
+        Returns:
+            Perseverance factor (0.0-1.0), where 1.0 = high perseverance, 0.5 = neutral, 0.0 = low perseverance
+        """
+        import math
+        import numpy as np
+        from datetime import timedelta
+        
+        # Handle both pandas Series (CSV) and dict (database) formats
+        if isinstance(row, pd.Series):
+            predicted_dict = {}
+            actual_dict = {}
+            if 'predicted_dict' in row and row.get('predicted_dict'):
+                try:
+                    predicted_dict = json.loads(row['predicted_dict']) if isinstance(row['predicted_dict'], str) else row['predicted_dict']
+                except (json.JSONDecodeError, TypeError):
+                    predicted_dict = {}
+            if 'actual_dict' in row and row.get('actual_dict'):
+                try:
+                    actual_dict = json.loads(row['actual_dict']) if isinstance(row['actual_dict'], str) else row['actual_dict']
+                except (json.JSONDecodeError, TypeError):
+                    actual_dict = {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            cognitive_load = row.get('cognitive_load', 0)
+            emotional_load = row.get('emotional_load', 0)
+            initial_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion') or 0
+        else:
+            # Database format (dict)
+            predicted = row.get('predicted', {})
+            actual = row.get('actual', {})
+            predicted_dict = predicted if isinstance(predicted, dict) else {}
+            actual_dict = actual if isinstance(actual, dict) else {}
+            completed_at = row.get('completed_at')
+            task_id = row.get('task_id')
+            cognitive_load = row.get('cognitive_load', 0)
+            emotional_load = row.get('emotional_load', 0)
+            initial_aversion = predicted_dict.get('initial_aversion') or predicted_dict.get('aversion') or 0
+        
+        # Default to neutral if missing critical data
+        if not completed_at:
+            return 0.5
+        
+        # Parse completion time
+        try:
+            if isinstance(completed_at, str):
+                current_completion_time = pd.to_datetime(completed_at)
+            else:
+                current_completion_time = completed_at
+        except (ValueError, TypeError):
+            return 0.5
+        
+        # 1. Obstacle Overcoming Score (40% weight - highest)
+        obstacle_score = 0.5  # Default neutral
+        
+        try:
+            # Get cognitive and emotional load (obstacles)
+            cognitive = pd.to_numeric(cognitive_load, errors='coerce') or 0.0
+            emotional = pd.to_numeric(emotional_load, errors='coerce') or 0.0
+            
+            # Combined load (obstacle level)
+            combined_load = (cognitive + emotional) / 2.0
+            
+            # Completion rate: if task was completed, rate = 1.0
+            completion_rate = 1.0  # This task was completed, so rate is 1.0
+            
+            # Obstacle score: higher load + completion = higher perseverance
+            if combined_load > 0:
+                # Normalize: 0-100 load maps to 0.0-1.0 score, but we want to reward high load
+                # So: load 0-50 = 0.0-0.5, load 50-100 = 0.5-1.0
+                if combined_load <= 50:
+                    obstacle_score = combined_load / 100.0  # 0-50 → 0.0-0.5
+                else:
+                    obstacle_score = 0.5 + ((combined_load - 50) / 50.0) * 0.5  # 50-100 → 0.5-1.0
+            else:
+                obstacle_score = 0.5  # No load = neutral
+        except Exception as e:
+            # On error, use neutral
+            obstacle_score = 0.5
+        
+        # 2. Aversion Resistance Score (30% weight)
+        aversion_score = 0.5  # Default neutral
+        
+        try:
+            # Get initial aversion
+            aversion = pd.to_numeric(initial_aversion, errors='coerce') or 0.0
+            
+            # Completion rate: if task was completed, rate = 1.0
+            completion_rate = 1.0  # This task was completed
+            
+            # Aversion score: higher aversion + completion = higher perseverance
+            if aversion > 0:
+                # Normalize: 0-100 aversion maps to 0.0-1.0 score
+                # So: aversion 0-50 = 0.0-0.5, aversion 50-100 = 0.5-1.0
+                if aversion <= 50:
+                    aversion_score = aversion / 100.0  # 0-50 → 0.0-0.5
+                else:
+                    aversion_score = 0.5 + ((aversion - 50) / 50.0) * 0.5  # 50-100 → 0.5-1.0
+            else:
+                aversion_score = 0.5  # No aversion = neutral
+        except Exception as e:
+            # On error, use neutral
+            aversion_score = 0.5
+        
+        # 3. Task Repetition Score (20% weight)
+        repetition_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                # Use provided completion counts if available, otherwise calculate
+                if task_completion_counts and task_id in task_completion_counts:
+                    completion_count = task_completion_counts[task_id]
+                else:
+                    # Calculate from data
+                    df = self._load_instances()
+                    if not df.empty:
+                        # Get completed tasks only
+                        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                        
+                        if not completed.empty:
+                            # Parse completed_at timestamps
+                            completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                            completed = completed.dropna(subset=['completed_at_dt'])
+                            
+                            # Get recent completions within lookback window
+                            cutoff_time = current_completion_time - timedelta(days=lookback_days)
+                            recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                            recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                            
+                            # Count completions of this template
+                            completion_count = len(recent[recent['task_id'] == task_id])
+                    else:
+                        completion_count = 1  # This is the first completion
+                
+                # Repetition score: 1 completion = 0.5, 2-5 = 0.5→0.8, 6-10 = 0.8→1.0, 10+ = 1.0
+                if completion_count <= 1:
+                    repetition_score = 0.5  # Neutral for first completion
+                elif completion_count <= 5:
+                    # Linear: 1 → 0.5, 5 → 0.8
+                    repetition_score = 0.5 + (completion_count - 1) / 4.0 * 0.3
+                elif completion_count <= 10:
+                    # Linear: 5 → 0.8, 10 → 1.0
+                    repetition_score = 0.8 + (completion_count - 5) / 5.0 * 0.2
+                else:
+                    repetition_score = 1.0  # Max at 10+ completions
+        except Exception as e:
+            # On error, use neutral
+            repetition_score = 0.5
+        
+        # 4. Consistency Score (10% weight) - Regular completion patterns over time
+        # NEW in v1.3: Scaled by persistence_factor to make it harder to max out
+        consistency_score = 0.5  # Default neutral
+        
+        try:
+            if task_id:
+                df = self._load_instances()
+                if not df.empty:
+                    # Get completed tasks only
+                    completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+                    
+                    if not completed.empty:
+                        # Parse completed_at timestamps
+                        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+                        completed = completed.dropna(subset=['completed_at_dt'])
+                        
+                        # Get recent completions of this template within lookback window
+                        cutoff_time = current_completion_time - timedelta(days=lookback_days)
+                        recent = completed[completed['completed_at_dt'] >= cutoff_time].copy()
+                        recent = recent[recent['completed_at_dt'] <= current_completion_time].copy()
+                        recent = recent[recent['task_id'] == task_id].copy()
+                        
+                        if len(recent) >= 3:  # Need at least 3 completions to measure consistency
+                            # Sort by completion time
+                            recent = recent.sort_values('completed_at_dt')
+                            
+                            # Calculate time differences between completions
+                            time_diffs = []
+                            for i in range(1, len(recent)):
+                                diff_days = (recent.iloc[i]['completed_at_dt'] - 
+                                           recent.iloc[i-1]['completed_at_dt']).total_seconds() / (24 * 3600)
+                                time_diffs.append(diff_days)
+                            
+                            if time_diffs:
+                                # Calculate variance in time differences (lower variance = more consistent)
+                                variance = np.var(time_diffs) if len(time_diffs) > 1 else 0.0
+                                
+                                # Normalize: lower variance = higher consistency
+                                # Assume max reasonable variance is 30 days (completions spread over a month)
+                                max_variance = 900.0  # 30 days squared
+                                base_consistency = 1.0 - min(1.0, variance / max_variance)
+                                
+                                # NEW in v1.3: Scale by persistence_factor to make consistency harder to max out
+                                # Higher persistence_factor (more completions) = need more consistency to max out
+                                # Formula: consistency_score = base_consistency / persistence_factor_scaled
+                                # Where persistence_factor_scaled maps 1.0-5.0 → 1.0-1.5 (modest scaling)
+                                persistence_factor_scaled = 1.0 + (persistence_factor - 1.0) * 0.125  # 1.0→1.0, 5.0→1.5
+                                consistency_score = base_consistency / persistence_factor_scaled
+                                
+                                # Clamp to reasonable range (0.0-1.0)
+                                consistency_score = max(0.0, min(1.0, consistency_score))
+        except Exception as e:
+            # On error, use neutral
+            consistency_score = 0.5
+        
+        # Combined Perseverance Factor (weights unchanged from v1.2)
+        perseverance_factor = (
+            obstacle_score * 0.4 +        # Obstacle overcoming (highest weight)
+            aversion_score * 0.3 +        # Aversion resistance
+            repetition_score * 0.2 +      # Task repetition
+            consistency_score * 0.1       # Consistency (now scaled by persistence_factor)
+        )
+        
+        # Clamp to valid range
+        return max(0.0, min(1.0, perseverance_factor))
 
     def calculate_daily_scores(self, target_date: Optional[datetime] = None) -> Dict[str, float]:
         """Calculate daily aggregated scores for a specific date.

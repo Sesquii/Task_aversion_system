@@ -57,16 +57,59 @@ ANALYTICS_MODULES = {
     },
     'grit_score': {
         'title': 'Grit Score',
-        'description': 'Rewards persistence and taking on difficult tasks. Includes difficulty bonus and time bonus (for tasks taking longer than estimated).',
+        'version': '1.2',
+        'description': 'Rewards persistence, passion, and dedication. Combines persistence factor (obstacle overcoming), focus factor (mental engagement), passion factor (relief vs emotional load), and time bonus (taking longer, especially on difficult tasks).',
         'icon': 'fitness_center',
         'color': 'purple',
-        'components': [],
-        'formula': 'grit_score = difficulty_bonus * time_bonus',
-        'range': '0 - 100+',
+        'components': [
+            {
+                'name': 'Persistence Factor',
+                'version': '1.2',
+                'description': 'Measures continuing despite obstacles. Combines obstacle overcoming (40%), aversion resistance (30%), task repetition (20%), and consistency (10%). Scaled to 0.5-1.5 range.',
+                'formula': 'persistence_factor_scaled = 0.5 + persistence_factor * 1.0\nwhere persistence_factor combines:\n  - Obstacle overcoming (40%): Completing despite high cognitive/emotional load\n  - Aversion resistance (30%): Completing despite high aversion\n  - Task repetition (20%): Completing same task multiple times\n  - Consistency (10%): Regular completion patterns over time',
+                'range': '0.5 - 1.5',
+                'graphic_script': 'grit_score_persistence_factor.py'
+            },
+            {
+                'name': 'Focus Factor',
+                'version': '1.2',
+                'description': 'Measures mental engagement and ability to concentrate. 100% emotion-based (mental state, not behavioral). Focus-positive emotions (focused, concentrated, determined, engaged, flow) increase score; focus-negative emotions (distracted, scattered, overwhelmed, unfocused) decrease score. Scaled to 0.5-1.5 range.',
+                'formula': 'focus_factor_scaled = 0.5 + focus_factor * 1.0\nwhere focus_factor = 0.5 + (positive_emotions - negative_emotions) * 0.5',
+                'range': '0.5 - 1.5',
+                'graphic_script': 'grit_score_focus_factor.py'
+            },
+            {
+                'name': 'Passion Factor',
+                'version': '1.2',
+                'description': 'Measures engagement and passion through relief vs emotional load balance. Positive when relief outweighs emotional load (engagement/passion), negative when emotional load outweighs relief (drain). Dampened for incomplete tasks. Scaled to 0.5-1.5 range.',
+                'formula': 'passion_delta = (relief / 100.0) - (emotional_load / 100.0)\npassion_factor = 1.0 + passion_delta * 0.5\nif completion_pct < 100: passion_factor *= 0.9',
+                'range': '0.5 - 1.5',
+                'graphic_script': 'grit_score_passion_factor.py'
+            },
+            {
+                'name': 'Time Bonus',
+                'version': '1.2',
+                'description': 'Rewards taking longer than estimated, especially on difficult tasks. Uses difficulty weighting (harder tasks get more credit), diminishing returns beyond 2x longer, and fading after many repetitions (negligible after ~50 completions). Capped at 3.0x maximum.',
+                'formula': 'if time_ratio > 1.0:\n  base_bonus = 1.0 + (excess * 0.8) if excess <= 1.0 else 1.8 + ((excess - 1.0) * 0.2)\n  weighted_bonus = 1.0 + (base_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)\n  time_bonus = 1.0 + (weighted_bonus - 1.0) * fade_factor\nelse:\n  time_bonus = 1.0',
+                'range': '1.0 - 3.0',
+                'graphic_script': 'grit_score_time_bonus.py',
+                'details': {
+                    'difficulty_weighting': 'Harder tasks (higher task_difficulty) get more credit for taking longer',
+                    'fading': 'Time bonus fades after 10+ completions: fade = 1.0 / (1.0 + (completion_count - 10) / 40.0)',
+                    'diminishing_returns': 'Linear up to 2x longer (1.8x bonus), then diminishing returns beyond 2x',
+                    'rationale': 'Prevents gaming by taking longer on routine tasks'
+                }
+            }
+        ],
+        'formula': 'grit_score = base_score * (persistence_factor_scaled * focus_factor_scaled * passion_factor * time_bonus)\nwhere base_score = completion_pct (0-100)',
+        'range': '0 - 200+',
         'use_cases': [
-            'Rewards completing difficult tasks',
-            'Rewards persistence (taking longer than estimated)',
-            'Opposite of execution score (which rewards speed)'
+            'Rewards persistence (obstacle overcoming, aversion resistance, repetition, consistency)',
+            'Rewards passion (mental engagement, relief vs emotional load balance)',
+            'Rewards dedication (taking longer, especially on difficult tasks)',
+            'Complements execution score (which rewards speed)',
+            'Complements productivity score (which rewards efficiency)',
+            'Captures long-term commitment vs. short-term efficiency'
         ]
     },
     'difficulty_bonus': {
