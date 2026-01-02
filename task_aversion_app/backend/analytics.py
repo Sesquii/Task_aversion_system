@@ -4273,6 +4273,517 @@ class Analytics:
             'composite_score': round(composite_score, 2)
         }
     
+    def calculate_daily_productivity_score_with_idle_refresh(
+        self,
+        target_date: Optional[datetime] = None,
+        idle_refresh_hours: float = 8.0
+    ) -> Dict[str, Any]:
+        """Calculate daily productivity score with 8-hour idle time refresh.
+        
+        This metric calculates a rolling daily productivity score that accumulates
+        throughout the day but resets after 8 hours of idle time (no task completions).
+        
+        For the current day: Looks back to find the last 8-hour idle period and
+        accumulates scores from that point forward up to the current time.
+        
+        For historical dates: Calculates the full day's score with idle refresh logic.
+        
+        Args:
+            target_date: Date to calculate for (default: today/now for rolling calculation)
+            idle_refresh_hours: Hours of idle time before score resets (default: 8.0)
+            
+        Returns:
+            Dict with:
+            - daily_score (float): Total productivity score for the day with idle refresh logic
+            - segments (List[Dict]): List of score segments (each segment is a period between idle resets)
+            - segment_count (int): Number of segments (resets) in the day
+            - total_tasks (int): Total tasks completed in the day
+        """
+        # #region agent log
+        import json
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4302',
+                    'message': 'calculate_daily_productivity_score_with_idle_refresh entry',
+                    'data': {
+                        'target_date': str(target_date) if target_date else None,
+                        'idle_refresh_hours': idle_refresh_hours
+                    },
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        now = datetime.now()
+        is_current_day = target_date is None
+        
+        if target_date is None:
+            target_date = now
+            target_date_obj = now.date()
+        else:
+            target_date_obj = target_date.date() if isinstance(target_date, datetime) else target_date
+        
+        # Get all completed instances
+        df = self._load_instances()
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4312',
+                    'message': 'After _load_instances',
+                    'data': {
+                        'df_total_rows': len(df),
+                        'df_columns': list(df.columns) if not df.empty else []
+                    },
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'A',
+                    'location': 'analytics.py:4313',
+                    'message': 'After filtering for completed_at',
+                    'data': {
+                        'completed_count': len(completed),
+                        'sample_completed_at': str(completed['completed_at'].iloc[0]) if not completed.empty else None
+                    },
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        if completed.empty:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'A',
+                        'location': 'analytics.py:4315',
+                        'message': 'Early return: no completed tasks',
+                        'data': {},
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            return {
+                'daily_score': 0.0,
+                'segments': [],
+                'segment_count': 0,
+                'total_tasks': 0
+            }
+        
+        # Parse completed_at timestamps
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed.dropna(subset=['completed_at_dt'])
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'B',
+                    'location': 'analytics.py:4325',
+                    'message': 'After parsing timestamps',
+                    'data': {
+                        'completed_count': len(completed),
+                        'earliest_completion': str(completed['completed_at_dt'].min()) if not completed.empty else None,
+                        'latest_completion': str(completed['completed_at_dt'].max()) if not completed.empty else None
+                    },
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        if completed.empty:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'B',
+                        'location': 'analytics.py:4327',
+                        'message': 'Early return: no valid timestamps',
+                        'data': {},
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            return {
+                'daily_score': 0.0,
+                'segments': [],
+                'segment_count': 0,
+                'total_tasks': 0
+            }
+        
+        # For current day: look back to find the start of the current segment
+        # For historical dates: use all tasks from that date
+        if is_current_day:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'C',
+                        'location': 'analytics.py:4337',
+                        'message': 'Current day calculation path',
+                        'data': {
+                            'now': str(now),
+                            'target_date_obj': str(target_date_obj)
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            idle_threshold = timedelta(hours=idle_refresh_hours)
+            
+            # Sort all completions by time (most recent first)
+            all_completions_sorted = completed.sort_values('completed_at_dt', ascending=False)
+            
+            if all_completions_sorted.empty:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'C',
+                            'location': 'analytics.py:4343',
+                            'message': 'Early return: all_completions_sorted empty',
+                            'data': {},
+                            'timestamp': int(datetime.now().timestamp() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+                return {
+                    'daily_score': 0.0,
+                    'segments': [],
+                    'segment_count': 0,
+                    'total_tasks': 0
+                }
+            
+            # Find the last completion time
+            last_completion = all_completions_sorted.iloc[0]['completed_at_dt']
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'C',
+                        'location': 'analytics.py:4352',
+                        'message': 'Last completion found',
+                        'data': {
+                            'last_completion': str(last_completion),
+                            'hours_since_last': (now - last_completion).total_seconds() / 3600,
+                            'idle_threshold_hours': idle_refresh_hours
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            # If there's been more than 8 hours since last completion, start new segment from now
+            if (now - last_completion) > idle_threshold:
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'C',
+                            'location': 'analytics.py:4355',
+                            'message': 'Early return: idle time exceeded threshold',
+                            'data': {
+                                'hours_since_last': (now - last_completion).total_seconds() / 3600
+                            },
+                            'timestamp': int(datetime.now().timestamp() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+                # Start new segment from now (no tasks yet in this segment)
+                return {
+                    'daily_score': 0.0,
+                    'segments': [],
+                    'segment_count': 0,
+                    'total_tasks': 0
+                }
+            
+            # Find where the current segment started by looking back for 8-hour gaps
+            # Work backwards from the most recent completion
+            segment_start_time = last_completion
+            
+            # Look for gaps > 8 hours going backwards
+            for i in range(len(all_completions_sorted) - 1):
+                current_time = all_completions_sorted.iloc[i]['completed_at_dt']
+                next_time = all_completions_sorted.iloc[i + 1]['completed_at_dt']
+                gap = current_time - next_time
+                
+                if gap > idle_threshold:
+                    # Found a gap > 8 hours, segment starts after this gap (at current_time)
+                    segment_start_time = current_time
+                    break
+            else:
+                # No gaps > 8 hours found, segment starts from the earliest completion
+                segment_start_time = all_completions_sorted.iloc[-1]['completed_at_dt']
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'C',
+                        'location': 'analytics.py:4377',
+                        'message': 'Segment start time calculated',
+                        'data': {
+                            'segment_start_time': str(segment_start_time),
+                            'total_completions': len(all_completions_sorted)
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            # Filter to tasks since segment start (up to now)
+            day_completions = completed[
+                (completed['completed_at_dt'] >= segment_start_time) &
+                (completed['completed_at_dt'] <= now)
+            ].copy()
+        else:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'B',
+                        'location': 'analytics.py:4387',
+                        'message': 'Historical date calculation path',
+                        'data': {
+                            'target_date_obj': str(target_date_obj)
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            # Historical date: use all tasks from that date
+            completed['completed_date'] = completed['completed_at_dt'].dt.date
+            day_completions = completed[completed['completed_date'] == target_date_obj].copy()
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'B',
+                    'location': 'analytics.py:4392',
+                    'message': 'After date filtering',
+                    'data': {
+                        'day_completions_count': len(day_completions),
+                        'is_current_day': is_current_day
+                    },
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        if day_completions.empty:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'B',
+                        'location': 'analytics.py:4393',
+                        'message': 'Early return: day_completions empty after filtering',
+                        'data': {},
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            return {
+                'daily_score': 0.0,
+                'segments': [],
+                'segment_count': 0,
+                'total_tasks': 0
+            }
+        
+        # Sort by completion time
+        day_completions = day_completions.sort_values('completed_at_dt')
+        
+        # Get task types for productivity score calculation
+        from .task_manager import TaskManager
+        task_manager = TaskManager()
+        tasks_df = task_manager.get_all()
+        
+        # Merge task_type if needed
+        if 'task_type' not in day_completions.columns and not tasks_df.empty and 'task_type' in tasks_df.columns:
+            day_completions = day_completions.merge(
+                tasks_df[['task_id', 'task_type']],
+                on='task_id',
+                how='left'
+            )
+            day_completions['task_type'] = day_completions['task_type'].fillna('Work')
+        
+        # Prepare data for productivity score calculation
+        self_care_tasks_per_day = {}
+        if 'task_type' in day_completions.columns:
+            day_completions['task_type_normalized'] = day_completions['task_type'].astype(str).str.strip().str.lower()
+            self_care_tasks = day_completions[
+                day_completions['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
+            ]
+            if not self_care_tasks.empty:
+                date_key = target_date_obj.isoformat()
+                self_care_count = len(self_care_tasks)
+                self_care_tasks_per_day[date_key] = self_care_count
+        
+        # Calculate work/play time for the day
+        work_play_time_per_day = {}
+        if 'task_type' in day_completions.columns:
+            def _get_actual_time(row):
+                try:
+                    actual_dict = row.get('actual_dict', {})
+                    if isinstance(actual_dict, dict):
+                        return float(actual_dict.get('time_actual_minutes', 0) or 0)
+                except (KeyError, TypeError, ValueError):
+                    pass
+                return 0.0
+            
+            day_completions['time_actual'] = day_completions.apply(_get_actual_time, axis=1)
+            date_key = target_date_obj.isoformat()
+            work_time = day_completions[
+                day_completions['task_type_normalized'] == 'work'
+            ]['time_actual'].sum()
+            play_time = day_completions[
+                day_completions['task_type_normalized'] == 'play'
+            ]['time_actual'].sum()
+            work_play_time_per_day[date_key] = {
+                'work_time': float(work_time),
+                'play_time': float(play_time)
+            }
+        
+        # Calculate productivity scores for each task
+        weekly_avg_time = 0.0
+        try:
+            work_volume_metrics = self.get_daily_work_volume_metrics(days=7)
+            weekly_avg_time = work_volume_metrics.get('avg_daily_work_time', 0.0) * 7.0
+        except Exception:
+            pass
+        
+        # Calculate productivity score for each completion
+        day_completions['productivity_score'] = day_completions.apply(
+            lambda row: self.calculate_productivity_score(
+                row=row,
+                self_care_tasks_per_day=self_care_tasks_per_day,
+                weekly_avg_time=weekly_avg_time,
+                work_play_time_per_day=work_play_time_per_day
+            ),
+            axis=1
+        )
+        
+        # Group completions into segments based on idle time
+        # If there's more than 8 hours between completions, start a new segment
+        idle_threshold = timedelta(hours=idle_refresh_hours)
+        segments = []
+        current_segment = []
+        current_segment_score = 0.0
+        last_completion_time = None
+        
+        for _, row in day_completions.iterrows():
+            completion_time = row['completed_at_dt']
+            score = float(row.get('productivity_score', 0.0) or 0.0)
+            
+            # Check if we need to start a new segment (idle time > threshold)
+            if last_completion_time is not None:
+                idle_time = completion_time - last_completion_time
+                if idle_time > idle_threshold:
+                    # Save current segment and start new one
+                    if current_segment:
+                        segments.append({
+                            'start_time': current_segment[0]['completed_at_dt'],
+                            'end_time': current_segment[-1]['completed_at_dt'],
+                            'score': current_segment_score,
+                            'task_count': len(current_segment)
+                        })
+                    current_segment = []
+                    current_segment_score = 0.0
+            
+            # Add to current segment
+            current_segment.append({
+                'completed_at_dt': completion_time,
+                'productivity_score': score
+            })
+            current_segment_score += score
+            last_completion_time = completion_time
+        
+        # Add final segment (for current day, this is the active segment)
+        if current_segment:
+            end_time = current_segment[-1]['completed_at_dt']
+            if is_current_day:
+                # For current day, segment is still active, end time is now
+                end_time = now
+            segments.append({
+                'start_time': current_segment[0]['completed_at_dt'],
+                'end_time': end_time,
+                'score': current_segment_score,
+                'task_count': len(current_segment)
+            })
+        
+        # Total score is sum of all segments (each segment resets after idle time)
+        total_score = sum(seg['score'] for seg in segments)
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'D',
+                    'location': 'analytics.py:4448',
+                    'message': 'Final calculation result',
+                    'data': {
+                        'total_score': total_score,
+                        'segment_count': len(segments),
+                        'total_tasks': len(day_completions),
+                        'segments': [{'score': s['score'], 'task_count': s['task_count']} for s in segments]
+                    },
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        return {
+            'daily_score': round(float(total_score), 2),
+            'segments': segments,
+            'segment_count': len(segments),
+            'total_tasks': len(day_completions)
+        }
+    
     def get_historical_daily_scores(self, score_type: str = 'productivity_score', top_n: int = 10) -> List[Dict[str, Any]]:
         """Get historical daily scores sorted by value.
         
@@ -9802,6 +10313,178 @@ class Analytics:
                     completed['duration_minutes_numeric'] * 
                     completed['relief_multiplier']
                 ) / 60.0  # Divide by 60 to normalize (convert minutes to hours scale)
+        elif attribute_key == 'daily_productivity_score_idle_refresh':
+            # #region agent log
+            import json
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'E',
+                        'location': 'analytics.py:10050',
+                        'message': 'get_attribute_trends: daily_productivity_score_idle_refresh entry',
+                        'data': {
+                            'days': days,
+                            'aggregation': aggregation,
+                            'completed_count': len(completed)
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            # Calculate daily productivity score with 8-hour idle refresh
+            # Get all unique dates in the range
+            now = datetime.now()
+            if days:
+                cutoff = now - timedelta(days=days)
+                date_range = pd.date_range(start=cutoff, end=now, freq='D')
+            else:
+                if completed.empty:
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'E',
+                                'location': 'analytics.py:10057',
+                                'message': 'Early return: completed empty',
+                                'data': {},
+                                'timestamp': int(datetime.now().timestamp() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
+                    return {'dates': [], 'values': [], 'aggregation': aggregation}
+                min_date = completed['completed_at_dt'].min().date()
+                max_date = completed['completed_at_dt'].max().date()
+                date_range = pd.date_range(start=pd.Timestamp(min_date), end=pd.Timestamp(max_date), freq='D')
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'E',
+                        'location': 'analytics.py:10065',
+                        'message': 'Date range calculated',
+                        'data': {
+                            'date_range_length': len(date_range),
+                            'first_date': str(date_range[0].date()) if len(date_range) > 0 else None,
+                            'last_date': str(date_range[-1].date()) if len(date_range) > 0 else None
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            daily_scores = []
+            daily_dates = []
+            
+            for date_ts in date_range:
+                date_obj = date_ts.date()
+                is_today = date_obj == now.date()
+                
+                try:
+                    # For today, pass None to use rolling calculation
+                    # For historical dates, pass the specific date
+                    target_date = None if is_today else datetime.combine(date_obj, datetime.min.time())
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'E',
+                                'location': 'analytics.py:10075',
+                                'message': 'Calling calculate_daily_productivity_score_with_idle_refresh',
+                                'data': {
+                                    'date_obj': str(date_obj),
+                                    'is_today': is_today,
+                                    'target_date': str(target_date) if target_date else None
+                                },
+                                'timestamp': int(datetime.now().timestamp() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    score_data = self.calculate_daily_productivity_score_with_idle_refresh(
+                        target_date=target_date,
+                        idle_refresh_hours=8.0
+                    )
+                    daily_score = score_data.get('daily_score', 0.0)
+                    
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'E',
+                                'location': 'analytics.py:10090',
+                                'message': 'Score calculated for date',
+                                'data': {
+                                    'date_obj': str(date_obj),
+                                    'daily_score': daily_score,
+                                    'total_tasks': score_data.get('total_tasks', 0)
+                                },
+                                'timestamp': int(datetime.now().timestamp() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
+                    
+                    daily_scores.append(float(daily_score))
+                    daily_dates.append(str(date_obj))
+                except Exception as e:
+                    # If calculation fails for a date, use 0.0
+                    print(f"[Analytics] Error calculating idle refresh score for {date_obj}: {e}")
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'E',
+                                'location': 'analytics.py:10100',
+                                'message': 'Exception calculating score',
+                                'data': {
+                                    'date_obj': str(date_obj),
+                                    'error': str(e)
+                                },
+                                'timestamp': int(datetime.now().timestamp() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
+                    daily_scores.append(0.0)
+                    daily_dates.append(str(date_obj))
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'E',
+                        'location': 'analytics.py:10110',
+                        'message': 'Returning trend data',
+                        'data': {
+                            'dates_count': len(daily_dates),
+                            'scores_count': len(daily_scores),
+                            'total_score': sum(daily_scores)
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            return {
+                'dates': daily_dates,
+                'values': daily_scores,
+                'aggregation': 'sum',  # Sum is appropriate since it's a daily total
+            }
         elif attribute_key == 'daily_self_care_tasks':
             # Calculate daily self care tasks count
             from .task_manager import TaskManager

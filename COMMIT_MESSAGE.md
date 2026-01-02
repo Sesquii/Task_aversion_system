@@ -1,86 +1,63 @@
-# Commit Message - PLANNING DOCUMENTS
+# Add Daily Productivity Score with 8-Hour Idle Refresh to Monitored Metrics
 
-**[PLANNING COMMIT - NO CODE CHANGES]**
+## Summary
+Added a new productivity metric that calculates daily productivity scores with an 8-hour idle time refresh mechanism. The metric accumulates scores throughout the day but resets after 8 hours of idle time (no task completions). This metric is now available in both the Analytics page and the Dashboard's Monitored Metrics section.
 
-## Planning Intent
+## Changes
 
-This commit adds two comprehensive planning documents for performance optimization and caching infrastructure improvements. This is a **planning document only** - no code changes have been made. These plans address critical performance bottlenecks in the analytics system and establish a flexible caching framework to improve user experience.
+### Backend (analytics.py)
+- **New method**: `calculate_daily_productivity_score_with_idle_refresh()`
+  - Calculates rolling daily productivity score that resets after 8 hours of idle time
+  - For current day: Looks back to find the last 8-hour idle period and accumulates scores from that point forward
+  - For historical dates: Calculates full day's score with idle refresh logic
+  - Returns daily score, segments, segment count, and total tasks
 
-## Plans Added
+- **Integration**: Added handling in `get_attribute_trends()` for `daily_productivity_score_idle_refresh`
+  - Supports trend visualization in Analytics page
+  - Handles both current day (rolling calculation) and historical dates
 
-### 1. Caching System Implementation Plan
-**File**: `.cursor/plans/caching_system_implementation_b3e70d55.plan.md`
+### Frontend (analytics_page.py)
+- **Added to CALCULATED_METRICS**: `'Daily Productivity Score (8h Idle Refresh)'`
+  - Available for selection in Analytics trends
+  - Can be aggregated (sum, mean, etc.) for trend analysis
 
-A comprehensive plan to implement a flexible caching system with three storage backends (memory, file, hybrid), loading UI with progress bars, and per-page refresh strategies. The system will allow users to choose between full caching (slow initial load, fast subsequent loads) and selective loading (fast initial load, lazy-load expensive metrics).
+### Dashboard (dashboard.py)
+- **Special handling**: Added on-demand calculation for `daily_productivity_score_idle_refresh` in monitored metrics
+  - Calculates current value using `calculate_daily_productivity_score_with_idle_refresh()`
+  - Retrieves historical data using `get_attribute_trends()`
+  - Displays in monitored metrics cards with tooltip charts
 
-**Key Features Planned:**
-- Three cache backends: memory (fast), file (persistent), hybrid (recommended default)
-- User-configurable cache modes via settings page
-- Loading screen with progress bar for full cache mode (60-second timeout)
-- Piecewise cache invalidation per subsystem (analytics, dashboard, summary)
-- Analytics cache: 1-hour TTL with manual refresh option (no auto-invalidation on task completion)
-- Dashboard metrics: Always refresh after task completion (regardless of cache)
-- Summary page: Daily cache refresh (once per day on first load)
+- **Documentation**: Added comprehensive comments explaining the special handling pattern
+  - Documents why special handling is needed (metrics not in standard dictionaries)
+  - Provides guidance for adding similar special handling for other metrics
+  - Includes examples and step-by-step instructions
 
-**Refresh Strategies:**
-- Analytics: Manual refresh only, 1-hour TTL, stays cached even after task completion
-- Dashboard: Monitored metrics refresh after every task completion
-- Summary: Cache once per day, refresh on first page load of day
+## Technical Details
 
-### 2. Optimize _load_instances() Performance Plan
-**File**: `.cursor/plans/optimize_load_instances_a1b2c3d4.plan.md`
+### How It Works
+1. **Current Day Calculation**:
+   - Finds the most recent task completion
+   - If >8 hours since last completion, returns 0 (new segment starting)
+   - Otherwise, looks backwards to find the last 8-hour idle gap
+   - Includes all tasks from after that gap up to current time
 
-A focused optimization plan to eliminate redundant data loading and processing. The `_load_instances()` method is currently called 59 times throughout analytics.py, causing 30-80 seconds of redundant processing per analytics page load.
+2. **Historical Dates**:
+   - Calculates full day's score with idle refresh logic
+   - Groups tasks into segments based on 8-hour gaps
+   - Sums scores across all segments for the day
 
-**Key Optimizations Planned:**
-- Instance-level DataFrame caching to eliminate redundant DB/CSV reads
-- Smart cache invalidation on instance/task changes
-- Optimized JSON parsing using vectorized pandas operations
-- Lazy column processing (only calculate derived columns when needed)
-- Optional gap filtering for methods that don't require it
+3. **Integration**:
+   - Available in Analytics trends (selectable in dropdown)
+   - Available in Monitored Metrics (selectable in configuration dialog)
+   - Both use the same calculation logic for consistency
 
-**Expected Performance Impact:**
-- Current: 30-80 seconds for 59 calls (500-1400ms per call)
-- Optimized: ~890ms for 59 calls (cache hit: <10ms per call)
-- **30-90x speedup** for cached scenarios
+## Benefits
+- Provides a productivity metric that accounts for work patterns and idle time
+- Encourages consistent daily productivity by resetting after extended breaks
+- Extensible pattern for adding other calculated metrics to monitored metrics section
 
-**Time Estimate:** 8-11 hours implementation time
-
-## Plan Structure
-
-### Caching System Implementation
-1. **Cache Manager**: Centralized cache management with three backends
-2. **Loading UI Component**: Progress bar modal for full cache mode
-3. **Cache Mode Selection**: Settings UI for user preference
-4. **Refresh Strategies**: Per-page cache invalidation rules
-5. **Analytics Integration**: Replace class-level cache with CacheManager
-6. **App Initialization**: First-load decision point for cache mode
-
-### _load_instances() Optimization
-1. **Instance-Level Cache**: Store processed DataFrame with TTL
-2. **Cache Invalidation**: Triggers on instance/task changes
-3. **JSON Parsing Optimization**: Vectorized operations, reduce apply() overhead
-4. **Lazy Column Processing**: Calculate derived columns only when needed
-5. **Performance Testing**: Benchmarks and validation
-
-## Implementation Status
-
-**Status**: Planning phase only - no code changes made
-
-**Next Steps**: 
-- Review and approve plans
-- Prioritize implementation order (suggest optimizing _load_instances() first for immediate impact)
-- Begin implementation when ready
-
-## Files Modified (Planning Documents Only)
-
-- `.cursor/plans/caching_system_implementation_b3e70d55.plan.md` (created)
-- `.cursor/plans/optimize_load_instances_a1b2c3d4.plan.md` (created)
-
-## Notes
-
-- Both plans can be implemented independently
-- The _load_instances() optimization will provide immediate performance benefits
-- The caching system can be integrated incrementally
-- CacheManager system will integrate with the _load_instances() cache in future phases
-- Plans include detailed time estimates, risk mitigation, and testing strategies
+## Testing
+- Verified metric appears in Analytics page trends
+- Verified metric appears in Monitored Metrics configuration
+- Verified metric calculates and displays correctly in dashboard
+- Verified historical data displays in tooltip charts

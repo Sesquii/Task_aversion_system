@@ -2231,6 +2231,35 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             
             def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary, analytics_instance=an):
                 def get_generic_value():
+                    # ====================================================================
+                    # SPECIAL HANDLING FOR CALCULATED METRICS
+                    # ====================================================================
+                    # Some metrics require on-demand calculation rather than lookup from
+                    # standard dictionaries (quality_metrics, relief_summary, composite_scores).
+                    # This pattern can be extended for other metrics that need special logic.
+                    #
+                    # Example: daily_productivity_score_idle_refresh needs to calculate
+                    # a rolling daily score that resets after 8 hours of idle time.
+                    # It's not pre-calculated in any standard metric dictionary.
+                    # ====================================================================
+                    
+                    # Special handling for daily_productivity_score_idle_refresh - calculate on demand
+                    # This metric calculates a rolling daily productivity score that accumulates
+                    # throughout the day but resets after 8 hours of idle time (no task completions).
+                    # For the current day, it looks back to find the last 8-hour idle period and
+                    # accumulates scores from that point forward up to the current time.
+                    if key == 'daily_productivity_score_idle_refresh':
+                        try:
+                            score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
+                                target_date=None,  # None = current day with rolling calculation
+                                idle_refresh_hours=8.0
+                            )
+                            result = score_data.get('daily_score', 0.0)
+                            return float(result)
+                        except Exception as e:
+                            print(f"[Dashboard] Error calculating daily_productivity_score_idle_refresh: {e}")
+                            return 0.0
+                    
                     # Special handling for expected_relief - get from analytics
                     if key == 'expected_relief':
                         try:
@@ -2518,6 +2547,24 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
 def render_monitored_metrics_section_loaded(container, relief_summary, selected_metrics, coloration_baseline, an, init_perf_logger, quality_metrics=None, composite_scores=None):
     """Render monitored metrics section with already-loaded data.
     
+    MONITORED METRICS SYSTEM OVERVIEW:
+    ===================================
+    This system supports monitoring up to 4 metrics on the dashboard. Metrics can be:
+    1. Pre-calculated values from dictionaries (quality_metrics, relief_summary, composite_scores)
+    2. Calculated on-demand using special handling (see make_get_value function)
+    
+    Special handling pattern:
+    - Some metrics require on-demand calculation (e.g., daily_productivity_score_idle_refresh)
+    - These metrics are not in standard dictionaries and need custom calculation logic
+    - Special handling is added in the make_get_value() function with if statements
+    - This pattern can be extended for other metrics that need custom calculation
+    
+    To add a new metric with special handling:
+    1. Add the metric to CALCULATED_METRICS in analytics_page.py
+    2. Add special handling in make_get_value() function (see comments there)
+    3. Add special history handling in make_get_history() if needed (see comments there)
+    ===================================
+    
     Args:
         quality_metrics: Optional dict of quality metrics from get_dashboard_metrics()
         composite_scores: Optional dict of composite scores from get_all_scores_for_composite()
@@ -2568,8 +2615,25 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             label = ATTRIBUTE_LABELS.get(metric_key, metric_key.replace('_', ' ').title())
             
             # Create closure-safe function for getting value (capture all needed data)
-            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary):
+            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary, analytics_instance=an):
                 def get_generic_value():
+                    # ====================================================================
+                    # SPECIAL HANDLING FOR CALCULATED METRICS
+                    # ====================================================================
+                    # Some metrics require on-demand calculation rather than lookup from
+                    # standard dictionaries (quality_metrics, relief_summary, composite_scores).
+                    # This pattern can be extended for other metrics that need special logic.
+                    #
+                    # Example: daily_productivity_score_idle_refresh needs to calculate
+                    # a rolling daily score that resets after 8 hours of idle time.
+                    # It's not pre-calculated in any standard metric dictionary.
+                    #
+                    # To add special handling for a new metric:
+                    # 1. Add an if statement checking for the metric key
+                    # 2. Call the appropriate calculation method from analytics_instance
+                    # 3. Return the calculated value as a float
+                    # ====================================================================
+                    
                     # #region agent log
                     try:
                         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -2589,6 +2653,50 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                             }) + '\n')
                     except: pass
                     # #endregion
+                    
+                    # Special handling for daily_productivity_score_idle_refresh - calculate on demand
+                    # This metric calculates a rolling daily productivity score that accumulates
+                    # throughout the day but resets after 8 hours of idle time (no task completions).
+                    # For the current day, it looks back to find the last 8-hour idle period and
+                    # accumulates scores from that point forward up to the current time.
+                    if key == 'daily_productivity_score_idle_refresh':
+                        try:
+                            score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
+                                target_date=None,  # None = current day with rolling calculation
+                                idle_refresh_hours=8.0
+                            )
+                            result = score_data.get('daily_score', 0.0)
+                            # #region agent log
+                            try:
+                                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({
+                                        'sessionId': 'debug-session',
+                                        'runId': 'run1',
+                                        'hypothesisId': 'G',
+                                        'location': 'dashboard.py:get_generic_value',
+                                        'message': 'calculated daily_productivity_score_idle_refresh',
+                                        'data': {'metric_key': key, 'value': result, 'total_tasks': score_data.get('total_tasks', 0)},
+                                        'timestamp': int(time.time() * 1000)
+                                    }) + '\n')
+                            except: pass
+                            # #endregion
+                            return float(result)
+                        except Exception as e:
+                            # #region agent log
+                            try:
+                                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps({
+                                        'sessionId': 'debug-session',
+                                        'runId': 'run1',
+                                        'hypothesisId': 'G',
+                                        'location': 'dashboard.py:get_generic_value',
+                                        'message': 'error calculating daily_productivity_score_idle_refresh',
+                                        'data': {'metric_key': key, 'error': str(e)},
+                                        'timestamp': int(time.time() * 1000)
+                                    }) + '\n')
+                            except: pass
+                            # #endregion
+                            return 0.0
                     
                     # Try quality metrics first (exact match)
                     if key in qual_metrics:
@@ -2670,22 +2778,6 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                         except: pass
                         # #endregion
                         return result
-                        result = float(val) if val is not None else 0.0
-                        # #region agent log
-                        try:
-                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                                f.write(json.dumps({
-                                    'sessionId': 'debug-session',
-                                    'runId': 'run1',
-                                    'hypothesisId': 'G',
-                                    'location': 'dashboard.py:get_generic_value',
-                                    'message': 'found in composite_scores',
-                                    'data': {'metric_key': key, 'value': result},
-                                    'timestamp': int(time.time() * 1000)
-                                }) + '\n')
-                        except: pass
-                        # #endregion
-                        return result
                     
                     # #region agent log
                     try:
@@ -2707,6 +2799,34 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             # Create closure-safe history function
             def make_get_history(key):
                 def get_history():
+                    # ====================================================================
+                    # SPECIAL HANDLING FOR METRIC HISTORY
+                    # ====================================================================
+                    # Some metrics need custom history retrieval logic instead of the
+                    # standard get_generic_metric_history() method. This pattern can be
+                    # extended for other metrics that need special history calculation.
+                    #
+                    # Example: daily_productivity_score_idle_refresh uses get_attribute_trends
+                    # to get historical daily values with the idle refresh logic applied.
+                    #
+                    # To add special handling for a new metric's history:
+                    # 1. Add an if statement checking for the metric key
+                    # 2. Call the appropriate history method (e.g., get_attribute_trends)
+                    # 3. Return the history data in the expected format
+                    # ====================================================================
+                    
+                    # Special handling for daily_productivity_score_idle_refresh - use get_attribute_trends
+                    # This ensures the historical data uses the same calculation logic (8-hour idle refresh)
+                    # as the current value, providing consistent trend visualization.
+                    if key == 'daily_productivity_score_idle_refresh':
+                        try:
+                            trends = an.get_attribute_trends(key, aggregation='sum', days=90)
+                            return trends
+                        except Exception as e:
+                            print(f"[Dashboard] Error getting history for {key}: {e}")
+                            return None
+                    
+                    # Standard history retrieval for other metrics
                     if hasattr(an, 'get_generic_metric_history'):
                         return an.get_generic_metric_history(key, days=90)
                     return None

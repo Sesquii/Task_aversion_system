@@ -28,6 +28,7 @@ CALCULATED_METRICS = [
     {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
     {'label': 'Stress-Relief Correlation Score', 'value': 'stress_relief_correlation_score'},
     {'label': 'Productivity Score', 'value': 'productivity_score'},
+    {'label': 'Daily Productivity Score (8h Idle Refresh)', 'value': 'daily_productivity_score_idle_refresh'},
     {'label': 'Grit Score', 'value': 'grit_score'},
     {'label': "Today's self care tasks", 'value': 'daily_self_care_tasks'},
     {'label': 'Work Time (minutes)', 'value': 'work_time'},
