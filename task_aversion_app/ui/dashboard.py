@@ -62,6 +62,28 @@ def safe_log(level, message):
 
 tm = TaskManager()
 im = InstanceManager()
+
+# Global variables for initialized tasks search
+initialized_tasks_container = None
+initialized_search_input_ref = None
+
+# #region agent log
+import json
+def debug_log(location, message, data=None, hypothesis_id=None):
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            log_entry = {
+                'location': location,
+                'message': message,
+                'data': data or {},
+                'timestamp': int(time.time() * 1000),
+                'sessionId': 'debug-session',
+                'runId': 'run1',
+                'hypothesisId': hypothesis_id
+            }
+            f.write(json.dumps(log_entry) + '\n')
+    except: pass
+# #endregion
 em = EmotionManager()
 an = Analytics()
 user_state = UserStateManager()
@@ -456,6 +478,232 @@ def show_details(instance_id):
         ui.button("Close", on_click=dialog.close)
 
     dialog.open()
+def refresh_initialized_tasks(search_query=None):
+    """
+    Refresh the initialized tasks display with optional search filtering.
+    
+    Args:
+        search_query: Optional string to filter tasks by name, description, notes, or pause notes
+    """
+    global initialized_tasks_container, initialized_search_input_ref
+    # #region agent log
+    debug_log('dashboard.py:470', 'refresh_initialized_tasks called', {'search_query': search_query, 'container_is_none': initialized_tasks_container is None, 'container_id': str(id(initialized_tasks_container)) if initialized_tasks_container else None, 'input_ref_is_none': initialized_search_input_ref is None}, 'H1')
+    # #endregion
+    
+    # Get search query from input if not provided
+    if search_query is None and initialized_search_input_ref is not None:
+        try:
+            current_value = initialized_search_input_ref.value
+            search_query = str(current_value).strip() if current_value else None
+            if search_query == '':
+                search_query = None
+        except Exception:
+            search_query = None
+    
+    refresh_start = time.perf_counter()
+    print(f"[Dashboard] refresh_initialized_tasks() called with search_query='{search_query}'")
+    
+    try:
+        init_perf_logger = get_init_perf_logger()
+        init_perf_logger.log_event("refresh_initialized_tasks_start", search_query=search_query)
+    except:
+        init_perf_logger = None
+    
+    # Check if container exists
+    if initialized_tasks_container is None:
+        print("[Dashboard] ERROR: initialized_tasks_container is None, cannot refresh. Will retry after delay.")
+        # #region agent log
+        debug_log('dashboard.py:492', 'Initialized tasks container is None, scheduling retry', {}, 'H1')
+        # #endregion
+        def retry_refresh():
+            refresh_initialized_tasks(search_query)
+        ui.timer(5.0, retry_refresh, once=True)
+        return
+    
+    # Get active instances (excluding current task)
+    if init_perf_logger:
+        with init_perf_logger.operation("list_active_instances"):
+            active = im.list_active_instances()
+        with init_perf_logger.operation("get_current_task"):
+            current_task = get_current_task()
+    else:
+        active = im.list_active_instances()
+        current_task = get_current_task()
+    
+    # Filter out current task from active list
+    active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
+    
+    print(f"[Dashboard] Total initialized tasks before filtering: {len(active_not_current)}")
+    
+    # Apply search filter if provided
+    if search_query:
+        search_query = str(search_query).strip().lower()
+        print(f"[Dashboard] Applying search filter: '{search_query}'")
+        
+        filtered_instances = []
+        for inst in active_not_current:
+            # Parse predicted data for description
+            predicted_str = inst.get("predicted") or "{}"
+            try:
+                predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
+            except (json.JSONDecodeError, TypeError):
+                predicted_data = {}
+            
+            # Parse actual data for pause notes
+            actual_str = inst.get("actual") or "{}"
+            try:
+                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+            except (json.JSONDecodeError, TypeError):
+                actual_data = {}
+            
+            # Get task name from instance
+            task_name = str(inst.get("task_name", "")).lower()
+            
+            # Get description from predicted data
+            description = str(predicted_data.get('description', '')).lower()
+            
+            # Get pause notes from actual data
+            pause_reason = str(actual_data.get('pause_reason', '')).lower()
+            
+            # Get task-level notes
+            task_id = inst.get('task_id')
+            task_notes = ''
+            if task_id:
+                try:
+                    task_notes = str(tm.get_task_notes(task_id) or '').lower()
+                except Exception:
+                    pass
+            
+            # Check if search query matches any field
+            matches_name = search_query in task_name
+            matches_description = search_query in description
+            matches_pause_notes = search_query in pause_reason
+            matches_task_notes = search_query in task_notes
+            
+            if matches_name or matches_description or matches_pause_notes or matches_task_notes:
+                filtered_instances.append(inst)
+                print(f"[Dashboard] Instance '{inst.get('task_name')}' matched search (name={matches_name}, desc={matches_description}, pause={matches_pause_notes}, notes={matches_task_notes})")
+        
+        active_not_current = filtered_instances
+        print(f"[Dashboard] Initialized tasks after filtering: {len(active_not_current)}")
+    else:
+        print("[Dashboard] No search query provided, showing all initialized tasks")
+    
+    # Clear the container
+    initialized_tasks_container.clear()
+    
+    if not active_not_current:
+        print("[Dashboard] No initialized tasks to display after filtering")
+        with initialized_tasks_container:
+            if search_query:
+                ui.markdown(f"_No initialized tasks match '{search_query}'_")
+            else:
+                ui.markdown("_No initialized tasks available_")
+        return
+    
+    print(f"[Dashboard] Rendering {len(active_not_current)} initialized tasks in 2-column layout")
+    
+    # Render initialized tasks in 2 columns
+    with initialized_tasks_container:
+        # Split into 2 columns
+        with ui.row().classes("w-full gap-2"):
+            col1 = ui.column().classes("w-1/2")
+            col2 = ui.column().classes("w-1/2")
+            
+            for idx, inst in enumerate(active_not_current):
+                col = col1 if idx % 2 == 0 else col2
+                with col:
+                    # Parse predicted data
+                    predicted_str = inst.get("predicted") or "{}"
+                    try:
+                        predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
+                    except (json.JSONDecodeError, TypeError):
+                        predicted_data = {}
+                    
+                    time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
+                    try:
+                        time_estimate = int(time_estimate)
+                    except (TypeError, ValueError):
+                        time_estimate = 0
+                    
+                    task_id = inst.get('task_id')
+                    formatted_tooltip = format_colored_tooltip(predicted_data, task_id)
+                    tooltip_id = f"tooltip-{inst['instance_id']}"
+                    instance_id = inst['instance_id']
+                    
+                    # Check if this task has pause notes and completion percentage
+                    actual_str = inst.get("actual") or "{}"
+                    has_pause_notes = False
+                    completion_pct = None
+                    is_paused = False
+                    try:
+                        actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                        pause_reason = actual_data.get('pause_reason', '')
+                        has_pause_notes = bool(pause_reason and pause_reason.strip())
+                        # Check if task is paused (has 'paused' flag in actual_data)
+                        is_paused = actual_data.get('paused', False)
+                        # Get completion percentage if available
+                        completion_pct = actual_data.get('pause_completion_percentage')
+                        if completion_pct is not None:
+                            try:
+                                completion_pct = float(completion_pct)
+                            except (ValueError, TypeError):
+                                completion_pct = None
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    
+                    with ui.card().classes("w-full p-2 task-card-hover mb-2 context-menu-card").props(f'data-instance-id="{instance_id}" data-context-menu="instance"').style("position: relative;"):
+                        # Hidden buttons for context menu actions (initialized tasks: View, Add Note, Complete)
+                        ui.button("", on_click=lambda iid=instance_id: view_initialized_instance(iid)).props(f'id="context-btn-instance-view-{instance_id}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id: add_instance_note(iid)).props(f'id="context-btn-instance-addnote-{instance_id}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id: go_complete(iid)).props(f'id="context-btn-instance-complete-{instance_id}"').style("display: none;")
+                        with ui.row().classes("w-full items-center gap-2"):
+                            ui.label(inst.get("task_name")).classes("text-sm font-bold flex-1")
+                            # Small indicator icon if task has pause notes
+                            if has_pause_notes:
+                                ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip("This task was paused - see notes when you start it")
+                        ui.label(f"{time_estimate} min").classes("text-xs text-gray-600")
+                        
+                        # Show completion percentage if task was paused
+                        if completion_pct is not None:
+                            ui.label(f"Progress: {int(completion_pct)}%").classes("text-xs font-semibold text-blue-600")
+                        
+                        initialized_at = inst.get('initialized_at', '')
+                        if initialized_at:
+                            ui.label(f"Initialize: {initialized_at}").classes("text-xs text-gray-500")
+                        
+                        # Show initialization description if available
+                        init_description = predicted_data.get('description', '')
+                        if init_description and init_description.strip():
+                            ui.label(init_description.strip()).classes("text-xs text-gray-700 mt-1 italic").style("max-width: 100%; word-wrap: break-word;")
+                        
+                        with ui.row().classes("gap-1 mt-1"):
+                            # Show "Resume" button if task is paused, otherwise "Start"
+                            if is_paused:
+                                ui.button("Resume",
+                                          on_click=lambda i=inst['instance_id']: resume_instance(i)
+                                          ).props("dense size=sm").classes("bg-blue-500")
+                            else:
+                                ui.button("Start",
+                                          on_click=lambda i=inst['instance_id']: start_instance(i)
+                                          ).props("dense size=sm").classes("bg-green-500")
+                            ui.button("Cancel",
+                                      on_click=lambda i=inst['instance_id']: go_cancel(i)
+                                      ).props("dense size=sm color=red")
+                        
+                        tooltip_html = f'<div id="{tooltip_id}" class="task-tooltip">{formatted_tooltip}</div>'
+                        ui.add_body_html(tooltip_html)
+        
+        # Re-initialize tooltips and context menus
+        ui.run_javascript('setTimeout(initTaskTooltips, 200);')
+        ui.run_javascript("setTimeout(initContextMenus, 100);")
+    
+    refresh_duration = (time.perf_counter() - refresh_start) * 1000
+    if init_perf_logger:
+        init_perf_logger.log_timing("refresh_initialized_tasks_total", refresh_duration, search_query=search_query)
+    print(f"[Dashboard] refresh_initialized_tasks() completed successfully in {refresh_duration:.2f}ms")
+
+
 def refresh_templates(search_query=None):
     """
     Refresh the task templates display with optional search filtering.
@@ -463,6 +711,22 @@ def refresh_templates(search_query=None):
     Args:
         search_query: Optional string to filter templates by name, description, or task_type
     """
+    global template_col
+    # #region agent log
+    debug_log('dashboard.py:690', 'refresh_templates called', {'search_query': search_query, 'container_is_none': template_col is None, 'container_id': str(id(template_col)) if template_col else None}, 'H1')
+    # #endregion
+    
+    # Check if container exists
+    if template_col is None:
+        print("[Dashboard] ERROR: template_col is None, cannot refresh. Will retry after delay.")
+        # #region agent log
+        debug_log('dashboard.py:694', 'Template container is None, scheduling retry', {}, 'H1')
+        # #endregion
+        def retry_refresh():
+            refresh_templates(search_query)
+        ui.timer(5.0, retry_refresh, once=True)
+        return
+    
     refresh_start = time.perf_counter()
     print(f"[Dashboard] refresh_templates() called with search_query='{search_query}'")
     print(f"[Dashboard] search_query type: {type(search_query)}, value: {repr(search_query)}")
@@ -4258,6 +4522,9 @@ def build_dashboard(task_manager):
                         placeholder="Search by name, description, or type..."
                     ).classes("w-full mb-2")
                     print(f"[Dashboard] Search input created: {search_input}")
+                    # #region agent log
+                    debug_log('dashboard.py:4494', 'Template search input created', {'input_id': str(id(search_input))}, 'H3')
+                    # #endregion
                     
                     # Debounce timer for template search input
                     template_search_debounce_timer = None
@@ -4265,6 +4532,9 @@ def build_dashboard(task_manager):
                     def handle_template_search(e):
                         """Handle search input changes with debouncing."""
                         nonlocal template_search_debounce_timer
+                        # #region agent log
+                        debug_log('dashboard.py:4500', 'Template search handler triggered', {'has_event': e is not None}, 'H2')
+                        # #endregion
                         
                         # Cancel existing timer if any
                         if template_search_debounce_timer is not None:
@@ -4274,6 +4544,13 @@ def build_dashboard(task_manager):
                         def apply_template_search():
                             """Apply the template search filter after debounce delay."""
                             try:
+                                # Ensure container exists before proceeding
+                                global template_col
+                                if template_col is None:
+                                    print("[Dashboard] template_col is None in search handler, retrying...")
+                                    ui.timer(5.0, apply_template_search, once=True)
+                                    return
+                                
                                 current_value = search_input.value
                                 search_query = str(current_value).strip() if current_value else None
                                 if search_query == '':
@@ -4282,21 +4559,46 @@ def build_dashboard(task_manager):
                                 refresh_templates(search_query=search_query)
                             except Exception as ex:
                                 print(f"[Dashboard] Error in debounced template search: {ex}")
+                                import traceback
+                                traceback.print_exc()
                         
                         # Create a timer that will execute after 300ms of no typing
                         template_search_debounce_timer = ui.timer(0.3, apply_template_search, once=True)
                     
-                    # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-                    search_input.on('update:model-value', handle_template_search)
-                    print("[Dashboard] Search input event handler attached")
-                    
                     global template_col
                     template_col = ui.row().classes('w-full gap-2')
+                    # #region agent log
+                    debug_log('dashboard.py:4533', 'Template container created', {'container_id': str(id(template_col)), 'is_none': template_col is None}, 'H1')
+                    # #endregion
+                    
+                    # Attach search handler immediately to the current input
+                    try:
+                        # #region agent log
+                        debug_log('dashboard.py:4538', 'Attempting to attach template search handler', {'input_id': str(id(search_input)), 'container_exists': template_col is not None}, 'H2')
+                        # #endregion
+                        search_input.on('update:model-value', handle_template_search)
+                        print("[Dashboard] Search input event handler attached")
+                        # #region agent log
+                        debug_log('dashboard.py:4540', 'Template search handler attached successfully', {}, 'H2')
+                        # #endregion
+                    except Exception as e:
+                        print(f"[Dashboard] Error attaching template search handler: {e}")
+                        # #region agent log
+                        debug_log('dashboard.py:4542', 'Error attaching template search handler', {'error': str(e)}, 'H2')
+                        # #endregion
+                    
+                    # Call refresh - it will retry automatically if container not ready
+                    # #region agent log
+                    debug_log('dashboard.py:4546', 'About to call initial refresh_templates', {'container_exists': template_col is not None}, 'H5')
+                    # #endregion
                     if init_perf_logger:
                         with init_perf_logger.operation("refresh_templates_initial"):
                             refresh_templates()
                     else:
                         refresh_templates()
+                    # #region agent log
+                    debug_log('dashboard.py:4551', 'Initial refresh_templates completed', {'container_exists': template_col is not None}, 'H5')
+                    # #endregion
 
             # ====================================================================
             # COLUMN 2 — Middle Column
@@ -4368,101 +4670,90 @@ def build_dashboard(task_manager):
                         # Add tooltip using NiceGUI's tooltip feature
                         time_label.tooltip(tooltip_content)
                     
+                    # Search bar for initialized tasks
+                    initialized_search_input = ui.input(
+                        label="Search initialized tasks",
+                        placeholder="Search by name, description, or notes..."
+                    ).classes("w-full mb-2")
+                    # #region agent log
+                    debug_log('dashboard.py:4629', 'Initialized tasks search input created', {'input_id': str(id(initialized_search_input))}, 'H3')
+                    # #endregion
+                    
+                    # Debounce timer for initialized tasks search input
+                    initialized_search_debounce_timer = None
+                    
+                    def handle_initialized_search(e):
+                        """Handle search input changes with debouncing."""
+                        nonlocal initialized_search_debounce_timer
+                        # #region agent log
+                        debug_log('dashboard.py:4635', 'Initialized tasks search handler triggered', {'has_event': e is not None}, 'H2')
+                        # #endregion
+                        
+                        # Cancel existing timer if any
+                        if initialized_search_debounce_timer is not None:
+                            initialized_search_debounce_timer.deactivate()
+                        
+                        # Create a debounced function that will execute after user stops typing
+                        def apply_initialized_search():
+                            """Apply the initialized tasks search filter after debounce delay."""
+                            try:
+                                # Ensure container exists before proceeding
+                                global initialized_tasks_container
+                                if initialized_tasks_container is None:
+                                    print("[Dashboard] initialized_tasks_container is None in search handler, retrying...")
+                                    ui.timer(5.0, apply_initialized_search, once=True)
+                                    return
+                                
+                                print(f"[Dashboard] Applying initialized tasks search filter")
+                                refresh_initialized_tasks()
+                            except Exception as ex:
+                                print(f"[Dashboard] Error in debounced initialized tasks search: {ex}")
+                                import traceback
+                                traceback.print_exc()
+                        
+                        # Create a timer that will execute after 300ms of no typing
+                        initialized_search_debounce_timer = ui.timer(0.3, apply_initialized_search, once=True)
+                    
                     ui.separator()
                     
-                    if not active_not_current:
-                        ui.label("No active tasks").classes("text-xs text-gray-500")
-                    else:
-                        # Split into 2 columns
-                        with ui.row().classes("w-full gap-2"):
-                            col1 = ui.column().classes("w-1/2")
-                            col2 = ui.column().classes("w-1/2")
-                            
-                            for idx, inst in enumerate(active_not_current):
-                                col = col1 if idx % 2 == 0 else col2
-                                with col:
-                                    # Parse predicted data
-                                    predicted_str = inst.get("predicted") or "{}"
-                                    try:
-                                        predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
-                                    except (json.JSONDecodeError, TypeError):
-                                        predicted_data = {}
-                                    
-                                    time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
-                                    try:
-                                        time_estimate = int(time_estimate)
-                                    except (TypeError, ValueError):
-                                        time_estimate = 0
-                                    
-                                    task_id = inst.get('task_id')
-                                    formatted_tooltip = format_colored_tooltip(predicted_data, task_id)
-                                    tooltip_id = f"tooltip-{inst['instance_id']}"
-                                    instance_id = inst['instance_id']
-                                    
-                                    # Check if this task has pause notes and completion percentage
-                                    actual_str = inst.get("actual") or "{}"
-                                    has_pause_notes = False
-                                    completion_pct = None
-                                    is_paused = False
-                                    try:
-                                        actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                        pause_reason = actual_data.get('pause_reason', '')
-                                        has_pause_notes = bool(pause_reason and pause_reason.strip())
-                                        # Check if task is paused (has 'paused' flag in actual_data)
-                                        is_paused = actual_data.get('paused', False)
-                                        # Get completion percentage if available
-                                        completion_pct = actual_data.get('pause_completion_percentage')
-                                        if completion_pct is not None:
-                                            try:
-                                                completion_pct = float(completion_pct)
-                                            except (ValueError, TypeError):
-                                                completion_pct = None
-                                    except (json.JSONDecodeError, TypeError):
-                                        pass
-                                    
-                                    with ui.card().classes("w-full p-2 task-card-hover mb-2 context-menu-card").props(f'data-instance-id="{instance_id}" data-context-menu="instance"').style("position: relative;"):
-                                        # Hidden buttons for context menu actions (initialized tasks: View, Add Note, Complete)
-                                        ui.button("", on_click=lambda iid=instance_id: view_initialized_instance(iid)).props(f'id="context-btn-instance-view-{instance_id}"').style("display: none;")
-                                        ui.button("", on_click=lambda iid=instance_id: add_instance_note(iid)).props(f'id="context-btn-instance-addnote-{instance_id}"').style("display: none;")
-                                        ui.button("", on_click=lambda iid=instance_id: go_complete(iid)).props(f'id="context-btn-instance-complete-{instance_id}"').style("display: none;")
-                                        with ui.row().classes("w-full items-center gap-2"):
-                                            ui.label(inst.get("task_name")).classes("text-sm font-bold flex-1")
-                                            # Small indicator icon if task has pause notes
-                                            if has_pause_notes:
-                                                ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip("This task was paused - see notes when you start it")
-                                        ui.label(f"{time_estimate} min").classes("text-xs text-gray-600")
-                                        
-                                        # Show completion percentage if task was paused
-                                        if completion_pct is not None:
-                                            ui.label(f"Progress: {int(completion_pct)}%").classes("text-xs font-semibold text-blue-600")
-                                        
-                                        initialized_at = inst.get('initialized_at', '')
-                                        if initialized_at:
-                                            ui.label(f"Initialize: {initialized_at}").classes("text-xs text-gray-500")
-                                        
-                                        # Show initialization description if available
-                                        init_description = predicted_data.get('description', '')
-                                        if init_description and init_description.strip():
-                                            ui.label(init_description.strip()).classes("text-xs text-gray-700 mt-1 italic").style("max-width: 100%; word-wrap: break-word;")
-                                        
-                                        with ui.row().classes("gap-1 mt-1"):
-                                            # Show "Resume" button if task is paused, otherwise "Start"
-                                            if is_paused:
-                                                ui.button("Resume",
-                                                          on_click=lambda i=inst['instance_id']: resume_instance(i)
-                                                          ).props("dense size=sm").classes("bg-blue-500")
-                                            else:
-                                                ui.button("Start",
-                                                          on_click=lambda i=inst['instance_id']: start_instance(i)
-                                                          ).props("dense size=sm").classes("bg-green-500")
-                                            ui.button("Cancel",
-                                                      on_click=lambda i=inst['instance_id']: go_cancel(i)
-                                                      ).props("dense size=sm color=red")
-                                        
-                                        tooltip_html = f'<div id="{tooltip_id}" class="task-tooltip">{formatted_tooltip}</div>'
-                                        ui.add_body_html(tooltip_html)
-                        
-                        ui.run_javascript('setTimeout(initTaskTooltips, 200);')
+                    # Container for initialized tasks (will be populated by refresh_initialized_tasks)
+                    global initialized_tasks_container
+                    initialized_tasks_container = ui.column().classes('w-full')
+                    # #region agent log
+                    debug_log('dashboard.py:4665', 'Initialized tasks container created', {'container_id': str(id(initialized_tasks_container)), 'is_none': initialized_tasks_container is None}, 'H1')
+                    # #endregion
+                    
+                    # Store search input reference for refresh function
+                    global initialized_search_input_ref
+                    initialized_search_input_ref = initialized_search_input
+                    # #region agent log
+                    debug_log('dashboard.py:4670', 'Initialized search input ref stored', {'ref_id': str(id(initialized_search_input_ref)), 'input_id': str(id(initialized_search_input))}, 'H3')
+                    # #endregion
+                    
+                    # Attach search handler immediately to the current input
+                    try:
+                        # #region agent log
+                        debug_log('dashboard.py:4675', 'Attempting to attach initialized tasks search handler', {'input_id': str(id(initialized_search_input)), 'container_exists': initialized_tasks_container is not None}, 'H2')
+                        # #endregion
+                        initialized_search_input.on('update:model-value', handle_initialized_search)
+                        print("[Dashboard] Initialized tasks search input event handler attached")
+                        # #region agent log
+                        debug_log('dashboard.py:4678', 'Initialized tasks search handler attached successfully', {}, 'H2')
+                        # #endregion
+                    except Exception as e:
+                        print(f"[Dashboard] Error attaching initialized tasks search handler: {e}")
+                        # #region agent log
+                        debug_log('dashboard.py:4681', 'Error attaching initialized tasks search handler', {'error': str(e)}, 'H2')
+                        # #endregion
+                    
+                    # Call refresh - it will retry automatically if container not ready
+                    # #region agent log
+                    debug_log('dashboard.py:4686', 'About to call initial refresh_initialized_tasks', {'container_exists': initialized_tasks_container is not None}, 'H5')
+                    # #endregion
+                    refresh_initialized_tasks()
+                    # #region agent log
+                    debug_log('dashboard.py:4688', 'Initial refresh_initialized_tasks completed', {'container_exists': initialized_tasks_container is not None}, 'H5')
+                    # #endregion
                 
                 # Bottom half: Current Task
                 with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;"):

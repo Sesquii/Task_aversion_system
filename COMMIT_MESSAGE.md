@@ -1,63 +1,46 @@
-# Add Daily Productivity Score with 8-Hour Idle Refresh to Monitored Metrics
+# Add Search Bar to Initialized Tasks
 
 ## Summary
-Added a new productivity metric that calculates daily productivity scores with an 8-hour idle time refresh mechanism. The metric accumulates scores throughout the day but resets after 8 hours of idle time (no task completions). This metric is now available in both the Analytics page and the Dashboard's Monitored Metrics section.
+Added search functionality to the initialized tasks section in the dashboard. Users can now search for initialized tasks by task name, description, task notes, and pause notes. The search bar uses debounced input (300ms delay) to prevent excessive filtering during typing.
 
 ## Changes
 
-### Backend (analytics.py)
-- **New method**: `calculate_daily_productivity_score_with_idle_refresh()`
-  - Calculates rolling daily productivity score that resets after 8 hours of idle time
-  - For current day: Looks back to find the last 8-hour idle period and accumulates scores from that point forward
-  - For historical dates: Calculates full day's score with idle refresh logic
-  - Returns daily score, segments, segment count, and total tasks
-
-- **Integration**: Added handling in `get_attribute_trends()` for `daily_productivity_score_idle_refresh`
-  - Supports trend visualization in Analytics page
-  - Handles both current day (rolling calculation) and historical dates
-
-### Frontend (analytics_page.py)
-- **Added to CALCULATED_METRICS**: `'Daily Productivity Score (8h Idle Refresh)'`
-  - Available for selection in Analytics trends
-  - Can be aggregated (sum, mean, etc.) for trend analysis
-
 ### Dashboard (dashboard.py)
-- **Special handling**: Added on-demand calculation for `daily_productivity_score_idle_refresh` in monitored metrics
-  - Calculates current value using `calculate_daily_productivity_score_with_idle_refresh()`
-  - Retrieves historical data using `get_attribute_trends()`
-  - Displays in monitored metrics cards with tooltip charts
+- **New function**: `refresh_initialized_tasks(search_query=None)`
+  - Filters initialized tasks by task name, description, task notes, and pause notes
+  - Re-renders filtered tasks in 2-column layout
+  - Handles empty states with appropriate messages
+  - Includes retry logic if containers aren't ready
 
-- **Documentation**: Added comprehensive comments explaining the special handling pattern
-  - Documents why special handling is needed (metrics not in standard dictionaries)
-  - Provides guidance for adding similar special handling for other metrics
-  - Includes examples and step-by-step instructions
+- **Search bar UI component**:
+  - Added search input for initialized tasks with debounced event handling
+  - Uses 300ms debounce timer to reduce refresh frequency during typing
+  - Search handler checks container existence before executing
+
+- **Global state management**:
+  - Added `initialized_tasks_container` global variable for container reference
+  - Added `initialized_search_input_ref` global variable for search input reference
+  - Container is created synchronously before refresh calls
 
 ## Technical Details
 
-### How It Works
-1. **Current Day Calculation**:
-   - Finds the most recent task completion
-   - If >8 hours since last completion, returns 0 (new segment starting)
-   - Otherwise, looks backwards to find the last 8-hour idle gap
-   - Includes all tasks from after that gap up to current time
+### Search Functionality
+- **Initialized Tasks Search**:
+  - Searches in: task name, description, task-level notes, pause notes
+  - Case-insensitive substring matching
+  - Updates in real-time with 300ms debounce
 
-2. **Historical Dates**:
-   - Calculates full day's score with idle refresh logic
-   - Groups tasks into segments based on 8-hour gaps
-   - Sums scores across all segments for the day
+### Implementation Pattern
+- Follows same pattern as existing task templates search and recommendation system search
+- Uses debounced `update:model-value` events to prevent refresh on every keystroke
+- Handlers are attached immediately after input creation to ensure proper binding
+- Includes error handling and retry logic for edge cases
 
-3. **Integration**:
-   - Available in Analytics trends (selectable in dropdown)
-   - Available in Monitored Metrics (selectable in configuration dialog)
-   - Both use the same calculation logic for consistency
-
-## Benefits
-- Provides a productivity metric that accounts for work patterns and idle time
-- Encourages consistent daily productivity by resetting after extended breaks
-- Extensible pattern for adding other calculated metrics to monitored metrics section
+## Known Issues
+- **Initial Load Bug**: Search bar may not work correctly on the first page load due to multiple page re-renders during initialization. The page renders multiple times (likely due to monitored metrics section), creating new UI elements each time. While handlers are attached immediately to the current inputs, there may still be timing issues where the final rendered inputs don't have handlers attached. Manual page refresh resolves the issue and search bar works correctly after refresh.
 
 ## Testing
-- Verified metric appears in Analytics page trends
-- Verified metric appears in Monitored Metrics configuration
-- Verified metric calculates and displays correctly in dashboard
-- Verified historical data displays in tooltip charts
+- Verified search works correctly after manual page refresh
+- Verified search filters initialized tasks by name, description, notes, and pause notes
+- Verified debouncing prevents excessive refreshes during typing
+- Verified empty states display correctly when no matches found
