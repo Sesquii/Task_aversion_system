@@ -92,56 +92,187 @@ def settings_page():
         ui.label("Data & Export").classes("text-lg font-semibold")
         
         def export_csv():
-            """Export database data to CSV files."""
-            import os
-            import sys
-            
+            """Export all database data and user preferences to CSV files."""
             try:
-                # Import here to avoid circular imports
-                from backend.database import get_session, Task, TaskInstance, Emotion
-                import pandas as pd
-                from nicegui import app
+                from backend.csv_export import export_all_data_to_csv, get_export_summary
+                import os
                 
-                session = get_session()
                 data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-                os.makedirs(data_dir, exist_ok=True)
                 
-                try:
-                    # Export tasks
-                    tasks = session.query(Task).all()
-                    if tasks:
-                        tasks_data = [task.to_dict() for task in tasks]
-                        tasks_df = pd.DataFrame(tasks_data)
-                        tasks_file = os.path.join(data_dir, 'tasks.csv')
-                        tasks_df.to_csv(tasks_file, index=False)
-                    
-                    # Export instances
-                    instances = session.query(TaskInstance).all()
-                    if instances:
-                        instances_data = [instance.to_dict() for instance in instances]
-                        instances_df = pd.DataFrame(instances_data)
-                        instances_file = os.path.join(data_dir, 'task_instances.csv')
-                        instances_df.to_csv(instances_file, index=False)
-                    
-                    # Export emotions
-                    emotions = session.query(Emotion).all()
-                    if emotions:
-                        emotions_data = [emotion.to_dict() for emotion in emotions]
-                        emotions_df = pd.DataFrame(emotions_data)
-                        emotions_file = os.path.join(data_dir, 'emotions.csv')
-                        emotions_df.to_csv(emotions_file, index=False)
-                    
-                    ui.notify(f"Data exported successfully! Files saved to: {data_dir}", color="positive")
-                finally:
-                    session.close()
+                export_counts, exported_files = export_all_data_to_csv(
+                    data_dir=data_dir,
+                    include_user_preferences=True
+                )
+                
+                summary = get_export_summary(export_counts)
+                file_list = "\n".join([f"  - {os.path.basename(f)}" for f in exported_files])
+                
+                message = f"Data exported successfully!\n\n{summary}\n\nFiles saved to:\n{data_dir}\n\nExported files:\n{file_list}"
+                ui.notify(message, color="positive", timeout=10000)
+                
             except Exception as e:
                 import traceback
                 error_msg = str(e)
                 ui.notify(f"Error exporting data: {error_msg}", color="negative")
                 print(f"[Settings] Export error: {traceback.format_exc()}")
         
+        def download_zip():
+            """Create ZIP file and trigger browser download."""
+            try:
+                from backend.csv_export import create_data_zip
+                import os
+                
+                zip_path = create_data_zip()
+                zip_filename = os.path.basename(zip_path)
+                
+                # Read zip file content
+                with open(zip_path, 'rb') as f:
+                    zip_content = f.read()
+                
+                # Trigger download
+                ui.download(zip_content, filename=zip_filename)
+                ui.notify(f"Download started: {zip_filename}", color="positive")
+                
+                # Clean up temp file after a delay
+                import threading
+                def cleanup():
+                    import time
+                    time.sleep(5)  # Wait 5 seconds before cleanup
+                    try:
+                        if os.path.exists(zip_path):
+                            os.remove(zip_path)
+                    except Exception:
+                        pass
+                
+                threading.Thread(target=cleanup, daemon=True).start()
+                
+            except Exception as e:
+                import traceback
+                error_msg = str(e)
+                ui.notify(f"Error creating download: {error_msg}", color="negative")
+                print(f"[Settings] Download error: {traceback.format_exc()}")
+        
+        def handle_upload(e):
+            """
+            Handle ZIP file upload and import data.
+            
+            NOTE: This function is currently disabled for security testing.
+            The code is preserved but the upload component is disabled in the UI.
+            To re-enable: Remove the disabled prop and set_enabled(False) call.
+            """
+            # SECURITY: Feature disabled pending security audit
+            ui.notify(
+                "Import feature is currently disabled for security testing. "
+                "Please contact administrator for data import assistance.",
+                color="negative",
+                timeout=8000
+            )
+            return
+            
+            # Code below is preserved for future security testing and re-enablement
+            # DO NOT DELETE - This will be tested and re-enabled after security audit
+            try:
+                from backend.csv_import import import_from_zip
+                from nicegui import events
+                import tempfile
+                import os
+                
+                # Read uploaded file content
+                if isinstance(e, events.UploadEventArguments):
+                    file_content = e.content.read()
+                else:
+                    # Fallback for different event structures
+                    file_content = e.content.read() if hasattr(e.content, 'read') else e.content
+                
+                # Save uploaded file to temp location
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+                temp_file.write(file_content)
+                temp_file.close()
+                
+                try:
+                    # Import data
+                    results = import_from_zip(temp_file.name, skip_existing=True)
+                    
+                    # Build summary message
+                    summary_lines = ["Import completed:"]
+                    total_imported = 0
+                    total_skipped = 0
+                    total_errors = 0
+                    
+                    for table_name, stats in results.items():
+                        imported = stats.get('imported', 0)
+                        skipped = stats.get('skipped', 0)
+                        errors = stats.get('errors', 0)
+                        total_imported += imported
+                        total_skipped += skipped
+                        total_errors += errors
+                        
+                        if imported > 0 or skipped > 0 or errors > 0:
+                            summary_lines.append(f"  {table_name}: {imported} imported, {skipped} skipped, {errors} errors")
+                        elif 'note' in stats:
+                            summary_lines.append(f"  {table_name}: {stats['note']}")
+                    
+                    summary_lines.append(f"\nTotal: {total_imported} imported, {total_skipped} skipped, {total_errors} errors")
+                    
+                    message = "\n".join(summary_lines)
+                    ui.notify(message, color="positive", timeout=10000)
+                    
+                    # Reload page to show updated data
+                    ui.navigate.reload()
+                    
+                finally:
+                    # Clean up temp file
+                    try:
+                        if os.path.exists(temp_file.name):
+                            os.remove(temp_file.name)
+                    except Exception:
+                        pass
+                
+            except Exception as ex:
+                import traceback
+                error_msg = str(ex)
+                ui.notify(f"Error importing data: {error_msg}", color="negative")
+                print(f"[Settings] Import error: {traceback.format_exc()}")
+        
         ui.button("📥 Export Data to CSV", on_click=export_csv).classes("bg-green-500 text-white mt-2")
-        ui.label("Export all database data (tasks, instances, emotions) to CSV files in the data/ folder.").classes("text-sm text-gray-600 mt-2")
+        ui.label("Export all database data (tasks, instances, emotions, popup triggers/responses, notes) and user preferences to CSV files in the data/ folder.").classes("text-sm text-gray-600 mt-2")
+        
+        ui.button("💾 Download Data as ZIP", on_click=download_zip).classes("bg-blue-500 text-white mt-2")
+        ui.label("Download all your data as a ZIP file containing all CSV files. Use this for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")
+        
+        # Security warning and disabled import feature
+        with ui.card().classes("p-4 mt-2 bg-red-50 border-2 border-red-300"):
+            ui.label("⚠️ IMPORT FEATURE TEMPORARILY DISABLED").classes("text-base font-bold text-red-700 mb-2")
+            ui.markdown(
+                "**Security Notice**: The data import feature has been temporarily disabled pending security testing.\n\n"
+                "This feature allows importing CSV data and automatically adding database columns, which requires "
+                "thorough security review to prevent exploitation before being enabled in production.\n\n"
+                "**Status**: Code is preserved but functionality is disabled until security audit is complete."
+            ).classes("text-sm text-red-800 mb-3")
+            
+            # Disabled upload component
+            upload_component = ui.upload(
+                on_upload=lambda e: ui.notify("Import feature is currently disabled for security testing.", color="negative"),
+                max_file_size=50 * 1024 * 1024,  # 50 MB limit
+                label="📤 Import Data from ZIP (DISABLED)",
+                auto_upload=False
+            ).classes("mt-2 opacity-50").props("accept=.zip disabled")
+            upload_component.set_enabled(False)
+            
+            ui.label("Upload functionality is disabled. The underlying import code is preserved for future security testing.").classes("text-xs text-red-700 mt-2 italic")
+        
+        # Abuse prevention limits info (for reference when feature is re-enabled)
+        with ui.card().classes("p-3 mt-2 bg-gray-50 border border-gray-200"):
+            ui.label("Planned Import Limits (When Re-enabled)").classes("text-sm font-semibold mb-2 text-gray-600")
+            ui.markdown(
+                "• **File size**: Maximum 50 MB per file\n"
+                "• **Rows per CSV**: Maximum 10,000 rows (excess truncated)\n"
+                "• **New columns**: Maximum 10 new columns per import\n"
+                "• **Total columns**: Maximum 100 columns per table\n"
+                "• **ZIP files**: Maximum 20 files per archive\n"
+                "• **Column names**: Must be alphanumeric with underscores only"
+            ).classes("text-xs text-gray-600")
+        
         ui.markdown("- **Data Guide**: Currently missing - documentation for local setup, data backup, and troubleshooting is planned but not yet implemented").classes("text-sm text-gray-600 mt-2")
     
     # Task Editing Management Section

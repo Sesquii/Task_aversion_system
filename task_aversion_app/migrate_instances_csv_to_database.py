@@ -13,6 +13,7 @@ os.environ['DATABASE_URL'] = 'sqlite:///data/task_aversion.db'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from backend.database import init_db, get_session, TaskInstance
+from backend.csv_export import export_all_data_to_csv, get_export_summary
 
 print("=" * 70)
 print("Task Instances CSV to Database Migration")
@@ -198,6 +199,29 @@ else:
     print("\n[NOTE] No new instances were migrated.")
     if skipped > 0:
         print("All instances were already in the database.")
+
+# Export database to CSV (backup/verification)
+print("\n" + "=" * 70)
+print("Exporting Database to CSV (Backup)")
+print("=" * 70)
+
+try:
+    data_dir = os.path.join('data')
+    export_counts, exported_files = export_all_data_to_csv(
+        data_dir=data_dir,
+        include_user_preferences=True
+    )
+    
+    summary = get_export_summary(export_counts)
+    print(f"\n{summary}")
+    print(f"\n[SUCCESS] Database exported to CSV files in: {data_dir}")
+    print("\nExported files:")
+    for file_path in exported_files:
+        print(f"  - {os.path.basename(file_path)}")
+    
+except Exception as e:
+    print(f"\n[WARNING] Failed to export database to CSV: {e}")
+    print("Migration completed, but CSV export failed. You can export manually from Settings.")
 
 print("\n" + "=" * 70)
 
