@@ -361,6 +361,34 @@ class PopupResponse(Base):
         return f"<PopupResponse(trigger_id='{self.trigger_id}', response='{self.response_value}')>"
 
 
+class Note(Base):
+    """
+    Note model (migrated from notes.csv).
+    Stores behavioral and emotional pattern observations.
+    """
+    __tablename__ = 'notes'
+    
+    # Primary key
+    note_id = Column(String, primary_key=True)  # Format: note-{timestamp_ms}
+    
+    # Note content
+    content = Column(Text, nullable=False)
+    
+    # Timestamp
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary (compatible with CSV format)."""
+        return {
+            'note_id': self.note_id,
+            'content': self.content,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else '',
+        }
+    
+    def __repr__(self):
+        return f"<Note(note_id='{self.note_id}', timestamp='{self.timestamp}')>"
+
+
 # Future models will be added here:
 # - User (for future multi-user support)
 # - Survey (for future survey system)
