@@ -1,132 +1,62 @@
 # Commit Message
 
-## Add Comprehensive CSV Export/Import with ZIP Support and Abuse Prevention
+## Add Debugging Logs for Manual Metric Reset Issue
 
-Add complete CSV export/import functionality with ZIP file support for data backup and restoration. Includes automatic schema evolution, abuse prevention measures, and comprehensive error handling. Import feature is temporarily disabled pending security testing.
+Added comprehensive debugging instrumentation to investigate why the manual metric reset feature (right-click context menu) is not persisting. The reset function successfully sets the value to 0.0, but it gets immediately overwritten by automatic metric updates. Issue persists and will be addressed in a future session.
 
-### Features
+### Issue Description
 
-- **CSV Export (`backend/csv_export.py`):**
-  - Export all database tables to CSV files (tasks, instances, emotions, popup triggers/responses, notes)
-  - Export user preferences CSV file
-  - Create timestamped ZIP archives containing all data files
-  - Browser download support via NiceGUI `ui.download()`
-  - Comprehensive export summary with record counts
+The manual reset feature for the "8 hour idle productivity score" metric was implemented with a right-click context menu option. When triggered, the reset function correctly sets the metric value to 0.0, but the value is immediately overwritten by `_update_metric_cards_incremental`, which recalculates the metric from the data source.
 
-- **CSV Import (`backend/csv_import.py`):**
-  - Import data from ZIP archives or individual CSV files
-  - Automatic schema evolution: detects and adds missing columns to database
-  - Handles missing CSV columns gracefully (uses database defaults)
-  - Handles extra CSV columns (attempts to add to schema, falls back to backup CSV)
-  - Type inference for dynamically added columns (INTEGER, REAL, TEXT)
-  - Backup system for extra columns that can't be added to schema
-  - Comprehensive error handling with detailed logging
+### Debugging Logs Added
 
-- **Settings Page Integration:**
-  - Export to CSV button (saves to data/ folder)
-  - Download as ZIP button (browser download)
-  - Import from ZIP upload component (currently disabled for security)
-  - Clear abuse prevention limits displayed to users
+- **`reset_metric_score()` function (`dashboard.py`):**
+  - Logs function entry with metric_key parameter
+  - Logs metric_cards state check (available keys, whether metric exists)
+  - Logs card_info retrieval (whether card_info exists, available keys, value_label presence)
+  - Logs value_label state before update (current value, available methods, widget type)
+  - Logs value_label state after update (update method used, new value, target value)
+  - Logs manually_reset flag status
 
-- **Migration Script Integration:**
-  - Automatic CSV export after migration completes
-  - Creates backup of database state in CSV format
-  - Integrated into `migrate_csv_to_database.py` and `migrate_instances_csv_to_database.py`
+- **`_update_metric_cards_incremental()` function (`dashboard.py`):**
+  - Logs when update is skipped due to manually_reset flag
+  - All logs use `hypothesisId: 'RESET_SCORE'` or `'UPDATE'` for easy filtering
 
-### Abuse Prevention Measures
+### Attempted Fix
 
-- **Column Limits:**
-  - Maximum 10 new columns per import
-  - Maximum 100 total columns per table
-  - Column name validation (alphanumeric + underscores only)
-  - SQL injection prevention (blocks SQL keywords in column names)
-  - Column name length limits (1-64 characters)
+Implemented a `manually_reset` flag mechanism:
+- Added `manually_reset: False` to metric card state initialization
+- Set flag to `True` when reset is called
+- Added check in `_update_metric_cards_incremental` to skip updates if flag is set
+- Flag prevents automatic recalculation from overwriting manually reset values
 
-- **Row Limits:**
-  - Maximum 10,000 rows per CSV file
-  - Excess rows are truncated (first N rows processed)
-
-- **File Size Limits:**
-  - Maximum 50 MB per file (matches UI limit)
-  - Applied to both CSV files and ZIP archives
-
-- **ZIP Archive Limits:**
-  - Maximum 20 files per ZIP archive
-
-- **Validation:**
-  - File size checks before processing
-  - Column name validation with security checks
-  - Type inference and validation for new columns
-
-### Technical Details
-
-- **Export System:**
-  - `export_all_data_to_csv()`: Exports all database tables and user preferences
-  - `create_data_zip()`: Creates timestamped ZIP file with all CSV exports
-  - `get_export_summary()`: Generates human-readable export statistics
-  - Supports all database models: Task, TaskInstance, Emotion, PopupTrigger, PopupResponse, Note
-
-- **Import System:**
-  - `import_from_zip()`: Main import function for ZIP archives
-  - Individual import functions for each table type
-  - `handle_extra_columns()`: Detects and adds missing columns to database schema
-  - `validate_column_name()`: Security validation for column names
-  - `check_file_size()`: File size validation
-  - `safe_get()`, `safe_int()`, `safe_float()`: Safe data extraction helpers
-  - Graceful error handling: continues processing valid data even when errors occur
-
-- **Schema Evolution:**
-  - Automatically detects CSV columns not in database
-  - Infers column types from sample data
-  - Attempts to add columns using ALTER TABLE
-  - Falls back to backup CSV if schema update fails
-  - Uses `setattr()` for dynamic column assignment
-
-- **Error Handling:**
-  - Row-level error handling (continues processing other rows)
-  - File-level error handling (returns partial results)
-  - Detailed logging with tracebacks
-  - User-friendly error messages
-
-### Security Status
-
-⚠️ **IMPORT FEATURE TEMPORARILY DISABLED** ⚠️
-
-The CSV import feature is currently **disabled in the UI** pending security testing. All code is preserved and functional, but the upload component is disabled to prevent use before security audit.
-
-**To re-enable after security testing:**
-1. Remove early return in `handle_upload()` in `ui/settings_page.py`
-2. Remove `disabled` prop from upload component
-3. Remove security warning card
-4. Conduct thorough security testing
-
-**Security concerns to test:**
-- SQL injection via column names
-- File path traversal in ZIP extraction
-- Resource exhaustion (large files, many columns)
-- Schema manipulation attacks
-- Data integrity validation
+**Status:** Fix attempted but issue persists. Further investigation needed to identify what triggers the immediate update after reset.
 
 ### Files Changed
 
-- `task_aversion_app/backend/csv_export.py` - New comprehensive export utility
-- `task_aversion_app/backend/csv_import.py` - New comprehensive import utility with abuse prevention
-- `task_aversion_app/ui/settings_page.py` - Added export/import UI with security warnings
-- `task_aversion_app/migrate_csv_to_database.py` - Added automatic CSV export after migration
-- `task_aversion_app/migrate_instances_csv_to_database.py` - Added automatic CSV export after migration
-- `task_aversion_app/export_to_csv.py` - Updated to use new comprehensive export function
+- `task_aversion_app/ui/dashboard.py`:
+  - Added comprehensive logging to `reset_metric_score()` function
+  - Added `manually_reset` flag to metric card state
+  - Added skip logic in `_update_metric_cards_incremental()` to respect reset flag
+  - Added logging for skip events
 
-### Usage
+### Next Steps
 
-**Export Data:**
-- Click "Export Data to CSV" in Settings to save CSV files to data/ folder
-- Click "Download Data as ZIP" in Settings to download ZIP archive via browser
+- Investigate what triggers `process_next_step` immediately after reset (logs show it runs ~1ms after reset)
+- Consider alternative approaches: disable periodic refresh timer, use different state management, or implement reset at data source level
+- Review NiceGUI event system to understand UI update triggers
+- Analyze timing between reset and automatic update to identify root cause
 
-**Import Data (Currently Disabled):**
-- Upload ZIP file via "Import Data from ZIP" component (disabled pending security testing)
-- System will automatically detect and add missing columns
-- Extra columns that can't be added are saved to backup CSV files
+### Log Analysis
 
-### Migration
+Logs show:
+1. Reset function successfully updates value to "0.0" (confirmed in logs)
+2. `process_next_step` is triggered immediately after (~1ms later)
+3. `_update_metric_cards_incremental` recalculates and overwrites the reset value
+4. The manually_reset flag skip logic should prevent this, but issue persists
 
-Export functionality is automatically integrated into migration scripts. After running migration, database state is automatically exported to CSV for backup.
+### Debug Log Location
+
+All debugging logs are written to: `c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log`
+
+Filter logs using: `grep "RESET_SCORE\|UPDATE" .cursor/debug.log`

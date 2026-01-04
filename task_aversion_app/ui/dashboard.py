@@ -91,6 +91,13 @@ DEFAULT_USER_ID = "default_user"
 
 # Module-level variables for dashboard state
 dash_filters = {}
+_monitored_metrics_state = {
+    'metric_cards': {},
+    'selected_metrics': [],
+    'coloration_baseline': 'last_3_months',
+    'analytics_instance': None,
+    'refresh_timer': None
+}
 RECOMMENDATION_METRICS = [
     {"label": "Relief score (high)", "key": "relief_score"},
     {"label": "Net relief (high)", "key": "net_relief_proxy"},
@@ -825,6 +832,205 @@ def delete_instance(instance_id):
     im.delete_instance(instance_id)
     ui.notify("Deleted", color='negative')
     ui.navigate.reload()
+
+
+def reset_metric_score(metric_key: str):
+    """Reset a metric score to 0 (temporary workaround for testing).
+    
+    Args:
+        metric_key: The metric key to reset (e.g., 'daily_productivity_score_idle_refresh')
+    """
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                'sessionId': 'debug-session',
+                'runId': 'run1',
+                'hypothesisId': 'RESET_SCORE',
+                'location': 'dashboard.py:reset_metric_score',
+                'message': 'reset_metric_score called',
+                'data': {
+                    'metric_key': metric_key
+                },
+                'timestamp': int(time.time() * 1000)
+            }) + '\n')
+    except Exception as e:
+        print(f"[Dashboard] Error logging reset_metric_score call: {e}")
+    # #endregion
+    
+    global _monitored_metrics_state
+    metric_cards_ref = _monitored_metrics_state.get('metric_cards', {})
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                'sessionId': 'debug-session',
+                'runId': 'run1',
+                'hypothesisId': 'RESET_SCORE',
+                'location': 'dashboard.py:reset_metric_score',
+                'message': 'Checking metric_cards state',
+                'data': {
+                    'metric_key': metric_key,
+                    'metric_cards_keys': list(metric_cards_ref.keys()),
+                    'metric_key_in_cards': metric_key in metric_cards_ref,
+                    'has_monitored_state': '_monitored_metrics_state' in globals()
+                },
+                'timestamp': int(time.time() * 1000)
+            }) + '\n')
+    except Exception as e:
+        print(f"[Dashboard] Error logging metric_cards check: {e}")
+    # #endregion
+    
+    if metric_key not in metric_cards_ref:
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'RESET_SCORE',
+                    'location': 'dashboard.py:reset_metric_score',
+                    'message': 'Metric key not found in metric_cards',
+                    'data': {
+                        'metric_key': metric_key,
+                        'available_keys': list(metric_cards_ref.keys())
+                    },
+                    'timestamp': int(time.time() * 1000)
+                }) + '\n')
+        except Exception as e:
+            print(f"[Dashboard] Error logging not found: {e}")
+        # #endregion
+        ui.notify(f"Metric {metric_key} not found", color='warning')
+        return
+    
+    card_info = metric_cards_ref.get(metric_key)
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                'sessionId': 'debug-session',
+                'runId': 'run1',
+                'hypothesisId': 'RESET_SCORE',
+                'location': 'dashboard.py:reset_metric_score',
+                'message': 'Card info retrieved',
+                'data': {
+                    'metric_key': metric_key,
+                    'has_card_info': card_info is not None,
+                    'card_info_keys': list(card_info.keys()) if card_info else [],
+                    'has_value_label': card_info.get('value_label') is not None if card_info else False
+                },
+                'timestamp': int(time.time() * 1000)
+            }) + '\n')
+    except Exception as e:
+        print(f"[Dashboard] Error logging card_info: {e}")
+    # #endregion
+    
+    if card_info and card_info.get('value_label'):
+        value_label = card_info['value_label']
+        
+        # #region agent log
+        try:
+            current_value = None
+            if hasattr(value_label, 'text'):
+                try:
+                    current_value = value_label.text
+                except:
+                    pass
+            elif hasattr(value_label, 'get_text'):
+                try:
+                    current_value = value_label.get_text()
+                except:
+                    pass
+            
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'RESET_SCORE',
+                    'location': 'dashboard.py:reset_metric_score',
+                    'message': 'About to update value_label',
+                    'data': {
+                        'metric_key': metric_key,
+                        'current_value': current_value,
+                        'has_text_attr': hasattr(value_label, 'text'),
+                        'has_set_text': hasattr(value_label, 'set_text'),
+                        'value_label_type': type(value_label).__name__
+                    },
+                    'timestamp': int(time.time() * 1000)
+                }) + '\n')
+        except Exception as e:
+            print(f"[Dashboard] Error logging before update: {e}")
+        # #endregion
+        
+        if hasattr(value_label, 'text'):
+            value_label.text = '0.0'
+            update_method = 'text'
+        elif hasattr(value_label, 'set_text'):
+            value_label.set_text('0.0')
+            update_method = 'set_text'
+        else:
+            update_method = 'none'
+        
+        # Set the manually_reset flag to prevent auto-updates
+        card_info['manually_reset'] = True
+        
+        # #region agent log
+        try:
+            new_value = None
+            if hasattr(value_label, 'text'):
+                try:
+                    new_value = value_label.text
+                except:
+                    pass
+            elif hasattr(value_label, 'get_text'):
+                try:
+                    new_value = value_label.get_text()
+                except:
+                    pass
+            
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'RESET_SCORE',
+                    'location': 'dashboard.py:reset_metric_score',
+                    'message': 'Value label updated and manually_reset flag set',
+                    'data': {
+                        'metric_key': metric_key,
+                        'update_method': update_method,
+                        'new_value': new_value,
+                        'target_value': '0.0',
+                        'manually_reset_flag_set': True
+                    },
+                    'timestamp': int(time.time() * 1000)
+                }) + '\n')
+        except Exception as e:
+            print(f"[Dashboard] Error logging after update: {e}")
+        # #endregion
+        
+        ui.notify(f"Reset {metric_key} to 0.0", color='info')
+    else:
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'RESET_SCORE',
+                    'location': 'dashboard.py:reset_metric_score',
+                    'message': 'Card info or value_label is None',
+                    'data': {
+                        'metric_key': metric_key,
+                        'card_info_is_none': card_info is None,
+                        'value_label_is_none': card_info.get('value_label') is None if card_info else 'N/A'
+                    },
+                    'timestamp': int(time.time() * 1000)
+                }) + '\n')
+        except Exception as e:
+            print(f"[Dashboard] Error logging no value_label: {e}")
+        # #endregion
 
 
 def edit_monitored_metrics_config():
@@ -2098,11 +2304,16 @@ def render_monitored_metrics_section(container):
         metric_cards = {}  # Store card references: metric_key -> {card, value_label, baseline_label, tooltip_id}
         for metric_key in selected_metrics:
             with metrics_grid:
-                card = ui.card().classes("p-2 metric-card-hover bg-gray-100").style("min-width: 0;")
+                card = ui.card().classes("p-2 metric-card-hover bg-gray-100 context-menu-card").style("min-width: 0;").props(f'data-context-menu="metric" data-metric-key="{metric_key}"')
                 with card:
                     label_widget = ui.label("Loading...").classes("text-xs text-gray-500 mb-0.5")
                     value_label = ui.label("...").classes("text-lg font-bold")
                     baseline_label = ui.label("...").classes("text-xs text-gray-400")
+                    
+                    # Create hidden button for context menu reset action (only for daily_productivity_score_idle_refresh)
+                    if metric_key == 'daily_productivity_score_idle_refresh':
+                        reset_button_id = f'context-btn-metric-reset-{metric_key}'
+                        ui.button("", on_click=lambda key=metric_key: reset_metric_score(key)).props(f'id="{reset_button_id}"').style("display: none;")
                 
                 # Create tooltip container
                 tooltip_id = f'monitored-{metric_key}'
@@ -2114,7 +2325,9 @@ def render_monitored_metrics_section(container):
                     'value_label': value_label,
                     'baseline_label': baseline_label,
                     'tooltip_id': tooltip_id,
-                    'rendered': False
+                    'rendered': False,
+                    'metric_key': metric_key,
+                    'manually_reset': False  # Flag to prevent auto-updates after manual reset
                 }
     
     def get_targeted_metric_values(metrics_list, an):
@@ -2414,6 +2627,16 @@ def render_monitored_metrics_section(container):
                             an,
                             init_perf_logger
                         )
+                        
+                        # Store state for periodic refresh
+                        global _monitored_metrics_state
+                        _monitored_metrics_state['metric_cards'] = metric_cards
+                        _monitored_metrics_state['selected_metrics'] = selected_metrics
+                        _monitored_metrics_state['coloration_baseline'] = coloration_baseline
+                        _monitored_metrics_state['analytics_instance'] = an
+                        
+                        # Set up periodic refresh for 8-hour idle productivity score
+                        _setup_periodic_metric_refresh(metric_cards, selected_metrics, an)
                     except Exception as e:
                         print(f"[Dashboard] Error updating metric cards: {e}")
                         import traceback
@@ -2438,6 +2661,144 @@ def render_monitored_metrics_section(container):
     
     # Return early - actual rendering happens in load_and_render
     return
+
+
+def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
+    """Set up periodic refresh for time-sensitive metrics like daily_productivity_score_idle_refresh.
+    
+    This function creates a timer that periodically refreshes metrics that depend on current time,
+    such as the 8-hour idle productivity score which should reset after 8 hours of idle time.
+    """
+    global _monitored_metrics_state
+    
+    # Cancel any existing refresh timer
+    if _monitored_metrics_state.get('refresh_timer'):
+        try:
+            _monitored_metrics_state['refresh_timer'].cancel()
+        except:
+            pass
+    
+    # Only set up periodic refresh if daily_productivity_score_idle_refresh is selected
+    if 'daily_productivity_score_idle_refresh' not in selected_metrics:
+        return
+    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                'sessionId': 'debug-session',
+                'runId': 'run1',
+                'hypothesisId': 'REFRESH_SETUP',
+                'location': 'dashboard.py:_setup_periodic_metric_refresh',
+                'message': 'Setting up periodic refresh for daily_productivity_score_idle_refresh',
+                'data': {},
+                'timestamp': int(time.time() * 1000)
+            }) + '\n')
+    except: pass
+    # #endregion
+    
+    def refresh_idle_metric():
+        """Periodically refresh the 8-hour idle productivity score metric."""
+        global _monitored_metrics_state
+        
+        metric_key = 'daily_productivity_score_idle_refresh'
+        metric_cards_ref = _monitored_metrics_state.get('metric_cards', {})
+        an_ref = _monitored_metrics_state.get('analytics_instance')
+        
+        if metric_key not in metric_cards_ref or an_ref is None:
+            return
+        
+        # #region agent log
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'PERIODIC_REFRESH',
+                    'location': 'dashboard.py:refresh_idle_metric',
+                    'message': 'Periodic refresh triggered for daily_productivity_score_idle_refresh',
+                    'data': {},
+                    'timestamp': int(time.time() * 1000)
+                }) + '\n')
+        except: pass
+        # #endregion
+        
+        try:
+            # Recalculate the metric (this will check if 8 hours have passed)
+            score_data = an_ref.calculate_daily_productivity_score_with_idle_refresh(
+                target_date=None,  # None = current day with rolling calculation
+                idle_refresh_hours=8.0
+            )
+            new_value = score_data.get('daily_score', 0.0)
+            
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'PERIODIC_REFRESH',
+                        'location': 'dashboard.py:refresh_idle_metric',
+                        'message': 'Calculated new value for daily_productivity_score_idle_refresh',
+                        'data': {
+                            'new_value': new_value,
+                            'total_tasks': score_data.get('total_tasks', 0),
+                            'segment_count': score_data.get('segment_count', 0)
+                        },
+                        'timestamp': int(time.time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
+            # Update the UI
+            card_info = metric_cards_ref.get(metric_key)
+            if card_info and card_info.get('value_label'):
+                formatted_value = f"{new_value:.1f}"
+                value_label = card_info['value_label']
+                if hasattr(value_label, 'text'):
+                    value_label.text = formatted_value
+                elif hasattr(value_label, 'set_text'):
+                    value_label.set_text(formatted_value)
+                
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'PERIODIC_REFRESH',
+                            'location': 'dashboard.py:refresh_idle_metric',
+                            'message': 'Updated UI with new value',
+                            'data': {
+                                'formatted_value': formatted_value,
+                                'has_text_attr': hasattr(value_label, 'text'),
+                                'has_set_text': hasattr(value_label, 'set_text')
+                            },
+                            'timestamp': int(time.time() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
+        except Exception as e:
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'PERIODIC_REFRESH',
+                        'location': 'dashboard.py:refresh_idle_metric',
+                        'message': 'Error during periodic refresh',
+                        'data': {'error': str(e)},
+                        'timestamp': int(time.time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            print(f"[Dashboard] Error refreshing daily_productivity_score_idle_refresh: {e}")
+    
+    # Set up timer to refresh every 5 minutes (300 seconds)
+    # This is frequent enough to detect when 8 hours have passed (we check every 5 min)
+    refresh_timer = ui.timer(300.0, refresh_idle_metric)
+    _monitored_metrics_state['refresh_timer'] = refresh_timer
 
 
 def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger):
@@ -2608,6 +2969,26 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
         
         card_info = metric_cards[metric_key]
         metric_config = available_metrics[metric_key]
+        
+        # Skip update if metric was manually reset (temporary workaround)
+        if card_info.get('manually_reset', False):
+            # #region agent log
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'UPDATE',
+                        'location': 'dashboard.py:_update_metric_cards_incremental',
+                        'message': 'Skipping update - metric was manually reset',
+                        'data': {
+                            'metric_key': metric_key
+                        },
+                        'timestamp': int(time.time() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            continue
         
         # Check if we have the minimum data needed to render this metric
         # Some metrics need relief_summary, others need quality_metrics or composite_scores
@@ -4207,6 +4588,15 @@ def build_dashboard(task_manager):
                     { label: 'Add Note', action: 'addnote', class: 'edit' },
                     { label: 'View Notes', action: 'viewnotes', class: 'edit' }
                 ];
+            } else if (type === 'metric') {
+                // Metric cards: Reset Score (only for daily_productivity_score_idle_refresh)
+                if (id === 'daily_productivity_score_idle_refresh') {
+                    menuItems = [
+                        { label: 'Reset Score', action: 'reset', class: 'delete' }
+                    ];
+                } else {
+                    menuItems = [];
+                }
             }
             
             menuItems.forEach(item => {
@@ -4257,8 +4647,8 @@ def build_dashboard(task_manager):
                     if (confirm(confirmMsg)) {
                         button.click();
                     }
-                } else if (action === 'addnote' || action === 'viewnotes' || action === 'view' || action === 'complete') {
-                    // No confirmation needed for view/note/complete actions
+                } else if (action === 'addnote' || action === 'viewnotes' || action === 'view' || action === 'complete' || action === 'reset') {
+                    // No confirmation needed for view/note/complete/reset actions
                     button.click();
                 } else {
                     button.click();
@@ -4280,6 +4670,8 @@ def build_dashboard(task_manager):
                         id = element.getAttribute('data-template-id');
                     } else if (type === 'instance' || type === 'completed' || type === 'active') {
                         id = element.getAttribute('data-instance-id');
+                    } else if (type === 'metric') {
+                        id = element.getAttribute('data-metric-key');
                     }
                     
                     if (id) {
@@ -4304,7 +4696,7 @@ def build_dashboard(task_manager):
         // Hide context menu on click outside
         document.addEventListener('click', hideContextMenu);
         document.addEventListener('contextmenu', function(e) {
-            if (!e.target.closest('[data-context-menu]') && !e.target.closest('[data-completed-instance-id]')) {
+            if (!e.target.closest('[data-context-menu]') && !e.target.closest('[data-completed-instance-id]') && !e.target.closest('[data-metric-key]')) {
                 hideContextMenu();
             }
         });

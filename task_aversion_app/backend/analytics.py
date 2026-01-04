@@ -5686,19 +5686,108 @@ class Analytics:
             # Work backwards from the most recent completion
             segment_start_time = last_completion
             
+            # #region agent log
+            try:
+                completion_times = [str(all_completions_sorted.iloc[i]['completed_at_dt']) for i in range(min(10, len(all_completions_sorted)))]
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'H1',
+                        'location': 'analytics.py:5689',
+                        'message': 'Starting gap detection loop',
+                        'data': {
+                            'total_completions': len(all_completions_sorted),
+                            'last_completion': str(last_completion),
+                            'first_10_completions': completion_times,
+                            'idle_threshold_hours': idle_refresh_hours
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
+            
             # Look for gaps > 8 hours going backwards
+            gaps_found = []
             for i in range(len(all_completions_sorted) - 1):
                 current_time = all_completions_sorted.iloc[i]['completed_at_dt']
                 next_time = all_completions_sorted.iloc[i + 1]['completed_at_dt']
                 gap = current_time - next_time
+                gap_hours = gap.total_seconds() / 3600
+                
+                gaps_found.append({
+                    'index': i,
+                    'current_time': str(current_time),
+                    'next_time': str(next_time),
+                    'gap_hours': gap_hours,
+                    'exceeds_threshold': gap > idle_threshold
+                })
+                
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'H1',
+                            'location': 'analytics.py:5695',
+                            'message': 'Checking gap between completions',
+                            'data': {
+                                'index': i,
+                                'current_time': str(current_time),
+                                'next_time': str(next_time),
+                                'gap_hours': gap_hours,
+                                'idle_threshold_hours': idle_refresh_hours,
+                                'exceeds_threshold': gap > idle_threshold
+                            },
+                            'timestamp': int(datetime.now().timestamp() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
                 
                 if gap > idle_threshold:
                     # Found a gap > 8 hours, segment starts after this gap (at current_time)
                     segment_start_time = current_time
+                    # #region agent log
+                    try:
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                'sessionId': 'debug-session',
+                                'runId': 'run1',
+                                'hypothesisId': 'H1',
+                                'location': 'analytics.py:5697',
+                                'message': 'Found 8-hour gap, setting segment start',
+                                'data': {
+                                    'segment_start_time': str(segment_start_time),
+                                    'gap_hours': gap_hours,
+                                    'index': i
+                                },
+                                'timestamp': int(datetime.now().timestamp() * 1000)
+                            }) + '\n')
+                    except: pass
+                    # #endregion
                     break
             else:
                 # No gaps > 8 hours found, segment starts from the earliest completion
                 segment_start_time = all_completions_sorted.iloc[-1]['completed_at_dt']
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            'sessionId': 'debug-session',
+                            'runId': 'run1',
+                            'hypothesisId': 'H1',
+                            'location': 'analytics.py:5701',
+                            'message': 'No 8-hour gap found, using earliest completion',
+                            'data': {
+                                'segment_start_time': str(segment_start_time),
+                                'earliest_completion': str(all_completions_sorted.iloc[-1]['completed_at_dt']),
+                                'gaps_checked': gaps_found
+                            },
+                            'timestamp': int(datetime.now().timestamp() * 1000)
+                        }) + '\n')
+                except: pass
+                # #endregion
             
             # #region agent log
             try:
@@ -5706,12 +5795,14 @@ class Analytics:
                     f.write(json.dumps({
                         'sessionId': 'debug-session',
                         'runId': 'run1',
-                        'hypothesisId': 'C',
-                        'location': 'analytics.py:4377',
+                        'hypothesisId': 'H2',
+                        'location': 'analytics.py:5720',
                         'message': 'Segment start time calculated',
                         'data': {
                             'segment_start_time': str(segment_start_time),
-                            'total_completions': len(all_completions_sorted)
+                            'last_completion': str(last_completion),
+                            'total_completions': len(all_completions_sorted),
+                            'completed_before_filter': len(completed)
                         },
                         'timestamp': int(datetime.now().timestamp() * 1000)
                     }) + '\n')
@@ -5719,10 +5810,33 @@ class Analytics:
             # #endregion
             
             # Filter to tasks since segment start (up to now)
+            before_filter_count = len(completed)
             day_completions = completed[
                 (completed['completed_at_dt'] >= segment_start_time) &
                 (completed['completed_at_dt'] <= now)
             ].copy()
+            
+            # #region agent log
+            try:
+                filtered_times = [str(dt) for dt in day_completions['completed_at_dt'].head(10).tolist()] if not day_completions.empty else []
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'H3',
+                        'location': 'analytics.py:5725',
+                        'message': 'Filtered tasks after segment start',
+                        'data': {
+                            'segment_start_time': str(segment_start_time),
+                            'now': str(now),
+                            'before_filter_count': before_filter_count,
+                            'after_filter_count': len(day_completions),
+                            'first_10_filtered_times': filtered_times
+                        },
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+            # #endregion
         else:
             # #region agent log
             try:
@@ -5857,6 +5971,46 @@ class Analytics:
             ),
             axis=1
         )
+        
+        # #region agent log
+        try:
+            task_scores = []
+            for idx, row in day_completions.iterrows():
+                task_scores.append({
+                    'completed_at': str(row.get('completed_at_dt', '')),
+                    'task_id': str(row.get('task_id', '')),
+                    'task_name': str(row.get('task_name', ''))[:50],
+                    'productivity_score': float(row.get('productivity_score', 0.0) or 0.0),
+                    'time_actual': float(row.get('time_actual', 0.0) or 0.0) if 'time_actual' in row else None
+                })
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    'sessionId': 'debug-session',
+                    'runId': 'run1',
+                    'hypothesisId': 'H4',
+                    'location': 'analytics.py:5973',
+                    'message': 'Productivity scores calculated for filtered tasks',
+                    'data': {
+                        'task_count': len(day_completions),
+                        'total_score': float(day_completions['productivity_score'].sum()),
+                        'task_scores': task_scores
+                    },
+                    'timestamp': int(datetime.now().timestamp() * 1000)
+                }) + '\n')
+        except Exception as e:
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps({
+                        'sessionId': 'debug-session',
+                        'runId': 'run1',
+                        'hypothesisId': 'H4',
+                        'location': 'analytics.py:5973',
+                        'message': 'Error logging task scores',
+                        'data': {'error': str(e)},
+                        'timestamp': int(datetime.now().timestamp() * 1000)
+                    }) + '\n')
+            except: pass
+        # #endregion
         
         # Group completions into segments based on idle time
         # If there's more than 8 hours between completions, start a new segment
