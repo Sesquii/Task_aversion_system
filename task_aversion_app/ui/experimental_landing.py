@@ -89,6 +89,23 @@ def experimental_landing_page():
                     on_click=lambda: ui.navigate.to("/experimental/productivity-grit-tradeoff")
                 ).classes("bg-blue-500 text-white ml-4")
         
+        # Task Distribution
+        with ui.card().classes("p-4 mb-4 border border-gray-300"):
+            with ui.row().classes("w-full items-center justify-between"):
+                with ui.column().classes("flex-1 gap-2"):
+                    with ui.row().classes("items-center gap-2"):
+                        ui.label("Task Distribution").classes("text-lg font-semibold")
+                        ui.badge("Experimental", color="gray").classes("text-xs")
+                    ui.label(
+                        "Visualize how task completion is distributed across different task templates. "
+                        "Pie charts show the proportion of completed instances for each task template. "
+                        "Future: Will support jobs system with separate charts per job."
+                    ).classes("text-sm text-gray-700")
+                ui.button(
+                    "Open",
+                    on_click=lambda: ui.navigate.to("/experimental/task-distribution")
+                ).classes("bg-blue-500 text-white ml-4")
+        
         # Productivity Settings - Advanced Configuration
         with ui.card().classes("p-4 mb-4 border border-gray-300 bg-yellow-50"):
             with ui.row().classes("w-full items-center justify-between"):

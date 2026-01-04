@@ -32,6 +32,7 @@ from ui.formula_baseline_charts import register_formula_baseline_charts  # regis
 from ui import formula_control_system  # registers /experimental/formula-control-system/productivity-score
 from ui import coursera_analysis  # registers /experimental/coursera-analysis
 from ui import productivity_grit_tradeoff  # registers /experimental/productivity-grit-tradeoff
+from ui import task_distribution  # registers /experimental/task-distribution
 
 
 task_manager = TaskManager()
