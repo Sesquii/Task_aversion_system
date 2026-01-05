@@ -835,21 +835,292 @@ class Analytics:
             # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
             focus_factor_scaled = 0.5 + focus_factor * 1.0
             
+            # Get disappointment factor (from stored value or calculate from net_relief)
+            disappointment_factor = 0.0
+            if 'disappointment_factor' in row.index:
+                try:
+                    disappointment_factor = float(row.get('disappointment_factor', 0) or 0)
+                except (ValueError, TypeError):
+                    disappointment_factor = 0.0
+            else:
+                # Calculate from net_relief if available
+                try:
+                    expected_relief = float(predicted_dict.get('expected_relief', 0) or 0)
+                    actual_relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+                    net_relief = actual_relief - expected_relief
+                    if net_relief < 0:
+                        disappointment_factor = -net_relief
+                except (ValueError, TypeError, KeyError):
+                    disappointment_factor = 0.0
+            
+            # --- Disappointment resilience: v1.6a (current implementation) ---
+            # Based on research: disappointment with completion=100% indicates grit/resilience
+            # Disappointment with completion<100% indicates lack of grit (giving up)
+            disappointment_resilience = 1.0
+            if disappointment_factor > 0:
+                if completion_pct >= 100.0:
+                    # Persistent disappointment: completing despite unmet expectations
+                    # Reward: up to 1.5x multiplier for high disappointment
+                    disappointment_resilience = 1.0 + (disappointment_factor / 200.0)
+                    disappointment_resilience = min(1.5, disappointment_resilience)  # Cap at 1.5x
+                else:
+                    # Abandonment disappointment: giving up due to disappointment
+                    # Penalty: reduce grit score
+                    disappointment_resilience = 1.0 - (disappointment_factor / 300.0)
+                    disappointment_resilience = max(0.67, disappointment_resilience)  # Cap at 0.67x
+            
             # Base score from completion percentage
             base_score = completion_pct
             
-            # Grit score = persistence * focus * passion * time_bonus
+            # Grit score = persistence * focus * passion * time_bonus * disappointment_resilience
             grit_score = base_score * (
                 persistence_factor_scaled *  # 0.5-1.5 range (persistence boost)
                 focus_factor_scaled *        # 0.5-1.5 range (focus boost)
                 passion_factor *             # 0.5-1.5 range (passion factor)
-                time_bonus                   # 1.0+ range (time bonus)
+                time_bonus *                 # 1.0+ range (time bonus)
+                disappointment_resilience     # 0.67-1.5 range (disappointment resilience/penalty)
             )
             
             return float(grit_score)
         
         except (KeyError, TypeError, ValueError, AttributeError):
             return 0.0
+    
+    def _calculate_grit_score_base(self, row: pd.Series, task_completion_counts: Dict[str, int], 
+                                    disappointment_max_bonus: float = 1.5, 
+                                    disappointment_min_penalty: float = 0.67,
+                                    use_exponential_scaling: bool = False,
+                                    base_score_multiplier: float = 1.0) -> float:
+        """Base function for calculating grit score with configurable disappointment resilience caps.
+        
+        This is a helper function used by v1.6 variants to avoid code duplication.
+        
+        Args:
+            row: Task instance row
+            task_completion_counts: Dict mapping task_id to completion count
+            disappointment_max_bonus: Maximum bonus multiplier for persistent disappointment (default 1.5)
+            disappointment_min_penalty: Minimum penalty multiplier for abandonment disappointment (default 0.67)
+        
+        Returns:
+            Grit score
+        """
+        import math
+        try:
+            actual_dict = row.get('actual_dict', {})
+            predicted_dict = row.get('predicted_dict', {})
+            task_id = row.get('task_id', '')
+            
+            if not isinstance(actual_dict, dict) or not isinstance(predicted_dict, dict):
+                return 0.0
+            
+            completion_pct = float(actual_dict.get('completion_percent', 100) or 100)
+            time_actual = float(actual_dict.get('time_actual_minutes', 0) or 0)
+            time_estimate = float(predicted_dict.get('time_estimate_minutes', 0) or predicted_dict.get('estimate', 0) or 0)
+            completion_count = max(1, int(task_completion_counts.get(task_id, 1) or 1))
+            
+            # --- Persistence multiplier: sqrt→log growth with familiarity decay ---
+            raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
+            if completion_count > 100:
+                decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)
+            else:
+                decay = 1.0
+            persistence_multiplier = max(1.0, min(5.0, raw_multiplier * decay))
+            
+            # --- Time bonus: difficulty-weighted, diminishing returns, fades after many reps ---
+            time_bonus = 1.0
+            if time_estimate > 0 and time_actual > 0:
+                time_ratio = time_actual / time_estimate
+                if time_ratio > 1.0:
+                    excess = time_ratio - 1.0
+                    if excess <= 1.0:
+                        base_time_bonus = 1.0 + (excess * 0.8)
+                    else:
+                        base_time_bonus = 1.8 + ((excess - 1.0) * 0.2)
+                    base_time_bonus = min(3.0, base_time_bonus)
+                    
+                    task_difficulty = float(actual_dict.get('task_difficulty', predicted_dict.get('task_difficulty', 50)) or 50)
+                    difficulty_factor = max(0.0, min(1.0, task_difficulty / 100.0))
+                    weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+                    
+                    fade = 1.0 / (1.0 + max(0, completion_count - 10) / 40.0)
+                    time_bonus = 1.0 + (weighted_time_bonus - 1.0) * fade
+                else:
+                    time_bonus = 1.0
+            
+            # --- Passion factor: relief vs emotional load ---
+            relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+            emotional = float(actual_dict.get('actual_emotional', actual_dict.get('emotional_load', 0)) or 0)
+            relief_norm = max(0.0, min(1.0, relief / 100.0))
+            emotional_norm = max(0.0, min(1.0, emotional / 100.0))
+            passion_delta = relief_norm - emotional_norm
+            passion_factor = 1.0 + passion_delta * 0.5
+            if completion_pct < 100:
+                passion_factor *= 0.9
+            passion_factor = max(0.5, min(1.5, passion_factor))
+            
+            # Calculate persistence and focus factors
+            persistence_factor = self.calculate_persistence_factor(row=row, task_completion_counts=task_completion_counts)
+            persistence_factor_scaled = 0.5 + persistence_factor * 1.0
+            focus_factor = self.calculate_focus_factor(row)
+            focus_factor_scaled = 0.5 + focus_factor * 1.0
+            
+            # Get disappointment factor
+            disappointment_factor = 0.0
+            if 'disappointment_factor' in row.index:
+                try:
+                    disappointment_factor = float(row.get('disappointment_factor', 0) or 0)
+                except (ValueError, TypeError):
+                    disappointment_factor = 0.0
+            else:
+                try:
+                    expected_relief = float(predicted_dict.get('expected_relief', 0) or 0)
+                    actual_relief = float(actual_dict.get('actual_relief', actual_dict.get('relief_score', 0)) or 0)
+                    net_relief = actual_relief - expected_relief
+                    if net_relief < 0:
+                        disappointment_factor = -net_relief
+                except (ValueError, TypeError, KeyError):
+                    disappointment_factor = 0.0
+            
+            # --- Disappointment resilience with configurable caps ---
+            disappointment_resilience = 1.0
+            if disappointment_factor > 0:
+                if completion_pct >= 100.0:
+                    # Persistent disappointment: reward completing despite disappointment
+                    if use_exponential_scaling:
+                        # Exponential scaling: 1.0 + (1 - exp(-disappointment_factor / k)) * bonus_range
+                        # k chosen so that at disappointment=100, we approach max_bonus
+                        # Use k = 144 (100/ln(2)) for consistent exponential curve
+                        # Then scale the exponential result to reach max_bonus at disappointment=100
+                        bonus_range = disappointment_max_bonus - 1.0
+                        k = 144.0  # Consistent exponential parameter
+                        # Exponential curve: 0 to 1 as disappointment goes from 0 to infinity
+                        exponential_factor = 1.0 - math.exp(-disappointment_factor / k)
+                        # Scale to bonus_range: at disappointment=100, exponential_factor ≈ 0.51
+                        # To reach max_bonus at disappointment=100, scale by (max_bonus-1)/0.51
+                        # But simpler: scale so that at disappointment=100, we get close to max_bonus
+                        scale_factor = bonus_range / (1.0 - math.exp(-100.0 / k))  # Normalize to disappointment=100
+                        disappointment_resilience = 1.0 + (exponential_factor * scale_factor)
+                        disappointment_resilience = min(disappointment_max_bonus, disappointment_resilience)
+                    else:
+                        # Linear scaling: 1.0 + (disappointment_factor / 200.0)
+                        disappointment_resilience = 1.0 + (disappointment_factor / 200.0)
+                        disappointment_resilience = min(disappointment_max_bonus, disappointment_resilience)
+                else:
+                    # Abandonment disappointment: penalize giving up (always linear)
+                    disappointment_resilience = 1.0 - (disappointment_factor / 300.0)
+                    disappointment_resilience = max(disappointment_min_penalty, disappointment_resilience)
+            
+            # Calculate final grit score
+            base_score = completion_pct * base_score_multiplier
+            grit_score = base_score * (
+                persistence_factor_scaled *
+                focus_factor_scaled *
+                passion_factor *
+                time_bonus *
+                disappointment_resilience
+            )
+            
+            return float(grit_score)
+        
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return 0.0
+    
+    def calculate_grit_score_v1_6a(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.6a: Original caps (1.5x bonus, 0.67x penalty).
+        
+        Disappointment resilience:
+        - Persistent disappointment (completion >= 100%): up to 1.5x (50% bonus)
+        - Abandonment disappointment (completion < 100%): down to 0.67x (33% penalty)
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=1.5, 
+                                               disappointment_min_penalty=0.67)
+    
+    def calculate_grit_score_v1_6b(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.6b: Reduced positive cap (1.3x bonus, 0.67x penalty).
+        
+        Disappointment resilience:
+        - Persistent disappointment (completion >= 100%): up to 1.3x (30% bonus)
+        - Abandonment disappointment (completion < 100%): down to 0.67x (33% penalty)
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=1.3, 
+                                               disappointment_min_penalty=0.67)
+    
+    def calculate_grit_score_v1_6c(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.6c: Balanced caps (1.2x bonus, 0.8x penalty).
+        
+        Disappointment resilience:
+        - Persistent disappointment (completion >= 100%): up to 1.2x (20% bonus)
+        - Abandonment disappointment (completion < 100%): down to 0.8x (20% penalty)
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=1.2, 
+                                               disappointment_min_penalty=0.8)
+    
+    def calculate_grit_score_v1_6d(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.6d: Exponential scaling up to 1.5x bonus, 0.67x penalty.
+        
+        Disappointment resilience:
+        - Persistent disappointment (completion >= 100%): exponential scaling up to 1.5x (50% bonus)
+        - Abandonment disappointment (completion < 100%): linear down to 0.67x (33% penalty)
+        - Exponential formula: 1.0 + (1 - exp(-disappointment/144)) * 0.5
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=1.5, 
+                                               disappointment_min_penalty=0.67,
+                                               use_exponential_scaling=True)
+    
+    def calculate_grit_score_v1_6e(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.6e: Exponential scaling up to 2.0x bonus, 0.67x penalty.
+        
+        Disappointment resilience:
+        - Persistent disappointment (completion >= 100%): exponential scaling up to 2.0x (100% bonus)
+        - Abandonment disappointment (completion < 100%): linear down to 0.67x (33% penalty)
+        - Exponential formula: 1.0 + (1 - exp(-disappointment/144)) * 1.0
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=2.0, 
+                                               disappointment_min_penalty=0.67,
+                                               use_exponential_scaling=True)
+    
+    def calculate_grit_score_v1_7a(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.7a: v1.6e with 1.1x base score multiplier.
+        
+        Adds 10% multiplier to base score (completion_pct) before applying other factors.
+        This increases all scores by 10% while maintaining relative differences.
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=2.0, 
+                                               disappointment_min_penalty=0.67,
+                                               use_exponential_scaling=True,
+                                               base_score_multiplier=1.1)
+    
+    def calculate_grit_score_v1_7b(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.7b: Exponential scaling up to 2.1x bonus, 0.67x penalty.
+        
+        Disappointment resilience:
+        - Persistent disappointment (completion >= 100%): exponential scaling up to 2.1x (110% bonus)
+        - Abandonment disappointment (completion < 100%): linear down to 0.67x (33% penalty)
+        - Higher cap than v1.6e to provide stronger bonuses for high disappointment
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=2.1, 
+                                               disappointment_min_penalty=0.67,
+                                               use_exponential_scaling=True)
+    
+    def calculate_grit_score_v1_7c(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+        """Calculate grit score v1.7c: v1.7a + v1.7b combined.
+        
+        - 1.1x base score multiplier
+        - Exponential scaling up to 2.1x bonus
+        - Applies both enhancements from v1.7a and v1.7b
+        """
+        return self._calculate_grit_score_base(row, task_completion_counts, 
+                                               disappointment_max_bonus=2.1, 
+                                               disappointment_min_penalty=0.67,
+                                               use_exponential_scaling=True,
+                                               base_score_multiplier=1.1)
     
     def calculate_grit_score_v1_3(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
         """Calculate grit score v1.3 with:
