@@ -270,27 +270,31 @@ def initialize_task_page(task_manager, emotion_manager):
 
             ui.label("Current Emotional State").classes("text-lg font-semibold")
 
-            # Load existing emotion values from predicted data (task-specific)
-            emotion_values_dict = predicted_data.get('emotion_values', {})
-            if isinstance(emotion_values_dict, str):
-                try:
-                    emotion_values_dict = json.loads(emotion_values_dict)
-                except json.JSONDecodeError:
-                    emotion_values_dict = {}
-            if not isinstance(emotion_values_dict, dict):
-                # Handle backward compatibility: if emotions is a list, create dict with default 50
-                if isinstance(emotion_values_dict, list):
-                    emotion_values_dict = {emotion: 50 for emotion in emotion_values_dict}
-                else:
-                    # Also check if there's an old 'emotions' list field
-                    old_emotions = predicted_data.get('emotions', [])
-                    if isinstance(old_emotions, list):
-                        emotion_values_dict = {emotion: 50 for emotion in old_emotions}
-                    else:
+            # Emotion loading logic:
+            # - When editing: use task-specific emotions from predicted_data
+            # - When initializing new task: use persistent emotions (current emotional state)
+            if edit_mode:
+                # Editing: load task-specific emotions from predicted data
+                emotion_values_dict = predicted_data.get('emotion_values', {})
+                if isinstance(emotion_values_dict, str):
+                    try:
+                        emotion_values_dict = json.loads(emotion_values_dict)
+                    except json.JSONDecodeError:
                         emotion_values_dict = {}
-            
-            # If no task-specific emotions exist, load persistent emotions
-            if not emotion_values_dict:
+                if not isinstance(emotion_values_dict, dict):
+                    # Handle backward compatibility: if emotions is a list, create dict with default 50
+                    if isinstance(emotion_values_dict, list):
+                        emotion_values_dict = {emotion: 50 for emotion in emotion_values_dict}
+                    else:
+                        # Also check if there's an old 'emotions' list field
+                        old_emotions = predicted_data.get('emotions', [])
+                        if isinstance(old_emotions, list):
+                            emotion_values_dict = {emotion: 50 for emotion in old_emotions}
+                        else:
+                            emotion_values_dict = {}
+            else:
+                # New initialization: use persistent emotions (current emotional state)
+                # This ensures emotions continuously update across pages
                 emotion_values_dict = user_state.get_persistent_emotions()
 
             # Single text input for emotions (comma-separated or one at a time)

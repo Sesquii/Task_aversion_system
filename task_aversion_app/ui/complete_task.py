@@ -247,6 +247,11 @@ def complete_task_page(task_manager, emotion_manager):
         ui.label("Current Emotional State").classes("text-lg font-semibold mt-4")
         
         # Load initial emotion values from predicted data (from initialization)
+        # Emotion loading logic:
+        # - When editing: use task-specific emotions from actual/predicted data
+        # - When completing new task: use persistent emotions for sliders, but show initial values for comparison
+        
+        # Always load initial emotions from predicted data (for comparison display)
         initial_emotion_values = predicted_data.get('emotion_values', {})
         if isinstance(initial_emotion_values, str):
             try:
@@ -265,10 +270,6 @@ def complete_task_page(task_manager, emotion_manager):
                 else:
                     initial_emotion_values = {}
         
-        # If no initial emotions from this task, load persistent emotions
-        if not initial_emotion_values:
-            initial_emotion_values = user_state.get_persistent_emotions()
-        
         # Load actual emotion values if they exist (for editing)
         actual_emotion_values = current_actual_data.get('emotion_values', {})
         if isinstance(actual_emotion_values, str):
@@ -279,35 +280,67 @@ def complete_task_page(task_manager, emotion_manager):
         if not isinstance(actual_emotion_values, dict):
             actual_emotion_values = {}
         
-        # Get all emotions that were tracked initially, plus any new ones added
-        initial_emotions = list(initial_emotion_values.keys())
-        actual_emotions = list(actual_emotion_values.keys())
-        all_emotions = list(set(initial_emotions + actual_emotions))
+        # Determine which emotions to show and what default values to use
+        if edit_mode:
+            # Editing: use task-specific emotions (actual if exists, else initial)
+            # Get all emotions from both initial and actual
+            initial_emotions = list(initial_emotion_values.keys())
+            actual_emotions = list(actual_emotion_values.keys())
+            all_emotions = list(set(initial_emotions + actual_emotions))
+        else:
+            # New completion: use persistent emotions for sliders (current emotional state)
+            # But also include initial emotions for comparison
+            persistent_emotions = user_state.get_persistent_emotions()
+            initial_emotions = list(initial_emotion_values.keys())
+            persistent_emotion_list = list(persistent_emotions.keys())
+            # Combine: initial emotions (for comparison) + persistent emotions (for current state)
+            all_emotions = list(set(initial_emotions + persistent_emotion_list))
         
         # Container for emotion sliders
         emotion_sliders_container = ui.column().classes("w-full gap-2")
         emotion_sliders = {}
         
         def get_emotion_default_value(emotion):
-            """Get default value for an emotion: actual value if exists, else initial value, else 50
+            """Get default value for an emotion slider.
             
-            Note: If an emotion was initialized but is not in actual_emotion_values, it means
-            it was either never set or was set to 0 (and filtered out). We default to showing
-            the initial value so the user can see what it was and adjust if needed.
+            Logic:
+            - When editing: use actual value if exists, else initial value, else 50
+            - When completing new task: use persistent emotion value (current state), 
+              but fall back to initial value if persistent doesn't have it, else 50
             """
-            if emotion in actual_emotion_values:
-                val = actual_emotion_values[emotion]
-                try:
-                    return int(float(val))
-                except (ValueError, TypeError):
-                    pass
-            if emotion in initial_emotion_values:
-                val = initial_emotion_values[emotion]
-                try:
-                    return int(float(val))
-                except (ValueError, TypeError):
-                    pass
-            return 50
+            if edit_mode:
+                # Editing: prioritize actual value, then initial value
+                if emotion in actual_emotion_values:
+                    val = actual_emotion_values[emotion]
+                    try:
+                        return int(float(val))
+                    except (ValueError, TypeError):
+                        pass
+                if emotion in initial_emotion_values:
+                    val = initial_emotion_values[emotion]
+                    try:
+                        return int(float(val))
+                    except (ValueError, TypeError):
+                        pass
+                return 50
+            else:
+                # New completion: use persistent emotions (current emotional state)
+                # This ensures emotions continuously update across pages
+                persistent_emotions = user_state.get_persistent_emotions()
+                if emotion in persistent_emotions:
+                    val = persistent_emotions[emotion]
+                    try:
+                        return int(float(val))
+                    except (ValueError, TypeError):
+                        pass
+                # Fall back to initial value if persistent doesn't have it
+                if emotion in initial_emotion_values:
+                    val = initial_emotion_values[emotion]
+                    try:
+                        return int(float(val))
+                    except (ValueError, TypeError):
+                        pass
+                return 50
         
         def update_emotion_sliders():
             """Update the emotion sliders"""
