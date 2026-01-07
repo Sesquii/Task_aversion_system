@@ -12,6 +12,7 @@ from ui.cancel_task import cancel_task_page
 from ui.analytics_page import register_analytics_page
 from ui.analytics_glossary import register_analytics_glossary
 from ui.relief_comparison_analytics import register_relief_comparison_page
+from ui.known_issues_page import register_known_issues_page
 from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handling
 # import submodules without rebinding the nicegui `ui` object
 from ui import survey_page  # registers /survey
@@ -84,6 +85,7 @@ def register_pages():
     register_analytics_glossary()
     register_relief_comparison_page()
     register_formula_baseline_charts()
+    register_known_issues_page()
 
 
 if __name__ in {"__main__", "__mp_main__"}:

@@ -85,10 +85,10 @@ This system goes beyond a simple to-do list by incorporating psychological and b
   - Task templates and quick actions
   - Active task instances and current task
   - Recommendations and metrics
-- **Monitored Metrics System**: Configurable dashboard metrics (up to 4 user-selectable metrics)
+- **Monitored Metrics System** (WIP/partially implemented): Configurable dashboard metrics (up to 4 user-selectable metrics)
   - Multiple baseline types: last 3 months, last month, last week, average, all data
-  - Color-coded metrics (green/yellow/red) based on baseline comparison
-  - Interactive tooltip charts showing historical trends
+  - Color-coded metrics (green/yellow/red) based on baseline comparison 
+  - Interactive tooltip charts showing historical trends (does not display)
   - 24+ available metrics including productivity, execution, grit, stress, wellbeing, and more
 - **Search Functionality**: Search bar for initialized tasks (by name, description, notes)
 - **Real-Time Metrics**: Live tracking of key performance indicators
@@ -633,9 +633,9 @@ The core workflow is functional and stable for daily use. Database migration is 
 
 - The system is designed to be data-driven: the more you use it, the better the recommendations become
 - Database storage (SQLite/PostgreSQL) is now the default - this resolves file locking issues with CSV
-- Major performance optimizations completed: analytics page loads nearly instantly, dashboard loads in ~5 seconds
+- Major performance optimizations completed: analytics page loads nearly instantly, dashboard loads in ~3 seconds before cached, instantly afterwards
 - The composite score system is highly customizable - adjust weights to match your priorities
-- All analytics formulas are versioned and documented in the Analytics Glossary
+- Analytics formulas are versioned and documented in the Analytics Glossary
 - Popup system provides intelligent guidance without being intrusive (daily caps and cooldowns)
 - Monitored metrics system allows you to track up to 4 key metrics with baseline comparisons
 - Regular use (daily task completion) provides the most valuable insights

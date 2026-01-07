@@ -223,6 +223,11 @@ def open_pause_dialog(instance_id):
     with ui.dialog() as dialog, ui.card().classes("w-96"):
         ui.label("Add pause notes (optional)").classes("text-lg font-bold mb-2")
         ui.label("Task is already paused. You can add notes below or just close this dialog.").classes("text-sm text-gray-600 mb-3")
+        
+        # Warning about pause/resume bug
+        with ui.card().classes("p-2 mb-3 bg-orange-50 border border-orange-200"):
+            ui.label("⚠️ WARNING: There is a known bug where time spent on task may not always save correctly between pause and resume. Please verify your time is tracked correctly after resuming.").classes("text-xs text-orange-700")
+        
         reason_input = ui.textarea(
             label="Reason (optional)",
             placeholder="Why did you pause this task?"
@@ -2282,6 +2287,10 @@ def render_monitored_metrics_section(container):
         with ui.row().classes("w-full justify-between items-center mb-2"):
             ui.label("Monitored Metrics").classes("text-sm font-semibold")
             ui.button("Edit", on_click=lambda: open_metrics_config_dialog()).props("dense size=sm")
+        
+        # Experimental warning
+        with ui.row().classes("w-full mb-2"):
+            ui.label("⚠️ EXPERIMENTAL: Some data may not load correctly. See Analytics page for all correct data.").classes("text-xs text-orange-600 italic")
         
         # Metrics grid - 2 columns, 2 rows
         metrics_grid = ui.row().classes("w-full gap-1").style("display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.25rem;")
@@ -4828,6 +4837,9 @@ def build_dashboard(task_manager):
                 ui.button("Glossary",
                           on_click=lambda: ui.navigate.to('/analytics/glossary'),
                           icon="menu_book").classes("text-xl py-3 px-6").props('data-tooltip-id="glossary_link"')
+                ui.button("Known Issues",
+                          on_click=lambda: ui.navigate.to('/known-issues'),
+                          icon="bug_report").classes("text-xl py-3 px-6").props('data-tooltip-id="known_issues_link"')
                 ui.button("Settings",
                           on_click=lambda: ui.navigate.to('/settings'),
                           icon="settings").classes("text-xl py-3 px-6").props('data-tooltip-id="settings_link"')
