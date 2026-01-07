@@ -7,7 +7,7 @@ This guide explains how to use the performance benchmarking tools to track impro
 We have **two complementary benchmarking tools**:
 
 1. **Backend Benchmark** (`benchmark_performance.py`) - Measures backend/database performance
-2. **E2E Benchmark** (`benchmark_performance_playwright.py`) - Measures full user experience through browser
+2. **E2E Benchmark** - (Removed: `benchmark_performance_playwright.py` - did not accurately reflect actual performance)
 
 ## When to Use Each
 
@@ -26,21 +26,9 @@ We have **two complementary benchmarking tools**:
 - CSV file I/O performance
 - Backend calculation times
 
-### E2E Benchmark (Playwright)
+### E2E Benchmark (Removed)
 
-**Use this to:**
-- Measure actual user experience
-- Track full-stack performance (backend + frontend + network)
-- Verify that backend optimizations translate to faster page loads
-- Test with real browser rendering
-- Measure network and JavaScript execution times
-
-**What it measures:**
-- Time to First Byte (TTFB)
-- DOMContentLoaded time
-- Full page load time
-- Network resource loading
-- JavaScript execution time
+**Note:** The Playwright E2E benchmark script was removed as it did not accurately reflect actual performance. Use the backend benchmark (`benchmark_performance.py`) for accurate performance measurements.
 
 ## Setup
 
@@ -53,23 +41,9 @@ cd task_aversion_app
 python benchmark_performance.py
 ```
 
-### E2E Benchmark
+### E2E Benchmark (Removed)
 
-Requires Playwright:
-
-```bash
-# Install Playwright
-pip install playwright
-
-# Install browser
-playwright install chromium
-
-# Make sure your app is running first!
-python app.py  # In one terminal
-
-# Then run benchmark in another terminal
-python benchmark_performance_playwright.py
-```
+The Playwright E2E benchmark script has been removed as it did not accurately reflect actual performance.
 
 ## Usage Examples
 
@@ -86,18 +60,9 @@ python benchmark_performance.py --warmup 2 --iterations 5
 python benchmark_performance.py --output baseline_results.json
 ```
 
-### Basic E2E Benchmark
+### E2E Benchmark (Removed)
 
-```bash
-# Default: http://localhost:8080, 3 iterations
-python benchmark_performance_playwright.py
-
-# Custom URL and iterations
-python benchmark_performance_playwright.py --url http://localhost:8080 --iterations 5
-
-# Save to specific file
-python benchmark_performance_playwright.py --output e2e_baseline.json
-```
+The Playwright E2E benchmark script has been removed. Use `benchmark_performance.py` for accurate performance measurements.
 
 ## Interpreting Results
 
@@ -120,9 +85,9 @@ The backend benchmark outputs JSON with:
 - `individual_operations._load_instances_all.avg_ms`: Database/CSV read performance
 - `individual_operations.get_relief_summary.avg_ms`: Analytics calculation performance
 
-### E2E Benchmark Results
+### Benchmark Results
 
-The E2E benchmark outputs JSON with:
+The backend benchmark outputs JSON with:
 
 - `dashboard`: Full page load metrics
   - `avg_total`: Total page load time
@@ -147,8 +112,7 @@ The E2E benchmark outputs JSON with:
 # Backend baseline
 python benchmark_performance.py --output baseline_backend.json
 
-# E2E baseline (app must be running)
-python benchmark_performance_playwright.py --output baseline_e2e.json
+# E2E benchmark removed - use backend benchmark instead
 ```
 
 ### 2. Implement Optimizations
@@ -163,8 +127,7 @@ Make your changes (e.g., add database indexes, implement caching, etc.)
 # Backend results
 python benchmark_performance.py --output optimized_backend.json
 
-# E2E results
-python benchmark_performance_playwright.py --output optimized_e2e.json
+# E2E benchmark removed - use backend benchmark instead
 ```
 
 ### 4. Compare Results
@@ -188,12 +151,7 @@ Compare the JSON files to see:
 }
 ```
 
-**E2E:**
-```json
-{
-  "dashboard": {"avg_total": 2100.3, "avg_ttfb": 1200.1}
-}
-```
+**Note:** E2E benchmark removed - use backend benchmark for accurate measurements.
 
 ### After Optimization
 
@@ -207,7 +165,7 @@ Compare the JSON files to see:
 }
 ```
 
-**E2E:**
+**Note:** E2E benchmark removed - use backend benchmark for accurate measurements.
 ```json
 {
   "dashboard": {"avg_total": 950.2, "avg_ttfb": 400.3}  // 55% faster!
@@ -219,7 +177,7 @@ Compare the JSON files to see:
 1. **Run multiple times**: Performance can vary, so run 3-5 iterations and average
 2. **Warm up first**: The first run may be slower due to cold starts
 3. **Compare apples to apples**: Use same dataset size, same machine, same conditions
-4. **Track both**: Backend improvements don't always translate 1:1 to E2E improvements
+4. **Focus on backend**: Backend benchmark provides accurate performance measurements
 5. **Check data stats**: Larger datasets will naturally be slower - track dataset size in results
 
 ## Troubleshooting

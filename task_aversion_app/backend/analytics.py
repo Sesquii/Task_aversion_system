@@ -1,6 +1,7 @@
 # backend/analytics.py
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -54,6 +55,25 @@ class Analytics:
     # Cache for get_dashboard_metrics()
     _dashboard_metrics_cache = None
     _dashboard_metrics_cache_time = None
+    
+    # Cache for calculate_time_tracking_consistency_score()
+    _time_tracking_cache = None
+    _time_tracking_cache_time = None
+    _time_tracking_cache_params = None  # Store (days, target_sleep_hours) to invalidate on param change
+    
+    # Cache for chart data methods
+    _trend_series_cache = None
+    _trend_series_cache_time = None
+    _attribute_distribution_cache = None
+    _attribute_distribution_cache_time = None
+    _stress_dimension_cache = None
+    _stress_dimension_cache_time = None
+    
+    # Cache for rankings (keyed by metric/top_n)
+    _rankings_cache = {}  # Dict keyed by (metric, top_n) -> (result, timestamp)
+    _leaderboard_cache = None
+    _leaderboard_cache_time = None
+    _leaderboard_cache_top_n = None
     
     @staticmethod
     def calculate_difficulty_bonus(
@@ -1403,33 +1423,39 @@ class Analytics:
                 counts = completed.groupby('task_id').size()
                 completion_counts = counts.to_dict()
             
-            # Calculate factors for all completed instances
-            perseverance_values = []
-            persistence_values = []
-            
-            for idx, row in completed.iterrows():
-                try:
-                    task_id = row.get('task_id', '')
-                    completion_count = completion_counts.get(task_id, 1)
-                    
-                    # Calculate persistence_factor
-                    raw_multiplier = 1.0 + 0.015 * max(0, completion_count - 1) ** 1.001
-                    if completion_count > 100:
-                        decay = 1.0 / (1.0 + (completion_count - 100) / 200.0)
-                    else:
-                        decay = 1.0
-                    persistence_factor = max(1.0, min(5.0, raw_multiplier * decay))
-                    persistence_values.append(persistence_factor)
-                    
-                    # Calculate perseverance_factor
-                    perseverance_factor = self.calculate_perseverance_factor_v1_3(
-                        row=row,
-                        task_completion_counts=completion_counts,
-                        persistence_factor=persistence_factor
-                    )
-                    perseverance_values.append(perseverance_factor)
-                except Exception:
-                    continue
+            # Calculate factors for all completed instances (vectorized)
+            # Vectorize persistence_factor calculation
+            if not completed.empty and 'task_id' in completed.columns:
+                task_ids = completed['task_id'].fillna('')
+                completion_counts_series = task_ids.map(lambda tid: completion_counts.get(tid, 1))
+                
+                # Vectorized persistence_factor calculation
+                completion_minus_one = (completion_counts_series - 1).clip(lower=0)
+                raw_multiplier = 1.0 + 0.015 * (completion_minus_one ** 1.001)
+                decay = np.where(
+                    completion_counts_series > 100,
+                    1.0 / (1.0 + (completion_counts_series - 100) / 200.0),
+                    1.0
+                )
+                persistence_factors = (raw_multiplier * decay).clip(1.0, 5.0)
+                persistence_values = persistence_factors.tolist()
+                
+                # Perseverance factor still needs per-row calculation (calls complex method)
+                perseverance_values = []
+                for idx, row in completed.iterrows():
+                    try:
+                        persistence_factor = float(persistence_factors.loc[idx])
+                        perseverance_factor = self.calculate_perseverance_factor_v1_3(
+                            row=row,
+                            task_completion_counts=completion_counts,
+                            persistence_factor=persistence_factor
+                        )
+                        perseverance_values.append(perseverance_factor)
+                    except Exception:
+                        continue
+            else:
+                perseverance_values = []
+                persistence_values = []
             
             # Calculate statistics
             if perseverance_values:
@@ -1507,21 +1533,31 @@ class Analytics:
             if len(task_instances) < 5:  # Need at least 5 completions to establish baseline
                 return False, 0.0
             
-            # Get recent load values (excluding current)
-            recent_loads = []
-            for idx, inst_row in task_instances.iterrows():
-                if idx == row.name:  # Skip current instance
-                    continue
-                inst_actual = inst_row.get('actual_dict', {})
-                if isinstance(inst_actual, str):
+            # Get recent load values (excluding current) - vectorized extraction
+            # Filter out current instance first
+            task_instances_filtered = task_instances[task_instances.index != row.name].copy()
+            
+            if task_instances_filtered.empty:
+                return False, 0.0
+            
+            # Vectorized extraction of load values from actual_dict
+            def extract_load_from_dict(d):
+                if isinstance(d, str):
                     try:
-                        inst_actual = json.loads(inst_actual)
+                        d = json.loads(d)
                     except:
-                        continue
-                inst_cognitive = float(inst_actual.get('cognitive_load', 0) or 0)
-                inst_emotional = float(inst_actual.get('emotional_load', 0) or 0)
-                inst_load = (inst_cognitive + inst_emotional) / 2.0
-                recent_loads.append(inst_load)
+                        return None
+                if not isinstance(d, dict):
+                    return None
+                cognitive = float(d.get('cognitive_load', 0) or 0)
+                emotional = float(d.get('emotional_load', 0) or 0)
+                return (cognitive + emotional) / 2.0
+            
+            if 'actual_dict' in task_instances_filtered.columns:
+                recent_loads = task_instances_filtered['actual_dict'].apply(extract_load_from_dict)
+                recent_loads = recent_loads.dropna().tolist()
+            else:
+                recent_loads = []
             
             if len(recent_loads) < 3:  # Need at least 3 recent values
                 return False, 0.0
@@ -2168,31 +2204,25 @@ class Analytics:
             
             total_tasks = len(tasks_df)
             
-            # 1. Calculate percentage of tasks with notes
-            tasks_with_notes = 0
-            total_note_length = 0
-            note_count = 0
+            # 1. Calculate percentage of tasks with notes (vectorized)
+            # Vectorized extraction of description and notes lengths
+            if 'description' in tasks_df.columns:
+                description_lengths = tasks_df['description'].fillna('').astype(str).str.strip().str.len()
+            else:
+                description_lengths = pd.Series(0, index=tasks_df.index)
             
-            for _, task in tasks_df.iterrows():
-                has_notes = False
-                note_length = 0
-                
-                # Check description field
-                description = str(task.get('description', '') or '').strip()
-                if description:
-                    has_notes = True
-                    note_length += len(description)
-                
-                # Check notes field
-                notes = str(task.get('notes', '') or '').strip()
-                if notes:
-                    has_notes = True
-                    note_length += len(notes)
-                
-                if has_notes:
-                    tasks_with_notes += 1
-                    total_note_length += note_length
-                    note_count += 1
+            if 'notes' in tasks_df.columns:
+                notes_lengths = tasks_df['notes'].fillna('').astype(str).str.strip().str.len()
+            else:
+                notes_lengths = pd.Series(0, index=tasks_df.index)
+            
+            # Vectorized calculation: has_notes if either description or notes has content
+            has_notes_mask = (description_lengths > 0) | (notes_lengths > 0)
+            tasks_with_notes = int(has_notes_mask.sum())
+            
+            # Total note length (sum of description + notes for tasks with notes)
+            total_note_length = int((description_lengths + notes_lengths)[has_notes_mask].sum())
+            note_count = tasks_with_notes
             
             # Note coverage: percentage of tasks with any notes
             note_coverage = (tasks_with_notes / total_tasks) if total_tasks > 0 else 0.0
@@ -2556,6 +2586,20 @@ class Analytics:
         # Also invalidate dashboard metrics since it depends on instances
         self._dashboard_metrics_cache = None
         self._dashboard_metrics_cache_time = None
+        # Invalidate chart and ranking caches too
+        self._trend_series_cache = None
+        self._trend_series_cache_time = None
+        self._attribute_distribution_cache = None
+        self._attribute_distribution_cache_time = None
+        self._stress_dimension_cache = None
+        self._stress_dimension_cache_time = None
+        self._rankings_cache = {}
+        self._leaderboard_cache = None
+        self._leaderboard_cache_time = None
+        self._leaderboard_cache_top_n = None
+        self._time_tracking_cache = None
+        self._time_tracking_cache_time = None
+        self._time_tracking_cache_params = None
     
     def _load_instances(self, completed_only: bool = False) -> pd.DataFrame:
         """Load instances from database or CSV.
@@ -2756,16 +2800,14 @@ class Analytics:
                         df['stress_efficiency'] = df['stress_efficiency'].round(2)
                     
                     # Calculate expected_relief: relief predicted before task (from predicted_dict)
-                    def _get_expected_relief_from_dict(row):
-                        try:
-                            predicted_dict = row.get('predicted_dict', {})
-                            if isinstance(predicted_dict, dict):
-                                return predicted_dict.get('expected_relief', None)
-                        except (KeyError, TypeError):
-                            pass
-                        return None
-                    
-                    df['expected_relief'] = df.apply(_get_expected_relief_from_dict, axis=1)
+                    # Vectorized extraction from predicted_dict column
+                    if 'predicted_dict' in df.columns:
+                        # Extract expected_relief directly from dict column (vectorized)
+                        df['expected_relief'] = df['predicted_dict'].apply(
+                            lambda d: d.get('expected_relief', None) if isinstance(d, dict) else None
+                        )
+                    else:
+                        df['expected_relief'] = None
                     df['expected_relief'] = pd.to_numeric(df['expected_relief'], errors='coerce')
                     
                     # Calculate net_relief: actual relief minus expected relief
@@ -2794,14 +2836,13 @@ class Analytics:
                         df['serendipity_factor'] = None
                     
                     # Fill missing serendipity_factor by calculating from net_relief
+                    # Vectorized: serendipity = max(0, net_relief) - only positive net_relief counts
                     missing_serendipity = df['serendipity_factor'].isna()
                     if missing_serendipity.any():
-                        df.loc[missing_serendipity, 'serendipity_factor'] = df.loc[missing_serendipity, 'net_relief'].apply(
-                            lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0
-                        )
-                    # Ensure all values are non-negative
-                    df['serendipity_factor'] = df['serendipity_factor'].fillna(0.0)
-                    df['serendipity_factor'] = df['serendipity_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+                        net_relief_series = pd.to_numeric(df.loc[missing_serendipity, 'net_relief'], errors='coerce').fillna(0.0)
+                        df.loc[missing_serendipity, 'serendipity_factor'] = net_relief_series.clip(lower=0.0)
+                    # Ensure all values are non-negative (vectorized)
+                    df['serendipity_factor'] = pd.to_numeric(df['serendipity_factor'], errors='coerce').fillna(0.0).clip(lower=0.0)
                     
                     # Use stored disappointment_factor if available, otherwise calculate
                     if 'disappointment_factor' in df.columns:
@@ -2810,14 +2851,13 @@ class Analytics:
                         df['disappointment_factor'] = None
                     
                     # Fill missing disappointment_factor by calculating from net_relief
+                    # Vectorized: disappointment = max(0, -net_relief) - only negative net_relief counts
                     missing_disappointment = df['disappointment_factor'].isna()
                     if missing_disappointment.any():
-                        df.loc[missing_disappointment, 'disappointment_factor'] = df.loc[missing_disappointment, 'net_relief'].apply(
-                            lambda x: max(0.0, -float(x)) if pd.notna(x) else 0.0
-                        )
-                    # Ensure all values are non-negative
-                    df['disappointment_factor'] = df['disappointment_factor'].fillna(0.0)
-                    df['disappointment_factor'] = df['disappointment_factor'].apply(lambda x: max(0.0, float(x)) if pd.notna(x) else 0.0)
+                        net_relief_series = pd.to_numeric(df.loc[missing_disappointment, 'net_relief'], errors='coerce').fillna(0.0)
+                        df.loc[missing_disappointment, 'disappointment_factor'] = (-net_relief_series).clip(lower=0.0)
+                    # Ensure all values are non-negative (vectorized)
+                    df['disappointment_factor'] = pd.to_numeric(df['disappointment_factor'], errors='coerce').fillna(0.0).clip(lower=0.0)
                     
                     # Calculate stress_relief_correlation_score: measures inverse correlation
                     stress_norm = pd.to_numeric(df['stress_level'], errors='coerce').fillna(50.0)
@@ -2826,16 +2866,11 @@ class Analytics:
                     df['stress_relief_correlation_score'] = correlation_raw.clip(0.0, 100.0).round(2)
                     
                     # Calculate behavioral_score (simplified version - full version is in CSV path)
-                    def _calculate_behavioral_score(row):
-                        try:
-                            behavioral = row.get('behavioral_score')
-                            if behavioral and str(behavioral).strip():
-                                return pd.to_numeric(behavioral, errors='coerce')
-                            return pd.NA
-                        except (KeyError, TypeError, ValueError):
-                            return pd.NA
-                    
-                    df['behavioral_score'] = df.apply(_calculate_behavioral_score, axis=1)
+                    # Vectorized: directly convert existing column if present
+                    if 'behavioral_score' in df.columns:
+                        df['behavioral_score'] = pd.to_numeric(df['behavioral_score'], errors='coerce')
+                    else:
+                        df['behavioral_score'] = pd.NA
                     
                     # Handle cognitive_load backward compatibility
                     if 'cognitive_load' in df.columns:
@@ -4196,6 +4231,18 @@ class Analytics:
         """
         import time
         start = time.perf_counter()
+        
+        # Check cache (keyed by parameters)
+        current_time = time.time()
+        cache_key = (days, target_sleep_hours)
+        if (self._time_tracking_cache is not None and 
+            self._time_tracking_cache_time is not None and
+            self._time_tracking_cache_params == cache_key and
+            (current_time - self._time_tracking_cache_time) < self._cache_ttl_seconds):
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] calculate_time_tracking_consistency_score (cached): {duration:.2f}ms")
+            return self._time_tracking_cache.copy()
+        
         df = self._load_instances()
         
         if df.empty:
@@ -7017,7 +7064,7 @@ class Analytics:
         import time as time_module
         import traceback
         import json
-        total_start = time_module.time()
+        total_start = time_module.perf_counter()
         
         # #region agent log
         try:
@@ -7846,8 +7893,8 @@ class Analytics:
         Analytics._relief_summary_cache = result
         Analytics._relief_summary_cache_time = time_module.time()
         
-        total_time = (time_module.time() - total_start) * 1000
-        print(f"[Analytics] get_relief_summary: TOTAL TIME: {total_time:.2f}ms")
+        total_time = (time_module.perf_counter() - total_start) * 1000
+        print(f"[Analytics] get_relief_summary: {total_time:.2f}ms")
         
         # #region agent log
         try:
@@ -10786,12 +10833,26 @@ class Analytics:
             List of dicts with task_id, task_name, metric_value, and count
         """
         import time
+        import copy
         start = time.perf_counter()
+        
+        # Check cache (keyed by metric and top_n)
+        cache_key = (metric, top_n)
+        current_time = time.time()
+        if cache_key in self._rankings_cache:
+            cached_result, cached_time = self._rankings_cache[cache_key]
+            if cached_time is not None and (current_time - cached_time) < self._cache_ttl_seconds:
+                duration = (time.perf_counter() - start) * 1000
+                print(f"[Analytics] get_task_performance_ranking (cached): {duration:.2f}ms (metric: {metric}, top_n: {top_n})")
+                return copy.deepcopy(cached_result)
+        
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
-            return []
+            result = []
+            self._rankings_cache[cache_key] = (result, time.time())
+            return result
         
         # Map metric names to columns
         metric_map = {
@@ -10818,9 +10879,11 @@ class Analytics:
         task_stats = task_stats[task_stats['metric_value'].notna()]
         
         if task_stats.empty:
+            result = []
+            self._rankings_cache[cache_key] = (result, time.time())
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_task_performance_ranking: {duration:.2f}ms (no data, metric: {metric})")
-            return []
+            return result
         
         # Sort appropriately (higher is better for relief, stress_efficiency, behavioral_score; lower is better for stress_level)
         ascending = (metric == 'stress_level')
@@ -10839,6 +10902,9 @@ class Analytics:
                 'metric': metric,
             })
         
+        # Store in cache
+        self._rankings_cache[cache_key] = (copy.deepcopy(result), time.time())
+        
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_task_performance_ranking: {duration:.2f}ms (metric: {metric}, top_n: {top_n})")
         return result
@@ -10854,21 +10920,40 @@ class Analytics:
         """
         import time
         start = time.perf_counter()
+        
+        # Check cache (keyed by top_n)
+        current_time = time.time()
+        if (self._leaderboard_cache is not None and 
+            self._leaderboard_cache_time is not None and
+            self._leaderboard_cache_top_n == top_n and
+            (current_time - self._leaderboard_cache_time) < self._cache_ttl_seconds):
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] get_stress_efficiency_leaderboard (cached): {duration:.2f}ms (top_n: {top_n})")
+            return copy.deepcopy(self._leaderboard_cache)
+        
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
+            result = []
+            self._leaderboard_cache = result
+            self._leaderboard_cache_time = time.time()
+            self._leaderboard_cache_top_n = top_n
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (no data)")
-            return []
+            return result
         
         # Filter to tasks with valid stress efficiency
         valid = completed[completed['stress_efficiency'].notna() & (completed['stress_efficiency'] > 0)].copy()
         
         if valid.empty:
+            result = []
+            self._leaderboard_cache = result
+            self._leaderboard_cache_time = time.time()
+            self._leaderboard_cache_top_n = top_n
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (no valid data)")
-            return []
+            return result
         
         # Group by task_id and calculate averages
         task_stats = valid.groupby('task_id').agg({
@@ -10900,6 +10985,11 @@ class Analytics:
                 'avg_stress': round(float(row['avg_stress']), 2),
                 'count': int(row['count']),
             })
+        
+        # Store in cache
+        self._leaderboard_cache = copy.deepcopy(result)
+        self._leaderboard_cache_time = time.time()
+        self._leaderboard_cache_top_n = top_n
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (top_n: {top_n})")
@@ -11777,12 +11867,28 @@ class Analytics:
     def trend_series(self) -> pd.DataFrame:
         import time
         start = time.perf_counter()
+        
+        # Check cache
+        current_time = time.time()
+        if (self._trend_series_cache is not None and 
+            self._trend_series_cache_time is not None and
+            (current_time - self._trend_series_cache_time) < self._cache_ttl_seconds):
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] trend_series (cached): {duration:.2f}ms")
+            return self._trend_series_cache.copy()
+        
         df = self._load_instances()
         if df.empty:
-            return pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+            result = pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+            self._trend_series_cache = result.copy()
+            self._trend_series_cache_time = time.time()
+            return result
         completed = df[df['completed_at'].astype(str).str.len() > 0]
         if completed.empty:
-            return pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+            result = pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+            self._trend_series_cache = result.copy()
+            self._trend_series_cache_time = time.time()
+            return result
 
         # Ensure datetime and numeric relief
         completed = completed.copy()
@@ -11791,7 +11897,10 @@ class Analytics:
         completed['relief_score_numeric'] = pd.to_numeric(completed['relief_score'], errors='coerce').fillna(0.0)
 
         if completed.empty:
-            return pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+            result = pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
+            self._trend_series_cache = result.copy()
+            self._trend_series_cache_time = time.time()
+            return result
 
         # Aggregate relief per day, then compute cumulative total over time
         daily = (
@@ -11806,16 +11915,35 @@ class Analytics:
         daily['completed_at'] = pd.to_datetime(daily['completed_at'])
         daily['cumulative_relief_score'] = daily['daily_relief_score'].cumsum()
 
+        result = daily[['completed_at', 'daily_relief_score', 'cumulative_relief_score']].copy()
+        
+        # Store in cache
+        self._trend_series_cache = result.copy()
+        self._trend_series_cache_time = time.time()
+        
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] trend_series: {duration:.2f}ms")
-        return daily[['completed_at', 'daily_relief_score', 'cumulative_relief_score']]
+        return result
 
     def attribute_distribution(self) -> pd.DataFrame:
         import time
         start = time.perf_counter()
+        
+        # Check cache
+        current_time = time.time()
+        if (self._attribute_distribution_cache is not None and 
+            self._attribute_distribution_cache_time is not None and
+            (current_time - self._attribute_distribution_cache_time) < self._cache_ttl_seconds):
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] attribute_distribution (cached): {duration:.2f}ms")
+            return self._attribute_distribution_cache.copy()
+        
         df = self._load_instances()
         if df.empty:
-            return pd.DataFrame(columns=['attribute', 'value'])
+            result = pd.DataFrame(columns=['attribute', 'value'])
+            self._attribute_distribution_cache = result.copy()
+            self._attribute_distribution_cache_time = time.time()
+            return result
         melted_frames = []
         
         # Attributes to exclude from distribution chart (not actively tracked)
@@ -11864,12 +11992,22 @@ class Analytics:
             melted_frames.append(efficiency_sub)
         
         if not melted_frames:
+            result = pd.DataFrame(columns=['attribute', 'value'])
+            self._attribute_distribution_cache = result.copy()
+            self._attribute_distribution_cache_time = time.time()
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] attribute_distribution: {duration:.2f}ms (no data)")
-            return pd.DataFrame(columns=['attribute', 'value'])
+            return result
+        
+        result = pd.concat(melted_frames, ignore_index=True).copy()
+        
+        # Store in cache
+        self._attribute_distribution_cache = result.copy()
+        self._attribute_distribution_cache_time = time.time()
+        
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] attribute_distribution: {duration:.2f}ms")
-        return pd.concat(melted_frames, ignore_index=True)
+        return result
 
     # ------------------------------------------------------------------
     # Trends and correlation helpers
@@ -12349,15 +12487,29 @@ class Analytics:
         """
         import time
         start = time.perf_counter()
+        
+        # Check cache
+        current_time = time.time()
+        if (self._stress_dimension_cache is not None and 
+            self._stress_dimension_cache_time is not None and
+            (current_time - self._stress_dimension_cache_time) < self._cache_ttl_seconds):
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] get_stress_dimension_data (cached): {duration:.2f}ms")
+            # Deep copy to prevent mutation
+            return copy.deepcopy(self._stress_dimension_cache)
+        
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
-            return {
+            result = {
                 'cognitive': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
                 'emotional': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
                 'physical': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
             }
+            self._stress_dimension_cache = copy.deepcopy(result)
+            self._stress_dimension_cache_time = time.time()
+            return result
         
         # Convert to numeric and calculate dimensions
         completed['mental_energy_numeric'] = pd.to_numeric(completed['mental_energy_needed'], errors='coerce').fillna(50.0)
@@ -12411,9 +12563,7 @@ class Analytics:
         emotional_daily = [{'date': str(row['date']), 'value': float(row['emotional_stress'])} for _, row in daily_emotional.iterrows()]
         physical_daily = [{'date': str(row['date']), 'value': float(row['physical_stress'])} for _, row in daily_physical.iterrows()]
         
-        duration = (time.perf_counter() - start) * 1000
-        print(f"[Analytics] get_stress_dimension_data: {duration:.2f}ms")
-        return {
+        result = {
             'cognitive': {
                 'total': cognitive_total,
                 'avg_7d': cognitive_avg_7d,
@@ -12430,6 +12580,14 @@ class Analytics:
                 'daily': physical_daily,
             },
         }
+        
+        # Store in cache (deep copy to prevent mutation)
+        self._stress_dimension_cache = copy.deepcopy(result)
+        self._stress_dimension_cache_time = time.time()
+        
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_stress_dimension_data: {duration:.2f}ms")
+        return result
 
     def calculate_correlation(self, attribute_x: str, attribute_y: str, method: str = 'pearson') -> Dict[str, any]:
         """Calculate correlation between two attributes with metadata for tooltips."""
@@ -13021,6 +13179,115 @@ class Analytics:
             'emotion_trends': emotion_trends,
             'spikes': sorted(spikes, key=lambda x: x['spike_amount'], reverse=True),
             'correlations': correlations
+        }
+
+    # ------------------------------------------------------------------
+    # Batched methods for performance optimization (Phase 2)
+    # ------------------------------------------------------------------
+    
+    def get_analytics_page_data(self, days: int = 7) -> Dict[str, any]:
+        """Batched method to get all main analytics page data in one call.
+        
+        Combines:
+        - get_dashboard_metrics()
+        - get_relief_summary()
+        - calculate_time_tracking_consistency_score()
+        
+        This reduces multiple sequential calls to a single batched call.
+        
+        Args:
+            days: Number of days for time tracking consistency (default 7)
+        
+        Returns:
+            Dict with keys: 'dashboard_metrics', 'relief_summary', 'time_tracking'
+        """
+        import time
+        start = time.perf_counter()
+        
+        # Get all three datasets (they may use caching internally)
+        dashboard_metrics = self.get_dashboard_metrics()
+        relief_summary = self.get_relief_summary()
+        time_tracking = self.calculate_time_tracking_consistency_score(days=days)
+        
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_analytics_page_data (batched): {duration:.2f}ms")
+        
+        return {
+            'dashboard_metrics': dashboard_metrics,
+            'relief_summary': relief_summary,
+            'time_tracking': time_tracking,
+        }
+    
+    def get_chart_data(self) -> Dict[str, any]:
+        """Batched method to get all chart data in one call.
+        
+        Combines:
+        - trend_series()
+        - attribute_distribution()
+        - get_stress_dimension_data()
+        
+        This reduces multiple sequential calls to a single batched call.
+        
+        Returns:
+            Dict with keys: 'trend_series', 'attribute_distribution', 'stress_dimension_data'
+        """
+        import time
+        start = time.perf_counter()
+        
+        # Get all three chart datasets
+        trend_series_df = self.trend_series()
+        attribute_dist_df = self.attribute_distribution()
+        stress_dimension = self.get_stress_dimension_data()
+        
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_chart_data (batched): {duration:.2f}ms")
+        
+        return {
+            'trend_series': trend_series_df,
+            'attribute_distribution': attribute_dist_df,
+            'stress_dimension_data': stress_dimension,
+        }
+    
+    def get_rankings_data(self, top_n: int = 5, leaderboard_n: int = 10) -> Dict[str, List[Dict[str, any]]]:
+        """Batched method to get all task ranking data in one call.
+        
+        Combines:
+        - get_task_performance_ranking() for multiple metrics
+        - get_stress_efficiency_leaderboard()
+        
+        This reduces multiple sequential calls to a single batched call.
+        
+        Args:
+            top_n: Number of top tasks for each ranking (default 5)
+            leaderboard_n: Number of tasks for stress efficiency leaderboard (default 10)
+        
+        Returns:
+            Dict with keys:
+            - 'relief_ranking'
+            - 'stress_efficiency_ranking'
+            - 'behavioral_score_ranking'
+            - 'stress_level_ranking'
+            - 'stress_efficiency_leaderboard'
+        """
+        import time
+        start = time.perf_counter()
+        
+        # Get all rankings in one batch
+        relief_ranking = self.get_task_performance_ranking('relief', top_n=top_n)
+        stress_efficiency_ranking = self.get_task_performance_ranking('stress_efficiency', top_n=top_n)
+        behavioral_ranking = self.get_task_performance_ranking('behavioral_score', top_n=top_n)
+        stress_level_ranking = self.get_task_performance_ranking('stress_level', top_n=top_n)
+        leaderboard = self.get_stress_efficiency_leaderboard(top_n=leaderboard_n)
+        
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_rankings_data (batched): {duration:.2f}ms")
+        
+        return {
+            'relief_ranking': relief_ranking,
+            'stress_efficiency_ranking': stress_efficiency_ranking,
+            'behavioral_score_ranking': behavioral_ranking,
+            'stress_level_ranking': stress_level_ranking,
+            'stress_efficiency_leaderboard': leaderboard,
         }
 
     # ------------------------------------------------------------------

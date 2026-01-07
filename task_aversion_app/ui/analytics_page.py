@@ -140,15 +140,18 @@ def build_analytics_page():
     # Load composite score asynchronously
     ui.timer(0.1, load_composite_score, once=True)
 
+    # Get all main analytics data in one batched call (Phase 2 optimization)
+    page_data = analytics_service.get_analytics_page_data(days=7)
+    metrics = page_data['dashboard_metrics']
+    relief_summary = page_data['relief_summary']
+    tracking_data = page_data['time_tracking']
+    
     # Time Tracking Consistency Section
     with ui.card().classes("p-4 mb-4 bg-teal-50 border border-teal-200"):
         ui.label("Time Tracking Consistency").classes("text-xl font-bold mb-2")
         ui.label("Measures how well you track your time. Sleep up to 8 hours is rewarded. Untracked time is penalized.").classes(
             "text-sm text-gray-600 mb-3"
         )
-        
-        # Get time tracking details
-        tracking_data = analytics_service.calculate_time_tracking_consistency_score(days=7)
         
         with ui.row().classes("gap-4 flex-wrap"):
             with ui.card().classes("p-3 min-w-[200px]"):
@@ -193,33 +196,6 @@ def build_analytics_page():
             "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
             "Higher tracking consistency means more of your day is logged."
         ).classes("text-sm text-gray-600")
-
-    # #region agent log
-    try:
-        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:105', 'message': 'analytics page calling get_dashboard_metrics', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-    except: pass
-    # #endregion
-    
-    metrics = analytics_service.get_dashboard_metrics()
-    
-    # #region agent log
-    try:
-        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:106', 'message': 'analytics page calling get_relief_summary', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-    except: pass
-    # #endregion
-    
-    get_relief_start = time.perf_counter()
-    relief_summary = analytics_service.get_relief_summary()
-    get_relief_duration = (time.perf_counter() - get_relief_start) * 1000
-    
-    # #region agent log
-    try:
-        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H4', 'location': 'analytics_page.py:106', 'message': 'analytics page get_relief_summary completed', 'data': {'duration_ms': get_relief_duration, 'has_data': bool(relief_summary)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-    except: pass
-    # #endregion
     
     life_balance = metrics.get('life_balance', {})
     with ui.row().classes("gap-3 flex-wrap mb-4"):
@@ -492,20 +468,29 @@ def build_analytics_page():
                         ui.label("Sensitive:").classes("text-xs text-gray-600")
                         ui.label(f"{sensitive_score:.1f}").classes("text-sm font-bold text-purple-600")
 
+    # Get all chart data in one batched call (Phase 2 optimization)
+    chart_data = analytics_service.get_chart_data()
+    
     with ui.row().classes("analytics-grid flex-wrap w-full"):
-        _render_time_chart()
-        _render_attribute_box()
+        _render_time_chart(chart_data['trend_series'])
+        _render_attribute_box(chart_data['attribute_distribution'])
 
     _render_trends_section()
-    _render_stress_metrics_section()
-    _render_task_rankings()
-    _render_stress_efficiency_leaderboard()
-    _render_metric_comparison()
+    _render_stress_metrics_section(chart_data['stress_dimension_data'])
+    
+    # Get all rankings data in one batched call (Phase 2 optimization)
+    rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10)
+    
+    _render_task_rankings(rankings_data)
+    _render_stress_efficiency_leaderboard(rankings_data['stress_efficiency_leaderboard'])
+    _render_metric_comparison(metrics)
     _render_correlation_explorer()
 
 
-def _render_time_chart():
-    df = analytics_service.trend_series()
+def _render_time_chart(df=None):
+    """Render time chart. If df is provided, use it (batched), otherwise fetch."""
+    if df is None:
+        df = analytics_service.trend_series()
     with ui.card().classes("p-3 grow"):
         ui.label("Total relief trend").classes("font-bold text-md mb-2")
         if df.empty:
@@ -522,8 +507,10 @@ def _render_time_chart():
         ui.plotly(fig)
 
 
-def _render_attribute_box():
-    df = analytics_service.attribute_distribution()
+def _render_attribute_box(df=None):
+    """Render attribute box chart. If df is provided, use it (batched), otherwise fetch."""
+    if df is None:
+        df = analytics_service.attribute_distribution()
     with ui.card().classes("p-3 grow"):
         ui.label("Attribute distribution").classes("font-bold text-md mb-2")
         if df.empty:
@@ -635,8 +622,12 @@ def _render_trends_section():
         update_chart()
 
 
-def _render_stress_metrics_section():
-    """Render stress dimension metrics with bar charts and line graphs."""
+def _render_stress_metrics_section(stress_data=None):
+    """Render stress dimension metrics with bar charts and line graphs.
+    
+    Args:
+        stress_data: Optional pre-fetched stress dimension data (for batching)
+    """
     ui.separator().classes("my-4")
     with ui.card().classes("p-4 w-full"):
         ui.label("Stress Metrics").classes("text-xl font-bold mb-2")
@@ -651,8 +642,9 @@ def _render_stress_metrics_section():
             values = [item['value'] for item in daily_list if item.get('value') is not None]
             return sum(values) / len(values) if values else 0.0
         
-        # Get stress dimension data
-        stress_data = analytics_service.get_stress_dimension_data()
+        # Get stress dimension data if not provided
+        if stress_data is None:
+            stress_data = analytics_service.get_stress_dimension_data()
         
         # Calculate daily averages (overall, not just 7-day)
         cognitive_daily_avg = calc_daily_avg(stress_data.get('cognitive', {}).get('daily', []))
@@ -833,8 +825,12 @@ def _render_stress_metrics_section():
                 ui.label(f"Daily Avg: {physical_daily_avg:.1f}").classes("text-sm")
 
 
-def _render_metric_comparison():
-    """Render a flexible metric comparison tool with scatter plots."""
+def _render_metric_comparison(metrics=None):
+    """Render a flexible metric comparison tool with scatter plots.
+    
+    Args:
+        metrics: Optional pre-fetched dashboard metrics (for batching)
+    """
     ui.separator().classes("my-4")
     with ui.card().classes("p-4 w-full"):
         ui.label("Metric Comparison").classes("text-xl font-bold mb-2")
@@ -862,6 +858,10 @@ def _render_metric_comparison():
         stats_area = ui.column().classes("mt-3 w-full gap-2")
         
         def render_comparison():
+            # Get metrics if not provided
+            nonlocal metrics
+            if metrics is None:
+                metrics = analytics_service.get_dashboard_metrics()
             chart_area.clear()
             stats_area.clear()
             
@@ -1140,7 +1140,8 @@ def _render_metric_comparison():
                                             ui.label(interpretation_label).classes("text-xs text-gray-500 mt-1")
                                             
                                             # Add volume context warning if efficiency is high but volume is low
-                                            volume_metrics = analytics_service.get_dashboard_metrics().get('productivity_volume', {})
+                                            # Use already-loaded metrics from page_data to avoid duplicate call
+                                            volume_metrics = metrics.get('productivity_volume', {})
                                             volume_score = volume_metrics.get('work_volume_score', 0.0)
                                             avg_work_time = volume_metrics.get('avg_daily_work_time', 0.0)
                                             
@@ -1204,7 +1205,8 @@ def _render_metric_comparison():
                                         ui.label(interpretation_label).classes("text-xs text-gray-500 mt-1")
                                         
                                         # Add volume context warning if efficiency is high but volume is low
-                                        volume_metrics = analytics_service.get_dashboard_metrics().get('productivity_volume', {})
+                                        # Use already-loaded metrics from page_data to avoid duplicate call
+                                        volume_metrics = metrics.get('productivity_volume', {})
                                         volume_score = volume_metrics.get('work_volume_score', 0.0)
                                         avg_work_time = volume_metrics.get('avg_daily_work_time', 0.0)
                                         
@@ -1346,13 +1348,22 @@ def _render_correlation_explorer():
             render_correlation()
 
 
-def _render_task_rankings():
+def _render_task_rankings(rankings_data=None):
+    """Render task performance rankings.
+    
+    Args:
+        rankings_data: Optional pre-fetched rankings data (for batching)
+    """
     ui.separator()
     ui.label("Task Performance Rankings").classes("text-xl font-semibold mt-4")
     
+    # Get rankings data if not provided
+    if rankings_data is None:
+        rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10)
+    
     with ui.row().classes("gap-4 flex-wrap mt-2"):
         # Top tasks by relief
-        top_relief = analytics_service.get_task_performance_ranking('relief', top_n=5)
+        top_relief = rankings_data['relief_ranking']
         with ui.card().classes("p-3 min-w-[250px]"):
             ui.label("Top 5 Tasks by Relief").classes("font-bold text-md mb-2")
             if not top_relief:
@@ -1362,7 +1373,7 @@ def _render_task_rankings():
                     ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
         
         # Top tasks by stress efficiency
-        top_efficiency = analytics_service.get_task_performance_ranking('stress_efficiency', top_n=5)
+        top_efficiency = rankings_data['stress_efficiency_ranking']
         with ui.card().classes("p-3 min-w-[250px]"):
             ui.label("Top 5 Tasks by Stress Efficiency").classes("font-bold text-md mb-2")
             if not top_efficiency:
@@ -1372,7 +1383,7 @@ def _render_task_rankings():
                     ui.label(f"{task['task_name']}: {task['metric_value']:.2f} (n={task['count']})").classes("text-sm")
         
         # Top tasks by behavioral score
-        top_behavioral = analytics_service.get_task_performance_ranking('behavioral_score', top_n=5)
+        top_behavioral = rankings_data['behavioral_score_ranking']
         with ui.card().classes("p-3 min-w-[250px]"):
             ui.label("Top 5 Tasks by Behavioral Score").classes("font-bold text-md mb-2")
             if not top_behavioral:
@@ -1382,7 +1393,7 @@ def _render_task_rankings():
                     ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
         
         # Lowest stress tasks
-        low_stress = analytics_service.get_task_performance_ranking('stress_level', top_n=5)
+        low_stress = rankings_data['stress_level_ranking']
         with ui.card().classes("p-3 min-w-[250px]"):
             ui.label("Top 5 Lowest Stress Tasks").classes("font-bold text-md mb-2")
             if not low_stress:
@@ -1392,12 +1403,18 @@ def _render_task_rankings():
                     ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
 
 
-def _render_stress_efficiency_leaderboard():
+def _render_stress_efficiency_leaderboard(leaderboard=None):
+    """Render stress efficiency leaderboard.
+    
+    Args:
+        leaderboard: Optional pre-fetched leaderboard data (for batching)
+    """
     ui.separator()
     ui.label("Stress Efficiency Leaderboard").classes("text-xl font-semibold mt-4")
     ui.label("Tasks that give you the most relief per unit of stress").classes("text-sm text-gray-500 mb-2")
     
-    leaderboard = analytics_service.get_stress_efficiency_leaderboard(top_n=10)
+    if leaderboard is None:
+        leaderboard = analytics_service.get_stress_efficiency_leaderboard(top_n=10)
     
     if not leaderboard:
         ui.label("No data yet. Complete some tasks to see your stress efficiency leaders.").classes("text-xs text-gray-500")
