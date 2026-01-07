@@ -31,6 +31,14 @@ class TaskManager:
         # Strict mode: If DISABLE_CSV_FALLBACK is set, fail instead of falling back to CSV
         self.strict_mode = bool(os.getenv('DISABLE_CSV_FALLBACK', '').lower() in ('1', 'true', 'yes'))
         
+        # Cache for frequently accessed data
+        self._tasks_list_cache = None
+        self._tasks_list_cache_time = None
+        self._tasks_all_cache = None
+        self._tasks_all_cache_time = None
+        self._task_cache = {}  # Per-task cache: {task_id: (task_dict, timestamp)}
+        self._cache_ttl_seconds = 300  # 5 minutes
+        
         if self.use_db:
             # Database backend
             try:
@@ -60,6 +68,14 @@ class TaskManager:
             print("[TaskManager] Using CSV backend")
         
         self.initialization_entries = []
+    
+    def _invalidate_task_caches(self):
+        """Invalidate all task caches. Call this when tasks are created/updated/deleted."""
+        self._tasks_list_cache = None
+        self._tasks_list_cache_time = None
+        self._tasks_all_cache = None
+        self._tasks_all_cache_time = None
+        self._task_cache.clear()
     
     def _init_csv(self):
         """Initialize CSV backend."""
@@ -119,11 +135,30 @@ class TaskManager:
         self._reload_csv()
     
     def get_task(self, task_id):
-        """Return a task row by id as a dict. Works with both CSV and database."""
+        """Return a task row by id as a dict. Works with both CSV and database.
+        
+        Uses per-task caching to avoid repeated database queries. Cache is TTL-based (5 minutes).
+        """
+        import time
+        
+        # Check per-task cache first
+        current_time = time.time()
+        if task_id in self._task_cache:
+            cached_task, cache_time = self._task_cache[task_id]
+            if (current_time - cache_time) < self._cache_ttl_seconds:
+                return cached_task.copy() if isinstance(cached_task, dict) else cached_task
+        
+        # Cache miss - load from database/CSV
         if self.use_db:
-            return self._get_task_db(task_id)
+            result = self._get_task_db(task_id)
         else:
-            return self._get_task_csv(task_id)
+            result = self._get_task_csv(task_id)
+        
+        # Store in per-task cache
+        if result is not None:
+            self._task_cache[task_id] = (result.copy() if isinstance(result, dict) else result, time.time())
+        
+        return result
     
     def _get_task_csv(self, task_id):
         """CSV-specific get_task."""
@@ -148,11 +183,30 @@ class TaskManager:
             return self._get_task_csv(task_id)
 
     def list_tasks(self) -> List[str]:
-        """Return list of task names. Works with both CSV and database."""
+        """Return list of task names. Works with both CSV and database.
+        
+        Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes).
+        """
+        import time
+        
+        # Check cache first
+        current_time = time.time()
+        if (self._tasks_list_cache is not None and 
+            self._tasks_list_cache_time is not None and
+            (current_time - self._tasks_list_cache_time) < self._cache_ttl_seconds):
+            return self._tasks_list_cache.copy()
+        
+        # Cache miss - load from database/CSV
         if self.use_db:
-            return self._list_tasks_db()
+            result = self._list_tasks_db()
         else:
-            return self._list_tasks_csv()
+            result = self._list_tasks_csv()
+        
+        # Store in cache
+        self._tasks_list_cache = result.copy() if isinstance(result, list) else result
+        self._tasks_list_cache_time = time.time()
+        
+        return result
     
     def _list_tasks_csv(self) -> List[str]:
         """CSV-specific list_tasks."""
@@ -179,11 +233,30 @@ class TaskManager:
             self.initialization_entries.append(entry)
             print(f"Saved initialization entry: {entry}")
     def get_all(self):
-        """Return all tasks as DataFrame (CSV) or list of dicts (database). Works with both backends."""
+        """Return all tasks as DataFrame (CSV) or list of dicts (database). Works with both backends.
+        
+        Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes).
+        """
+        import time
+        
+        # Check cache first
+        current_time = time.time()
+        if (self._tasks_all_cache is not None and 
+            self._tasks_all_cache_time is not None and
+            (current_time - self._tasks_all_cache_time) < self._cache_ttl_seconds):
+            return self._tasks_all_cache.copy()
+        
+        # Cache miss - load from database/CSV
         if self.use_db:
-            return self._get_all_db()
+            result = self._get_all_db()
         else:
-            return self._get_all_csv()
+            result = self._get_all_csv()
+        
+        # Store in cache
+        self._tasks_all_cache = result.copy()
+        self._tasks_all_cache_time = time.time()
+        
+        return result
     
     def _get_all_csv(self):
         """CSV-specific get_all."""
@@ -223,6 +296,8 @@ class TaskManager:
         """
         if routine_days_of_week is None:
             routine_days_of_week = []
+        # Invalidate caches before creating
+        self._invalidate_task_caches()
         if self.use_db:
             return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
         else:
@@ -328,6 +403,8 @@ class TaskManager:
 
     def update_task(self, task_id, **kwargs):
         """Update a task. Works with both CSV and database."""
+        # Invalidate caches before updating
+        self._invalidate_task_caches()
         if self.use_db:
             return self._update_task_db(task_id, **kwargs)
         else:
@@ -557,6 +634,8 @@ class TaskManager:
     def delete_by_id(self, task_id):
         """Remove a task template by id. Works with both CSV and database."""
         print(f"[TaskManager] delete_by_id called with: {task_id}")
+        # Invalidate caches before deleting
+        self._invalidate_task_caches()
         if self.use_db:
             return self._delete_by_id_db(task_id)
         else:

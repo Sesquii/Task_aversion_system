@@ -45,6 +45,16 @@ class Analytics:
     _composite_scores_cache_time = None
     _cache_ttl_seconds = 300  # Cache for 5 minutes (optimized for dashboard performance)
     
+    # Cache for _load_instances() - separate caches for all vs completed_only
+    _instances_cache_all = None
+    _instances_cache_all_time = None
+    _instances_cache_completed = None
+    _instances_cache_completed_time = None
+    
+    # Cache for get_dashboard_metrics()
+    _dashboard_metrics_cache = None
+    _dashboard_metrics_cache_time = None
+    
     @staticmethod
     def calculate_difficulty_bonus(
         current_aversion: Optional[float],
@@ -2537,12 +2547,45 @@ class Analytics:
         
         return df_filtered
     
+    def _invalidate_instances_cache(self):
+        """Invalidate the instances cache. Call this when instances are created/updated/deleted."""
+        self._instances_cache_all = None
+        self._instances_cache_all_time = None
+        self._instances_cache_completed = None
+        self._instances_cache_completed_time = None
+        # Also invalidate dashboard metrics since it depends on instances
+        self._dashboard_metrics_cache = None
+        self._dashboard_metrics_cache_time = None
+    
     def _load_instances(self, completed_only: bool = False) -> pd.DataFrame:
         """Load instances from database or CSV.
+        
+        Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes)
+        and can be invalidated by calling _invalidate_instances_cache().
         
         Args:
             completed_only: If True, only load completed instances (optimization for relief_summary)
         """
+        import time
+        
+        # Check cache first
+        cache_key = 'completed' if completed_only else 'all'
+        current_time = time.time()
+        
+        if completed_only:
+            # Check completed instances cache
+            if (self._instances_cache_completed is not None and 
+                self._instances_cache_completed_time is not None and
+                (current_time - self._instances_cache_completed_time) < self._cache_ttl_seconds):
+                return self._instances_cache_completed.copy()
+        else:
+            # Check all instances cache
+            if (self._instances_cache_all is not None and 
+                self._instances_cache_all_time is not None and
+                (current_time - self._instances_cache_all_time) < self._cache_ttl_seconds):
+                return self._instances_cache_all.copy()
+        
+        # Cache miss or expired - load from database/CSV
         # Default to database (SQLite) unless USE_CSV is explicitly set
         use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
         
@@ -2564,8 +2607,10 @@ class Analytics:
                 session = get_session()
                 try:
                     # OPTIMIZATION: Only load completed instances if requested
+                    # OPTIMIZATION: Use indexed column for filtering
                     if completed_only:
                         # Filter to only completed instances at database level (much faster)
+                        # Uses index on completed_at for fast filtering
                         instances = session.query(TaskInstance).filter(
                             TaskInstance.completed_at.isnot(None),
                             TaskInstance.completed_at != ''
@@ -2810,6 +2855,15 @@ class Analytics:
                             missing_difficulty = difficulty_numeric.isna() | (difficulty_numeric == 0)
                             has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
                             df.loc[has_cognitive & missing_difficulty, 'task_difficulty'] = cognitive_scaled.loc[has_cognitive & missing_difficulty]
+                    
+                    # Store in cache before returning
+                    import time
+                    if completed_only:
+                        self._instances_cache_completed = df.copy()
+                        self._instances_cache_completed_time = time.time()
+                    else:
+                        self._instances_cache_all = df.copy()
+                        self._instances_cache_all_time = time.time()
                     
                     return df
                 finally:
@@ -3174,6 +3228,19 @@ class Analytics:
         df['behavioral_score'] = df['behavioral_score'].round(2)
 
         df['status'] = df['status'].replace('', 'active').str.lower()
+        
+        # Store in cache before returning (CSV path)
+        import time
+        if completed_only:
+            # Filter to completed instances for CSV path
+            if 'completed_at' in df.columns:
+                df = df[df['completed_at'].astype(str).str.strip() != '']
+            self._instances_cache_completed = df.copy()
+            self._instances_cache_completed_time = time.time()
+        else:
+            self._instances_cache_all = df.copy()
+            self._instances_cache_all_time = time.time()
+        
         return df
 
     # ------------------------------------------------------------------
@@ -3241,6 +3308,8 @@ class Analytics:
     def get_dashboard_metrics(self, metrics: Optional[List[str]] = None) -> Dict[str, Dict[str, Optional[float]]]:
         """Get dashboard metrics, optionally calculating only specific metrics.
         
+        Uses caching to avoid repeated calculations. Cache is TTL-based (5 minutes).
+        
         Args:
             metrics: Optional list of metric keys to calculate. If None, calculates all metrics.
                     Metric keys can be in format 'category.key' (e.g., 'quality.avg_relief')
@@ -3252,6 +3321,36 @@ class Analytics:
         Returns:
             Dict with same structure as before, but only contains requested metrics (or all if metrics=None)
         """
+        import time
+        
+        # Check cache first (always cache full result, then filter if needed)
+        current_time = time.time()
+        if (self._dashboard_metrics_cache is not None and 
+            self._dashboard_metrics_cache_time is not None and
+            (current_time - self._dashboard_metrics_cache_time) < self._cache_ttl_seconds):
+            # Cache hit - filter if specific metrics requested
+            if metrics is not None:
+                # Filter cached result to requested metrics
+                requested_metrics = self._expand_metric_dependencies(metrics)
+                def needs_metric(key: str) -> bool:
+                    return key in requested_metrics
+                
+                # Filter the cached result
+                filtered_result = {}
+                if 'counts' in self._dashboard_metrics_cache:
+                    filtered_result['counts'] = {}
+                    for key in ['active', 'completed_7d', 'total_created', 'total_completed', 'completion_rate', 'daily_self_care_tasks', 'avg_daily_self_care_tasks']:
+                        if needs_metric(key) and key in self._dashboard_metrics_cache['counts']:
+                            filtered_result['counts'][key] = self._dashboard_metrics_cache['counts'][key]
+                
+                # Similar filtering for other sections...
+                # For simplicity, if metrics are requested, we'll recalculate (more accurate)
+                # But for common case of metrics=None, we use cache
+                pass  # Will fall through to calculation
+            else:
+                # No filtering needed, return cached full result
+                return self._dashboard_metrics_cache.copy()
+        
         # Determine which metrics to calculate
         if metrics is not None:
             requested_metrics = self._expand_metric_dependencies(metrics)
@@ -3664,6 +3763,12 @@ class Analytics:
                 result['productivity_volume']['volumetric_productivity_score'] = round(volumetric_productivity, 1)
             if needs_metric('volumetric_potential_score'):
                 result['productivity_volume']['volumetric_potential_score'] = round(volumetric_potential, 1)
+        
+        # Store full result in cache (only if metrics=None, otherwise cache is less useful)
+        if metrics is None:
+            import time
+            self._dashboard_metrics_cache = result.copy()
+            self._dashboard_metrics_cache_time = time.time()
         
         return result
 

@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text, Float, ForeignKey
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text, Float, ForeignKey, Index
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.exc import OperationalError, IntegrityError
 
@@ -89,14 +89,14 @@ class Task(Base):
     version = Column(Integer, default=1)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)  # Indexed for date range queries
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Task properties
     is_recurring = Column(Boolean, default=False)
     categories = Column(JSON, default=list)  # List of category strings
     default_estimate_minutes = Column(Integer, default=0)
-    task_type = Column(String, default='Work')  # Work, Self care, etc.
+    task_type = Column(String, default='Work', index=True)  # Work, Self care, etc. - Indexed for filtering
     default_initial_aversion = Column(String, default='')  # Optional default aversion value
     
     # Routine scheduling fields
@@ -154,7 +154,7 @@ class TaskInstance(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     initialized_at = Column(DateTime, default=None, nullable=True)
     started_at = Column(DateTime, default=None, nullable=True)
-    completed_at = Column(DateTime, default=None, nullable=True)
+    completed_at = Column(DateTime, default=None, nullable=True, index=True)  # Indexed for completed-only queries
     cancelled_at = Column(DateTime, default=None, nullable=True)
     
     # JSON data (raw data storage)
@@ -228,6 +228,14 @@ class TaskInstance(Base):
     
     def __repr__(self):
         return f"<TaskInstance(instance_id='{self.instance_id}', task_id='{self.task_id}', status='{self.status}')>"
+    
+    # Composite indexes for common query patterns
+    __table_args__ = (
+        # Index for filtering by status and completion (common in list_active_instances)
+        Index('idx_taskinstance_status_completed', 'status', 'is_completed', 'is_deleted'),
+        # Index for task_id + completion status (common when getting instances for a task)
+        Index('idx_taskinstance_task_completed', 'task_id', 'is_completed'),
+    )
 
 
 class Emotion(Base):

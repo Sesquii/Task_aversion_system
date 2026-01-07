@@ -1,0 +1,129 @@
+{
+  "timestamp": "2026-01-06T23:19:09.759222",
+  "warmup_runs": 1,
+  "iterations": 3,
+  "dashboard": {},
+  "analytics": {},
+  "individual_operations": {
+    "list_tasks": {
+      "durations_ms": [
+        0.001500127837061882,
+        0.000600004568696022,
+        0.000400003045797348
+      ],
+      "avg_ms": 0.0008333784838517507,
+      "min_ms": 0.000400003045797348,
+      "max_ms": 0.001500127837061882,
+      "count": 3
+    },
+    "list_active_instances": {
+      "durations_ms": [
+        0.001100124791264534,
+        0.000600004568696022,
+        0.000400003045797348
+      ],
+      "avg_ms": 0.0007000441352526346,
+      "min_ms": 0.000400003045797348,
+      "max_ms": 0.001100124791264534,
+      "count": 3
+    },
+    "get_relief_summary": {
+      "durations_ms": [
+        1.5143000055104494,
+        1.5867999754846096,
+        1.9823999609798193
+      ],
+      "avg_ms": 1.6944999806582928,
+      "min_ms": 1.5143000055104494,
+      "max_ms": 1.9823999609798193,
+      "count": 3
+    },
+    "get_dashboard_metrics": {
+      "durations_ms": [
+        0.003600027412176132,
+        0.001300126314163208,
+        0.000800006091594696
+      ],
+      "avg_ms": 0.0019000532726446788,
+      "min_ms": 0.000800006091594696,
+      "max_ms": 0.003600027412176132,
+      "count": 3
+    },
+    "load_instances_all": {
+      "durations_ms": [
+        0.026999972760677338,
+        0.026799971237778664,
+        0.021900050342082977
+      ],
+      "avg_ms": 0.025233331446846325,
+      "min_ms": 0.021900050342082977,
+      "max_ms": 0.026999972760677338,
+      "count": 3
+    },
+    "load_instances_completed": {
+      "durations_ms": [
+        0.0195999164134264,
+        0.020999927073717117,
+        0.01810002140700817
+      ],
+      "avg_ms": 0.019566621631383896,
+      "min_ms": 0.01810002140700817,
+      "max_ms": 0.020999927073717117,
+      "count": 3
+    },
+    "get_all_scores_for_composite": {
+      "durations_ms": [
+        0.00500003807246685,
+        0.0012998934835195541,
+        0.000600004568696022
+      ],
+      "avg_ms": 0.0022999787082274756,
+      "min_ms": 0.000600004568696022,
+      "max_ms": 0.00500003807246685,
+      "count": 3
+    },
+    "calculate_time_tracking_consistency": {
+      "durations_ms": [
+        13.277500169351697,
+        13.82180000655353,
+        14.124400215223432
+      ],
+      "avg_ms": 13.741233463709554,
+      "min_ms": 13.277500169351697,
+      "max_ms": 14.124400215223432,
+      "count": 3
+    }
+  },
+  "summary": {
+    "slowest_operations": [
+      {
+        "name": "calculate_time_tracking_consistency",
+        "avg_ms": 13.741233463709554
+      },
+      {
+        "name": "get_relief_summary",
+        "avg_ms": 1.6944999806582928
+      },
+      {
+        "name": "load_instances_all",
+        "avg_ms": 0.025233331446846325
+      },
+      {
+        "name": "load_instances_completed",
+        "avg_ms": 0.019566621631383896
+      },
+      {
+        "name": "get_all_scores_for_composite",
+        "avg_ms": 0.0022999787082274756
+      }
+    ]
+  },
+  "data_stats": {
+    "total_tasks": 37,
+    "total_instances": 287,
+    "completed_instances": 0,
+    "active_instances": 22,
+    "instances_dataframe_rows": 287,
+    "instances_dataframe_columns": 47
+  }
+}

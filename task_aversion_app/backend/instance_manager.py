@@ -60,6 +60,26 @@ class InstanceManager:
                 )
             self._init_csv()
             print("[InstanceManager] Using CSV backend")
+        
+        # Cache for frequently accessed data
+        self._active_instances_cache = None
+        self._active_instances_cache_time = None
+        self._recent_completed_cache = {}  # Per-limit cache: {limit: (result, timestamp)}
+        self._cache_ttl_seconds = 120  # 2 minutes (shorter for active instances since they change frequently)
+    
+    def _invalidate_instance_caches(self):
+        """Invalidate all instance caches. Call this when instances are created/updated/deleted."""
+        self._active_instances_cache = None
+        self._active_instances_cache_time = None
+        self._recent_completed_cache.clear()
+        # Also invalidate Analytics caches since they depend on instances
+        try:
+            from backend.analytics import Analytics
+            # Get the singleton instance if it exists, or create a new one
+            analytics = Analytics()
+            analytics._invalidate_instances_cache()
+        except Exception:
+            pass  # Analytics may not be imported yet
     
     def _init_csv(self):
         """Initialize CSV backend."""
@@ -304,6 +324,8 @@ class InstanceManager:
 
     def create_instance(self, task_id, task_name, task_version=1, predicted: dict = None):
         """Create a new task instance. Works with both CSV and database."""
+        # Invalidate caches before creating
+        self._invalidate_instance_caches()
         if self.use_db:
             return self._create_instance_db(task_id, task_name, task_version, predicted)
         else:
@@ -682,11 +704,30 @@ class InstanceManager:
             return self._pause_instance_csv(instance_id, reason, completion_percentage)
 
     def list_active_instances(self):
-        """List active task instances. Works with both CSV and database."""
+        """List active task instances. Works with both CSV and database.
+        
+        Uses caching to avoid repeated database queries. Cache is TTL-based (2 minutes).
+        """
+        import time
+        
+        # Check cache first
+        current_time = time.time()
+        if (self._active_instances_cache is not None and 
+            self._active_instances_cache_time is not None and
+            (current_time - self._active_instances_cache_time) < self._cache_ttl_seconds):
+            return self._active_instances_cache.copy() if isinstance(self._active_instances_cache, list) else self._active_instances_cache
+        
+        # Cache miss - load from database/CSV
         if self.use_db:
-            return self._list_active_instances_db()
+            result = self._list_active_instances_db()
         else:
-            return self._list_active_instances_csv()
+            result = self._list_active_instances_csv()
+        
+        # Store in cache
+        self._active_instances_cache = result.copy() if isinstance(result, list) else result
+        self._active_instances_cache_time = time.time()
+        
+        return result
     
     def get_instances_by_task_id(self, task_id: str, include_completed: bool = False):
         """Get all instances for a specific task_id. Works with both CSV and database."""
@@ -733,9 +774,13 @@ class InstanceManager:
         return df.to_dict(orient='records')
     
     def _list_active_instances_db(self):
-        """Database-specific list_active_instances."""
+        """Database-specific list_active_instances.
+        
+        Uses composite index (status, is_completed, is_deleted) for optimal performance.
+        """
         try:
             with self.db_session() as session:
+                # Uses composite index idx_taskinstance_status_completed for fast filtering
                 instances = session.query(self.TaskInstance).filter(
                     self.TaskInstance.is_completed == False,
                     self.TaskInstance.is_deleted == False,
@@ -1071,6 +1116,8 @@ class InstanceManager:
 
     def complete_instance(self, instance_id, actual: dict):
         """Complete a task instance. Works with both CSV and database."""
+        # Invalidate caches before completing
+        self._invalidate_instance_caches()
         if self.use_db:
             return self._complete_instance_db(instance_id, actual)
         else:
@@ -1300,6 +1347,8 @@ class InstanceManager:
     
     def cancel_instance(self, instance_id, actual: dict):
         """Cancel a task instance. Works with both CSV and database."""
+        # Invalidate caches before cancelling
+        self._invalidate_instance_caches()
         if self.use_db:
             return self._cancel_instance_db(instance_id, actual)
         else:
@@ -1471,6 +1520,8 @@ class InstanceManager:
 
     def delete_instance(self, instance_id):
         """Delete a task instance. Works with both CSV and database."""
+        # Invalidate caches before deleting
+        self._invalidate_instance_caches()
         if self.use_db:
             return self._delete_instance_db(instance_id)
         else:
@@ -1670,11 +1721,29 @@ class InstanceManager:
             instance.disappointment_factor = None
 
     def list_recent_completed(self, limit=20):
-        """List recently completed instances. Works with both CSV and database."""
+        """List recently completed instances. Works with both CSV and database.
+        
+        Uses caching to avoid repeated database queries. Cache is TTL-based (2 minutes).
+        """
+        import time
+        
+        # Check per-limit cache first
+        current_time = time.time()
+        if limit in self._recent_completed_cache:
+            cached_result, cache_time = self._recent_completed_cache[limit]
+            if (current_time - cache_time) < self._cache_ttl_seconds:
+                return cached_result.copy() if isinstance(cached_result, list) else cached_result
+        
+        # Cache miss - load from database/CSV
         if self.use_db:
-            return self._list_recent_completed_db(limit)
+            result = self._list_recent_completed_db(limit)
         else:
-            return self._list_recent_completed_csv(limit)
+            result = self._list_recent_completed_csv(limit)
+        
+        # Store in per-limit cache
+        self._recent_completed_cache[limit] = (result.copy() if isinstance(result, list) else result, time.time())
+        
+        return result
     
     def _list_recent_completed_csv(self, limit=20):
         """CSV-specific list_recent_completed."""
