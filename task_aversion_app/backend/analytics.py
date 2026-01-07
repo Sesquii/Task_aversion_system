@@ -5868,27 +5868,25 @@ class Analytics:
     def calculate_daily_productivity_score_with_idle_refresh(
         self,
         target_date: Optional[datetime] = None,
-        idle_refresh_hours: float = 8.0
+        idle_refresh_hours: float = 8.0  # Deprecated: kept for backward compatibility, not used
     ) -> Dict[str, Any]:
-        """Calculate daily productivity score with 8-hour idle time refresh.
+        """Calculate daily productivity score with midnight refresh.
         
-        This metric calculates a rolling daily productivity score that accumulates
-        throughout the day but resets after 8 hours of idle time (no task completions).
+        This metric calculates a daily productivity score that resets at midnight each day.
         
-        For the current day: Looks back to find the last 8-hour idle period and
-        accumulates scores from that point forward up to the current time.
+        For the current day: Accumulates scores from midnight of the current day up to now.
         
-        For historical dates: Calculates the full day's score with idle refresh logic.
+        For historical dates: Calculates the full day's score from midnight to end of day.
         
         Args:
             target_date: Date to calculate for (default: today/now for rolling calculation)
-            idle_refresh_hours: Hours of idle time before score resets (default: 8.0)
+            idle_refresh_hours: Deprecated parameter, kept for backward compatibility
             
         Returns:
             Dict with:
-            - daily_score (float): Total productivity score for the day with idle refresh logic
-            - segments (List[Dict]): List of score segments (each segment is a period between idle resets)
-            - segment_count (int): Number of segments (resets) in the day
+            - daily_score (float): Total productivity score for the day
+            - segments (List[Dict]): List containing single segment from midnight
+            - segment_count (int): Always 1 (single day segment)
             - total_tasks (int): Total tasks completed in the day
         """
         # #region agent log
@@ -6026,7 +6024,7 @@ class Analytics:
                 'total_tasks': 0
             }
         
-        # For current day: look back to find the start of the current segment
+        # For current day: use midnight of current day as segment start
         # For historical dates: use all tasks from that date
         if is_current_day:
             # #region agent log
@@ -6047,187 +6045,8 @@ class Analytics:
             except: pass
             # #endregion
             
-            idle_threshold = timedelta(hours=idle_refresh_hours)
-            
-            # Sort all completions by time (most recent first)
-            all_completions_sorted = completed.sort_values('completed_at_dt', ascending=False)
-            
-            if all_completions_sorted.empty:
-                # #region agent log
-                try:
-                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({
-                            'sessionId': 'debug-session',
-                            'runId': 'run1',
-                            'hypothesisId': 'C',
-                            'location': 'analytics.py:4343',
-                            'message': 'Early return: all_completions_sorted empty',
-                            'data': {},
-                            'timestamp': int(datetime.now().timestamp() * 1000)
-                        }) + '\n')
-                except: pass
-                # #endregion
-                return {
-                    'daily_score': 0.0,
-                    'segments': [],
-                    'segment_count': 0,
-                    'total_tasks': 0
-                }
-            
-            # Find the last completion time
-            last_completion = all_completions_sorted.iloc[0]['completed_at_dt']
-            
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({
-                        'sessionId': 'debug-session',
-                        'runId': 'run1',
-                        'hypothesisId': 'C',
-                        'location': 'analytics.py:4352',
-                        'message': 'Last completion found',
-                        'data': {
-                            'last_completion': str(last_completion),
-                            'hours_since_last': (now - last_completion).total_seconds() / 3600,
-                            'idle_threshold_hours': idle_refresh_hours
-                        },
-                        'timestamp': int(datetime.now().timestamp() * 1000)
-                    }) + '\n')
-            except: pass
-            # #endregion
-            
-            # If there's been more than 8 hours since last completion, start new segment from now
-            if (now - last_completion) > idle_threshold:
-                # #region agent log
-                try:
-                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({
-                            'sessionId': 'debug-session',
-                            'runId': 'run1',
-                            'hypothesisId': 'C',
-                            'location': 'analytics.py:4355',
-                            'message': 'Early return: idle time exceeded threshold',
-                            'data': {
-                                'hours_since_last': (now - last_completion).total_seconds() / 3600
-                            },
-                            'timestamp': int(datetime.now().timestamp() * 1000)
-                        }) + '\n')
-                except: pass
-                # #endregion
-                # Start new segment from now (no tasks yet in this segment)
-                return {
-                    'daily_score': 0.0,
-                    'segments': [],
-                    'segment_count': 0,
-                    'total_tasks': 0
-                }
-            
-            # Find where the current segment started by looking back for 8-hour gaps
-            # Work backwards from the most recent completion
-            segment_start_time = last_completion
-            
-            # #region agent log
-            try:
-                completion_times = [str(all_completions_sorted.iloc[i]['completed_at_dt']) for i in range(min(10, len(all_completions_sorted)))]
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({
-                        'sessionId': 'debug-session',
-                        'runId': 'run1',
-                        'hypothesisId': 'H1',
-                        'location': 'analytics.py:5689',
-                        'message': 'Starting gap detection loop',
-                        'data': {
-                            'total_completions': len(all_completions_sorted),
-                            'last_completion': str(last_completion),
-                            'first_10_completions': completion_times,
-                            'idle_threshold_hours': idle_refresh_hours
-                        },
-                        'timestamp': int(datetime.now().timestamp() * 1000)
-                    }) + '\n')
-            except: pass
-            # #endregion
-            
-            # Look for gaps > 8 hours going backwards
-            gaps_found = []
-            for i in range(len(all_completions_sorted) - 1):
-                current_time = all_completions_sorted.iloc[i]['completed_at_dt']
-                next_time = all_completions_sorted.iloc[i + 1]['completed_at_dt']
-                gap = current_time - next_time
-                gap_hours = gap.total_seconds() / 3600
-                
-                gaps_found.append({
-                    'index': i,
-                    'current_time': str(current_time),
-                    'next_time': str(next_time),
-                    'gap_hours': gap_hours,
-                    'exceeds_threshold': gap > idle_threshold
-                })
-                
-                # #region agent log
-                try:
-                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({
-                            'sessionId': 'debug-session',
-                            'runId': 'run1',
-                            'hypothesisId': 'H1',
-                            'location': 'analytics.py:5695',
-                            'message': 'Checking gap between completions',
-                            'data': {
-                                'index': i,
-                                'current_time': str(current_time),
-                                'next_time': str(next_time),
-                                'gap_hours': gap_hours,
-                                'idle_threshold_hours': idle_refresh_hours,
-                                'exceeds_threshold': gap > idle_threshold
-                            },
-                            'timestamp': int(datetime.now().timestamp() * 1000)
-                        }) + '\n')
-                except: pass
-                # #endregion
-                
-                if gap > idle_threshold:
-                    # Found a gap > 8 hours, segment starts after this gap (at current_time)
-                    segment_start_time = current_time
-                    # #region agent log
-                    try:
-                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                            f.write(json.dumps({
-                                'sessionId': 'debug-session',
-                                'runId': 'run1',
-                                'hypothesisId': 'H1',
-                                'location': 'analytics.py:5697',
-                                'message': 'Found 8-hour gap, setting segment start',
-                                'data': {
-                                    'segment_start_time': str(segment_start_time),
-                                    'gap_hours': gap_hours,
-                                    'index': i
-                                },
-                                'timestamp': int(datetime.now().timestamp() * 1000)
-                            }) + '\n')
-                    except: pass
-                    # #endregion
-                    break
-            else:
-                # No gaps > 8 hours found, segment starts from the earliest completion
-                segment_start_time = all_completions_sorted.iloc[-1]['completed_at_dt']
-                # #region agent log
-                try:
-                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({
-                            'sessionId': 'debug-session',
-                            'runId': 'run1',
-                            'hypothesisId': 'H1',
-                            'location': 'analytics.py:5701',
-                            'message': 'No 8-hour gap found, using earliest completion',
-                            'data': {
-                                'segment_start_time': str(segment_start_time),
-                                'earliest_completion': str(all_completions_sorted.iloc[-1]['completed_at_dt']),
-                                'gaps_checked': gaps_found
-                            },
-                            'timestamp': int(datetime.now().timestamp() * 1000)
-                        }) + '\n')
-                except: pass
-                # #endregion
+            # Use midnight of current day as segment start
+            segment_start_time = datetime.combine(target_date_obj, datetime.min.time())
             
             # #region agent log
             try:
@@ -6237,19 +6056,18 @@ class Analytics:
                         'runId': 'run1',
                         'hypothesisId': 'H2',
                         'location': 'analytics.py:5720',
-                        'message': 'Segment start time calculated',
+                        'message': 'Segment start time set to midnight',
                         'data': {
                             'segment_start_time': str(segment_start_time),
-                            'last_completion': str(last_completion),
-                            'total_completions': len(all_completions_sorted),
-                            'completed_before_filter': len(completed)
+                            'now': str(now),
+                            'total_completions': len(completed)
                         },
                         'timestamp': int(datetime.now().timestamp() * 1000)
                     }) + '\n')
             except: pass
             # #endregion
             
-            # Filter to tasks since segment start (up to now)
+            # Filter to tasks since midnight (up to now)
             before_filter_count = len(completed)
             day_completions = completed[
                 (completed['completed_at_dt'] >= segment_start_time) &
@@ -6452,56 +6270,25 @@ class Analytics:
             except: pass
         # #endregion
         
-        # Group completions into segments based on idle time
-        # If there's more than 8 hours between completions, start a new segment
-        idle_threshold = timedelta(hours=idle_refresh_hours)
-        segments = []
-        current_segment = []
-        current_segment_score = 0.0
-        last_completion_time = None
+        # Calculate total score for the day (single segment from midnight)
+        total_score = float(day_completions['productivity_score'].sum())
         
-        for _, row in day_completions.iterrows():
-            completion_time = row['completed_at_dt']
-            score = float(row.get('productivity_score', 0.0) or 0.0)
-            
-            # Check if we need to start a new segment (idle time > threshold)
-            if last_completion_time is not None:
-                idle_time = completion_time - last_completion_time
-                if idle_time > idle_threshold:
-                    # Save current segment and start new one
-                    if current_segment:
-                        segments.append({
-                            'start_time': current_segment[0]['completed_at_dt'],
-                            'end_time': current_segment[-1]['completed_at_dt'],
-                            'score': current_segment_score,
-                            'task_count': len(current_segment)
-                        })
-                    current_segment = []
-                    current_segment_score = 0.0
-            
-            # Add to current segment
-            current_segment.append({
-                'completed_at_dt': completion_time,
-                'productivity_score': score
-            })
-            current_segment_score += score
-            last_completion_time = completion_time
-        
-        # Add final segment (for current day, this is the active segment)
-        if current_segment:
-            end_time = current_segment[-1]['completed_at_dt']
+        # Create single segment representing the full day
+        if not day_completions.empty:
+            segment_start = datetime.combine(target_date_obj, datetime.min.time())
             if is_current_day:
-                # For current day, segment is still active, end time is now
-                end_time = now
-            segments.append({
-                'start_time': current_segment[0]['completed_at_dt'],
-                'end_time': end_time,
-                'score': current_segment_score,
-                'task_count': len(current_segment)
-            })
-        
-        # Total score is sum of all segments (each segment resets after idle time)
-        total_score = sum(seg['score'] for seg in segments)
+                segment_end = now
+            else:
+                segment_end = day_completions['completed_at_dt'].max()
+            
+            segments = [{
+                'start_time': segment_start,
+                'end_time': segment_end,
+                'score': total_score,
+                'task_count': len(day_completions)
+            }]
+        else:
+            segments = []
         
         # #region agent log
         try:
@@ -12197,7 +11984,7 @@ class Analytics:
             except: pass
             # #endregion
             
-            # Calculate daily productivity score with 8-hour idle refresh
+            # Calculate daily productivity score with midnight refresh
             # Get all unique dates in the range
             now = datetime.now()
             if days:

@@ -2621,7 +2621,7 @@ def render_monitored_metrics_section(container):
                         _monitored_metrics_state['coloration_baseline'] = coloration_baseline
                         _monitored_metrics_state['analytics_instance'] = an
                         
-                        # Set up periodic refresh for 8-hour idle productivity score
+                        # Set up periodic refresh for daily productivity score (resets at midnight)
                         _setup_periodic_metric_refresh(metric_cards, selected_metrics, an)
                     except Exception as e:
                         print(f"[Dashboard] Error updating metric cards: {e}")
@@ -2653,7 +2653,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
     """Set up periodic refresh for time-sensitive metrics like daily_productivity_score_idle_refresh.
     
     This function creates a timer that periodically refreshes metrics that depend on current time,
-    such as the 8-hour idle productivity score which should reset after 8 hours of idle time.
+    such as the daily productivity score which resets at midnight each day.
     """
     global _monitored_metrics_state
     
@@ -2683,8 +2683,12 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
     except: pass
     # #endregion
     
+    # Track last refresh date to detect midnight crossing
+    from datetime import datetime, date
+    _monitored_metrics_state['last_refresh_date'] = date.today()
+    
     def refresh_idle_metric():
-        """Periodically refresh the 8-hour idle productivity score metric."""
+        """Periodically refresh the daily productivity score metric (resets at midnight)."""
         global _monitored_metrics_state
         
         metric_key = 'daily_productivity_score_idle_refresh'
@@ -2692,6 +2696,20 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
         an_ref = _monitored_metrics_state.get('analytics_instance')
         
         if metric_key not in metric_cards_ref or an_ref is None:
+            return
+        
+        # Check if we've crossed midnight
+        current_date = date.today()
+        last_refresh_date = _monitored_metrics_state.get('last_refresh_date')
+        
+        # Always refresh (metric updates throughout the day), but log midnight crossing
+        should_refresh = True
+        if last_refresh_date and current_date != last_refresh_date:
+            # Midnight crossed - this is when the score resets
+            should_refresh = True
+            _monitored_metrics_state['last_refresh_date'] = current_date
+        
+        if not should_refresh:
             return
         
         # #region agent log
@@ -2703,17 +2721,21 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
                     'hypothesisId': 'PERIODIC_REFRESH',
                     'location': 'dashboard.py:refresh_idle_metric',
                     'message': 'Periodic refresh triggered for daily_productivity_score_idle_refresh',
-                    'data': {},
+                    'data': {
+                        'current_date': str(current_date),
+                        'last_refresh_date': str(last_refresh_date) if last_refresh_date else None,
+                        'midnight_crossed': current_date != last_refresh_date if last_refresh_date else False
+                    },
                     'timestamp': int(time.time() * 1000)
                 }) + '\n')
         except: pass
         # #endregion
         
         try:
-            # Recalculate the metric (this will check if 8 hours have passed)
+            # Recalculate the metric (resets at midnight)
             score_data = an_ref.calculate_daily_productivity_score_with_idle_refresh(
                 target_date=None,  # None = current day with rolling calculation
-                idle_refresh_hours=8.0
+                idle_refresh_hours=8.0  # Deprecated parameter, kept for compatibility
             )
             new_value = score_data.get('daily_score', 0.0)
             
@@ -2781,9 +2803,9 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
             # #endregion
             print(f"[Dashboard] Error refreshing daily_productivity_score_idle_refresh: {e}")
     
-    # Set up timer to refresh every 5 minutes (300 seconds)
-    # This is frequent enough to detect when 8 hours have passed (we check every 5 min)
-    refresh_timer = ui.timer(300.0, refresh_idle_metric)
+    # Set up timer to refresh every minute (60 seconds)
+    # This ensures we catch midnight crossing and keep the metric updated throughout the day
+    refresh_timer = ui.timer(60.0, refresh_idle_metric)
     _monitored_metrics_state['refresh_timer'] = refresh_timer
 
 
@@ -2850,20 +2872,19 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     # This pattern can be extended for other metrics that need special logic.
                     #
                     # Example: daily_productivity_score_idle_refresh needs to calculate
-                    # a rolling daily score that resets after 8 hours of idle time.
+                    # a daily score that resets at midnight each day.
                     # It's not pre-calculated in any standard metric dictionary.
                     # ====================================================================
                     
                     # Special handling for daily_productivity_score_idle_refresh - calculate on demand
-                    # This metric calculates a rolling daily productivity score that accumulates
-                    # throughout the day but resets after 8 hours of idle time (no task completions).
-                    # For the current day, it looks back to find the last 8-hour idle period and
-                    # accumulates scores from that point forward up to the current time.
+                    # This metric calculates a daily productivity score that accumulates
+                    # throughout the day and resets at midnight each day.
+                    # For the current day, it accumulates scores from midnight up to the current time.
                     if key == 'daily_productivity_score_idle_refresh':
                         try:
                             score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
                                 target_date=None,  # None = current day with rolling calculation
-                                idle_refresh_hours=8.0
+                                idle_refresh_hours=8.0  # Deprecated parameter, kept for compatibility
                             )
                             result = score_data.get('daily_score', 0.0)
                             return float(result)
@@ -3256,7 +3277,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # This pattern can be extended for other metrics that need special logic.
                     #
                     # Example: daily_productivity_score_idle_refresh needs to calculate
-                    # a rolling daily score that resets after 8 hours of idle time.
+                    # a daily score that resets at midnight each day.
                     # It's not pre-calculated in any standard metric dictionary.
                     #
                     # To add special handling for a new metric:
@@ -3286,15 +3307,14 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # #endregion
                     
                     # Special handling for daily_productivity_score_idle_refresh - calculate on demand
-                    # This metric calculates a rolling daily productivity score that accumulates
-                    # throughout the day but resets after 8 hours of idle time (no task completions).
-                    # For the current day, it looks back to find the last 8-hour idle period and
-                    # accumulates scores from that point forward up to the current time.
+                    # This metric calculates a daily productivity score that accumulates
+                    # throughout the day and resets at midnight each day.
+                    # For the current day, it accumulates scores from midnight up to the current time.
                     if key == 'daily_productivity_score_idle_refresh':
                         try:
                             score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
                                 target_date=None,  # None = current day with rolling calculation
-                                idle_refresh_hours=8.0
+                                idle_refresh_hours=8.0  # Deprecated parameter, kept for compatibility
                             )
                             result = score_data.get('daily_score', 0.0)
                             # #region agent log
@@ -3447,7 +3467,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # ====================================================================
                     
                     # Special handling for daily_productivity_score_idle_refresh - use get_attribute_trends
-                    # This ensures the historical data uses the same calculation logic (8-hour idle refresh)
+                    # This ensures the historical data uses the same calculation logic (midnight refresh)
                     # as the current value, providing consistent trend visualization.
                     if key == 'daily_productivity_score_idle_refresh':
                         try:
