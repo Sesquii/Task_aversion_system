@@ -3322,6 +3322,7 @@ class Analytics:
             Dict with same structure as before, but only contains requested metrics (or all if metrics=None)
         """
         import time
+        start = time.perf_counter()
         
         # Check cache first (always cache full result, then filter if needed)
         current_time = time.time()
@@ -3349,6 +3350,8 @@ class Analytics:
                 pass  # Will fall through to calculation
             else:
                 # No filtering needed, return cached full result
+                duration = (time.perf_counter() - start) * 1000
+                print(f"[Analytics] get_dashboard_metrics (cached): {duration:.2f}ms")
                 return self._dashboard_metrics_cache.copy()
         
         # Determine which metrics to calculate
@@ -3770,6 +3773,8 @@ class Analytics:
             self._dashboard_metrics_cache = result.copy()
             self._dashboard_metrics_cache_time = time.time()
         
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_dashboard_metrics: {duration:.2f}ms")
         return result
 
     def get_life_balance(self) -> Dict[str, any]:
@@ -4189,6 +4194,8 @@ class Analytics:
             - tracking_coverage: Proportion of day tracked (0-1)
             - daily_scores: List of daily scores
         """
+        import time
+        start = time.perf_counter()
         df = self._load_instances()
         
         if df.empty:
@@ -4323,6 +4330,8 @@ class Analytics:
             daily_scores.append(daily_score)
         
         if not daily_data:
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] calculate_time_tracking_consistency_score: {duration:.2f}ms (no data)")
             return {
                 'tracking_consistency_score': 0.0,
                 'avg_tracked_time_minutes': 0.0,
@@ -4339,6 +4348,8 @@ class Analytics:
         avg_coverage = sum(d['tracking_coverage'] for d in daily_data) / len(daily_data)
         overall_score = sum(daily_scores) / len(daily_scores) if daily_scores else 0.0
         
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] calculate_time_tracking_consistency_score: {duration:.2f}ms")
         return {
             'tracking_consistency_score': round(float(overall_score), 1),
             'avg_tracked_time_minutes': round(float(avg_tracked), 1),
@@ -4496,6 +4507,8 @@ class Analytics:
         """
         import time as time_module
         
+        start = time_module.perf_counter()
+        
         # Determine which metrics to calculate
         if metrics is not None:
             requested_metrics = set(metrics)
@@ -4516,6 +4529,8 @@ class Analytics:
             if (Analytics._composite_scores_cache is not None and 
                 Analytics._composite_scores_cache_time is not None and
                 (current_time - Analytics._composite_scores_cache_time) < Analytics._cache_ttl_seconds):
+                duration = (time_module.perf_counter() - start) * 1000
+                print(f"[Analytics] get_all_scores_for_composite (cached): {duration:.2f}ms")
                 return Analytics._composite_scores_cache.copy()  # Return copy to prevent mutation
         
         scores = {}
@@ -4599,6 +4614,8 @@ class Analytics:
             Analytics._composite_scores_cache = scores.copy()
             Analytics._composite_scores_cache_time = time_module.time()
         
+        duration = (time_module.perf_counter() - start) * 1000
+        print(f"[Analytics] get_all_scores_for_composite: {duration:.2f}ms")
         return scores
     
     def get_execution_score_chunked(self, state: Dict[str, any], batch_size: int = 5, user_id: str = "default", persist: bool = True) -> Dict[str, any]:
@@ -7037,6 +7054,8 @@ class Analytics:
                     }) + '\n')
             except: pass
             # #endregion
+            duration = (time_module.perf_counter() - total_start) * 1000
+            print(f"[Analytics] get_relief_summary (cached): {duration:.2f}ms")
             return Analytics._relief_summary_cache
         
         # #region agent log
@@ -10766,6 +10785,8 @@ class Analytics:
         Returns:
             List of dicts with task_id, task_name, metric_value, and count
         """
+        import time
+        start = time.perf_counter()
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
@@ -10797,6 +10818,8 @@ class Analytics:
         task_stats = task_stats[task_stats['metric_value'].notna()]
         
         if task_stats.empty:
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] get_task_performance_ranking: {duration:.2f}ms (no data, metric: {metric})")
             return []
         
         # Sort appropriately (higher is better for relief, stress_efficiency, behavioral_score; lower is better for stress_level)
@@ -10816,6 +10839,8 @@ class Analytics:
                 'metric': metric,
             })
         
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_task_performance_ranking: {duration:.2f}ms (metric: {metric}, top_n: {top_n})")
         return result
 
     def get_stress_efficiency_leaderboard(self, top_n: int = 10) -> List[Dict[str, any]]:
@@ -10827,16 +10852,22 @@ class Analytics:
         Returns:
             List of dicts with task_id, task_name, stress_efficiency, avg_relief, avg_stress, and count
         """
+        import time
+        start = time.perf_counter()
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (no data)")
             return []
         
         # Filter to tasks with valid stress efficiency
         valid = completed[completed['stress_efficiency'].notna() & (completed['stress_efficiency'] > 0)].copy()
         
         if valid.empty:
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (no valid data)")
             return []
         
         # Group by task_id and calculate averages
@@ -10870,6 +10901,8 @@ class Analytics:
                 'count': int(row['count']),
             })
         
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (top_n: {top_n})")
         return result
 
     # ------------------------------------------------------------------
@@ -11742,6 +11775,8 @@ class Analytics:
     # Analytics datasets for charts
     # ------------------------------------------------------------------
     def trend_series(self) -> pd.DataFrame:
+        import time
+        start = time.perf_counter()
         df = self._load_instances()
         if df.empty:
             return pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
@@ -11771,9 +11806,13 @@ class Analytics:
         daily['completed_at'] = pd.to_datetime(daily['completed_at'])
         daily['cumulative_relief_score'] = daily['daily_relief_score'].cumsum()
 
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] trend_series: {duration:.2f}ms")
         return daily[['completed_at', 'daily_relief_score', 'cumulative_relief_score']]
 
     def attribute_distribution(self) -> pd.DataFrame:
+        import time
+        start = time.perf_counter()
         df = self._load_instances()
         if df.empty:
             return pd.DataFrame(columns=['attribute', 'value'])
@@ -11825,7 +11864,11 @@ class Analytics:
             melted_frames.append(efficiency_sub)
         
         if not melted_frames:
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] attribute_distribution: {duration:.2f}ms (no data)")
             return pd.DataFrame(columns=['attribute', 'value'])
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] attribute_distribution: {duration:.2f}ms")
         return pd.concat(melted_frames, ignore_index=True)
 
     # ------------------------------------------------------------------
@@ -12277,6 +12320,8 @@ class Analytics:
         normalize: bool = False,
     ) -> Dict[str, Dict[str, any]]:
         """Return trends for multiple attributes; optionally normalize each series (min-max)."""
+        import time
+        start = time.perf_counter()
         trends = {}
         attribute_keys = attribute_keys or []
         for key in attribute_keys:
@@ -12293,6 +12338,8 @@ class Analytics:
                 data['original_min'] = v_min
                 data['original_max'] = v_max
             trends[key] = data
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_multi_attribute_trends: {duration:.2f}ms (attributes: {len(attribute_keys)})")
         return trends
 
     def get_stress_dimension_data(self) -> Dict[str, Dict[str, float]]:
@@ -12300,6 +12347,8 @@ class Analytics:
         Calculate stress dimension values for cognitive, emotional, and physical stress.
         Returns dictionary with totals, 7-day averages, and daily values for each dimension.
         """
+        import time
+        start = time.perf_counter()
         df = self._load_instances()
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
@@ -12327,6 +12376,8 @@ class Analytics:
         completed = completed[completed['completed_at_dt'].notna()]
         
         if completed.empty:
+            duration = (time.perf_counter() - start) * 1000
+            print(f"[Analytics] get_stress_dimension_data: {duration:.2f}ms (no data)")
             return {
                 'cognitive': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
                 'emotional': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
@@ -12360,6 +12411,8 @@ class Analytics:
         emotional_daily = [{'date': str(row['date']), 'value': float(row['emotional_stress'])} for _, row in daily_emotional.iterrows()]
         physical_daily = [{'date': str(row['date']), 'value': float(row['physical_stress'])} for _, row in daily_physical.iterrows()]
         
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] get_stress_dimension_data: {duration:.2f}ms")
         return {
             'cognitive': {
                 'total': cognitive_total,
