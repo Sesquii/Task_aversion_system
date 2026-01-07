@@ -57,14 +57,24 @@ This system goes beyond a simple to-do list by incorporating psychological and b
   - Execution score
 - **Performance Metrics**:
   - **Productivity Score (v1.1)**: Measures productive output based on completion, task type, and efficiency
-  - **Execution Score (v1.0)**: Rewards efficient execution of difficult tasks
-  - **Grit Score**: Measures persistence and commitment (rewards repeated completions and taking longer)
+  - **Execution Score (v1.2)**: Rewards efficient execution of difficult tasks with momentum and thoroughness factors
+  - **Grit Score (v1.8)**: Measures persistence and commitment with disappointment resilience factor
+    - Includes focus factor (emotion-based), persistence factor (historical patterns), and passion factor
+    - Exponential scaling rewards completing tasks despite disappointment (up to 10.0x bonus)
+  - **Thoroughness Factor**: Measures data quality and tracking thoroughness (note coverage, length, slider compliance)
+  - **Momentum Factor**: Measures building energy through repeated action (task clustering, volume, consistency)
+  - **Focus Factor**: Pure mental state measurement based on focus-positive vs focus-negative emotions
+  - **Persistence Factor**: Measures continuing despite obstacles (aversion resistance, task repetition)
   - **Stress Efficiency**: Relief per unit stress
   - **Net Wellbeing**: Relief minus stress (normalized)
   - **Behavioral Score**: Historical efficiency patterns
+  - **Daily Productivity Score (8h Idle Refresh)**: Daily score that resets after 8 hours of idle time
 
 ### Task Recommendations
 
+- **Dual Recommendation Modes**: Toggle between "Task Templates" and "Initialized Tasks" recommendation modes
+- **Normalized Scoring**: Recommendation scores on 0-100 scale for meaningful comparisons
+- **Detailed Tooltips**: Hover to see sub-scores (relief, cognitive load, emotional load, physical load, stress, behavioral score, net wellbeing, etc.)
 - **Rule-Based Recommendations**: Task suggestions using multiple metrics (relief score, difficulty, efficiency, etc.)
 - **Category-Based Filtering**: Get recommendations filtered by task category
 - **Customizable Metric Selection**: Choose which factors to prioritize in recommendations
@@ -75,6 +85,12 @@ This system goes beyond a simple to-do list by incorporating psychological and b
   - Task templates and quick actions
   - Active task instances and current task
   - Recommendations and metrics
+- **Monitored Metrics System**: Configurable dashboard metrics (up to 4 user-selectable metrics)
+  - Multiple baseline types: last 3 months, last month, last week, average, all data
+  - Color-coded metrics (green/yellow/red) based on baseline comparison
+  - Interactive tooltip charts showing historical trends
+  - 24+ available metrics including productivity, execution, grit, stress, wellbeing, and more
+- **Search Functionality**: Search bar for initialized tasks (by name, description, notes)
 - **Real-Time Metrics**: Live tracking of key performance indicators
 - **Interactive Tooltips**: Detailed information on hover for tasks and metrics
 - **Gap Detection**: Automatic detection and handling of data gaps in your tracking
@@ -88,30 +104,71 @@ Access via `/experimental` route:
   - Parameter comparison charts
   - CSV persistence for formula settings
   - Support for productivity score formula tuning
+- **Formula Baseline Charts**: Theoretical charts for formula analysis and refinement
+- **Coursera Analysis**: Compare productivity scores on days with vs without specific tasks
+- **Productivity vs Grit Tradeoff**: Scatter plot visualization exploring efficiency vs persistence metrics
+- **Task Distribution Analysis**: Pie charts showing task template completion patterns with interactive status filters
+
+### Goal Tracking (Production)
+
+Access via `/goals` route:
+
 - **Productivity Hours Goal Tracking**: Goal-based productivity tracking with:
+  - Rolling 7-day calculation mode (default) or Monday-based week mode
+  - Daily trend visualization (90-day window with 7-day rolling average)
   - Weekly productivity hour goals
   - Goal achievement tracking
-  - Hybrid initialization (auto-estimate with manual adjustment)
+  - Pace projection for Monday-based mode
   - Configurable productivity metrics charts
-  - Goal-based score adjustments
-- **Formula Baseline Charts**: Theoretical charts for formula analysis and refinement
 
 ### Data Management
 
 - **Database Storage (Primary)**: SQLite database (default) with PostgreSQL support
+- **Database Optimizations**: 
+  - Comprehensive indexing (composite indexes for common query patterns)
+  - Instance-level caching (1,383x faster for `_load_instances()`)
+  - Shared class-level cache across all manager instances
+  - Smart cache invalidation on data changes
 - **CSV Fallback**: Automatic fallback to CSV when database is unavailable
+- **CSV Export/Import**: Comprehensive data backup and restoration
+  - Export all tables to CSV files with timestamped ZIP archives
+  - Browser download support
+  - Import from ZIP with automatic schema evolution
+  - Abuse prevention measures (column/row/file size limits)
+- **Factor Storage**: Automatic calculation and storage of serendipity_factor and disappointment_factor in database
 - **Data Validation**: Automatic validation and error handling
-- **Backup & Recovery**: Tools for data backup and restoration
 - **Audit System**: Data integrity checking and reporting
 - **Migration Tools**: Safe migration scripts with rollback capability
 
 ### Additional Tools
 
+- **Notes System**: Behavioral and emotional pattern observations page (`/notes`)
+  - Create, view, and delete notes with timestamps
+  - Database-backed storage with CSV fallback
+  - Default note initialization on first use
+- **Popup System**: Intelligent popup triggers for user guidance and awareness
+  - Slider adjustment reminders (trigger 7.1)
+  - Momentum popups at 5 task completions (trigger 4.1)
+  - Take a break reminders after 4+ hours of work (trigger 1.1)
+  - Score milestone celebrations (trigger 6.1)
+  - Weekly progress summaries (trigger 5.1)
+  - Tiered messaging system (first time vs repeats)
+  - Daily popup caps and cooldown system
+- **Task Editing Manager**: Unified interface for editing completed and cancelled tasks
+  - Chronological pagination (25 tasks per page)
+  - Separate "Edit Init" and "Edit Completion" buttons for completed tasks
+  - Status badges and filtering (All/Completed/Cancelled)
+  - Direct navigation to initialization and completion editing pages
+- **Summary Page**: Quick access to overall performance score and component breakdown (`/summary`)
+- **Productivity Settings Page**: Comprehensive productivity configuration (`/settings/productivity-settings`)
+  - Basic settings: weekly curve, target hours, burnout thresholds, primary productivity task
+  - Advanced settings: Component and curve weight configuration with multiple saved configurations
+  - Productivity score over time chart with multi-configuration comparison
 - **Mental Health Survey**: Integrated survey system for tracking overall wellbeing
 - **Settings Management**: Centralized configuration including:
   - Composite score weight configuration
   - Cancellation penalty settings
-  - Cancellation category management
+  - Cancellation category management (moved to cancelled tasks page)
 - **Tutorial System**: Guided walkthrough for new users
 - **Data Archival**: Automatic archiving of historical data with metadata
 - **Cancelled Tasks Analytics**: Track and analyze cancelled tasks with category grouping
@@ -130,22 +187,40 @@ Access via `/experimental` route:
 
 ### Analytics & Scoring Enhancements
 
-- **Execution Score v1.0**: New metric rewarding efficient execution of difficult tasks
-  - Combines difficulty, speed, start speed, and completion factors
+- **Execution Score v1.2**: Enhanced metric with proper separation of factors
+  - Removed focus factor (moved to grit score as emotion-based)
+  - Added momentum factor (behavioral pattern: task clustering, volume, consistency, acceleration)
+  - Added thoroughness factor (data quality: note coverage, length, slider compliance)
+  - Combines difficulty, speed, start speed, completion, thoroughness, and momentum
   - Fully documented with graphic aids and glossary entry
-  - Integrated into composite score system
+- **Grit Score v1.8**: Comprehensive persistence measurement with disappointment resilience
+  - Includes focus factor (emotion-based mental state)
+  - Includes persistence factor (historical patterns: obstacle overcoming, aversion resistance, task repetition)
+  - Includes passion factor (relief vs emotional load)
+  - Includes time bonus (taking longer, dedication)
+  - Disappointment resilience factor: Exponential scaling up to 10.0x bonus for completing tasks despite disappointment
+  - Strong positive correlation (0.89) for completed tasks
 - **Productivity Score v1.1**: Major improvements to efficiency calculation
   - Fixed comparison to use task's own estimate (not weekly average)
   - Accounts for completion percentage in efficiency calculation
   - Capped efficiency multiplier (0.5x-1.5x) to prevent extreme scores
   - Fixed flattened_square curve calculation
   - Prevents negative scores from very fast completions
+- **Thoroughness Factor**: New data quality metric
+  - Base factor (0.5-1.0) based on percentage of tasks with notes
+  - Length bonus (+0.0 to +0.3) for thorough notes
+  - Popup penalty (-0.0 to -0.2) for skipping slider adjustments
+  - Comprehensive visualizations (note coverage, length distribution, penalty trends)
 - **Analytics Glossary System**: Comprehensive glossary with versioned formulas
   - Module-based organization
-  - Version badges (v1.0, v1.1)
+  - Version badges (v1.0, v1.1, v1.2, v1.8)
   - Graphic aids (theoretical and data-driven)
   - Expandable component details
-- **Grit Score Updates**: Refined grit score formula for persistence measurement
+  - Consolidated volumetric productivity module
+- **Scale Refactoring**: Native 0-100 scale throughout system
+  - Removed all 0-10 to 0-100 scaling logic
+  - Simplified codebase and eliminated scaling bugs
+  - Backward compatible with old 0-10 data (read as-is)
 
 ### Formula Control & Experimental Features
 
@@ -154,24 +229,47 @@ Access via `/experimental` route:
   - CSV persistence for formula settings
   - Parameter comparison charts
   - Currently supports productivity score formula
-- **Productivity Hours Goal Tracking**: Goal-based productivity system
-  - Weekly goal setting with auto-estimation
-  - Goal achievement tracking
-  - Configurable chart views (points, score, hours, normalized)
-  - Goal-based score adjustments integrated into analytics
 - **Formula Baseline Charts**: Experimental analysis tools for formula refinement
+- **Coursera Analysis**: Data-driven insights into how specific tasks impact overall productivity metrics
+- **Productivity vs Grit Tradeoff**: Scatter plot visualization exploring efficiency vs persistence relationships
 
 ### Task Management Improvements
 
 - **Task Pausing**: Enhanced pause functionality with:
-  - Time tracking that persists across pauses
+  - Time tracking that persists across pauses (duration preserved across multiple pause/resume cycles)
   - Completion percentage tracking and display
   - Notes field for pause reasons
+  - Improved cache invalidation for immediate UI updates
+- **Task Editing Manager**: Unified interface replacing separate cancelled tasks management
+  - Edit both completed and cancelled tasks from one place
+  - Chronological ordering with pagination (25 tasks per page)
+  - Separate edit buttons for initialization and completion data
+  - Status badges and filtering
+- **Search Functionality**: Search bar for initialized tasks
+  - Search by task name, description, task notes, and pause notes
+  - Debounced input (300ms) for smooth performance
 - **Cancellation System**: Enhanced cancellation tracking with:
-  - Default and custom cancellation categories
+  - Default and custom cancellation categories (managed in cancelled tasks page)
   - Configurable productivity penalties per category
   - Cancelled tasks analytics page
   - Category-based grouping and analysis
+
+### Performance Optimizations
+
+- **Database Optimizations**: Major performance improvements
+  - Added composite indexes for common query patterns (1,383x faster for instance loading)
+  - Instance-level caching with shared class-level cache
+  - Smart cache invalidation on data changes
+  - Analytics page now loads nearly instantly (was 16.5 seconds)
+- **Analytics Performance**: Comprehensive optimization through batching, caching, and vectorization
+  - Batched API calls (get_analytics_page_data, get_chart_data, get_rankings_data)
+  - TTL-based caching for expensive calculations
+  - Vectorized operations (eliminated iterrows and apply operations)
+  - Dashboard loads 3-5x faster with selective metric calculation
+- **Monitored Metrics**: Optimized loading with selective calculation
+  - Only calculates displayed metrics (not all 24+ metrics)
+  - Lazy loading of history data (deferred to hover events)
+  - Background loading with chunking to prevent UI disruption
 
 ### Documentation & Development
 
@@ -179,6 +277,7 @@ Access via `/experimental` route:
 - **Migration Rules**: Comprehensive cursor rules for analytics module development
 - **Graphic Aid Generation Guidelines**: Standardized patterns for theoretical and data-driven visualizations
 - **Development Plans**: Comprehensive plans for performance optimization, analytics modularization, and deployment
+- **Planning Documents**: Roadmap for belief scores, grit+grace strategy, performance optimization, and cleanup
 
 ---
 
@@ -367,15 +466,25 @@ docker-compose up
 - `backend/task_manager.py`: Task CRUD operations (dual backend: database/CSV)
 - `backend/instance_manager.py`: Task instance management (dual backend: database/CSV)
 - `backend/emotion_manager.py`: Emotion tracking
-- `backend/analytics.py`: Analytics engine with versioned formulas (Execution Score v1.0, Productivity Score v1.1)
+- `backend/analytics.py`: Analytics engine with versioned formulas (Execution Score v1.2, Grit Score v1.8, Productivity Score v1.1)
 - `backend/compute_priority.py`: Priority scoring algorithms
 - `backend/productivity_tracker.py`: Productivity goal tracking service
 - `backend/user_state.py`: User preferences and state management
-- `ui/dashboard.py`: Main dashboard interface
+- `backend/popup_state.py`: Popup state management and CRUD operations
+- `backend/popup_dispatcher.py`: Popup trigger evaluation and content generation
+- `backend/notes_manager.py`: Notes storage (database + CSV support)
+- `backend/csv_export.py`: Comprehensive CSV export utility
+- `backend/csv_import.py`: CSV import utility with abuse prevention
+- `ui/dashboard.py`: Main dashboard interface with monitored metrics system
 - `ui/analytics_page.py`: Analytics visualization
 - `ui/analytics_glossary.py`: Analytics glossary with versioned formulas
+- `ui/summary_page.py`: Summary page with composite score display
+- `ui/productivity_settings_page.py`: Comprehensive productivity configuration
+- `ui/task_editing_manager.py`: Unified task editing interface
+- `ui/notes_page.py`: Notes page for behavioral/emotional observations
+- `ui/popup_modal.py`: Reusable popup modal component
 - `ui/formula_control_system.py`: Experimental formula parameter adjustment
-- `ui/productivity_goals_experimental.py`: Goal-based productivity tracking
+- `ui/productivity_goals_experimental.py`: Goal-based productivity tracking (production route: /goals)
 
 ### Database Schema
 
@@ -387,25 +496,40 @@ docker-compose up
 
 **Task Instances Table:**
 - Instance info (instance_id, task_id, status)
-- Time tracking (estimated_minutes, actual_minutes, completion_percentage)
+- Time tracking (estimated_minutes, actual_minutes, completion_percentage, time_spent_before_pause)
 - Psychological metrics (aversion, stress_level, relief_score)
 - Performance metrics (productivity_score, execution_score, grit_score)
+- Factor storage (serendipity_factor, disappointment_factor) - automatically calculated on completion
 - Behavioral data (skills_improved, environmental_effects)
 - Timestamps (initialized_at, completed_at, cancelled_at)
+- Indexes: completed_at, task_id, status+is_completed+is_deleted (composite), task_id+is_completed (composite)
 
 **Emotions Table:**
 - Emotion tracking (instance_id, phase: before/during/after)
 - Emotional states and intensities
 - Timestamps
 
+**Popup Triggers Table:**
+- Trigger state tracking (user_id, trigger_id, task_id, count, last_shown_at, helpful, last_response, last_comment)
+- Cooldown and daily count management
+
+**Popup Responses Table:**
+- Popup interaction logs (user_id, trigger_id, task_id, instance_id, response_value, helpful, comment, context)
+
+**Notes Table:**
+- Notes storage (note_id, content, timestamp)
+- Behavioral and emotional pattern observations
+
 ### Formula Versioning
 
 All analytics formulas are versioned with complete documentation:
 
-- **Execution Score v1.0**: Documented in `docs/execution_module_v1.0.md`
+- **Execution Score v1.2**: Enhanced with momentum and thoroughness factors (documented in Analytics Glossary)
+- **Grit Score v1.8**: Comprehensive persistence measurement with disappointment resilience (documented in Analytics Glossary)
 - **Productivity Score v1.1**: Documented in `docs/productivity_score_v1.1.md`
+- **Thoroughness Factor**: Data quality metric with comprehensive visualizations (documented in Analytics Glossary)
 
-Version information is displayed in the Analytics Glossary UI with version badges.
+Version information is displayed in the Analytics Glossary UI with version badges. All formulas include theoretical and data-driven visualizations.
 
 ---
 
@@ -420,9 +544,12 @@ Version information is displayed in the Analytics Glossary UI with version badge
 
 ### Performance Optimization
 
-- **Caching Layer**: Implement caching for analytics calculations to reduce load times
-- **Connection Pooling**: Enhanced database connection management
-- **Loading Screens**: Improved UX for long-running operations
+- ✅ **Caching Layer**: Implemented comprehensive caching for analytics calculations (completed)
+- ✅ **Database Indexing**: Added composite indexes for common query patterns (completed)
+- ✅ **Analytics Batching**: Batched API calls to reduce overhead (completed)
+- ✅ **Vectorization**: Replaced iterrows and apply operations with vectorized pandas/numpy operations (completed)
+- **Connection Pooling**: Enhanced database connection management (future)
+- **Loading Screens**: Improved UX for long-running operations (future)
 
 ### Online Deployment
 
@@ -450,7 +577,7 @@ Version information is displayed in the Analytics Glossary UI with version badge
 - **Spike Processing Enhancement**: Enhanced spike detection with batch processing and pattern analysis
 - **Data Guide**: Comprehensive documentation for local setup, data backup, and troubleshooting
 - **Habit Tracking**: Long-term habit formation tracking
-- **Export/Import**: Enhanced data portability
+- ✅ **Export/Import**: Comprehensive CSV export/import with ZIP support (completed)
 
 ---
 
@@ -473,7 +600,7 @@ See LICENSE file for details.
 - **Local-Only**: The app currently runs locally only - no online access or multi-device sync
 - **No User Accounts**: Single-user system with no authentication or data isolation
 - **Mobile Experience**: The interface is designed for desktop - mobile browser experience is not optimized
-- **Performance**: With very large datasets (1000+ task instances), some analytics operations may be slow (optimization planned)
+- **Performance**: Major optimizations completed - analytics page loads nearly instantly, dashboard loads in ~5 seconds
 - **Experimental Features**: Some features are marked experimental and may change or be removed
 
 ### Technical Debt
@@ -489,11 +616,16 @@ See LICENSE file for details.
 
 **Current Status**: Actively developed and used for personal productivity
 
-The core workflow is functional and stable for daily use. Database migration is complete with SQLite as the default backend. The system includes versioned analytics formulas, comprehensive glossary system, and experimental features for formula tuning and goal tracking. Development is ongoing with focus on performance optimization, analytics modularization, and deployment preparation.
+The core workflow is functional and stable for daily use. Database migration is complete with SQLite as the default backend. The system includes versioned analytics formulas (Execution Score v1.2, Grit Score v1.8, Productivity Score v1.1), comprehensive glossary system, popup system for user guidance, monitored metrics dashboard, and production goal tracking. Major performance optimizations have been completed - analytics page loads nearly instantly, dashboard loads in ~5 seconds. Development is ongoing with focus on analytics modularization and deployment preparation.
 
 **Database Migration**: ✅ **Complete** - SQLite is now the primary backend with CSV fallback
-**Analytics Formulas**: ✅ **Versioned** - Execution Score v1.0, Productivity Score v1.1
-**Experimental Features**: 🔬 **Active Development** - Formula Control System, Goal Tracking
+**Database Optimizations**: ✅ **Complete** - Comprehensive indexing and caching (1,383x faster instance loading)
+**Analytics Performance**: ✅ **Optimized** - Analytics page loads nearly instantly (was 16.5 seconds)
+**Analytics Formulas**: ✅ **Versioned** - Execution Score v1.2, Grit Score v1.8, Productivity Score v1.1
+**Popup System**: ✅ **Implemented** - 5 intelligent popup triggers with tiered messaging
+**Monitored Metrics**: ✅ **Implemented** - Configurable dashboard metrics with baseline comparisons
+**Goal Tracking**: ✅ **Production** - Productivity Hours Goal Tracking promoted from experimental
+**CSV Export/Import**: ✅ **Implemented** - Comprehensive data backup and restoration
 
 ---
 
@@ -501,9 +633,13 @@ The core workflow is functional and stable for daily use. Database migration is 
 
 - The system is designed to be data-driven: the more you use it, the better the recommendations become
 - Database storage (SQLite/PostgreSQL) is now the default - this resolves file locking issues with CSV
+- Major performance optimizations completed: analytics page loads nearly instantly, dashboard loads in ~5 seconds
 - The composite score system is highly customizable - adjust weights to match your priorities
 - All analytics formulas are versioned and documented in the Analytics Glossary
+- Popup system provides intelligent guidance without being intrusive (daily caps and cooldowns)
+- Monitored metrics system allows you to track up to 4 key metrics with baseline comparisons
 - Regular use (daily task completion) provides the most valuable insights
+- Goal tracking (Productivity Hours) is now in production - no longer experimental
 - Experimental features are available but may change - use with awareness that they're under active development
 - This is a personal project - some features may be rough around the edges
 
