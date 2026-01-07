@@ -11,6 +11,11 @@ from backend.performance_logger import get_perf_logger
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 perf_logger = get_perf_logger()
 class InstanceManager:
+    # Class-level cache shared across all instances
+    _shared_active_instances_cache = None
+    _shared_active_instances_cache_time = None
+    _shared_recent_completed_cache = {}  # Per-limit cache: {limit: (result, timestamp)}
+    
     def __init__(self):
         # Default to database (SQLite) unless USE_CSV is explicitly set
         # Check if CSV is explicitly requested
@@ -61,17 +66,15 @@ class InstanceManager:
             self._init_csv()
             print("[InstanceManager] Using CSV backend")
         
-        # Cache for frequently accessed data
-        self._active_instances_cache = None
-        self._active_instances_cache_time = None
-        self._recent_completed_cache = {}  # Per-limit cache: {limit: (result, timestamp)}
+        # Cache TTL (shared across all instances)
         self._cache_ttl_seconds = 120  # 2 minutes (shorter for active instances since they change frequently)
     
     def _invalidate_instance_caches(self):
-        """Invalidate all instance caches. Call this when instances are created/updated/deleted."""
-        self._active_instances_cache = None
-        self._active_instances_cache_time = None
-        self._recent_completed_cache.clear()
+        """Invalidate all instance caches (shared across all InstanceManager instances). 
+        Call this when instances are created/updated/deleted."""
+        InstanceManager._shared_active_instances_cache = None
+        InstanceManager._shared_active_instances_cache_time = None
+        InstanceManager._shared_recent_completed_cache.clear()
         # Also invalidate Analytics caches since they depend on instances
         try:
             from backend.analytics import Analytics
@@ -562,6 +565,8 @@ class InstanceManager:
         self._save()
         sys.stderr.write(f"[PAUSE DEBUG] CSV save completed\n\n")
         sys.stderr.flush()
+        # Invalidate caches AFTER pausing to ensure fresh data on next read
+        self._invalidate_instance_caches()
     
     def _pause_instance_db(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
         """Database-specific pause_instance."""
@@ -702,6 +707,9 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in pause_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._pause_instance_csv(instance_id, reason, completion_percentage)
+        # Invalidate caches AFTER pausing to ensure fresh data on next read
+        # Do this outside the session context to ensure it always runs
+        self._invalidate_instance_caches()
 
     def list_active_instances(self):
         """List active task instances. Works with both CSV and database.
@@ -710,12 +718,12 @@ class InstanceManager:
         """
         import time
         
-        # Check cache first
+        # Check shared cache first
         current_time = time.time()
-        if (self._active_instances_cache is not None and 
-            self._active_instances_cache_time is not None and
-            (current_time - self._active_instances_cache_time) < self._cache_ttl_seconds):
-            return self._active_instances_cache.copy() if isinstance(self._active_instances_cache, list) else self._active_instances_cache
+        if (InstanceManager._shared_active_instances_cache is not None and 
+            InstanceManager._shared_active_instances_cache_time is not None and
+            (current_time - InstanceManager._shared_active_instances_cache_time) < self._cache_ttl_seconds):
+            return InstanceManager._shared_active_instances_cache.copy() if isinstance(InstanceManager._shared_active_instances_cache, list) else InstanceManager._shared_active_instances_cache
         
         # Cache miss - load from database/CSV
         if self.use_db:
@@ -723,9 +731,9 @@ class InstanceManager:
         else:
             result = self._list_active_instances_csv()
         
-        # Store in cache
-        self._active_instances_cache = result.copy() if isinstance(result, list) else result
-        self._active_instances_cache_time = time.time()
+        # Store in shared cache
+        InstanceManager._shared_active_instances_cache = result.copy() if isinstance(result, list) else result
+        InstanceManager._shared_active_instances_cache_time = time.time()
         
         return result
     
@@ -920,6 +928,8 @@ class InstanceManager:
         sys.stderr.flush()
         sys.stderr.write(f"[START DEBUG] Start completed\n\n")
         sys.stderr.flush()
+        # Invalidate caches AFTER starting to ensure fresh data on next read
+        self._invalidate_instance_caches()
     
     def _resume_instance_csv(self, instance_id):
         """CSV-specific resume_instance (resuming a paused task)."""
@@ -990,6 +1000,8 @@ class InstanceManager:
         sys.stderr.flush()
         sys.stderr.write(f"[RESUME DEBUG] Resume completed\n\n")
         sys.stderr.flush()
+        # Invalidate caches AFTER resuming to ensure fresh data on next read
+        self._invalidate_instance_caches()
     
     def _start_instance_db(self, instance_id):
         """Database-specific start_instance (first time start, not resuming)."""
@@ -1034,6 +1046,8 @@ class InstanceManager:
                 sys.stderr.flush()
                 sys.stderr.write(f"[START DEBUG] Start completed\n\n")
                 sys.stderr.flush()
+                # Invalidate caches AFTER starting to ensure fresh data on next read
+                self._invalidate_instance_caches()
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in start_instance and CSV fallback is disabled: {e}") from e
@@ -1107,6 +1121,8 @@ class InstanceManager:
                 sys.stderr.flush()
                 sys.stderr.write(f"[RESUME DEBUG] Resume completed\n\n")
                 sys.stderr.flush()
+                # Invalidate caches AFTER resuming to ensure fresh data on next read
+                self._invalidate_instance_caches()
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in resume_instance and CSV fallback is disabled: {e}") from e
@@ -1116,8 +1132,7 @@ class InstanceManager:
 
     def complete_instance(self, instance_id, actual: dict):
         """Complete a task instance. Works with both CSV and database."""
-        # Invalidate caches before completing
-        self._invalidate_instance_caches()
+        # Note: Cache invalidation happens AFTER completion in _complete_instance_db/_complete_instance_csv
         if self.use_db:
             return self._complete_instance_db(instance_id, actual)
         else:
@@ -1213,6 +1228,8 @@ class InstanceManager:
         
         self._update_attributes_from_payload(idx, actual)
         self._save()
+        # Invalidate caches AFTER completing to ensure fresh data on next read
+        self._invalidate_instance_caches()
     
     def _complete_instance_db(self, instance_id, actual: dict):
         """Database-specific complete_instance."""
@@ -1323,6 +1340,9 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in complete_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._complete_instance_csv(instance_id, actual)
+        # Invalidate caches AFTER completing to ensure fresh data on next read
+        # Do this outside the session context to ensure it always runs
+        self._invalidate_instance_caches()
 
     def append_instance_notes(self, instance_id: str, note: str):
         """Append a note to the task template (shared across all instances). Works with both CSV and database.
@@ -1347,8 +1367,7 @@ class InstanceManager:
     
     def cancel_instance(self, instance_id, actual: dict):
         """Cancel a task instance. Works with both CSV and database."""
-        # Invalidate caches before cancelling
-        self._invalidate_instance_caches()
+        # Note: Cache invalidation happens AFTER cancelling in _cancel_instance_db/_cancel_instance_csv
         if self.use_db:
             return self._cancel_instance_db(instance_id, actual)
         else:
@@ -1371,6 +1390,8 @@ class InstanceManager:
         self.df.at[idx, 'proactive_score'] = ''
         self._update_attributes_from_payload(idx, actual or {})
         self._save()
+        # Invalidate caches AFTER cancelling to ensure fresh data on next read
+        self._invalidate_instance_caches()
     
     def _cancel_instance_db(self, instance_id, actual: dict):
         """Database-specific cancel_instance."""
@@ -1400,6 +1421,9 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in cancel_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._cancel_instance_csv(instance_id, actual)
+        # Invalidate caches AFTER cancelling to ensure fresh data on next read
+        # Do this outside the session context to ensure it always runs
+        self._invalidate_instance_caches()
 
     def update_cancelled_instance(self, instance_id, cancellation_data: dict):
         """Update cancellation data for an already-cancelled instance. Works with both CSV and database."""
@@ -1520,8 +1544,7 @@ class InstanceManager:
 
     def delete_instance(self, instance_id):
         """Delete a task instance. Works with both CSV and database."""
-        # Invalidate caches before deleting
-        self._invalidate_instance_caches()
+        # Note: Cache invalidation happens AFTER deleting in _delete_instance_db/_delete_instance_csv
         if self.use_db:
             return self._delete_instance_db(instance_id)
         else:
@@ -1538,6 +1561,8 @@ class InstanceManager:
             return False
         self._save()
         print("[InstanceManager] Instance deleted.")
+        # Invalidate caches AFTER deleting to ensure fresh data on next read
+        self._invalidate_instance_caches()
         return True
     
     def _delete_instance_db(self, instance_id):
@@ -1562,6 +1587,9 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in delete_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._delete_instance_csv(instance_id)
+        # Invalidate caches AFTER deleting to ensure fresh data on next read
+        # Do this outside the session context to ensure it always runs
+        self._invalidate_instance_caches()
 
     def _update_attributes_from_payload(self, idx, payload: dict):
         """Persist wellbeing attributes if caller provided them (CSV version).
@@ -1729,8 +1757,8 @@ class InstanceManager:
         
         # Check per-limit cache first
         current_time = time.time()
-        if limit in self._recent_completed_cache:
-            cached_result, cache_time = self._recent_completed_cache[limit]
+        if limit in InstanceManager._shared_recent_completed_cache:
+            cached_result, cache_time = InstanceManager._shared_recent_completed_cache[limit]
             if (current_time - cache_time) < self._cache_ttl_seconds:
                 return cached_result.copy() if isinstance(cached_result, list) else cached_result
         
@@ -1741,7 +1769,7 @@ class InstanceManager:
             result = self._list_recent_completed_csv(limit)
         
         # Store in per-limit cache
-        self._recent_completed_cache[limit] = (result.copy() if isinstance(result, list) else result, time.time())
+        InstanceManager._shared_recent_completed_cache[limit] = (result.copy() if isinstance(result, list) else result, time.time())
         
         return result
     

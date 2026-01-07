@@ -186,22 +186,8 @@ def resume_instance(instance_id, container=None):
     ui.notify("Instance resumed", color='positive')
     
     # Reload the page to update the current task display
-    ui.navigate.reload()
-
-
-def resume_instance(instance_id, container=None):
-    """Resume a paused instance and update the container to show ongoing time."""
-    # Check if there's already a current task running
-    current = get_current_task()
-    if current and current.get('instance_id') != instance_id:
-        ui.notify("You need to finish the current task first", color='warning')
-        return
-    
-    im.resume_instance(instance_id)
-    ui.notify("Instance resumed", color='positive')
-    
-    # Reload the page to update the current task display
-    ui.navigate.reload()
+    # Use a small delay to ensure cache invalidation completes
+    ui.timer(0.1, lambda: ui.navigate.reload(), once=True)
     
     # If container provided, replace button with ongoing timer
     if container:

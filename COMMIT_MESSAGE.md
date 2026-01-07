@@ -1,120 +1,64 @@
-# Commit Message
+# Fix Cache Invalidation Issues and Improve Pause/Resume Functionality
 
-## Complete Analytics Performance Optimization (Phases 1-4)
+## Summary
+Fixed critical cache invalidation timing issues that caused completed and cancelled tasks to persist in the UI, and improved pause/resume functionality to preserve duration data. Implemented shared cache across all InstanceManager instances to ensure consistency.
 
-### Summary
+## Changes Made
 
-Completed comprehensive analytics performance optimization through profiling, batching, caching, and vectorization. Analytics page now loads nearly instantly. Phase 5 (Lazy Loading) skipped as current performance is sufficient.
+### Cache Invalidation Fixes
+- **Moved cache invalidation to after database commits**: Cache was being invalidated before data was written, causing stale data to be cached. Now invalidates after commits complete.
+- **Implemented shared class-level cache**: Each UI module was creating its own InstanceManager instance with separate caches, causing inconsistencies. Changed to class-level shared cache so all instances see the same data.
+- **Fixed cache invalidation for all write operations**: 
+  - `complete_instance` - invalidates after completion
+  - `cancel_instance` - invalidates after cancellation  
+  - `delete_instance` - invalidates after deletion
+  - `pause_instance` - invalidates after pausing
+  - `resume_instance` - invalidates after resuming
+  - `start_instance` - invalidates after starting
 
-### Optimization Phases Completed
+### Pause/Resume Improvements
+- **Preserved duration data across pause/resume cycles**: `time_spent_before_pause` is now properly maintained and accumulated across multiple pause/resume cycles.
+- **Added cache invalidation to pause/resume operations**: Ensures duration data is immediately available after resuming.
+- **Fixed UI refresh timing**: Added small delay before page reload to ensure cache invalidation completes before UI updates.
 
-**Phase 1: Profiling & Hotspot Identification** ✅
-- Added timing instrumentation to all key analytics methods
-- Identified bottlenecks: multiple sequential calls, expensive calculations
-- Documented how to find API calls and performance bottlenecks in NiceGUI architecture
+### Code Quality
+- **Removed duplicate `resume_instance` function** in dashboard.py
+- **Consistent cache invalidation pattern**: All database write operations now invalidate cache outside session context for reliability
 
-**Phase 2: Batching Operations** ✅
-- Created `get_analytics_page_data()` - batches dashboard metrics, relief summary, time tracking
-- Created `get_chart_data()` - batches trend series, attribute distribution, stress dimension data
-- Created `get_rankings_data()` - batches task performance rankings and stress efficiency leaderboard
-- Updated UI to use batched methods, reducing API call overhead significantly
+## Issues Fixed
+- ✅ Completed tasks now immediately removed from active tasks list
+- ✅ Cancelled tasks now immediately removed from active tasks list  
+- ✅ Duration data (`time_spent_before_pause`) preserved and displayed correctly after resume
+- ✅ All UI modules now see consistent, up-to-date data
 
-**Phase 3: Cache Heavy Calculations** ✅
-- Added caching to `calculate_time_tracking_consistency_score()` with TTL
-- Added caching to `trend_series()`, `attribute_distribution()`, `get_stress_dimension_data()`
-- Added caching to `get_task_performance_ranking()`, `get_stress_efficiency_leaderboard()`
-- Added caching to `get_multi_attribute_trends()`
-- Updated cache invalidation to clear all analytics caches on data changes
+## Known Issues
+- ⚠️ Pause functionality is still inconsistent - may need further investigation and testing
 
-**Phase 4: Chunking & Vectorization** ✅
-- Vectorized `_get_expected_relief_from_dict` - replaced `df.apply(axis=1)` with direct dict extraction
-- Vectorized `serendipity_factor` and `disappointment_factor` - replaced `.apply(lambda)` with `.clip()` operations
-- Vectorized `behavioral_score` - simplified to direct column conversion
-- Vectorized `persistence_factor` calculation in `get_all_scores_for_composite` - replaced iterrows with numpy operations
-- Vectorized load extraction in `_detect_suddenly_challenging` - replaced iterrows with vectorized dict extraction
-- Vectorized notes counting in `calculate_focus_factor` - replaced iterrows with pandas string operations
+## Technical Details
 
-**Phase 5: Lazy Loading in UI** ⏭️ **SKIPPED**
-- Skipped as current performance is sufficient (page loads nearly instantly)
-- Can be implemented in future if needed
+### Shared Cache Implementation
+- Changed instance-level cache variables to class-level:
+  - `self._active_instances_cache` → `InstanceManager._shared_active_instances_cache`
+  - `self._recent_completed_cache` → `InstanceManager._shared_recent_completed_cache`
+- Updated `_invalidate_instance_caches()` to clear shared cache
+- Updated `list_active_instances()` and `list_recently_completed()` to use shared cache
 
-### Performance Impact
+### Cache Invalidation Timing
+- Moved invalidation outside database session contexts in:
+  - `_complete_instance_db()`
+  - `_cancel_instance_db()`
+  - `_pause_instance_db()`
+  - `_resume_instance_db()`
+  - `_delete_instance_db()`
+- Ensures cache is cleared after transaction commits and session closes
 
-**Eliminated Slow Operations:**
-- 5+ `df.apply(axis=1)` operations (row-by-row processing)
-- 3 `iterrows()` loops (replaced with vectorized pandas/numpy operations)
-- Multiple sequential API calls (replaced with batched methods)
-- Expensive recalculations (replaced with TTL-based caching)
+## Files Modified
+- `task_aversion_app/backend/instance_manager.py` - Shared cache implementation and cache invalidation fixes
+- `task_aversion_app/ui/dashboard.py` - Removed duplicate function, improved resume timing
+- `task_aversion_app/ui/cancel_task.py` - Navigation improvements
 
-**Performance Improvements:**
-- Analytics page: Now loads nearly instantly (was 16.5 seconds)
-- Backend operations: Significantly faster through vectorization and caching
-- Reduced overhead: Batched methods reduce function call overhead
-
-### Technical Changes
-
-**Backend (`backend/analytics.py`):**
-- Added timing instrumentation to key methods (Phase 1)
-- Created 3 new batched methods: `get_analytics_page_data()`, `get_chart_data()`, `get_rankings_data()` (Phase 2)
-- Added 6 new cache variables with TTL-based expiration (Phase 3)
-- Vectorized 6 key operations, eliminating iterrows and apply operations (Phase 4)
-- Fixed timing bug in `get_relief_summary()` (mixed `time.time()` and `time.perf_counter()`)
-
-**Frontend (`ui/analytics_page.py`):**
-- Updated to use batched analytics methods (Phase 2)
-- Modified render functions to accept pre-fetched data (backward compatible)
-- Removed duplicate `get_dashboard_metrics()` call
-
-**Documentation:**
-- Updated `ANALYTICS_OPTIMIZATION_NEXT_STEPS.md` with completion status and dates
-- Added detailed instructions on finding API calls in NiceGUI architecture
-- Updated `BENCHMARKING_GUIDE.md` to remove Playwright benchmark references
-
-**Cleanup:**
-- Deleted `benchmark_performance_playwright.py` (did not accurately reflect actual performance)
-- Removed all references to Playwright benchmark from documentation
-
-### Files Changed
-
-**Core:**
-- `task_aversion_app/backend/analytics.py`: Added batching, caching, vectorization (Phases 1-4)
-- `task_aversion_app/ui/analytics_page.py`: Updated to use batched methods (Phase 2)
-
-**Documentation:**
-- `task_aversion_app/ANALYTICS_OPTIMIZATION_NEXT_STEPS.md`: Updated with completion status, marked Phase 5 as skipped
-- `task_aversion_app/BENCHMARKING_GUIDE.md`: Removed Playwright benchmark references
-
-**Removed:**
-- `task_aversion_app/benchmark_performance_playwright.py`: Deleted (inaccurate performance measurements)
-
-### Bug Fixes
-
-- Fixed `IndentationError` in `analytics_page.py` (incorrect indentation in volume metrics calculation)
-- Fixed `NameError` in `analytics_page.py` (missing `metrics` variable in nested function)
-- Fixed timing bug in `get_relief_summary()` (mixed `time.time()` and `time.perf_counter()`)
-- Fixed linter error: added missing `import copy` in `analytics.py`
-
-### Testing
-
-- Verified all batched methods work correctly
-- Confirmed cache invalidation works on data changes
-- Validated vectorized operations produce same results as original code
-- Tested analytics page loads successfully with all optimizations
-
-### Impact
-
-- **User Experience**: Analytics page now loads nearly instantly instead of 16.5 seconds
-- **Scalability**: System can handle more users with reduced backend load
-- **Maintainability**: Clear separation of concerns with batched methods
-- **Performance Monitoring**: Timing instrumentation provides visibility into method performance
-
-### Next Steps (Optional)
-
-- Monitor performance in production with real user data
-- Consider Phase 5 (Lazy Loading) if performance degrades with larger datasets
-- Re-run benchmarks to measure quantitative improvements
-- Consider additional optimizations if needed
-
-### Date
-
-Last optimization: January 2025
+## Testing Recommendations
+- Test completing tasks and verify they disappear from active list immediately
+- Test cancelling tasks and verify they disappear from active list immediately
+- Test pausing and resuming tasks multiple times and verify duration accumulates correctly
+- Test pause functionality for consistency issues

@@ -99,6 +99,7 @@ def cancel_task_page(task_manager, emotion_manager):
                     return
 
                 ui.notify("Instance cancelled", color='warning')
+                # Navigate to dashboard - it will refresh on load
                 ui.navigate.to('/')
 
             ui.button("Submit Cancellation", color="warning", on_click=submit_cancellation).classes("mt-2")
