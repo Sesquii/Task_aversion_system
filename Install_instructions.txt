@@ -29,6 +29,8 @@ Don't know Python? No problem! Follow these simple steps:
 
 ### Step 3: Run the App
 
+**Recommended Method: Using docker-compose (Easiest)**
+
 1. In the `Task_aversion_system` folder, **hold Shift and right-click** in an empty area
 2. Select "Open PowerShell window here" (or "Open Terminal here" on Mac)
 3. Type this command (without quotes) and press Enter :
@@ -40,6 +42,24 @@ Don't know Python? No problem! Follow these simple steps:
 6. Go to: **http://localhost:8080**
 
 That's it! The app is now running.
+
+**Alternative Method: Using Docker Desktop UI or docker run**
+
+If you prefer to use Docker Desktop's interface or run the container directly:
+
+1. First, build the Docker image (one time only):
+   ```powershell
+   docker build -t task-aversion-system:latest .
+   ```
+
+2. Then run the container:
+   ```powershell
+   docker run -d --name task-aversion-system -p 8080:8080 -e NICEGUI_HOST=0.0.0.0 -v task-aversion-data:/app/data task-aversion-system:latest
+   ```
+
+3. Access the app at: **http://localhost:8080**
+
+**Note:** The `docker-compose up` method is recommended because it automatically handles all the settings (port mapping, environment variables, and data volumes). If you use `docker run` directly, you must include all those options manually.
 
 ### To Stop the App
 

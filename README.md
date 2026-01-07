@@ -354,7 +354,7 @@ If you're not comfortable with Python setup, you can use Docker instead. Docker 
    cd Task_aversion_system
    ```
 
-2. **Start the application:**
+2. **Start the application (Recommended - using docker-compose):**
    ```bash
    docker-compose up
    ```
@@ -364,6 +364,24 @@ If you're not comfortable with Python setup, you can use Docker instead. Docker 
 3. **Access the application:**
    - Open your browser to `http://localhost:8080`
    - Your data is stored in a Docker volume (persists between restarts but separate from the repository)
+
+**Alternative: Using docker run directly**
+
+If you prefer to use Docker Desktop's interface or run the container with `docker run`:
+
+```bash
+# Build the image (one time only)
+docker build -t task-aversion-system:latest .
+
+# Run the container
+docker run -d --name task-aversion-system \
+  -p 8080:8080 \
+  -e NICEGUI_HOST=0.0.0.0 \
+  -v task-aversion-data:/app/data \
+  task-aversion-system:latest
+```
+
+**Note:** The `docker-compose up` method is recommended because it automatically configures port mapping, environment variables, and data volumes. If you use `docker run` directly, you must include all these options manually.
 
 ### Alternative: Use Your Own Data Folder
 
