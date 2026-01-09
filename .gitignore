@@ -33,6 +33,7 @@ run.log
 # Environment variables
 .env
 .env.local
+.env.production
 
 # Data files - keep local, don't track in git
 task_aversion_app/data/
