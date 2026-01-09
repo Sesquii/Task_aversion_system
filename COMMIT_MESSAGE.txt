@@ -1,61 +1,68 @@
-Add Task Editing Manager with chronological pagination and dual edit buttons
+Goals Page Milestone Tree Redesign
 
-This commit introduces a comprehensive Task Editing Manager system that
-replaces the separate cancelled tasks management interface. The new system
-allows users to edit both completed and cancelled tasks from a unified
-interface with chronological ordering, pagination, and direct navigation
-to initialization and completion editing pages.
+Redesign goals page with collapsible tree navigation and 4-column layout for
+comprehensive task and milestone management.
 
-Changes:
-- Replaced "Manage Cancelled Tasks" button in settings with "Task Editing
-  Manager" button
-- Created new unified task editing interface showing completed and cancelled
-  tasks in chronological order (most recent first)
-- Added pagination support (25 tasks per page) with Previous/Next navigation
-- Completed tasks now have two edit buttons: "Edit Init" and "Edit Completion"
-- Cancelled tasks retain single edit button that opens cancellation dialog
-- Tasks are labeled with status badges (COMPLETED/CANCELLED) for clarity
-- Filter dropdown allows filtering by All/Completed/Cancelled status
+Database Changes:
+- Add milestones table with scope support (global/template/job)
+- Add milestone_id foreign key to task_instances
+- Add instance_notes JSON field to task_instances for structured notes
+  (initialization, pause, completion)
+- Migration script to move existing 6 milestones from user_state to database
+  as template-specific milestones for "Task Aversion System" template
 
-Technical Changes:
-- Created new task_editing_manager.py module with pagination logic and
-  chronological sorting
-- Added get_all_tasks_chronologically() function to combine and sort tasks
-  by completed_at/cancelled_at timestamps
-- Implemented PageState class for pagination state management
-- Updated initialize_task.py to support edit mode for completed tasks:
-  - Detects edit mode via query parameter
-  - Loads existing predicted values instead of defaults
-  - Skips popup evaluations in edit mode
-  - Marks task as edited and navigates back to editing manager
-- Updated complete_task.py to support edit mode for completed tasks:
-  - Loads all existing values including completion percentage and notes
-  - Allows full editing of all completion fields
-  - Uses update methods instead of complete_instance() to preserve status
-  - Marks task as edited and navigates back to editing manager
-- Added mark_instance_as_edited() function to track edited tasks with
-  timestamp in actual data (is_edited flag and edited_at timestamp)
-- Added helper functions _update_actual_data_csv() and _update_actual_data_db()
-  for updating instance actual data when editing completed tasks
+Backend:
+- Create MilestoneManager with dual backend support (database/CSV)
+- Add milestone assignment methods to InstanceManager
+- Add instance notes management (initialization, pause, completion)
+- Support milestone progress tracking and counting
 
-User Experience:
-- Unified interface for managing both completed and cancelled tasks
-- Chronological ordering provides better context of task history
-- Pagination improves performance with large task lists
-- Direct navigation buttons for completed tasks allow quick access to
-  edit initialization or completion data separately
-- Status badges make it easy to distinguish task types at a glance
-- Edited tasks are clearly marked with [EDITED] label and timestamp
-- Filter dropdown allows users to focus on specific task types
+UI Redesign (goals_page.py):
+- Column 1 (1/4 width): Collapsible task tree with IDE-like navigation
+  - Tree structure: Global Milestones → Task Types → Jobs (optional) →
+    Job Milestones → Templates → Template Milestones → Instances
+  - Right-click context menus for edit/copy/initialize/assign actions
+  - Hover tooltips showing instance initialization notes
+  - Toggle for completed tasks view (shows counts per milestone/template)
+  - Bottom totals bar (initialized/completed tasks, milestone status counts)
+- Column 2 (1/4 width): Task details with tabbed interface
+  - Most recently opened task shown by default
+  - Editable instance fields (predicted/actual JSON data)
+  - Double-click instances in tree to open in persistent tabs
+- Column 3 (1/4 width): All initialized tasks list
+  - Toggle: "Show All" / "Show Unassigned Only"
+  - Compact display matching dashboard's recently completed style
+- Column 4 (1/4 width): Template initialization
+  - Searchable template list (without metrics/completed/recent sections)
+  - Initialize and create new template buttons
+
+Features:
+- Manual milestone assignment to instances (single milestone per instance)
+- Instance notes tracking: initialization, pause (per-pause array), completion
+- Global milestone counting: tracks instances assigned to any template/job milestone
+- Tree state persistence (expanded/collapsed, selected node)
+- Jobs system integration ready (optional job level in tree)
+
+Integration:
+- Update initialize_task.py to capture initialization notes and optional
+  milestone assignment
+- Update complete_task.py to capture completion notes
+- Update instance pause tracking to append notes to instance_notes['pauses']
+
+Migration:
+- Migrate existing 6 hardcoded milestones from goals_page.py to database
+- Preserve milestone status and notes from user_state
+- Maintain backward compatibility during transition
+
+Files Added:
+- backend/milestone_manager.py
+- SQLite_migration/XXX_add_milestones.py
+- migrate_milestones_to_table.py
 
 Files Modified:
-- ui/settings_page.py: Changed button text and navigation target from
-  /cancelled-tasks to /task-editing-manager
-- ui/task_editing_manager.py: New file with complete editing interface,
-  pagination, and chronological sorting logic
-- ui/initialize_task.py: Added edit mode support with value loading,
-  skip popups, and navigation back to editing manager
-- ui/complete_task.py: Added edit mode support with full field editing,
-  completion percentage/notes loading, and navigation back to editing
-  manager
-- app.py: Registered new task_editing_manager module
+- backend/database.py (Milestone model, TaskInstance updates)
+- backend/instance_manager.py (milestone_id, instance_notes support)
+- ui/goals_page.py (complete redesign)
+- ui/initialize_task.py (notes capture, milestone assignment)
+- ui/complete_task.py (completion notes)
+- backend/user_state.py (deprecate milestone methods, keep for compatibility)

@@ -720,4 +720,118 @@ class UserStateManager:
         
         config_json = json.dumps(validated)
         return self.update_preference(user_id, "monitored_metrics_config", config_json)
+    
+    # -----------------------------
+    # Milestone tracking
+    # -----------------------------
+    def get_milestones(self, user_id: str = "default") -> Dict[str, Dict[str, Any]]:
+        """Get milestone tracking data.
+        
+        Returns:
+            Dict of milestone_id -> milestone_data (status, notes, etc.)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        milestones_json = prefs.get("milestones", "")
+        if not milestones_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(milestones_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_milestones(self, milestones: Dict[str, Dict[str, Any]], user_id: str = "default") -> Dict[str, Any]:
+        """Set milestone tracking data.
+        
+        Args:
+            milestones: Dict of milestone_id -> milestone_data
+            user_id: User ID
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        milestones_json = json.dumps(milestones)
+        return self.update_preference(user_id, "milestones", milestones_json)
+    
+    def update_milestone(self, milestone_id: str, status: str, notes: str = "", user_id: str = "default") -> Dict[str, Any]:
+        """Update a single milestone.
+        
+        Args:
+            milestone_id: Unique identifier for the milestone
+            status: Status ('not_started', 'in_progress', 'completed')
+            notes: Optional notes about the milestone
+            user_id: User ID
+            
+        Returns:
+            Updated milestones dict
+        """
+        milestones = self.get_milestones(user_id)
+        milestones[milestone_id] = {
+            'status': status,
+            'notes': notes,
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        self.set_milestones(milestones, user_id)
+        return milestones
+    
+    # -----------------------------
+    # Template goals tracking
+    # -----------------------------
+    def get_template_goals(self, user_id: str = "default") -> Dict[str, Dict[str, Any]]:
+        """Get template-specific goals.
+        
+        Returns:
+            Dict of task_id -> goal_data (target_frequency, target_relief, etc.)
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        
+        goals_json = prefs.get("template_goals", "")
+        if not goals_json:
+            return {}
+        
+        try:
+            import json
+            return json.loads(goals_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    
+    def set_template_goals(self, goals: Dict[str, Dict[str, Any]], user_id: str = "default") -> Dict[str, Any]:
+        """Set template-specific goals.
+        
+        Args:
+            goals: Dict of task_id -> goal_data
+            user_id: User ID
+            
+        Returns:
+            Updated preferences dict
+        """
+        import json
+        goals_json = json.dumps(goals)
+        return self.update_preference(user_id, "template_goals", goals_json)
+    
+    def update_template_goal(self, task_id: str, goal_data: Dict[str, Any], user_id: str = "default") -> Dict[str, Any]:
+        """Update a single template goal.
+        
+        Args:
+            task_id: Task template ID
+            goal_data: Dict with goal settings (target_frequency, target_relief, etc.)
+            user_id: User ID
+            
+        Returns:
+            Updated template goals dict
+        """
+        goals = self.get_template_goals(user_id)
+        goals[task_id] = {
+            **goal_data,
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        self.set_template_goals(goals, user_id)
+        return goals
 
