@@ -1230,6 +1230,40 @@ class InstanceManager:
         self._save()
         # Invalidate caches AFTER completing to ensure fresh data on next read
         self._invalidate_instance_caches()
+        
+        # Log recommendation outcome if this was a recommended task
+        try:
+            from backend.recommendation_logger import recommendation_logger
+            task_id = self.df.at[idx, 'task_id']
+            task_name = self.df.at[idx, 'task_name']
+            
+            # Get predicted and actual relief for accuracy tracking
+            predicted = json.loads(self.df.at[idx, 'predicted'] or "{}")
+            predicted_relief = predicted.get('expected_relief') or predicted.get('relief_score')
+            actual_relief = actual.get('actual_relief') or actual.get('relief_score')
+            
+            # Get duration
+            duration_minutes = None
+            if 'duration_minutes' in self.df.columns:
+                duration_str = self.df.at[idx, 'duration_minutes']
+                if duration_str:
+                    try:
+                        duration_minutes = float(duration_str)
+                    except (ValueError, TypeError):
+                        pass
+            
+            recommendation_logger.log_recommendation_outcome(
+                task_id=task_id,
+                instance_id=instance_id,
+                task_name=task_name,
+                outcome='completed',
+                completion_time_minutes=duration_minutes,
+                actual_relief=float(actual_relief) if actual_relief is not None else None,
+                predicted_relief=float(predicted_relief) if predicted_relief is not None else None
+            )
+        except Exception:
+            # Don't fail if logging fails
+            pass
     
     def _complete_instance_db(self, instance_id, actual: dict):
         """Database-specific complete_instance."""
@@ -1334,6 +1368,35 @@ class InstanceManager:
                 self._calculate_and_store_factors_db(instance)
                 
                 session.commit()
+                
+                # Log recommendation outcome if this was a recommended task
+                try:
+                    from backend.recommendation_logger import recommendation_logger
+                    task_id = instance.task_id
+                    task_name = instance.task_name
+                    
+                    # Get predicted and actual relief for accuracy tracking
+                    predicted = instance.predicted or {}
+                    predicted_relief = predicted.get('expected_relief') or predicted.get('relief_score')
+                    actual_relief = actual.get('actual_relief') if actual else None
+                    if actual_relief is None:
+                        actual_relief = instance.relief_score
+                    
+                    # Get duration
+                    duration_minutes = instance.duration_minutes
+                    
+                    recommendation_logger.log_recommendation_outcome(
+                        task_id=task_id,
+                        instance_id=instance_id,
+                        task_name=task_name,
+                        outcome='completed',
+                        completion_time_minutes=float(duration_minutes) if duration_minutes is not None else None,
+                        actual_relief=float(actual_relief) if actual_relief is not None else None,
+                        predicted_relief=float(predicted_relief) if predicted_relief is not None else None
+                    )
+                except Exception:
+                    # Don't fail if logging fails
+                    pass
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in complete_instance and CSV fallback is disabled: {e}") from e

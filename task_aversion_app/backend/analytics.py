@@ -10958,6 +10958,7 @@ class Analytics:
         add (100 - value) to prioritize lower numbers.
         """
         from .task_manager import TaskManager
+        from .recommendation_logger import recommendation_logger
         
         filters = {**self.default_filters(), **(filters or {})}
         
@@ -11218,6 +11219,21 @@ class Analytics:
                 'cognitive_load': row.get('cognitive_load'),
                 'emotional_load': row.get('emotional_load'),
             })
+        
+        # Log recommendation generation
+        try:
+            from .recommendation_logger import recommendation_logger
+            metric_list = metrics if isinstance(metrics, list) else [metrics] if metrics else []
+            recommendation_logger.log_recommendation_generated(
+                mode='templates',
+                metrics=metric_list,
+                filters=filters,
+                recommendations=ranked
+            )
+        except Exception as e:
+            # Don't fail if logging fails
+            import warnings
+            warnings.warn(f"Failed to log recommendations: {e}")
         
         return ranked
 
@@ -11579,6 +11595,21 @@ class Analytics:
                 'cognitive_load': row.get('cognitive_load'),
                 'emotional_load': row.get('emotional_load'),
             })
+        
+        # Log recommendation generation
+        try:
+            from .recommendation_logger import recommendation_logger
+            metric_list = metrics if isinstance(metrics, list) else [metrics] if metrics else []
+            recommendation_logger.log_recommendation_generated(
+                mode='instances',
+                metrics=metric_list,
+                filters=filters,
+                recommendations=ranked
+            )
+        except Exception as e:
+            # Don't fail if logging fails
+            import warnings
+            warnings.warn(f"Failed to log recommendations: {e}")
         
         return ranked
 
