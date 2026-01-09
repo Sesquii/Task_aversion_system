@@ -1,17 +1,29 @@
 # Server Migration Checklist
 
 ## Current Status
+
 - ✅ SSH access to VPS (Ubuntu 22.04)
 - ✅ Local SQLite migration complete
 - ✅ Codebase supports PostgreSQL via DATABASE_URL
-- ⏳ PostgreSQL installation on VPS
+- ✅ **Phase 1 Complete**: PostgreSQL installation on VPS
+- ✅ **Phase 1 Complete**: Database setup (task_aversion_system)
+- ✅ **Phase 1 Complete**: Backup script configured
 - ⏳ Code deployment to server
 - ⏳ Nginx + TLS setup
 - ⏳ Systemd service configuration
 
-## Phase 1: Server Preparation (Do This First)
+## Phase 1: Server Preparation ✅ COMPLETE
+
+**Completed:**
+- PostgreSQL installed and running on VPS
+- Database `task_aversion_system` created
+- User `task_aversion_user` created with secure password
+- Backup script created and tested
+- `.pgpass` configured for automated backups
+- Cron job configured for daily backups
 
 ### 1.1 PostgreSQL Installation
+
 ```bash
 # SSH into your VPS
 ssh your-user@your-server-ip
@@ -31,6 +43,7 @@ sudo systemctl enable postgresql
 ```
 
 **Note: Kernel Upgrade Notification**
+
 - After `apt update && apt upgrade`, you may see a kernel upgrade notification
 - Current kernel: 5.15.0-143-generic → New kernel: 5.15.0-164-generic
 - **When to reboot:**
@@ -48,6 +61,7 @@ sudo systemctl enable postgresql
   (You'll need to SSH back in after ~1-2 minutes)
 
 ### 1.2 Database Setup
+
 ```bash
 # Switch to postgres user
 sudo -u postgres psql
@@ -76,18 +90,21 @@ GRANT ALL ON SCHEMA public TO task_aversion_user;
 ```
 
 **Common Mistakes to Avoid:**
+
 - ❌ **DON'T** run multiple commands on one line: `CREATE USER ...; GRANT ...` (will cause syntax error)
 - ✅ **DO** run each command separately, pressing Enter after each one
 - ⚠️ **Note**: If you use uppercase names like `TAS`, PostgreSQL will convert them to lowercase (`tas`) unless you use quotes: `"TAS"`
 - ✅ **Recommended**: Use lowercase with underscores: `task_aversion`, `task_aversion_user`
 
 **If You Forget a Semicolon:**
+
 - If you see `postgres-#` or `database_name-#` (with a dash), you're in multi-line mode
 - **To cancel and start fresh**: Press `Ctrl+C` or type `\c` and press Enter
 - This will cancel the current command and return you to the normal prompt (`postgres=#`)
 - Then retype your command with the semicolon
 
 **What to customize:**
+
 - ✅ **REQUIRED**: Replace `'your-secure-password-here'` with a strong password
   - Use a password manager to generate a secure password
   - Save this password - you'll need it for DATABASE_URL in Phase 3.1
@@ -98,6 +115,7 @@ GRANT ALL ON SCHEMA public TO task_aversion_user;
   - Example: `CREATE USER my_app_user WITH PASSWORD '...';`
 
 **Important:** If you customize the database name or username, remember to update:
+
 - The DATABASE_URL in Phase 3.1 (environment variables)
 - The backup script in Phase 1.4
 - All references in Phase 4.2 (migrations)
@@ -107,6 +125,7 @@ GRANT ALL ON SCHEMA public TO task_aversion_user;
 **First, find your server's IP address:**
 
 On the server (via SSH), run one of these commands:
+
 ```bash
 # Option 1: Show all IP addresses
 ip addr show
@@ -124,15 +143,18 @@ ifconfig | grep "inet " | grep -v 127.0.0.1
 ```
 
 **What to look for:**
+
 - The IP address will look like: `192.168.1.100` or `203.0.113.45`
 - Ignore `127.0.0.1` (that's localhost)
 - The main IP is usually on `eth0`, `ens3`, or `enp0s3` interface
 
 **Alternative: Check your VPS provider dashboard**
+
 - Most VPS providers (DigitalOcean, Linode, AWS, etc.) show the IP in their control panel
 - Look for "IP Address", "Public IP", or "IPv4 Address"
 
 **Then test the connection:**
+
 ```bash
 # Install PostgreSQL client tools locally (if not already installed)
 # Windows: Download from https://www.postgresql.org/download/windows/
@@ -144,8 +166,44 @@ psql -h your-server-ip -U task_aversion_user -d task_aversion_system
 # If connection works, you're ready for Phase 2
 ```
 
+**Windows PowerShell: If `psql` command not found after installing PostgreSQL:**
+
+PostgreSQL installs to a specific directory that may not be in your PATH. Try these options:
+
+**Option 1: Use full path (quick test)**
+```powershell
+# Typical PostgreSQL installation path
+& "C:\Program Files\PostgreSQL\15\bin\psql.exe" -h your-server-ip -U task_aversion_user -d task_aversion_system
+# Or try version 14, 16, etc. if 15 doesn't work
+```
+
+**Option 2: Add PostgreSQL to PATH (permanent fix)**
+1. Find PostgreSQL installation:
+   - Usually: `C:\Program Files\PostgreSQL\15\bin` (or 14, 16, etc.)
+   - Or search for `psql.exe` in File Explorer
+2. Add to PATH:
+   - Press `Win + R`, type `sysdm.cpl`, press Enter
+   - Click "Environment Variables"
+   - Under "User variables", select "Path" → "Edit"
+   - Click "New" → Add: `C:\Program Files\PostgreSQL\15\bin` (adjust version number)
+   - Click OK on all dialogs
+   - **Restart PowerShell** (close and reopen)
+3. Test:
+   ```powershell
+   psql --version
+   ```
+
+**Option 3: Use WSL (if you have it)**
+```bash
+# In WSL terminal
+sudo apt install postgresql-client
+psql -h your-server-ip -U task_aversion_user -d task_aversion_system
+```
+
 ### 1.4 Basic Backup Script
+
 Create `/home/your-user/backup_task_aversion.sh` on the server:
+
 ```bash
 #!/bin/bash
 BACKUP_DIR="/home/your-user/backups"
@@ -153,7 +211,8 @@ DATE=$(date +%Y%m%d_%H%M%S)
 mkdir -p $BACKUP_DIR
 
 # Backup database
-pg_dump -U task_aversion_user task_aversion_system > $BACKUP_DIR/task_aversion_system_$DATE.sql
+# Use -h localhost to force TCP/IP connection (password auth) instead of peer auth
+pg_dump -h localhost -U task_aversion_user task_aversion_system > $BACKUP_DIR/task_aversion_system_$DATE.sql
 
 # Keep only last 7 days of backups
 find $BACKUP_DIR -name "task_aversion_system_*.sql" -mtime +7 -delete
@@ -162,22 +221,68 @@ echo "Backup completed: task_aversion_system_$DATE.sql"
 ```
 
 Make it executable:
+
 ```bash
 chmod +x /home/your-user/backup_task_aversion.sh
 ```
 
+**Optional: Set up passwordless authentication for cron jobs**
+
+To avoid password prompts when running backups via cron, create a `.pgpass` file:
+
+```bash
+# Create .pgpass file in your home directory
+nano ~/.pgpass
+```
+
+Add this line (replace with your actual password):
+```
+localhost:5432:task_aversion_system:task_aversion_user:your-password-here
+```
+
+Format: `hostname:port:database:username:password`
+
+Set secure permissions (required for .pgpass to work):
+```bash
+chmod 600 ~/.pgpass
+```
+
+**Now the backup script will work without password prompts!**
+
+**Optional: Set up automatic backups (cron job)**
+
+To run backups automatically (e.g., daily at 2 AM):
+
+```bash
+# Edit crontab (will open in default editor, usually nano)
+crontab -e
+
+# Add this line (runs daily at 2 AM)
+0 2 * * * /home/your-user/backup_task_aversion.sh
+
+# Save and exit (Ctrl+O, Enter, Ctrl+X if using nano)
+```
+
+**Cron editor notes:**
+- `crontab -e` opens your default editor (usually `nano` or `vi`)
+- If it asks which editor, choose `nano` (easier) by typing `nano` and pressing Enter
+- To change default editor: `export EDITOR=nano` (add to `~/.bashrc` to make permanent)
+
 ## Phase 2: Migration Script Conversion (Local Work)
 
 ### 2.1 Review Current Migrations
+
 - Review all scripts in `task_aversion_app/SQLite_migration/`
 - Note any SQLite-specific syntax that needs conversion
 
 ### 2.2 Create PostgreSQL Migration Script
+
 - Create `task_aversion_app/PostgreSQL_migration/` folder
 - Convert SQLite migrations to PostgreSQL-compatible SQL
 - Test against local PostgreSQL (Docker is fine)
 
 ### 2.3 Key Differences to Watch For
+
 - SQLite: `INTEGER PRIMARY KEY` → PostgreSQL: `SERIAL PRIMARY KEY` or `BIGSERIAL`
 - SQLite: `TEXT` → PostgreSQL: `TEXT` (same, but check constraints)
 - SQLite: `JSON` → PostgreSQL: `JSONB` (better performance)
@@ -187,7 +292,9 @@ chmod +x /home/your-user/backup_task_aversion.sh
 ## Phase 3: Deployment Configuration (Documentation)
 
 ### 3.1 Environment Variables
+
 Create `.env.production` template:
+
 ```bash
 DATABASE_URL=postgresql://task_aversion_user:password@localhost:5432/task_aversion_system
 NICEGUI_HOST=0.0.0.0
@@ -196,7 +303,9 @@ NICEGUI_PORT=8080
 ```
 
 ### 3.2 Systemd Service File
+
 Create `/etc/systemd/system/task-aversion-app.service`:
+
 ```ini
 [Unit]
 Description=Task Aversion System
@@ -217,7 +326,9 @@ WantedBy=multi-user.target
 ```
 
 ### 3.3 Nginx Configuration
+
 Create `/etc/nginx/sites-available/task-aversion-system`:
+
 ```nginx
 server {
     listen 80;
@@ -234,6 +345,7 @@ server {
 ```
 
 Enable site:
+
 ```bash
 sudo ln -s /etc/nginx/sites-available/task-aversion-system /etc/nginx/sites-enabled/
 sudo nginx -t  # Test configuration
@@ -241,6 +353,7 @@ sudo systemctl reload nginx
 ```
 
 ### 3.4 TLS/SSL Setup (Let's Encrypt)
+
 ```bash
 # Install certbot
 sudo apt install certbot python3-certbot-nginx -y
@@ -254,6 +367,7 @@ sudo certbot --nginx -d TaskAversionSystem.com -d www.TaskAversionSystem.com
 ## Phase 4: Code Deployment (When Ready)
 
 ### 4.1 Initial Deployment
+
 ```bash
 # On your local machine
 # Push code to git repository (if using version control)
@@ -271,6 +385,7 @@ pip install -r requirements.txt
 ```
 
 ### 4.2 Run Migrations
+
 ```bash
 # Set DATABASE_URL
 export DATABASE_URL="postgresql://task_aversion_user:password@localhost:5432/task_aversion_system"
@@ -281,6 +396,7 @@ python PostgreSQL_migration/001_initial_schema.py
 ```
 
 ### 4.3 Start Service
+
 ```bash
 # Enable and start systemd service
 sudo systemctl enable task-aversion-app
@@ -296,12 +412,14 @@ sudo journalctl -u task-aversion-app -f
 ## Phase 5: Post-Deployment
 
 ### 5.1 Smoke Tests
+
 - Access via domain name
 - Test login/authentication
 - Create a test task
 - Verify data persistence
 
 ### 5.2 Monitoring
+
 - Set up log rotation
 - Monitor disk space
 - Set up automated backups (cron job)
@@ -318,13 +436,16 @@ sudo journalctl -u task-aversion-app -f
 ## When to Deploy
 
 **Good time to deploy:**
+
 - ✅ Phases 1-3 complete
 - ✅ Migrations tested locally
 - ✅ You have a stable feature set you want to share
 - ✅ You have time to monitor and fix issues
 
 **Wait to deploy if:**
+
 - ❌ Actively developing major features
 - ❌ System is unstable
 - ❌ Migrations not tested
 - ❌ No time to monitor deployment
+
