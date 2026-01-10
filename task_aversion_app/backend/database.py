@@ -153,6 +153,9 @@ class Task(Base):
     # Shared notes field - notes are shared across all instances of this task template
     notes = Column(Text, default='')  # Runtime notes (separate from description which is set at task creation)
     
+    # User association (nullable for existing anonymous data)
+    user_id = Column(Integer, ForeignKey('users.user_id', ondelete='CASCADE'), nullable=True, index=True)
+    
     def to_dict(self) -> dict:
         """Convert model instance to dictionary (compatible with CSV format)."""
         return {
@@ -172,7 +175,8 @@ class Task(Base):
             'routine_time': self.routine_time or '00:00',
             'completion_window_hours': str(self.completion_window_hours) if self.completion_window_hours is not None else '',
             'completion_window_days': str(self.completion_window_days) if self.completion_window_days is not None else '',
-            'notes': self.notes or ''
+            'notes': self.notes or '',
+            'user_id': str(self.user_id) if self.user_id is not None else ''
         }
     
     def __repr__(self):
@@ -232,6 +236,9 @@ class TaskInstance(Base):
     environmental_effect = Column(Float, default=None, nullable=True)
     skills_improved = Column(Text, default='')  # Comma-separated list stored as text
     
+    # User association (nullable for existing anonymous data)
+    user_id = Column(Integer, ForeignKey('users.user_id', ondelete='CASCADE'), nullable=True, index=True)
+    
     def to_dict(self) -> dict:
         """Convert model instance to dictionary (compatible with CSV format)."""
         def format_datetime(dt):
@@ -268,6 +275,7 @@ class TaskInstance(Base):
             'skills_improved': self.skills_improved or '',
             'serendipity_factor': str(self.serendipity_factor) if self.serendipity_factor is not None else '',
             'disappointment_factor': str(self.disappointment_factor) if self.disappointment_factor is not None else '',
+            'user_id': str(self.user_id) if self.user_id is not None else ''
         }
     
     def __repr__(self):
@@ -429,12 +437,16 @@ class Note(Base):
     # Timestamp
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     
+    # User association (nullable for existing anonymous data)
+    user_id = Column(Integer, ForeignKey('users.user_id', ondelete='CASCADE'), nullable=True, index=True)
+    
     def to_dict(self) -> dict:
         """Convert model instance to dictionary (compatible with CSV format)."""
         return {
             'note_id': self.note_id,
             'content': self.content,
             'timestamp': self.timestamp.isoformat() if self.timestamp else '',
+            'user_id': str(self.user_id) if self.user_id is not None else ''
         }
     
     def __repr__(self):

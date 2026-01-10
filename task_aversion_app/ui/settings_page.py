@@ -91,65 +91,47 @@ def settings_page():
         ui.separator()
         ui.label("Data & Export").classes("text-lg font-semibold")
         
-        def export_csv():
-            """Export all database data and user preferences to CSV files."""
-            try:
-                from backend.csv_export import export_all_data_to_csv, get_export_summary
-                import os
-                
-                data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
-                
-                export_counts, exported_files = export_all_data_to_csv(
-                    data_dir=data_dir,
-                    include_user_preferences=True
-                )
-                
-                summary = get_export_summary(export_counts)
-                file_list = "\n".join([f"  - {os.path.basename(f)}" for f in exported_files])
-                
-                message = f"Data exported successfully!\n\n{summary}\n\nFiles saved to:\n{data_dir}\n\nExported files:\n{file_list}"
-                ui.notify(message, color="positive", timeout=10000)
-                
-            except Exception as e:
-                import traceback
-                error_msg = str(e)
-                ui.notify(f"Error exporting data: {error_msg}", color="negative")
-                print(f"[Settings] Export error: {traceback.format_exc()}")
-        
         def download_zip():
             """Create ZIP file and trigger browser download."""
             try:
                 from backend.csv_export import create_data_zip
                 import os
+                import tempfile
+                from pathlib import Path
                 
+                # Create ZIP file
                 zip_path = create_data_zip()
                 zip_filename = os.path.basename(zip_path)
                 
-                # Read zip file content
+                # Read zip file content as bytes
                 with open(zip_path, 'rb') as f:
                     zip_content = f.read()
                 
-                # Trigger download
+                # Use NiceGUI's download function with bytes
+                # ui.download accepts (source, filename) where source can be bytes, path, or URL
                 ui.download(zip_content, filename=zip_filename)
-                ui.notify(f"Download started: {zip_filename}", color="positive")
                 
-                # Clean up temp file after a delay
+                ui.notify(f"Download started: {zip_filename}", color="positive", timeout=3000)
+                
+                # Clean up temp file after a delay (give browser time to download)
                 import threading
                 def cleanup():
                     import time
-                    time.sleep(5)  # Wait 5 seconds before cleanup
+                    time.sleep(10)  # Wait 10 seconds before cleanup to allow download to complete
                     try:
                         if os.path.exists(zip_path):
                             os.remove(zip_path)
-                    except Exception:
-                        pass
+                            print(f"[Settings] Cleaned up temp file: {zip_path}")
+                    except Exception as e:
+                        print(f"[Settings] Error cleaning up temp file: {e}")
                 
                 threading.Thread(target=cleanup, daemon=True).start()
                 
             except Exception as e:
                 import traceback
                 error_msg = str(e)
-                ui.notify(f"Error creating download: {error_msg}", color="negative")
+                traceback.print_exc()
+                ui.notify(f"Error creating download: {error_msg}", color="negative", timeout=10000)
                 print(f"[Settings] Download error: {traceback.format_exc()}")
         
         def handle_upload(e):
@@ -234,11 +216,8 @@ def settings_page():
                 ui.notify(f"Error importing data: {error_msg}", color="negative")
                 print(f"[Settings] Import error: {traceback.format_exc()}")
         
-        ui.button("📥 Export Data to CSV", on_click=export_csv).classes("bg-green-500 text-white mt-2")
-        ui.label("Export all database data (tasks, instances, emotions, popup triggers/responses, notes) and user preferences to CSV files in the data/ folder.").classes("text-sm text-gray-600 mt-2")
-        
-        ui.button("💾 Download Data as ZIP", on_click=download_zip).classes("bg-blue-500 text-white mt-2")
-        ui.label("Download all your data as a ZIP file containing all CSV files. Use this for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")
+        ui.button("💾 Download My Data", on_click=download_zip).classes("bg-blue-500 text-white mt-2")
+        ui.label("Download all your data as a ZIP file containing CSV files (tasks, instances, emotions, popup triggers/responses, notes, survey responses, and user preferences). Use this for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")
         
         # Security warning and disabled import feature
         with ui.card().classes("p-4 mt-2 bg-red-50 border-2 border-red-300"):

@@ -300,7 +300,7 @@ def migrate():
             print("Migration Summary")
             print("=" * 70)
             print(f"Columns added (new): {added_count}")
-            print(f"Columns converted (TEXT → INTEGER): {converted_count}")
+            print(f"Columns converted (TEXT to INTEGER): {converted_count}")
             print(f"Columns skipped (already exist/correct type): {skipped_count}")
             
             if errors:

@@ -1,0 +1,222 @@
+Phase 2 Cleanup: Export/Import Security + Migration 009-010 + Data Preparation
+
+## Summary
+Completed Phase 2 migrations 009-010 (SQLite and PostgreSQL), improved export/import
+with security validation and old version compatibility, simplified UI, and prepared data
+for migration. User data downloaded and ready for import after OAuth setup.
+Local Docker PostgreSQL testing pending before proceeding to Phase 2B (OAuth).
+
+## Migrations 009-010: OAuth Schema Preparation
+
+### SQLite Migrations Created
+- 009_create_users_table.py - Creates users table (INTEGER PRIMARY KEY)
+- 010_add_user_id_foreign_keys.py - Adds user_id foreign keys to existing tables
+  - Handles TEXT to INTEGER conversion for tables with VARCHAR user_id
+  - Adds INTEGER user_id columns to tasks, task_instances, notes
+  - Creates user_id_new columns for tables needing data migration (survey_responses, popup_triggers, popup_responses)
+  - Notes special case: user_preferences requires separate migration (010b) due to PRIMARY KEY
+
+### PostgreSQL Migrations Created  
+- 009_create_users_table.py - Creates users table (SERIAL PRIMARY KEY)
+- 010_add_user_id_foreign_keys.py - Adds user_id foreign keys with proper constraints
+  - Same structure as SQLite, optimized for PostgreSQL (JSONB, GIN indexes)
+
+### Database Model Updates
+- Added User model to backend/database.py with OAuth fields
+- Added user_id columns to Task, TaskInstance, Note models (nullable for anonymous data)
+- All user_id columns are ForeignKey with ON DELETE CASCADE
+- Updated to_dict() methods to include user_id in exports
+
+## Export/Import Improvements & Cleanup
+
+### Export Functionality
+- **Always exports all 8 expected files**, even if empty (with headers):
+  - tasks.csv, task_instances.csv, emotions.csv, notes.csv
+  - popup_triggers.csv, popup_responses.csv, survey_responses.csv
+  - user_preferences.csv
+- All files include user_id columns (nullable, empty for anonymous data)
+- ZIP files are import-ready without modification
+- **UI Cleanup**: Removed confusing "Export Data to CSV" button
+  - Kept only "Download My Data" button that downloads ZIP to browser
+  - Clearer user experience - one button, one action
+
+### Data Preparation for Migration
+- User data successfully exported and downloaded
+- ZIP files ready for import after OAuth setup
+- All files include user_id columns (will be populated after authentication)
+- Export/import cycle verified and working
+
+### Import Functionality - Security
+- **Rejects ZIPs with unexpected/additional files** (security measure)
+- Validates that only expected CSV files are present in ZIP
+- Returns clear error if validation fails with list of allowed files
+- Prevents malicious ZIP files with unexpected content
+
+### Import Functionality - Compatibility
+- **Accepts ZIPs with missing files** (old version compatibility)
+- Missing files are gracefully skipped with informative note
+- Missing columns in CSV files are handled by imputing empty/default values
+- New nullable columns (like user_id) accept empty values from old exports
+- Handles files in subdirectories (recursive search)
+
+### Import Functionality - File Support
+- Added survey_responses.csv import support
+- Added user_id handling in Task, TaskInstance, Note imports
+- All 8 expected files can be imported from ZIP
+- Proper handling of empty CSVs (headers only)
+
+## Testing Infrastructure
+
+### Docker PostgreSQL Testing Setup
+- Created docker-compose.test.yml for local PostgreSQL testing
+- Uses port 5433 to avoid conflicts with existing PostgreSQL
+- Test database: task_aversion_test
+- Automated test scripts:
+  - test_local_migrations.sh (Bash/Linux)
+  - test_local_migrations.ps1 (PowerShell)
+- Health checks and proper cleanup instructions
+
+### Local Testing Guide
+- Created docs/local_testing_guide.md
+- Step-by-step instructions for SQLite and PostgreSQL testing
+- Troubleshooting guide
+- Quick reference commands
+
+## Migration Status
+
+### SQLite Migrations
+- ✅ Tested locally: Migrations 009-010 applied successfully
+- ✅ All user_id columns added correctly
+- ✅ Foreign keys enabled and working
+- ✅ Export/import cycle verified
+
+### PostgreSQL Migrations
+- ⏳ Pending: Local Docker PostgreSQL testing
+- ⏳ Pending: Verify all migrations (001-010) work with Docker PostgreSQL
+
+## Documentation Updates
+
+### Migration Documentation
+- Updated PostgreSQL_migration/README.md with migrations 009-010
+- Updated SQLite_migration/README.md with migrations 009-010
+- Created MIGRATION_009_010_NOTES.md with detailed explanations
+- Updated check_migration_status.py scripts for both SQLite and PostgreSQL
+- Added notes about CSV import writing to database (clarification)
+
+### Server Migration Checklist
+- Updated Phase 2 status to complete
+- Added Phase 2B (OAuth Implementation) as next step
+- Updated testing instructions
+
+## Key Features
+
+### Security
+- Import validates ZIP files and rejects unexpected files
+- File whitelist prevents malicious ZIP uploads
+- Column name validation prevents SQL injection
+- Abuse prevention limits (row count, file size, column limits)
+
+### Compatibility
+- Handles old version ZIPs with missing files
+- Missing columns imputed with empty/default values
+- New nullable columns (user_id) work with old exports
+- Recursive file search handles directory structures
+
+### Data Export/Import
+- Export always creates all expected files (even if empty)
+- Import processes all expected files that are present
+- Missing files are noted but don't block import
+- User data downloaded and ready for migration
+
+## Files Changed
+
+### New Files
+- SQLite_migration/009_create_users_table.py
+- SQLite_migration/010_add_user_id_foreign_keys.py
+- PostgreSQL_migration/009_create_users_table.py
+- PostgreSQL_migration/010_add_user_id_foreign_keys.py
+- PostgreSQL_migration/MIGRATION_009_010_NOTES.md
+- docker-compose.test.yml
+- PostgreSQL_migration/test_local_migrations.sh
+- PostgreSQL_migration/test_local_migrations.ps1
+- docs/local_testing_guide.md
+- docs/phase2b_oauth_authentication_plan.md
+
+### Modified Files
+- backend/database.py (added User model, user_id columns to Task/TaskInstance/Note)
+- backend/csv_export.py (always create all files, include user_id in exports)
+- backend/csv_import.py (security validation, survey_responses import, user_id handling)
+- ui/settings_page.py (removed confusing export button, simplified UI)
+- PostgreSQL_migration/README.md (updated with migrations 009-010)
+- PostgreSQL_migration/check_migration_status.py (added 009-010 checks)
+- SQLite_migration/README.md (updated with migrations 009-010)
+- SQLite_migration/check_migration_status.py (added 009-010 checks)
+- SQLite_migration/010_add_user_id_foreign_keys.py (fixed Unicode arrow character)
+- docs/server_migration_checklist.md (updated Phase 2 status, added Phase 2B)
+
+## Testing Status
+
+### Completed
+- [x] SQLite migrations 009-010 tested locally
+- [x] Export includes all files with user_id columns
+- [x] Import validates files and rejects unexpected files (security)
+- [x] Import handles missing files (old version compatibility)
+- [x] Download functionality works in browser
+- [x] Data exported successfully and downloaded (ready for migration)
+- [x] Export/import cycle verified with existing data
+
+### Pending - Local Docker PostgreSQL Testing (Next Step)
+- [ ] Start Docker PostgreSQL container (docker-compose.test.yml)
+- [ ] Test all PostgreSQL migrations (001-010) with Docker
+- [ ] Verify schema creation and user_id foreign keys
+- [ ] Test database operations (create, read, update) with PostgreSQL
+- [ ] Verify export/import cycle works with PostgreSQL database
+- [ ] After Docker testing passes, proceed to Phase 2B (OAuth Implementation)
+
+## Next Steps
+
+1. **Local Docker PostgreSQL Testing** (Step 2)
+   - Start Docker PostgreSQL container
+   - Test all migrations (001-010)
+   - Verify schema and data operations
+   - Test export/import cycle with PostgreSQL
+
+2. **Phase 2B: OAuth Implementation** (After Docker testing)
+   - Set up Google OAuth credentials
+   - Implement authentication backend
+   - Update all managers to filter by user_id
+   - Test authenticated import with user isolation
+
+3. **Data Migration** (After OAuth)
+   - Import downloaded data into authenticated account
+   - Link anonymous data to users
+   - Handle user_preferences PRIMARY KEY conversion (migration 010b)
+
+## Notes
+
+- **Database naming**: SQLite uses `task_aversion.db` (filename), PostgreSQL uses `task_aversion_system` (database name). This is intentional - they don't need to match as they're different contexts (file vs. database name).
+
+- **Data preparation**: User data has been successfully exported and downloaded. ZIP files are ready for import after OAuth authentication is set up. All exports include user_id columns (currently empty/null for anonymous data).
+
+- **Security**: Import now validates ZIP files and rejects unexpected/additional files. Only expected CSV files are allowed. This prevents malicious ZIP uploads while maintaining compatibility with old version exports (missing files are OK).
+
+- **Compatibility**: Import handles old version ZIPs gracefully - missing files are skipped, missing columns imputed with empty/default values. New nullable columns (user_id) work seamlessly with old exports.
+
+- All migrations are idempotent (safe to run multiple times)
+- CSV import writes to database, not CSV files (clarified in documentation)
+- user_preferences PRIMARY KEY conversion deferred to migration 010b (complex operation)
+- Export creates minimal files (headers only) when data is missing, but always includes all expected files
+
+## Pending Work
+
+**IMMEDIATE**: Local Docker PostgreSQL testing (Step 2)
+- Test all PostgreSQL migrations (001-010) with Docker
+- Verify schema, indexes, foreign keys work correctly
+- Test database operations and export/import cycle
+- Once verified, proceed to Phase 2B (OAuth Implementation)
+
+**AFTER DOCKER TESTING**: Phase 2B - OAuth Implementation
+- Set up Google OAuth credentials
+- Implement authentication backend
+- Secure import functionality (require auth, filter by user_id)
+- Test authenticated data flow
