@@ -135,6 +135,123 @@ def main():
         print("  [SKIP] task_instances table does not exist (run migration 003 first)")
     
     print()
+    
+    # Check for notes column (Migration 006)
+    print("Migration 006: Notes Column")
+    print("-" * 70)
+    
+    if check_column_exists('tasks', 'notes'):
+        print("  [OK] notes column exists")
+        print("  [OK] Migration 006 appears to be complete")
+    else:
+        print("  [MISSING] notes column does not exist")
+        print("  -> Run: python SQLite_migration/006_add_notes_column.py")
+    
+    print()
+    
+    # Check for user_preferences table (Migration 007)
+    print("Migration 007: User Preferences Table")
+    print("-" * 70)
+    
+    if check_table_exists('user_preferences'):
+        print("  [OK] user_preferences table exists")
+        
+        # Check key columns
+        try:
+            inspector = inspect(engine)
+            columns = [col['name'] for col in inspector.get_columns('user_preferences')]
+            key_columns = ['user_id', 'tutorial_completed', 'created_at', 'productivity_settings']
+            
+            for col in key_columns:
+                exists = col in columns
+                status = "[OK]" if exists else "[MISSING]"
+                print(f"  {status} Column '{col}': {'exists' if exists else 'MISSING'}")
+        except Exception as e:
+            print(f"  [ERROR] Could not check columns: {e}")
+    else:
+        print("  [MISSING] user_preferences table does not exist")
+        print("  -> Run: python SQLite_migration/007_create_user_preferences_table.py")
+    
+    print()
+    
+    # Check for survey_responses table (Migration 008)
+    print("Migration 008: Survey Responses Table")
+    print("-" * 70)
+    
+    if check_table_exists('survey_responses'):
+        print("  [OK] survey_responses table exists")
+        
+        # Check key columns
+        try:
+            inspector = inspect(engine)
+            columns = [col['name'] for col in inspector.get_columns('survey_responses')]
+            key_columns = ['response_id', 'user_id', 'question_category', 'timestamp']
+            
+            for col in key_columns:
+                exists = col in columns
+                status = "[OK]" if exists else "[MISSING]"
+                print(f"  {status} Column '{col}': {'exists' if exists else 'MISSING'}")
+        except Exception as e:
+            print(f"  [ERROR] Could not check columns: {e}")
+    else:
+        print("  [MISSING] survey_responses table does not exist")
+        print("  -> Run: python SQLite_migration/008_create_survey_responses_table.py")
+    
+    print()
+    
+    # Check for users table (Migration 009)
+    print("Migration 009: Users Table (OAuth Authentication)")
+    print("-" * 70)
+    
+    if check_table_exists('users'):
+        print("  [OK] users table exists")
+        
+        # Check key columns
+        try:
+            inspector = inspect(engine)
+            columns = [col['name'] for col in inspector.get_columns('users')]
+            key_columns = ['user_id', 'email', 'google_id', 'oauth_provider']
+            
+            for col in key_columns:
+                exists = col in columns
+                status = "[OK]" if exists else "[MISSING]"
+                print(f"  {status} Column '{col}': {'exists' if exists else 'MISSING'}")
+        except Exception as e:
+            print(f"  [ERROR] Could not check columns: {e}")
+    else:
+        print("  [MISSING] users table does not exist")
+        print("  -> Run: python SQLite_migration/009_create_users_table.py")
+    
+    print()
+    
+    # Check for user_id foreign keys (Migration 010)
+    print("Migration 010: User ID Foreign Keys")
+    print("-" * 70)
+    
+    tables_to_check = ['tasks', 'task_instances', 'survey_responses', 'popup_triggers', 'notes']
+    all_have_user_id = True
+    
+    for table_name in tables_to_check:
+        if check_table_exists(table_name):
+            has_user_id = check_column_exists(table_name, 'user_id') or check_column_exists(table_name, 'user_id_new')
+            status = "[OK]" if has_user_id else "[MISSING]"
+            print(f"  {status} {table_name}.user_id: {'exists' if has_user_id else 'MISSING'}")
+            if not has_user_id:
+                all_have_user_id = False
+        else:
+            print(f"  [SKIP] {table_name} table does not exist (run earlier migrations first)")
+    
+    if all_have_user_id:
+        print("  [OK] Migration 010 appears to be complete")
+    else:
+        print("  [INCOMPLETE] Migration 010 needs to be run")
+        print("  -> Run: python SQLite_migration/010_add_user_id_foreign_keys.py")
+        print("  NOTE: Some tables may have 'user_id_new' columns that need data migration")
+    
+    print()
+    print("=" * 70)
+    print("\nSummary: Run migrations in order (001, 002, 003, 004, 005, 006, 007, 008, 009, 010)")
+    print("All migrations are idempotent - safe to run multiple times.")
     print("=" * 70)
 
 if __name__ == "__main__":

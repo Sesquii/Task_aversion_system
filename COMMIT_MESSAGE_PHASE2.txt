@@ -1,0 +1,143 @@
+Phase 2: PostgreSQL Migration Scripts + OAuth Schema Preparation
+
+## Summary
+Created PostgreSQL migration scripts (001-010) to match SQLite migrations,
+including OAuth authentication schema preparation (migrations 009-010).
+Added local testing infrastructure with Docker PostgreSQL.
+
+## Migrations Created
+
+### PostgreSQL Migrations (001-010)
+- 001_initial_schema.py - Initial database schema
+- 002_add_routine_scheduling_fields.py - Routine scheduling fields (JSONB)
+- 003_create_task_instances_table.py - Task instances table
+- 004_create_emotions_table.py - Emotions table (SERIAL)
+- 005_add_indexes_and_foreign_keys.py - Indexes including GIN on JSONB
+- 006_add_notes_column.py - Notes column to tasks
+- 007_create_user_preferences_table.py - User preferences (JSONB)
+- 008_create_survey_responses_table.py - Survey responses
+- 009_create_users_table.py - Users table for OAuth authentication
+- 010_add_user_id_foreign_keys.py - User ID foreign keys for data isolation
+
+### SQLite Migrations (009-010) - Added
+- 009_create_users_table.py - Users table (INTEGER PRIMARY KEY)
+- 010_add_user_id_foreign_keys.py - User ID foreign keys (SQLite-compatible)
+
+## Database Schema Changes
+
+### User Model Added (backend/database.py)
+- Created User model with INTEGER user_id (SERIAL for PostgreSQL, INTEGER for SQLite)
+- Stores Google OAuth IDs, emails, usernames
+- Proper indexes for OAuth lookups
+- Ready for OAuth authentication implementation
+
+### User ID Foreign Keys (Migration 010)
+- Added INTEGER user_id columns to: tasks, task_instances, notes
+- For tables with VARCHAR user_id: Added user_id_new INTEGER column
+  - survey_responses, popup_triggers, popup_responses
+- Note: user_preferences requires special migration (010b) due to PRIMARY KEY
+- All user_id columns are nullable initially to allow existing anonymous data
+
+## Testing Infrastructure
+
+### Docker PostgreSQL Testing
+- Created docker-compose.test.yml for local PostgreSQL testing
+- Uses port 5433 to avoid conflicts
+- Test scripts for automated migration testing:
+  - test_local_migrations.sh (Bash/Linux)
+  - test_local_migrations.ps1 (PowerShell)
+- Health checks and proper cleanup
+
+### Local Testing Guide
+- Created docs/local_testing_guide.md
+- Step-by-step instructions for SQLite and PostgreSQL testing
+- Troubleshooting guide
+- Quick reference commands
+
+## Documentation Updates
+
+### PostgreSQL Migration README
+- Updated with migrations 009-010
+- Added note about CSV import writing to database (not CSV files)
+- Clarified that imports go to database, not CSV
+
+### SQLite Migration README
+- Updated with migrations 009-010
+- Migration order and instructions
+
+### Server Migration Checklist
+- Updated Phase 2 status
+- Added migrations 009-010 to checklist
+- Updated testing instructions
+
+### Migration Status Checkers
+- Updated PostgreSQL check_migration_status.py (migrations 009-010)
+- Updated SQLite check_migration_status.py (migrations 009-010)
+
+## Key Features
+
+### PostgreSQL-Specific Optimizations
+- JSONB instead of TEXT for JSON columns (better performance)
+- GIN indexes on JSONB columns for efficient JSON queries
+- SERIAL/BIGSERIAL for auto-incrementing IDs
+- Proper foreign key constraints with ON DELETE CASCADE
+- Indexes optimized for OAuth lookups (email, google_id)
+
+### SQLite Compatibility
+- INTEGER PRIMARY KEY for auto-increment
+- Foreign keys enabled with PRAGMA
+- TEXT columns for VARCHAR fields
+- Proper handling of PRIMARY KEY constraints
+
+### Data Import Clarification
+- Clarified that csv_import.py writes to DATABASE, not CSV files
+- Import reads FROM CSV/ZIP, writes TO database via SQLAlchemy
+- CSV files are only used as export format and import source
+
+## Next Steps (Phase 2B - OAuth Implementation)
+
+1. Test migrations locally (SQLite + Docker PostgreSQL)
+2. Set up Google OAuth credentials
+3. Implement OAuth authentication backend (backend/auth.py)
+4. Modify import to require authentication and filter by user_id
+5. Test OAuth flow locally
+6. Test authenticated import with user isolation
+
+## Files Changed
+
+### New Files
+- PostgreSQL_migration/009_create_users_table.py
+- PostgreSQL_migration/010_add_user_id_foreign_keys.py
+- SQLite_migration/009_create_users_table.py
+- SQLite_migration/010_add_user_id_foreign_keys.py
+- docker-compose.test.yml
+- PostgreSQL_migration/test_local_migrations.sh
+- PostgreSQL_migration/test_local_migrations.ps1
+- PostgreSQL_migration/MIGRATION_009_010_NOTES.md
+- docs/local_testing_guide.md
+- docs/phase2b_oauth_authentication_plan.md
+
+### Modified Files
+- backend/database.py (added User model)
+- PostgreSQL_migration/README.md (updated with migrations 009-010)
+- PostgreSQL_migration/check_migration_status.py (added 009-010 checks)
+- SQLite_migration/README.md (updated with migrations 009-010)
+- SQLite_migration/check_migration_status.py (added 009-010 checks)
+- docs/server_migration_checklist.md (updated Phase 2 status)
+
+## Testing Checklist
+
+- [ ] Test SQLite migrations 009-010 locally
+- [ ] Test PostgreSQL migrations 009-010 with Docker
+- [ ] Verify User model creates correctly
+- [ ] Verify user_id foreign keys are added correctly
+- [ ] Verify indexes are created (email, google_id)
+- [ ] Test data isolation (queries filter by user_id)
+- [ ] Verify import still writes to database correctly
+
+## Notes
+
+- Migrations 009-010 prepare schema for OAuth but don't implement OAuth yet
+- user_preferences PRIMARY KEY conversion deferred to migration 010b
+- All migrations are idempotent (safe to run multiple times)
+- Import functionality already writes to database (not CSV) - clarified in docs

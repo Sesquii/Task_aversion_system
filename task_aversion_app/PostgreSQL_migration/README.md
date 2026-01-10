@@ -102,13 +102,155 @@ if __name__ == '__main__':
     run_migration()
 ```
 
+## Migration Scripts
+
+**All PostgreSQL migration scripts have been created and are ready for use.**
+
+### Migration Order
+
+1. **001_initial_schema.py** - Creates the initial database schema (all tables)
+2. **002_add_routine_scheduling_fields.py** - Adds routine scheduling fields to tasks table
+3. **003_create_task_instances_table.py** - Creates the task_instances table for storing task execution instances
+4. **004_create_emotions_table.py** - Creates the emotions table for storing available emotions
+5. **005_add_indexes_and_foreign_keys.py** - Adds performance indexes and foreign key constraints
+6. **006_add_notes_column.py** - Adds notes column to tasks table
+7. **007_create_user_preferences_table.py** - Creates the user_preferences table for storing user settings and preferences
+8. **008_create_survey_responses_table.py** - Creates the survey_responses table for storing survey question responses
+9. **009_create_users_table.py** - Creates the users table for OAuth authentication (Google, etc.)
+10. **010_add_user_id_foreign_keys.py** - Adds user_id foreign keys to existing tables for user data isolation
+
+### Utility Scripts
+
+- **check_migration_status.py** - Check which migrations have been applied to your PostgreSQL database
+
+## How to Check Migration Status
+
+Before running migrations, check what's already been applied:
+
+**PowerShell:**
+```powershell
+cd task_aversion_app
+$env:DATABASE_URL = "postgresql://user:password@localhost:5432/task_aversion_system"
+python PostgreSQL_migration/check_migration_status.py
+```
+
+**Bash/Linux:**
+```bash
+cd task_aversion_app
+export DATABASE_URL="postgresql://user:password@localhost:5432/task_aversion_system"
+python PostgreSQL_migration/check_migration_status.py
+```
+
+This will show you which migrations have been applied and which are still needed.
+
+## How to Run Migrations
+
+### Prerequisites
+- Set `DATABASE_URL` environment variable to your PostgreSQL connection string
+- Example: `postgresql://user:password@localhost:5432/task_aversion_system`
+
+### Running a Migration
+
+**PowerShell:**
+```powershell
+cd task_aversion_app
+$env:DATABASE_URL = "postgresql://user:password@localhost:5432/task_aversion_system"
+python PostgreSQL_migration/001_initial_schema.py
+python PostgreSQL_migration/002_add_routine_scheduling_fields.py
+python PostgreSQL_migration/003_create_task_instances_table.py
+python PostgreSQL_migration/004_create_emotions_table.py
+python PostgreSQL_migration/005_add_indexes_and_foreign_keys.py
+python PostgreSQL_migration/006_add_notes_column.py
+python PostgreSQL_migration/007_create_user_preferences_table.py
+python PostgreSQL_migration/008_create_survey_responses_table.py
+python PostgreSQL_migration/009_create_users_table.py
+python PostgreSQL_migration/010_add_user_id_foreign_keys.py
+```
+
+**Bash/Linux:**
+```bash
+cd task_aversion_app
+export DATABASE_URL="postgresql://user:password@localhost:5432/task_aversion_system"
+python PostgreSQL_migration/001_initial_schema.py
+python PostgreSQL_migration/002_add_routine_scheduling_fields.py
+python PostgreSQL_migration/003_create_task_instances_table.py
+python PostgreSQL_migration/004_create_emotions_table.py
+python PostgreSQL_migration/005_add_indexes_and_foreign_keys.py
+python PostgreSQL_migration/006_add_notes_column.py
+python PostgreSQL_migration/007_create_user_preferences_table.py
+python PostgreSQL_migration/008_create_survey_responses_table.py
+python PostgreSQL_migration/009_create_users_table.py
+python PostgreSQL_migration/010_add_user_id_foreign_keys.py
+```
+
+## Important Notes
+
+### Data Import Goes to Database (Not CSV)
+
+**The CSV import functionality (`backend/csv_import.py`) writes data to the DATABASE, not CSV files.**
+
+Despite the name "csv_import", the import process:
+- Reads data FROM CSV/ZIP files
+- Writes data TO the database using SQLAlchemy models (`session.add()`, `session.commit()`)
+- Does NOT modify or write CSV files
+
+This is intentional - all data operations use the database backend by default. CSV files are only used as:
+- Export format for data portability
+- Import source for data migration
+
+### Migration 010 Notes
+
+Migration 010 adds `user_id` foreign keys to existing tables. Important points:
+- New tables (tasks, task_instances, notes) get INTEGER `user_id` columns
+- Tables with existing VARCHAR `user_id` (survey_responses, popup_triggers, etc.) get `user_id_new` INTEGER columns
+- The `user_preferences` table has VARCHAR `user_id` as PRIMARY KEY - requires special migration (010b) for conversion
+- All new `user_id` columns are nullable initially to allow existing anonymous data to remain
+- A separate data migration script will populate INTEGER `user_id` from VARCHAR `user_id` values
+
+## PostgreSQL-Specific Features
+
+### Key Conversions from SQLite
+
+1. **JSON Columns**: Uses `JSONB` instead of `TEXT` for JSON storage
+   - Better performance and indexing
+   - GIN indexes added for efficient JSON queries (Migration 005)
+
+2. **Auto-incrementing IDs**: Uses `SERIAL` or `BIGSERIAL` instead of `INTEGER PRIMARY KEY`
+   - PostgreSQL-native auto-increment support
+
+3. **Foreign Key Constraints**: Properly enforced at database level
+   - Migration 005 adds foreign key constraint: `task_instances.task_id -> tasks.task_id`
+   - Enforced with `ON DELETE RESTRICT` to prevent orphaned records
+
+4. **Indexes**: PostgreSQL-specific index types
+   - GIN indexes on JSONB columns for efficient JSON queries
+   - Composite indexes for common query patterns
+
+5. **Data Types**: PostgreSQL-native types
+   - `VARCHAR(n)` with explicit length constraints
+   - `TEXT` for unlimited-length text
+   - `JSONB` for JSON data with indexing support
+
 ## Status
 
-- ⏳ **Not Started**: PostgreSQL migrations need to be created
-- 📝 **Next Step**: Review SQLite migrations and create PostgreSQL equivalents
+- ✅ **Complete**: All PostgreSQL migration scripts have been created
+- ✅ **Ready for Testing**: Migrations can be tested locally with Docker PostgreSQL
+- ✅ **Ready for Deployment**: Migrations can be run on production server after testing
+
+## Migration Safety
+
+- All migrations are **idempotent** - safe to run multiple times
+- Migrations check if columns/tables already exist before adding them
+- Each migration includes verification steps
+- Always backup your database before running migrations:
+  ```bash
+  pg_dump -U user -d task_aversion_system > backup_$(date +%Y%m%d_%H%M%S).sql
+  ```
 
 ## Notes
 
-- Migrations should be tested locally before running on production server
-- Always backup database before running migrations
-- Consider using Alembic for more complex migration management in the future
+- **SQLite migrations preserved**: Original SQLite migration scripts in `SQLite_migration/` folder are kept as backup
+- **Separate scripts**: PostgreSQL migrations are separate from SQLite migrations for clarity
+- **Test locally first**: Use Docker PostgreSQL to test migrations before deploying to production
+- **Always backup**: Always backup database before running migrations on production
+- **Future consideration**: Consider using Alembic for more complex migration management in the future

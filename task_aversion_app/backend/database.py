@@ -72,6 +72,50 @@ def init_db():
 # SQLAlchemy Models
 # ============================================================================
 
+class User(Base):
+    """
+    User model for OAuth authentication.
+    Stores authenticated user accounts (Google OAuth, etc.).
+    """
+    __tablename__ = 'users'
+    
+    # Primary key - INTEGER (not VARCHAR) for proper foreign key relationships
+    user_id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # User identification
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    username = Column(String(100), unique=True, nullable=True)  # Optional username
+    
+    # OAuth provider information
+    google_id = Column(String(255), unique=True, nullable=True, index=True)  # Google OAuth ID
+    oauth_provider = Column(String(50), default='google', nullable=False)  # 'google', 'github', etc.
+    
+    # Account status
+    email_verified = Column(Boolean, default=True, nullable=False)  # Google emails are pre-verified
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    last_login = Column(DateTime, default=None, nullable=True)
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary."""
+        return {
+            'user_id': self.user_id,
+            'email': self.email,
+            'username': self.username,
+            'google_id': self.google_id,
+            'oauth_provider': self.oauth_provider,
+            'email_verified': bool(self.email_verified),
+            'is_active': bool(self.is_active),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+        }
+    
+    def __repr__(self):
+        return f"<User(user_id={self.user_id}, email='{self.email}')>"
+
+
 class Task(Base):
     """
     Task definition model (migrated from tasks.csv).
@@ -397,7 +441,119 @@ class Note(Base):
         return f"<Note(note_id='{self.note_id}', timestamp='{self.timestamp}')>"
 
 
-# Future models will be added here:
-# - User (for future multi-user support)
-# - Survey (for future survey system)
+class UserPreferences(Base):
+    """
+    User preferences model (migrated from user_preferences.csv).
+    Stores user settings, preferences, and state information.
+    """
+    __tablename__ = 'user_preferences'
+    
+    # Primary key
+    user_id = Column(String, primary_key=True)  # User identifier
+    
+    # Tutorial/onboarding preferences
+    tutorial_completed = Column(Boolean, default=False)
+    tutorial_choice = Column(String, default='')
+    tutorial_auto_show = Column(Boolean, default=True)
+    tooltip_mode_enabled = Column(Boolean, default=True)
+    survey_completed = Column(Boolean, default=False)
+    
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    last_active = Column(DateTime, default=datetime.utcnow, nullable=True)
+    
+    # Gap handling preference
+    gap_handling = Column(String, default=None, nullable=True)  # 'continue_as_is' or 'fresh_start'
+    
+    # JSON fields for complex preferences
+    persistent_emotion_values = Column(JSON, default=dict)  # Dict of emotion -> value (0-100)
+    productivity_history = Column(JSON, default=list)  # List of weekly productivity snapshots
+    productivity_goal_settings = Column(JSON, default=dict)  # Goal tracking settings
+    monitored_metrics_config = Column(JSON, default=dict)  # Metrics configuration
+    execution_score_chunk_state = Column(JSON, default=None, nullable=True)  # Execution score chunking state
+    productivity_settings = Column(JSON, default=dict)  # Productivity scoring settings (curve + thresholds)
+    
+    # Additional JSON fields that may be dynamically added (stored as JSON)
+    # Note: The CSV may have additional fields that are stored as JSON strings
+    # These will be handled dynamically by the migration script
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary (compatible with CSV format)."""
+        import json
+        
+        def format_datetime(dt):
+            return dt.isoformat() if dt else ''
+        
+        return {
+            'user_id': self.user_id,
+            'tutorial_completed': str(bool(self.tutorial_completed)),
+            'tutorial_choice': self.tutorial_choice or '',
+            'tutorial_auto_show': str(bool(self.tutorial_auto_show)),
+            'tooltip_mode_enabled': str(bool(self.tooltip_mode_enabled)),
+            'survey_completed': str(bool(self.survey_completed)),
+            'created_at': format_datetime(self.created_at),
+            'last_active': format_datetime(self.last_active),
+            'gap_handling': self.gap_handling or '',
+            'persistent_emotion_values': json.dumps(self.persistent_emotion_values) if isinstance(self.persistent_emotion_values, dict) else (self.persistent_emotion_values or '{}'),
+            'productivity_history': json.dumps(self.productivity_history) if isinstance(self.productivity_history, list) else (self.productivity_history or '[]'),
+            'productivity_goal_settings': json.dumps(self.productivity_goal_settings) if isinstance(self.productivity_goal_settings, dict) else (self.productivity_goal_settings or '{}'),
+            'monitored_metrics_config': json.dumps(self.monitored_metrics_config) if isinstance(self.monitored_metrics_config, dict) else (self.monitored_metrics_config or '{}'),
+            'execution_score_chunk_state': json.dumps(self.execution_score_chunk_state) if isinstance(self.execution_score_chunk_state, dict) else (self.execution_score_chunk_state or ''),
+            'productivity_settings': json.dumps(self.productivity_settings) if isinstance(self.productivity_settings, dict) else (self.productivity_settings or '{}'),
+        }
+    
+    def __repr__(self):
+        return f"<UserPreferences(user_id='{self.user_id}', tutorial_completed={self.tutorial_completed})>"
+
+
+class SurveyResponse(Base):
+    """
+    Survey response model (migrated from survey_responses.csv).
+    Stores individual survey question responses from users.
+    """
+    __tablename__ = 'survey_responses'
+    
+    # Primary key
+    response_id = Column(String, primary_key=True)  # Format: srv-{timestamp}
+    
+    # User identifier
+    user_id = Column(String, nullable=False, index=True)
+    
+    # Survey question information
+    question_category = Column(String, nullable=False, index=True)  # Category of question
+    question_id = Column(String, nullable=False)  # Unique question identifier
+    
+    # Response data
+    response_value = Column(String, default='', nullable=True)  # Numeric or coded response
+    response_text = Column(Text, default='', nullable=True)  # Free-form text response
+    
+    # Timestamp
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    
+    # Composite index for common queries (user_id + category, user_id + timestamp)
+    __table_args__ = (
+        Index('idx_survey_user_category', 'user_id', 'question_category'),
+        Index('idx_survey_user_timestamp', 'user_id', 'timestamp'),
+    )
+    
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary (compatible with CSV format)."""
+        def format_datetime(dt):
+            return dt.isoformat() if dt else ''
+        
+        return {
+            'user_id': self.user_id,
+            'response_id': self.response_id,
+            'question_category': self.question_category,
+            'question_id': self.question_id,
+            'response_value': self.response_value or '',
+            'response_text': self.response_text or '',
+            'timestamp': format_datetime(self.timestamp),
+        }
+    
+    def __repr__(self):
+        return f"<SurveyResponse(response_id='{self.response_id}', user_id='{self.user_id}', question_category='{self.question_category}')>"
+
+
+# Future models will be added here as needed
 
