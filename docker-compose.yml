@@ -13,9 +13,34 @@ services:
       - task-aversion-data:/app/data
     environment:
       - NICEGUI_HOST=0.0.0.0
+      # Optional: Set DATABASE_URL to use PostgreSQL instead of SQLite
+      # - DATABASE_URL=postgresql://task_aversion_user:testpassword@postgres:5432/task_aversion_test
     restart: unless-stopped
     container_name: task-aversion-system
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:14-alpine
+    # Using PostgreSQL 14 to match server version (14.2) for accurate testing
+    environment:
+      - POSTGRES_USER=task_aversion_user
+      - POSTGRES_PASSWORD=testpassword
+      - POSTGRES_DB=task_aversion_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U task_aversion_user -d task_aversion_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    container_name: task-aversion-postgres
 
 volumes:
   task-aversion-data:
     # Named volume - data persists but is separate from the repository
+  postgres-data:
+    # PostgreSQL data volume for testing migrations

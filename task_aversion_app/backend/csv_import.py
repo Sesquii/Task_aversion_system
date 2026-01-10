@@ -33,7 +33,7 @@ from pathlib import Path
 
 from backend.database import (
     get_session, init_db, Task, TaskInstance, Emotion,
-    PopupTrigger, PopupResponse, Note, engine, DATABASE_URL
+    PopupTrigger, PopupResponse, Note, SurveyResponse, engine, DATABASE_URL
 )
 from backend.user_state import UserStateManager, PREFS_FILE
 from sqlalchemy import inspect, text
@@ -497,6 +497,7 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                         completion_window_days = None
                 
                 notes = str(safe_get(row, 'notes', '')).strip()
+                user_id = safe_int(safe_get(row, 'user_id', ''), None)  # user_id is optional (nullable)
                 
                 # Parse created_at - optional field
                 created_at = parse_datetime(safe_get(row, 'created_at', ''))
@@ -534,6 +535,8 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                         existing_task.completion_window_days = completion_window_days
                     if 'notes' in row.index:
                         existing_task.notes = notes
+                    if 'user_id' in row.index:
+                        existing_task.user_id = user_id
                     if created_at:
                         existing_task.created_at = created_at
                     
@@ -575,7 +578,8 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                         routine_time=routine_time,
                         completion_window_hours=completion_window_hours,
                         completion_window_days=completion_window_days,
-                        notes=notes
+                        notes=notes,
+                        user_id=user_id  # Can be None for existing anonymous data
                     )
                     
                     # Set extra columns that were added to database
@@ -729,6 +733,7 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                 disappointment_factor = safe_float(safe_get(row, 'disappointment_factor', ''), None)
                 
                 skills_improved = str(safe_get(row, 'skills_improved', '')).strip()
+                user_id = safe_int(safe_get(row, 'user_id', ''), None)  # user_id is optional (nullable)
                 
                 # Parse datetime fields - use safe_get
                 created_at = parse_datetime(safe_get(row, 'created_at', ''))
@@ -764,6 +769,8 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                             setattr(existing_instance, field, locals()[field])
                     if 'skills_improved' in row.index:
                         existing_instance.skills_improved = skills_improved
+                    if 'user_id' in row.index:
+                        existing_instance.user_id = user_id
                     if created_at:
                         existing_instance.created_at = created_at
                     if initialized_at:
@@ -826,7 +833,8 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                         environmental_effect=environmental_effect,
                         skills_improved=skills_improved,
                         serendipity_factor=serendipity_factor,
-                        disappointment_factor=disappointment_factor
+                        disappointment_factor=disappointment_factor,
+                        user_id=user_id  # Can be None for existing anonymous data
                     )
                     
                     # Set extra columns that were added to database
@@ -1009,13 +1017,15 @@ def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True) ->
                     continue
                 
                 timestamp = parse_datetime(safe_get(row, 'timestamp', '')) or datetime.utcnow()
+                user_id = safe_int(safe_get(row, 'user_id', ''), None)  # user_id is optional (nullable)
                 
                 existing_note = session.query(Note).filter(Note.note_id == note_id).first()
                 if not existing_note:
                     note = Note(
                         note_id=note_id,
                         content=content,
-                        timestamp=timestamp
+                        timestamp=timestamp,
+                        user_id=user_id  # Can be None for existing anonymous data
                     )
                     session.add(note)
                     imported += 1
@@ -1230,6 +1240,92 @@ def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool 
     return imported, skipped, errors
 
 
+def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool = True) -> Tuple[int, int, int]:
+    """Import survey responses from CSV file into database. Handles missing columns gracefully."""
+    imported = 0
+    skipped = 0
+    errors = 0
+    
+    try:
+        # Check file size before processing
+        is_valid_size, size_error = check_file_size(csv_path)
+        if not is_valid_size:
+            print(f"[Import] {size_error}")
+            return 0, 0, 1  # Return error count
+        
+        df = pd.read_csv(csv_path, dtype=str).fillna('')
+        
+        # Abuse prevention: Limit number of rows
+        if len(df) > MAX_ROWS_PER_CSV:
+            print(f"[Import] ABUSE PREVENTION: CSV has {len(df)} rows. "
+                  f"Maximum allowed: {MAX_ROWS_PER_CSV}. "
+                  f"Only processing first {MAX_ROWS_PER_CSV} rows.")
+            df = df.head(MAX_ROWS_PER_CSV)
+        
+        existing_response_ids = set()
+        if skip_existing:
+            existing_responses = session.query(SurveyResponse).all()
+            existing_response_ids = {response.response_id for response in existing_responses}
+        
+        for idx, row in df.iterrows():
+            response_id = str(safe_get(row, 'response_id', '')).strip()
+            if not response_id:
+                errors += 1
+                continue
+            
+            if skip_existing and response_id in existing_response_ids:
+                skipped += 1
+                continue
+            
+            try:
+                user_id = str(safe_get(row, 'user_id', '')).strip()
+                question_category = str(safe_get(row, 'question_category', '')).strip()
+                question_id = str(safe_get(row, 'question_id', '')).strip()
+                
+                if not user_id or not question_category or not question_id:
+                    errors += 1
+                    continue
+                
+                response_value = str(safe_get(row, 'response_value', '')).strip() or None
+                response_text = str(safe_get(row, 'response_text', '')).strip() or None
+                timestamp = parse_datetime(safe_get(row, 'timestamp', '')) or datetime.utcnow()
+                
+                existing_response = session.query(SurveyResponse).filter(SurveyResponse.response_id == response_id).first()
+                if not existing_response:
+                    response = SurveyResponse(
+                        response_id=response_id,
+                        user_id=user_id,
+                        question_category=question_category,
+                        question_id=question_id,
+                        response_value=response_value,
+                        response_text=response_text,
+                        timestamp=timestamp
+                    )
+                    session.add(response)
+                    imported += 1
+                else:
+                    skipped += 1
+                
+            except Exception as e:
+                print(f"[Import] Error importing survey response {response_id}: {e}")
+                import traceback
+                print(f"[Import] Traceback: {traceback.format_exc()}")
+                errors += 1
+                # Continue processing other rows
+        
+        session.commit()
+        
+    except Exception as e:
+        session.rollback()
+        print(f"[Import] Error reading survey responses CSV: {e}")
+        import traceback
+        print(f"[Import] Traceback: {traceback.format_exc()}")
+        # Don't raise - return what we have so far
+        pass
+    
+    return imported, skipped, errors
+
+
 def import_user_preferences_from_csv(csv_path: str) -> Tuple[int, int]:
     """Import user preferences from CSV file. Handles missing columns gracefully."""
     imported = 0
@@ -1282,12 +1378,33 @@ def import_from_zip(zip_path: str, skip_existing: bool = True) -> Dict[str, Dict
     Falls back to backup CSV files if schema updates fail.
     Includes abuse prevention measures.
     
+    Security:
+    - REJECTS ZIPs with unexpected/additional files (security)
+    - ACCEPTS ZIPs with only expected files (even if some are missing for old version compatibility)
+    - Missing files are handled gracefully (will use default/empty values)
+    
+    Expected files (all must be present or none):
+    - tasks.csv
+    - task_instances.csv
+    - emotions.csv
+    - notes.csv
+    - popup_triggers.csv
+    - popup_responses.csv
+    - survey_responses.csv
+    - user_preferences.csv
+    
+    Compatibility:
+    - Accepts ZIPs from old versions (fewer files) - missing files are skipped with note
+    - Missing columns in CSV files are handled by imputing empty/default values
+    - New columns in database (like user_id) are nullable, so old data imports fine
+    
     Args:
         zip_path: Path to ZIP file
         skip_existing: If True, skip records that already exist
     
     Returns:
         Dictionary mapping table names to import statistics (imported, skipped, errors)
+        Includes '_error' key if import is rejected due to validation failure
     """
     results = {}
     temp_dir = tempfile.mkdtemp()
@@ -1303,6 +1420,18 @@ def import_from_zip(zip_path: str, skip_existing: bool = True) -> Dict[str, Dict
             }
             return results
         
+        # Define whitelist of allowed file names (security: prevent additional files)
+        ALLOWED_FILES = {
+            'tasks.csv': ('tasks', import_tasks_from_csv),
+            'task_instances.csv': ('task_instances', import_task_instances_from_csv),
+            'emotions.csv': ('emotions', import_emotions_from_csv),
+            'notes.csv': ('notes', import_notes_from_csv),
+            'popup_triggers.csv': ('popup_triggers', import_popup_triggers_from_csv),
+            'popup_responses.csv': ('popup_responses', import_popup_responses_from_csv),
+            'survey_responses.csv': ('survey_responses', import_survey_responses_from_csv),
+            'user_preferences.csv': ('user_preferences', None)  # Handled separately
+        }
+        
         # Extract ZIP to temp directory
         with zipfile.ZipFile(zip_path, 'r') as zipf:
             # Abuse prevention: Check number of files in ZIP
@@ -1314,6 +1443,36 @@ def import_from_zip(zip_path: str, skip_existing: bool = True) -> Dict[str, Dict
                 }
                 return results
             
+            # Security: Validate that all files in ZIP are on whitelist
+            # Reject ZIP if it contains any unexpected files
+            # This prevents malicious ZIP files with additional files
+            unexpected_files = []
+            for file_name in file_list:
+                # Skip directories (they end with '/' in ZIP file lists)
+                if file_name.endswith('/'):
+                    continue
+                
+                # Extract just the filename (ignore directories/paths)
+                # Handle both 'tasks.csv' and 'data/tasks.csv' formats
+                base_name = os.path.basename(file_name)
+                
+                # Skip empty strings (shouldn't happen, but be safe)
+                if not base_name:
+                    continue
+                
+                # Only check actual files (CSV files)
+                # Reject any file that's not in our whitelist
+                if base_name not in ALLOWED_FILES:
+                    unexpected_files.append(base_name)
+            
+            if unexpected_files:
+                results['_error'] = {
+                    'error': f'ZIP contains unexpected files: {", ".join(unexpected_files)}',
+                    'note': 'Import rejected for security. Only expected CSV files are allowed.',
+                    'allowed_files': list(ALLOWED_FILES.keys())
+                }
+                return results
+            
             zipf.extractall(temp_dir)
         
         # Initialize database
@@ -1321,40 +1480,58 @@ def import_from_zip(zip_path: str, skip_existing: bool = True) -> Dict[str, Dict
         session = get_session()
         
         try:
-            # Import each CSV file found
-            csv_files = {
-                'tasks.csv': ('tasks', import_tasks_from_csv),
-                'task_instances.csv': ('task_instances', import_task_instances_from_csv),
-                'emotions.csv': ('emotions', import_emotions_from_csv),
-                'notes.csv': ('notes', import_notes_from_csv),
-                'popup_triggers.csv': ('popup_triggers', import_popup_triggers_from_csv),
-                'popup_responses.csv': ('popup_responses', import_popup_responses_from_csv),
-                'user_preferences.csv': ('user_preferences', None)  # Handled separately
-            }
+            # Helper function to find file in extracted directory (handles subdirectories)
+            def find_file_in_dir(directory, filename):
+                """Find file in directory, searching recursively if needed."""
+                # Try direct path first (most common case)
+                direct_path = os.path.join(directory, filename)
+                if os.path.exists(direct_path) and os.path.isfile(direct_path):
+                    return direct_path
+                
+                # Search recursively (for ZIPs that preserve directory structure)
+                for root, dirs, files in os.walk(directory):
+                    if filename in files:
+                        return os.path.join(root, filename)
+                return None
             
-            for filename, (table_name, import_func) in csv_files.items():
-                csv_path = os.path.join(temp_dir, filename)
-                if os.path.exists(csv_path):
-                    if import_func:
-                        imported, skipped, errors = import_func(csv_path, session, skip_existing, backup_dir)
+            # Import each expected CSV file (allow missing files for old version compatibility)
+            for filename, (table_name, import_func) in ALLOWED_FILES.items():
+                csv_path = find_file_in_dir(temp_dir, filename)
+                if csv_path and os.path.exists(csv_path):
+                    try:
+                        if import_func:
+                            imported, skipped, errors = import_func(csv_path, session, skip_existing, backup_dir)
+                            results[table_name] = {
+                                'imported': imported,
+                                'skipped': skipped,
+                                'errors': errors
+                            }
+                        elif table_name == 'user_preferences':
+                            imported, errors = import_user_preferences_from_csv(csv_path)
+                            results[table_name] = {
+                                'imported': imported,
+                                'skipped': 0,
+                                'errors': errors
+                            }
+                    except Exception as e:
+                        print(f"[Import] Error processing {filename}: {e}")
+                        import traceback
+                        print(f"[Import] Traceback: {traceback.format_exc()}")
                         results[table_name] = {
-                            'imported': imported,
-                            'skipped': skipped,
-                            'errors': errors
-                        }
-                    elif table_name == 'user_preferences':
-                        imported, errors = import_user_preferences_from_csv(csv_path)
-                        results[table_name] = {
-                            'imported': imported,
+                            'imported': 0,
                             'skipped': 0,
-                            'errors': errors
+                            'errors': 0,
+                            'error': str(e),
+                            'note': 'Failed to import file'
                         }
                 else:
+                    # File missing - this is OK for old version compatibility
+                    # Missing columns will be handled by imputing empty values in import functions
                     results[table_name] = {
                         'imported': 0,
                         'skipped': 0,
                         'errors': 0,
-                        'note': 'File not found in ZIP'
+                        'note': 'File not found in ZIP (old version compatibility - will use defaults)'
                     }
             
             # Check if backup files were created and move to permanent location

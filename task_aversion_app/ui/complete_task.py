@@ -5,6 +5,7 @@ from fastapi import Request
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
+from backend.recommendation_logger import recommendation_logger
 from ui.popup_modal import show_popup_modal
 import json
 
@@ -749,6 +750,42 @@ def complete_task_page(task_manager, emotion_manager):
                 else:
                     result = im.complete_instance(iid, actual)
                     print("[complete_task] complete_instance result:", result)
+                    
+                    # Log recommendation outcome if this was a recommended task
+                    try:
+                        instance = im.get_instance(iid)
+                        if instance:
+                            task_id = instance.get('task_id')
+                            task_name = instance.get('task_name', '')
+                            
+                            # Get predicted and actual relief scores
+                            predicted_raw = instance.get('predicted') or '{}'
+                            predicted_data = {}
+                            try:
+                                predicted_data = json.loads(predicted_raw) if predicted_raw else {}
+                            except json.JSONDecodeError:
+                                pass
+                            
+                            predicted_relief = predicted_data.get('expected_relief') or predicted_data.get('relief_score')
+                            actual_relief_val = actual.get('actual_relief') or actual.get('relief_score')
+                            
+                            # Get duration
+                            duration_minutes = actual.get('time_actual_minutes')
+                            if duration_minutes is None:
+                                duration_minutes = instance.get('duration_minutes')
+                            
+                            recommendation_logger.log_recommendation_outcome(
+                                task_id=task_id,
+                                instance_id=iid,
+                                task_name=task_name,
+                                outcome='completed',
+                                completion_time_minutes=float(duration_minutes) if duration_minutes else None,
+                                actual_relief=float(actual_relief_val) if actual_relief_val is not None else None,
+                                predicted_relief=float(predicted_relief) if predicted_relief is not None else None,
+                            )
+                    except Exception as log_error:
+                        # Don't fail if logging fails
+                        print(f"[complete_task] Failed to log recommendation outcome: {log_error}")
                     
                     # If aversion slider exists, update the predicted aversion
                     # Note: We preserve initialization_expected_aversion so it always shows the original initialization value

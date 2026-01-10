@@ -11,14 +11,14 @@ todos: []
 - Database: **CURRENT STATE**: Migrated to SQLite locally with `SQLite_migration/` folder approach. This plan originally suggested going straight to Postgres, but SQLite migration was done first (which is fine - easier to test locally). **VPS STATUS**: Not deployed yet - Need to convert SQLite migrations to PostgreSQL when deploying to VPS.
 - Migration Strategy: Using numbered migration scripts in `SQLite_migration/` folder (001, 002, etc.) - see `SQLite_migration/README.md` for details. Minimum one migration per week to keep app moving.
 - Deployment: **CURRENT STATE**: Docker path already started. Systemd + nginx on the Ubuntu 22.04 VPS (simpler now); revisit Docker later if you want image-based releases/rollbacks.
-- VPS Progress: SSH access complete, code not on server yet.
+- VPS Progress: ✅ **Phase 1 Complete** - SSH access, PostgreSQL installed, database `task_aversion_system` created, backup script configured. Code not on server yet.
 - Domain: Point `TaskAversionSystem.com` A/AAAA to the VPS; Let’s Encrypt via nginx.
 - Auth interim: Enforce unique usernames (case-insensitive), with clear UI notice that this is a temporary, no-password system.
 - User cap initially: ~20–30 concurrent/light users until load-tested; adjust after a basic load test.
 
 **Steps**
 
-1. Postgres setup: install Postgres, create DB/user, configure env vars/secrets for the app; add simple backup script. **STATUS**: Not started - VPS setup only partially done (SSH access complete, code not on server yet).
+1. Postgres setup: install Postgres, create DB/user, configure env vars/secrets for the app; add simple backup script. **STATUS**: ✅ **COMPLETE** - PostgreSQL installed, database `task_aversion_system` and user `task_aversion_user` created, backup script configured with `.pgpass` and cron job. See `docs/server_migration_checklist.md` for details.
 2. App migration off CSV: **LOCAL ONLY** - Migrated to SQLite locally using `migrate_csv_to_database.py` and `SQLite_migration/` scripts. Code paths switched to DB locally (with CSV fallback option). **VPS STATUS**: Not done - Need to convert SQLite migrations to PostgreSQL and run on VPS when deploying.
 3. Username policy & UI notice: enforce uniqueness, add inline UI notice about temporary auth; reject duplicates with a helpful message.
 4. Nginx + TLS: reverse proxy to app, obtain/renew Let's Encrypt cert for `TaskAversionSystem.com`.

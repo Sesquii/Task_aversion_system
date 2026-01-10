@@ -1,0 +1,39 @@
+Add comprehensive logging system for recommendation effectiveness tracking
+
+Implements detailed logging throughout the recommendation system to enable
+data-driven improvements. Logs track the full recommendation lifecycle from
+generation through selection to completion outcomes.
+
+Features:
+- Recommendation generation logging (metrics, filters, all recommendations shown)
+- Recommendation selection logging (which recommendations users click)
+- Outcome tracking (completion rates, relief prediction accuracy)
+- Non-blocking logging (errors don't break the app)
+- JSONL format for easy analysis (one file per day)
+- Analysis script to generate insights from logs
+
+New Files:
+- backend/recommendation_logger.py: Core logging module with event tracking
+- analyze_recommendation_logs.py: Analysis script for log insights
+- docs/RECOMMENDATION_LOGGING.md: Documentation and usage guide
+- RECOMMENDATION_LOGGING_SETUP.md: Setup and overview documentation
+
+Modified Files:
+- backend/analytics.py: Added logging to recommendations_by_category() and recommendations_from_instances()
+- ui/dashboard.py: Added logging to recommendation button handlers (INITIALIZE/START/RESUME)
+- ui/complete_task.py: Added logging when recommended tasks are completed
+- backend/instance_manager.py: Added outcome logging in complete_instance() methods
+
+Log Files:
+- data/logs/recommendations_YYYYMMDD.jsonl: Main event log (JSONL format)
+- data/logs/recommendation_debug_YYYYMMDD.log: Debug log
+
+This enables tracking:
+- Selection rates (% of recommendations selected)
+- Completion rates (% of selected recommendations completed)
+- Relief prediction accuracy (predicted vs actual)
+- Metric effectiveness (which combinations work best)
+- Time-based patterns and trends
+
+The logging system is production-ready and will help identify improvements
+to the recommendation algorithm based on actual usage patterns.

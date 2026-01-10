@@ -14,6 +14,7 @@ from backend.emotion_manager import EmotionManager
 from backend.analytics import Analytics
 from backend.user_state import UserStateManager
 from backend.performance_logger import get_perf_logger as get_init_perf_logger
+from backend.recommendation_logger import recommendation_logger
 
 # Setup performance logging for monitored metrics
 PERF_LOG_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'logs')
@@ -5745,12 +5746,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -5759,8 +5796,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")
@@ -6133,12 +6188,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -6147,8 +6238,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")
@@ -6521,12 +6630,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -6535,8 +6680,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")
@@ -6909,12 +7072,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -6923,8 +7122,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")
@@ -7297,12 +7514,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -7311,8 +7564,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")
@@ -7685,12 +7956,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -7699,8 +8006,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")
@@ -8073,12 +8398,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -8087,8 +8448,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")
@@ -8461,12 +8840,48 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                         
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
+                            def log_and_resume(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='resume',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                resume_instance(iid)
+                            
                             ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: resume_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_resume(iid)
                                       ).props("dense size=sm").classes("w-full bg-blue-500")
                         else:
+                            def log_and_start(iid):
+                                try:
+                                    recommendation_logger.log_recommendation_selected(
+                                        task_id=rec.get('task_id'),
+                                        instance_id=iid,
+                                        task_name=task_label,
+                                        recommendation_score=score_val,
+                                        action='start',
+                                        context={
+                                            'mode': mode,
+                                            'metrics': metric_keys,
+                                            'filters': filters,
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                                start_instance(iid)
+                            
                             ui.button("START",
-                                      on_click=lambda iid=instance_id: start_instance(iid)
+                                      on_click=lambda iid=instance_id: log_and_start(iid)
                                       ).props("dense size=sm").classes("w-full bg-green-500")
                     else:
                         ui.label("No instance ID").classes("text-xs text-gray-400")
@@ -8475,8 +8890,26 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     task_id = rec.get('task_id')
                     if task_id:
                         # Capture task_id in lambda closure
+                        def log_and_init(tid):
+                            try:
+                                recommendation_logger.log_recommendation_selected(
+                                    task_id=tid,
+                                    instance_id=None,
+                                    task_name=task_label,
+                                    recommendation_score=score_val,
+                                    action='initialize',
+                                    context={
+                                        'mode': mode,
+                                        'metrics': metric_keys,
+                                        'filters': filters,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                            init_quick(tid)
+                        
                         ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: init_quick(tid)
+                                  on_click=lambda tid=task_id: log_and_init(tid)
                                   ).props("dense size=sm").classes("w-full")
                     else:
                         ui.label("No task ID").classes("text-xs text-gray-400")

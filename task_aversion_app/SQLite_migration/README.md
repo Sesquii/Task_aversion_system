@@ -13,6 +13,11 @@ This folder contains migration scripts to update your SQLite database schema as 
 3. **003_create_task_instances_table.py** - Creates the task_instances table for storing task execution instances
 4. **004_create_emotions_table.py** - Creates the emotions table for storing available emotions
 5. **005_add_indexes_and_foreign_keys.py** - Adds performance indexes and foreign key constraints to task_instances
+6. **006_add_notes_column.py** - Adds notes column to tasks table (if applicable)
+7. **007_create_user_preferences_table.py** - Creates the user_preferences table for storing user settings and preferences
+8. **008_create_survey_responses_table.py** - Creates the survey_responses table for storing survey question responses
+9. **009_create_users_table.py** - Creates the users table for OAuth authentication (Google, etc.)
+10. **010_add_user_id_foreign_keys.py** - Adds user_id foreign keys to existing tables for user data isolation
 
 ### Utility Scripts
 

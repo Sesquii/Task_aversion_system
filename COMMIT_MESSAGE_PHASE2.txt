@@ -1,0 +1,68 @@
+Phase 2 Cleanup: Export/Import Security + User ID in Models
+
+## Summary
+Fixed export to always include all expected files, added security validation to import,
+simplified UI, and added user_id columns to database models. User data prepared for migration.
+Local Docker PostgreSQL testing pending.
+
+## Code Changes
+
+### Database Models (backend/database.py)
+- Added User model with OAuth fields (email, google_id, username, oauth_provider)
+- Added user_id INTEGER column to Task model (nullable ForeignKey)
+- Added user_id INTEGER column to TaskInstance model (nullable ForeignKey)
+- Added user_id INTEGER column to Note model (nullable ForeignKey)
+- Updated to_dict() methods to include user_id in exports
+
+### Export Functionality (backend/csv_export.py)
+- Always creates all 8 expected CSV files, even if empty (with headers)
+- Added survey_responses.csv to export (always creates file)
+- All files now include user_id columns in exports
+- ZIP creation includes empty files for completeness
+
+### Import Functionality (backend/csv_import.py)
+- Added security validation: Rejects ZIPs with unexpected/additional files
+- Added file whitelist: Only 8 expected CSV files allowed (tasks, task_instances, emotions, notes, popup_triggers, popup_responses, survey_responses, user_preferences)
+- Added old version compatibility: Accepts ZIPs with missing files (skips gracefully)
+- Added survey_responses import support (import_survey_responses_from_csv function)
+- Added user_id handling in Task, TaskInstance, Note imports
+- Added recursive file search for files in subdirectories
+
+### UI Cleanup (ui/settings_page.py)
+- Removed confusing "Export Data to CSV" button (saved to server folder)
+- Kept only "Download My Data" button (downloads ZIP to browser)
+- Updated button label and description for clarity
+
+### SQLite Migration Fix
+- Fixed Unicode arrow character in SQLite migration 010 (TEXT → INTEGER)
+- Changed to ASCII-safe text: "TEXT to INTEGER"
+
+### Testing Infrastructure
+- Created docker-compose.test.yml for local PostgreSQL testing
+- Created test_local_migrations.sh (Bash) and test_local_migrations.ps1 (PowerShell)
+- Created docs/local_testing_guide.md
+
+## Files Changed
+
+### Modified Files
+- backend/database.py (added User model, user_id columns)
+- backend/csv_export.py (always create all files, include user_id)
+- backend/csv_import.py (security validation, survey_responses import, user_id handling)
+- ui/settings_page.py (removed export button, simplified UI)
+- SQLite_migration/010_add_user_id_foreign_keys.py (fixed Unicode character)
+
+### New Files
+- docker-compose.test.yml
+- PostgreSQL_migration/test_local_migrations.sh
+- PostgreSQL_migration/test_local_migrations.ps1
+- docs/local_testing_guide.md
+
+## Testing Status
+
+- [x] SQLite migrations 009-010 tested locally
+- [x] Export includes all files with user_id columns
+- [x] Import security validation working (rejects unexpected files)
+- [x] Import compatibility working (accepts missing files)
+- [x] Download functionality working in browser
+- [x] User data exported and downloaded (ready for migration)
+- [ ] Pending: Docker PostgreSQL testing (001-010)
