@@ -12,6 +12,26 @@ from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.exc import OperationalError, IntegrityError
 
+# Import JSONB for PostgreSQL (used when DATABASE_URL is PostgreSQL)
+# JSONB provides better performance and supports GIN indexes
+# Note: JSONB is only used at table creation time - application code treats them the same
+try:
+    from sqlalchemy.dialects.postgresql import JSONB
+    JSONB_AVAILABLE = True
+except ImportError:
+    JSONB_AVAILABLE = False
+    JSONB = JSON  # Fallback to JSON if postgresql dialect not available
+
+def get_json_type():
+    """
+    Return appropriate JSON type based on database.
+    Returns JSONB for PostgreSQL (better performance, supports indexes) or JSON for SQLite.
+    """
+    if DATABASE_URL.startswith('postgresql') and JSONB_AVAILABLE:
+        return JSONB
+    else:
+        return JSON
+
 # Base class for all models
 Base = declarative_base()
 
@@ -138,14 +158,15 @@ class Task(Base):
     
     # Task properties
     is_recurring = Column(Boolean, default=False)
-    categories = Column(JSON, default=list)  # List of category strings
+    json_type = get_json_type()
+    categories = Column(json_type, default=list)  # JSONB for PostgreSQL, JSON for SQLite
     default_estimate_minutes = Column(Integer, default=0)
     task_type = Column(String, default='Work', index=True)  # Work, Self care, etc. - Indexed for filtering
     default_initial_aversion = Column(String, default='')  # Optional default aversion value
     
     # Routine scheduling fields
     routine_frequency = Column(String, default='none')  # 'none', 'daily', 'weekly'
-    routine_days_of_week = Column(JSON, default=list)  # List of day numbers (0=Monday, 6=Sunday) for weekly
+    routine_days_of_week = Column(json_type, default=list)  # JSONB for PostgreSQL, JSON for SQLite
     routine_time = Column(String, default='00:00')  # Time in HH:MM format (24-hour)
     completion_window_hours = Column(Integer, default=None)  # Hours to complete task after initialization without penalty
     completion_window_days = Column(Integer, default=None)  # Days to complete task after initialization without penalty
@@ -206,8 +227,11 @@ class TaskInstance(Base):
     cancelled_at = Column(DateTime, default=None, nullable=True)
     
     # JSON data (raw data storage)
-    predicted = Column(JSON, default=dict)  # Predicted values as JSON
-    actual = Column(JSON, default=dict)  # Actual values as JSON
+    # Use JSONB for PostgreSQL (better performance, supports GIN indexes) or JSON for SQLite
+    # Application code treats them the same - SQLAlchemy handles conversion automatically
+    json_type = get_json_type()
+    predicted = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
+    actual = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
     
     # Scores
     procrastination_score = Column(Float, default=None, nullable=True)
@@ -397,7 +421,8 @@ class PopupResponse(Base):
     comment = Column(Text, default=None, nullable=True)
     
     # Context data (JSON) - stores completion context, survey context, etc.
-    context = Column(JSON, default=dict)
+    json_type = get_json_type()
+    context = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
     
     # Timestamp
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
@@ -478,12 +503,13 @@ class UserPreferences(Base):
     gap_handling = Column(String, default=None, nullable=True)  # 'continue_as_is' or 'fresh_start'
     
     # JSON fields for complex preferences
-    persistent_emotion_values = Column(JSON, default=dict)  # Dict of emotion -> value (0-100)
-    productivity_history = Column(JSON, default=list)  # List of weekly productivity snapshots
-    productivity_goal_settings = Column(JSON, default=dict)  # Goal tracking settings
-    monitored_metrics_config = Column(JSON, default=dict)  # Metrics configuration
-    execution_score_chunk_state = Column(JSON, default=None, nullable=True)  # Execution score chunking state
-    productivity_settings = Column(JSON, default=dict)  # Productivity scoring settings (curve + thresholds)
+    json_type = get_json_type()
+    persistent_emotion_values = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
+    productivity_history = Column(json_type, default=list)  # JSONB for PostgreSQL, JSON for SQLite
+    productivity_goal_settings = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
+    monitored_metrics_config = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
+    execution_score_chunk_state = Column(json_type, default=None, nullable=True)  # JSONB for PostgreSQL, JSON for SQLite
+    productivity_settings = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
     
     # Additional JSON fields that may be dynamically added (stored as JSON)
     # Note: The CSV may have additional fields that are stored as JSON strings

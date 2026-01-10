@@ -85,7 +85,8 @@ GRANT ALL PRIVILEGES ON DATABASE task_aversion_system TO task_aversion_user;
 # Step 4: Connect to the new database
 \c task_aversion_system
 
-# Step 5: Grant schema privileges (for PostgreSQL 15+)
+# Step 5: Grant schema privileges (required for PostgreSQL 14.2+)
+# Some PostgreSQL configurations require explicit schema privileges
 GRANT ALL ON SCHEMA public TO task_aversion_user;
 
 # Step 6: Exit psql
@@ -316,20 +317,59 @@ crontab -e
 - ✅ Added GIN indexes on JSONB columns for efficient JSON queries
 - ✅ Used PostgreSQL-specific syntax (VARCHAR with length, JSONB defaults)
 
-### 2.4 Testing (Next Steps)
+### 2.4 Testing with Docker ✅ READY FOR TESTING
+
+**Status**: ✅ **READY** - Automated test scripts created
 
 **Local Testing with Docker:**
 
-```bash
-# Start PostgreSQL container
-docker run --name test-postgres \
-  -e POSTGRES_PASSWORD=testpassword \
-  -e POSTGRES_DB=task_aversion_test \
-  -p 5432:5432 \
-  -d postgres:15
+Two automated scripts are available for testing migrations:
 
-# Set DATABASE_URL
-export DATABASE_URL="postgresql://postgres:testpassword@localhost:5432/task_aversion_test"
+**Option 1: Automated Test Script (Recommended)**
+
+**Windows PowerShell:**
+
+```powershell
+cd task_aversion_app
+.\PostgreSQL_migration\test_migrations_docker.ps1
+```
+
+**Linux/macOS:**
+
+```bash
+cd task_aversion_app
+chmod +x PostgreSQL_migration/test_migrations_docker.sh
+./PostgreSQL_migration/test_migrations_docker.sh
+```
+
+The automated script will:
+
+1. Check for existing containers and clean them up
+2. Start a fresh PostgreSQL 14 container (matches server version 14.2)
+3. Wait for PostgreSQL to be ready
+4. Set DATABASE_URL environment variable
+5. Check current migration status
+6. Run all 10 migrations in order (001-010)
+7. Perform final status check
+8. Keep container running for further testing
+
+**Option 2: Manual Testing with Docker Compose**
+
+```bash
+# From project root directory
+docker-compose up -d postgres
+
+# Wait for PostgreSQL to be ready (check health status)
+docker-compose ps postgres
+
+# Set DATABASE_URL (PowerShell)
+$env:DATABASE_URL = "postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
+
+# Set DATABASE_URL (Bash)
+export DATABASE_URL="postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
+
+# Navigate to app directory
+cd task_aversion_app
 
 # Check migration status
 python PostgreSQL_migration/check_migration_status.py
@@ -346,9 +386,126 @@ python PostgreSQL_migration/008_create_survey_responses_table.py
 python PostgreSQL_migration/009_create_users_table.py
 python PostgreSQL_migration/010_add_user_id_foreign_keys.py
 
+# Verify all migrations completed
+python PostgreSQL_migration/check_migration_status.py
+
+# Clean up (when done testing)
+docker-compose down
+# Or to keep data: docker-compose stop postgres
+```
+
+**Option 3: Manual Testing with Standalone Container**
+
+```bash
+# Start PostgreSQL container
+docker run --name test-postgres \
+  -e POSTGRES_PASSWORD=testpassword \
+  -e POSTGRES_USER=task_aversion_user \
+  -e POSTGRES_DB=task_aversion_test \
+  -p 5432:5432 \
+  -d postgres:14-alpine
+# Using PostgreSQL 14 to match server version (14.2) for accurate testing
+
+# Wait for PostgreSQL to be ready
+docker exec test-postgres pg_isready -U task_aversion_user -d task_aversion_test
+
+# Set DATABASE_URL (PowerShell)
+$env:DATABASE_URL = "postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
+
+# Set DATABASE_URL (Bash)
+export DATABASE_URL="postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
+
+# Run migrations (see Option 2 for migration commands)
+
 # Clean up
 docker stop test-postgres
 docker rm test-postgres
+```
+
+**Test Container Configuration:**
+
+- **Container name**: `test-postgres-migration` (automated script) or `task-aversion-postgres` (docker-compose)
+- **Database**: `task_aversion_test`
+- **User**: `task_aversion_user`
+- **Password**: `testpassword`
+- **Port**: `5432`
+- **Image**: `postgres:14-alpine` (matches server version 14.2 for accurate testing)
+
+**Why PostgreSQL 14 instead of 15?**
+
+- Your server is running PostgreSQL 14.2
+- Testing with the same version as production ensures accurate results
+- PostgreSQL 14 and 15 are compatible, but matching versions eliminates version-specific issues
+- If you upgrade the server to PostgreSQL 15 later, you can update Docker images to match
+- For now, matching server version is the safest approach for testing
+
+**Verification Steps:**
+
+After running migrations, verify:
+
+1. **Check migration status:**
+  ```bash
+   python PostgreSQL_migration/check_migration_status.py
+  ```
+2. **Connect to database and verify tables:**
+  ```bash
+   # Using psql (if installed)
+   psql -h localhost -U task_aversion_user -d task_aversion_test
+   # Then: \dt  (list tables)
+   #       \q   (quit)
+
+   # Or using Docker
+   docker exec -it test-postgres-migration psql -U task_aversion_user -d task_aversion_test
+  ```
+3. **Verify tables exist:**
+  ```sql
+   SELECT table_name 
+   FROM information_schema.tables 
+   WHERE table_schema = 'public' 
+   ORDER BY table_name;
+  ```
+4. **Check specific migration results:**
+  - Migration 001: Verify `tasks`, `task_instances`, `emotions` tables exist
+  - Migration 002: Verify `routine_frequency`, `routine_days_of_week` columns exist in `tasks`
+  - Migration 005: Verify indexes exist on `task_instances` table
+  - Migration 009: Verify `users` table exists
+  - Migration 010: Verify `user_id` columns exist in related tables
+
+**Troubleshooting:**
+
+- **Container won't start**: Check if port 5432 is already in use
+  ```bash
+  # Windows PowerShell
+  netstat -ano | findstr :5432
+
+  # Linux/macOS
+  lsof -i :5432
+  ```
+- **Connection refused**: Wait longer for PostgreSQL to initialize (can take 10-30 seconds)
+- **Migration fails**: Check DATABASE_URL is set correctly
+  ```bash
+  # PowerShell
+  echo $env:DATABASE_URL
+
+  # Bash
+  echo $DATABASE_URL
+  ```
+- **Permission errors**: Ensure you're running from the `task_aversion_app` directory where migrations are located
+
+**Cleanup:**
+
+When finished testing:
+
+```bash
+# Stop and remove container (automated script container)
+docker stop test-postgres-migration
+docker rm test-postgres-migration
+
+# Or if using docker-compose
+docker-compose down
+
+# To remove volumes (WARNING: deletes all test data)
+docker-compose down -v
 ```
 
 **Notes:**
@@ -356,6 +513,9 @@ docker rm test-postgres
 - All migrations are idempotent (safe to run multiple times)
 - SQLite migration scripts kept in `SQLite_migration/` as backup
 - PostgreSQL migrations are separate scripts for clarity
+- Test container uses different credentials than production (see Phase 3 for production setup)
+- Test database name is `task_aversion_test` (not `task_aversion_system`)
+- Automated scripts keep container running for further testing - clean up manually when done
 
 ## Phase 2B: User Authentication & Authorization ⚠️ CRITICAL
 

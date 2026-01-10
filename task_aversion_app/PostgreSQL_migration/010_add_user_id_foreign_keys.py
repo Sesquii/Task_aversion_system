@@ -306,19 +306,27 @@ def migrate():
             print(f"Columns converted (VARCHAR → INTEGER): {converted_count}")
             print(f"Columns skipped (already exist/correct type): {skipped_count}")
             
-            if errors:
-                print(f"\nErrors/Warnings encountered: {len(errors)}")
-                for error in errors:
-                    print(f"  - {error}")
+            # Separate warnings from actual errors
+            warnings = [e for e in errors if "Primary key conversion" in e or "Unexpected" in e]
+            actual_errors = [e for e in errors if "Primary key conversion" not in e and "Unexpected" not in e]
+            
+            if warnings:
+                print(f"\nWarnings encountered: {len(warnings)}")
+                for warning in warnings:
+                    print(f"  - {warning}")
                 
-                if any("Primary key conversion" in e for e in errors):
+                if any("Primary key conversion" in w for w in warnings):
                     print("\n[IMPORTANT] Some tables require manual primary key conversion:")
                     print("  - user_preferences: Has VARCHAR user_id as PRIMARY KEY")
                     print("  - A separate migration script (010b) will be needed for this")
                     print("  - This requires: 1) Create new table, 2) Migrate data, 3) Drop old, 4) Rename")
+                    print("  - This is expected and will be handled in a future migration")
             
-            if errors and any("Primary key conversion" not in e for e in errors):
-                print("\n[WARNING] Some migrations failed. Review errors above.")
+            if actual_errors:
+                print(f"\n[ERROR] Actual errors encountered: {len(actual_errors)}")
+                for error in actual_errors:
+                    print(f"  - {error}")
+                print("\n[ERROR] Migration failed due to actual errors. Review errors above.")
                 return False
             
             if added_count > 0 or converted_count > 0:

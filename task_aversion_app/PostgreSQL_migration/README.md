@@ -14,25 +14,97 @@ These scripts convert the SQLite migrations to PostgreSQL-compatible SQL for ser
 
 ## Local Testing with Docker
 
-### Start PostgreSQL Container
+### Automated Testing Scripts (Recommended)
+
+The easiest way to test migrations is using the automated test scripts:
+
+**Windows PowerShell:**
+```powershell
+cd task_aversion_app
+.\PostgreSQL_migration\test_migrations_docker.ps1
+```
+
+**Linux/macOS:**
+```bash
+cd task_aversion_app
+chmod +x PostgreSQL_migration/test_migrations_docker.sh
+./PostgreSQL_migration/test_migrations_docker.sh
+```
+
+These scripts will:
+1. Check for existing containers and clean them up
+2. Start a fresh PostgreSQL 14 container (matches server version 14.2)
+3. Wait for PostgreSQL to be ready
+4. Set DATABASE_URL environment variable automatically
+5. Check current migration status
+6. Run all 10 migrations in order (001-010)
+7. Perform final status check
+8. Keep container running for further testing
+
+**Cleanup when done:**
+```bash
+# Stop and remove the test container
+docker stop test-postgres-migration
+docker rm test-postgres-migration
+```
+
+### Manual Testing with Docker Compose
+
+Alternatively, you can use docker-compose:
+
+```bash
+# From project root directory
+docker-compose up -d postgres
+
+# Wait for PostgreSQL to be ready
+docker-compose ps postgres
+
+# Set DATABASE_URL (PowerShell)
+$env:DATABASE_URL = "postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
+
+# Set DATABASE_URL (Bash)
+export DATABASE_URL="postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
+
+# Navigate to app directory
+cd task_aversion_app
+
+# Check migration status
+python PostgreSQL_migration/check_migration_status.py
+
+# Run migrations (see "How to Run Migrations" section below)
+
+# Clean up when done
+docker-compose down
+```
+
+### Manual Testing with Standalone Container
+
+**Start PostgreSQL Container:**
 ```bash
 docker run --name test-postgres \
   -e POSTGRES_PASSWORD=testpassword \
+  -e POSTGRES_USER=task_aversion_user \
   -e POSTGRES_DB=task_aversion_test \
   -p 5432:5432 \
-  -d postgres:15
+  -d postgres:14-alpine
+# Using PostgreSQL 14 to match server version (14.2) for accurate testing
 ```
 
-### Test Connection
+**Test Connection:**
 ```bash
-# Set DATABASE_URL
-export DATABASE_URL="postgresql://postgres:testpassword@localhost:5432/task_aversion_test"
+# Set DATABASE_URL (PowerShell)
+$env:DATABASE_URL = "postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
 
-# Run migrations
-python PostgreSQL_migration/001_initial_schema.py
+# Set DATABASE_URL (Bash)
+export DATABASE_URL="postgresql://task_aversion_user:testpassword@localhost:5432/task_aversion_test"
+
+# Navigate to app directory
+cd task_aversion_app
+
+# Run migrations (see "How to Run Migrations" section below)
 ```
 
-### Clean Up
+**Clean Up:**
 ```bash
 docker stop test-postgres
 docker rm test-postgres

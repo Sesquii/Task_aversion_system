@@ -161,7 +161,8 @@ def main():
     print("-" * 70)
     
     if check_table_exists('task_instances'):
-        expected_indexes = [
+        # Required indexes (must exist)
+        required_indexes = [
             'idx_task_instances_task_status',
             'idx_task_instances_created_at',
             'idx_task_instances_is_completed',
@@ -170,13 +171,28 @@ def main():
             'idx_task_instances_actual_gin',
         ]
         
-        all_exist = True
-        for idx_name in expected_indexes:
+        # Optional indexes (nice to have, but not required)
+        optional_indexes = [
+            'idx_tasks_categories_gin',
+            'idx_tasks_routine_days_gin',
+        ]
+        
+        all_required_exist = True
+        for idx_name in required_indexes:
             exists = check_index_exists('task_instances', idx_name)
             status = "[OK]" if exists else "[MISSING]"
             print(f"  {status} Index '{idx_name}': {'exists' if exists else 'MISSING'}")
             if not exists:
-                all_exist = False
+                all_required_exist = False
+        
+        # Check optional indexes (only if tasks table exists)
+        if check_table_exists('tasks'):
+            for idx_name in optional_indexes:
+                exists = check_index_exists('tasks', idx_name)
+                status = "[OK]" if exists else "[OPTIONAL]"
+                print(f"  {status} Index '{idx_name}' (optional): {'exists' if exists else 'OPTIONAL - can be added later'}")
+        
+        all_exist = all_required_exist  # Only required indexes determine if migration is complete
         
         # Check for foreign key constraint
         try:
