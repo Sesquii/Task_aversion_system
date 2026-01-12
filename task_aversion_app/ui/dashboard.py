@@ -5113,6 +5113,16 @@ def build_dashboard(task_manager):
                           icon="settings").classes("text-xl py-3 px-6").props('data-tooltip-id="settings_link"')
         
         # ====================================================================
+        # DATA ISOLATION WARNING NOTE
+        # ====================================================================
+        with ui.card().classes("w-full mb-4 p-4 bg-yellow-50 border-2 border-yellow-400"):
+            with ui.row().classes("w-full items-center gap-3"):
+                ui.icon("warning", size="lg").classes("text-yellow-600")
+                with ui.column().classes("flex-1"):
+                    ui.label("Dashboard Metrics Temporarily Disabled").classes("text-lg font-bold text-yellow-800")
+                    ui.label("Dashboard metrics and analytics are currently disabled because data is duplicated in the database temporarily while working on data isolation in the auth branch. Metrics will be re-enabled once data isolation is complete.").classes("text-sm text-yellow-700")
+        
+        # ====================================================================
         # MAIN THREE-COLUMN LAYOUT
         # ====================================================================
         with ui.row().classes("dashboard-layout w-full gap-4"):
