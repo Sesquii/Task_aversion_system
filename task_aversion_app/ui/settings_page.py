@@ -2,6 +2,7 @@ from nicegui import ui
 from backend.user_state import UserStateManager
 from backend.instance_manager import InstanceManager
 from backend.analytics import Analytics
+from backend.task_manager import TaskManager
 import json
 
 analytics = Analytics()
@@ -9,6 +10,7 @@ analytics = Analytics()
 user_state = UserStateManager()
 DEFAULT_USER_ID = "default_user"
 im = InstanceManager()
+tm = TaskManager()
 
 # Default cancellation categories
 DEFAULT_CANCELLATION_CATEGORIES = {
@@ -33,11 +35,64 @@ def settings_page():
     def go_survey():
         ui.navigate.to("/survey")
     
+    def refresh_data_and_cache():
+        """Refresh data and clear all caches."""
+        try:
+            # Clear instance manager caches (class-level, shared across all instances)
+            im._invalidate_instance_caches()
+            
+            # Clear task manager caches
+            tm._invalidate_task_caches()
+            
+            # Clear analytics class-level caches (shared across all instances)
+            # These are class variables, so we need to clear them on the class itself
+            Analytics._relief_summary_cache = None
+            Analytics._relief_summary_cache_time = None
+            Analytics._composite_scores_cache = None
+            Analytics._composite_scores_cache_time = None
+            
+            # Clear analytics caches (settings page instance)
+            analytics._invalidate_instances_cache()
+            
+            # Try to clear dashboard's analytics instance cache if it exists
+            try:
+                # Import dashboard module to access its analytics instance
+                import ui.dashboard as dashboard_module
+                if hasattr(dashboard_module, 'an'):
+                    dashboard_module.an._invalidate_instances_cache()
+                    print("[Settings] Cleared dashboard analytics cache")
+            except Exception as dashboard_error:
+                # Dashboard module might not be loaded yet, which is okay
+                print(f"[Settings] Could not clear dashboard analytics cache: {dashboard_error}")
+            
+            # Reload user state
+            user_state._reload()
+            
+            # Reload instance manager data
+            im._reload()
+            
+            # Reload task manager data
+            tm._reload()
+            
+            ui.notify("Data refreshed and cache cleared!", color="positive")
+            # Reload the page to show fresh data
+            ui.navigate.reload()
+        except Exception as e:
+            import traceback
+            error_msg = str(e)
+            traceback.print_exc()
+            ui.notify(f"Error refreshing data: {error_msg}", color="negative", timeout=5000)
+            print(f"[Settings] Refresh error: {traceback.format_exc()}")
+    
     # def go_data_guide():
     #     ui.navigate.to("/data-guide")
 
     ui.label("Settings").classes("text-2xl font-bold mb-2")
     with ui.card().classes("w-full max-w-xl p-4 gap-3"):
+        # Refresh button at the top
+        ui.button("🔄 Refresh Data & Clear Cache", on_click=refresh_data_and_cache).classes("bg-green-500 text-white w-full mb-4")
+        ui.label("Clear all caches and reload data from storage. Use this if data seems stale or outdated.").classes("text-xs text-gray-500 mb-4")
+        ui.separator().classes("mb-4")
         ui.label("Surveys").classes("text-lg font-semibold")
         ui.button("Take Mental Health Survey", on_click=go_survey)
         ui.separator()

@@ -2284,10 +2284,12 @@ def render_monitored_metrics_section(container):
     
     # Create metrics grid and header immediately
     with container:
-        # Header with edit button
+        # Header with edit and update buttons
         with ui.row().classes("w-full justify-between items-center mb-2"):
             ui.label("Monitored Metrics").classes("text-sm font-semibold")
-            ui.button("Edit", on_click=lambda: open_metrics_config_dialog()).props("dense size=sm")
+            with ui.row().classes("gap-1"):
+                ui.button("Update", on_click=update_monitored_metrics).props("dense size=sm").classes("bg-green-500 text-white")
+                ui.button("Edit", on_click=lambda: open_metrics_config_dialog()).props("dense size=sm")
         
         # Experimental warning
         with ui.row().classes("w-full mb-2"):
@@ -3964,6 +3966,37 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                                     }}
                                 }}, 300);
                             ''')
+
+
+def update_monitored_metrics():
+    """Update monitored metrics by clearing caches and refreshing data."""
+    try:
+        from backend.analytics import Analytics
+        
+        # Clear instance manager caches (class-level, shared across all instances)
+        im._invalidate_instance_caches()
+        
+        # Clear analytics class-level caches (shared across all instances)
+        Analytics._relief_summary_cache = None
+        Analytics._relief_summary_cache_time = None
+        Analytics._composite_scores_cache = None
+        Analytics._composite_scores_cache_time = None
+        
+        # Clear analytics instance caches
+        an._invalidate_instances_cache()
+        
+        # Reload instance manager data
+        im._reload()
+        
+        ui.notify("Monitored metrics updated!", color="positive")
+        # Reload the page to show fresh metrics
+        ui.navigate.reload()
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        traceback.print_exc()
+        ui.notify(f"Error updating metrics: {error_msg}", color="negative", timeout=5000)
+        print(f"[Dashboard] Update metrics error: {traceback.format_exc()}")
 
 
 def open_metrics_config_dialog():

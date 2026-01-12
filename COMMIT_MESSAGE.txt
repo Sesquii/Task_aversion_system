@@ -1,124 +1,35 @@
-feat: Optimize PostgreSQL JSON columns to JSONB and enhance migration testing
+feat: Add cache refresh buttons for monitored metrics updates
 
-Optimize all JSON columns to use JSONB in PostgreSQL for better performance
-and indexing capabilities, while maintaining full compatibility with SQLite
-and existing application code. Includes comprehensive migration testing scripts
-and improved error handling.
+Add refresh/update buttons to clear caches and reload data for monitored
+metrics, allowing users to quickly update metrics between tasks without
+waiting for automatic cache expiration.
 
 ## Summary
 
-- JSONB optimization: All JSON columns automatically use JSONB in PostgreSQL
-- GIN indexes: Required indexes on `predicted`/`actual`, optional on `categories`/`routine_days_of_week`
-- Automatic conversion: Migration 005 converts existing JSON → JSONB automatically
-- Testing scripts: PowerShell and Bash scripts for Docker-based migration testing
-- Documentation: Comprehensive guides for JSONB compatibility and testing strategy
-- Error handling: Separates warnings from errors (optional indexes, expected warnings)
+- Settings page: Added "Refresh Data & Clear Cache" button at top of settings
+- Monitored metrics: Added "Update" button next to Edit button for quick refresh
+- Cache clearing: Invalidates all relevant caches (InstanceManager, Analytics class-level and instance-level)
+- Data reload: Forces fresh data reload for accurate metrics display
 
-## JSONB Optimization
+## Details
 
-### Database Model Changes (backend/database.py)
-- Added automatic JSONB type selection for PostgreSQL using `get_json_type()`
-- All JSON columns now use JSONB in PostgreSQL (better performance, supports GIN indexes)
-- Maintains JSON (TEXT) for SQLite (automatic mapping, no code changes needed)
-- Updated columns:
-  - TaskInstance: `predicted`, `actual` (with GIN indexes)
-  - Task: `categories`, `routine_days_of_week` (with optional GIN indexes)
-  - PopupResponse: `context`
-  - UserPreferences: All JSON preference fields
+### Settings Page (ui/settings_page.py)
+- Added refresh button at top of settings page (above all other sections)
+- Clears InstanceManager, TaskManager, and Analytics caches (class-level and instance-level)
+- Clears dashboard's Analytics instance cache if available
+- Reloads user state, instance manager, and task manager data
+- Full page reload to display fresh data
 
-### Migration Script Improvements (005_add_indexes_and_foreign_keys.py)
-- Automatic JSON → JSONB conversion for existing columns before creating indexes
-- Checks both `task_instances` and `tasks` tables for JSON columns
-- Re-inspects columns after conversion to ensure latest types
-- Optional GIN indexes for `tasks.categories` and `tasks.routine_days_of_week`
-- Treats optional index failures as warnings, not errors
-- Verification step distinguishes required vs optional indexes
+### Dashboard Monitored Metrics (ui/dashboard.py)
+- Added `update_monitored_metrics()` function for quick cache clearing
+- Added "Update" button next to Edit button in monitored metrics header
+- Green button styling to distinguish from Edit button
+- Focused cache clearing for metrics-related data (InstanceManager, Analytics)
+- Page reload to refresh metrics display
 
-### Migration Status Check (check_migration_status.py)
-- Separates required indexes from optional indexes in status reporting
-- Only required indexes determine migration completion status
-- Optional indexes shown as "[OPTIONAL]" instead of "[MISSING]"
+## Benefits
 
-### Migration 010 Improvements (010_add_user_id_foreign_keys.py)
-- Separates warnings from actual errors
-- Primary key conversion warnings don't cause migration failure
-- Returns success even when manual migrations are needed (expected workflow)
-
-## Testing Infrastructure
-
-### Docker Test Scripts
-- **PowerShell script** (test_migrations_docker.ps1): Windows testing
-- **Bash script** (test_migrations_docker.sh): Linux/macOS testing
-- Both scripts functionally equivalent (same Docker/Python operations)
-- Fixed directory navigation logic for robust execution from any location
-- Uses 127.0.0.1 instead of localhost to avoid IPv6 conflicts
-- Added explicit volume removal (`docker rm -v`) for clean testing
-- PostgreSQL 14-alpine to match server version (14.2)
-
-### Testing Documentation
-- **TESTING_STRATEGY.md**: Comprehensive testing guide explaining:
-  - Why Docker test is sufficient for migration logic validation
-  - When to test bash scripts (lightweight validation recommended)
-  - Risk assessment and error scenarios
-  - SQLite/PostgreSQL compatibility
-
-- **SQLITE_POSTGRES_SYNC.md**: Synchronization guide covering:
-  - JSONB compatibility (automatic via SQLAlchemy)
-  - CSV export/import strategy for data sync
-  - Schema compatibility between SQLite and PostgreSQL
-  - Best practices for maintaining dual-database setup
-
-- **JSONB_COMPATIBILITY.md**: Technical guide explaining:
-  - JSON vs JSONB differences and benefits
-  - Application code compatibility (no changes needed)
-  - CSV export/import compatibility
-  - All optimized JSON columns listed
-
-## Key Benefits
-
-### Performance
-- GIN indexes on `predicted` and `actual` columns enable fast JSON queries
-- JSONB binary format faster than JSON text for queries (slower inserts, faster reads)
-- Optional indexes ready for future category/routine filtering optimizations
-
-### Compatibility
-- Zero application code changes required (SQLAlchemy handles conversion)
-- CSV export/import works identically with both JSON and JSONB
-- Full SQLite compatibility maintained (maps to TEXT automatically)
-- Idempotent migrations (safe to re-run)
-
-### Maintainability
-- Clear separation of required vs optional database features
-- Comprehensive documentation for future developers
-- Automated testing scripts for both Windows and Linux
-- Migration scripts handle edge cases gracefully (warnings vs errors)
-
-## Testing
-- ✅ All migrations tested with Docker (PostgreSQL 14)
-- ✅ PowerShell script validated on Windows
-- ✅ Bash script syntax validated (Unix line endings)
-- ✅ Optional indexes marked correctly (don't fail migrations)
-- ✅ Migration 010 handles warnings correctly (doesn't fail on expected warnings)
-
-## Files Changed
-- backend/database.py: JSONB type selection for all JSON columns
-- PostgreSQL_migration/005_add_indexes_and_foreign_keys.py: JSON→JSONB conversion, optional indexes
-- PostgreSQL_migration/010_add_user_id_foreign_keys.py: Warning/error separation
-- PostgreSQL_migration/check_migration_status.py: Required vs optional index reporting
-- PostgreSQL_migration/test_migrations_docker.ps1: PowerShell test script (127.0.0.1, directory handling)
-- PostgreSQL_migration/test_migrations_docker.sh: Bash test script (127.0.0.1, directory handling, Unix LF)
-- PostgreSQL_migration/JSONB_COMPATIBILITY.md: Technical documentation
-- PostgreSQL_migration/SQLITE_POSTGRES_SYNC.md: Synchronization guide
-- PostgreSQL_migration/TESTING_STRATEGY.md: Testing strategy guide
-
-## Migration Notes
-- Migration 005 now automatically converts JSON → JSONB if needed
-- Optional GIN indexes can be created later if needed (marked as optional)
-- Migration 010 warnings about primary key conversion are expected (handled separately)
-- All migrations are idempotent - safe to re-run
-
-## Breaking Changes
-None - all changes are backward compatible:
-- SQLite databases unchanged (still use JSON/TEXT)
-- Existing PostgreSQL databases will have columns converted automatically
-- Application code unchanged (SQLAlchemy handles types transparently)
+- Quick updates: Users can manually refresh metrics immediately after completing tasks
+- No waiting: Bypasses cache TTL (5 minutes) for instant updates
+- Convenient placement: Update button right next to monitored metrics for easy access
+- Comprehensive: Settings button clears all caches for full system refresh
