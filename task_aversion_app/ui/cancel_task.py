@@ -31,6 +31,9 @@ def cancel_task_page(task_manager, emotion_manager):
     @ui.page('/cancel_task')
     def page(request: Request):
         ui.label("Cancel Task").classes("text-xl font-bold mb-4")
+        
+        with ui.row().classes("mb-4"):
+            ui.button("Return to Dashboard", on_click=lambda: ui.navigate.to("/")).classes("bg-gray-500 text-white")
 
         params = dict(request.query_params)
         instance_id = params.get("instance_id")

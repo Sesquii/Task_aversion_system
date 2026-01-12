@@ -153,6 +153,9 @@ def initialize_task_page(task_manager, emotion_manager):
             title_text = "Edit Task Initialization" if (edit_mode and is_completed_task) else "Initialize Task"
             ui.label(title_text).classes("text-3xl font-bold mb-4")
             
+            with ui.row().classes("mb-4"):
+                ui.button("Return to Dashboard", on_click=lambda: ui.navigate.to("/")).classes("bg-gray-500 text-white")
+            
             # Show edit mode notice
             if edit_mode and is_completed_task:
                 with ui.card().classes("w-full p-3 bg-blue-50 border border-blue-200 mb-4"):
