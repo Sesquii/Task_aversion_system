@@ -178,9 +178,11 @@ class TaskManager:
             with perf_logger.operation("_get_task_db", task_id=task_id, user_id=user_id):
                 with self.db_session() as session:
                     query = session.query(self.Task).filter(self.Task.task_id == task_id)
-                    # Filter by user_id if provided (allow NULL during migration period)
+                    # Filter by user_id if provided (include NULL user_id during migration period)
                     if user_id is not None:
-                        query = query.filter(self.Task.user_id == user_id)
+                        # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
+                        from sqlalchemy import or_
+                        query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
                     task = query.first()
                     return task.to_dict() if task else None
         except Exception as e:
@@ -233,9 +235,11 @@ class TaskManager:
         try:
             with self.db_session() as session:
                 query = session.query(self.Task)
-                # Filter by user_id if provided (allow NULL during migration period)
+                # Filter by user_id if provided (include NULL user_id during migration period)
                 if user_id is not None:
-                    query = query.filter(self.Task.user_id == user_id)
+                    # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
+                    from sqlalchemy import or_
+                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
                 tasks = query.all()
                 return [task.name for task in tasks]
         except Exception as e:
@@ -293,9 +297,11 @@ class TaskManager:
         try:
             with self.db_session() as session:
                 query = session.query(self.Task)
-                # Filter by user_id if provided (allow NULL during migration period)
+                # Filter by user_id if provided (include NULL user_id during migration period)
                 if user_id is not None:
-                    query = query.filter(self.Task.user_id == user_id)
+                    # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
+                    from sqlalchemy import or_
+                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
                 tasks = query.all()
                 if not tasks:
                     # Return empty DataFrame with expected columns
@@ -544,9 +550,11 @@ class TaskManager:
         try:
             with self.db_session() as session:
                 query = session.query(self.Task).filter(self.Task.name == name)
-                # Filter by user_id if provided (allow NULL during migration period)
+                # Filter by user_id if provided (include NULL user_id during migration period)
                 if user_id is not None:
-                    query = query.filter(self.Task.user_id == user_id)
+                    # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
+                    from sqlalchemy import or_
+                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
                 task = query.first()
                 return task.to_dict() if task else None
         except Exception as e:
@@ -615,9 +623,11 @@ class TaskManager:
             from datetime import datetime
             with self.db_session() as session:
                 query = session.query(self.Task).filter(self.Task.task_id == task_id)
-                # Filter by user_id if provided (allow NULL during migration period)
+                # Filter by user_id if provided (include NULL user_id during migration period)
                 if user_id is not None:
-                    query = query.filter(self.Task.user_id == user_id)
+                    # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
+                    from sqlalchemy import or_
+                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
                 task = query.first()
                 if not task:
                     raise ValueError(f"Task {task_id} not found")
@@ -676,9 +686,11 @@ class TaskManager:
         try:
             with self.db_session() as session:
                 query = session.query(self.Task).filter(self.Task.task_id == task_id)
-                # Filter by user_id if provided (allow NULL during migration period)
+                # Filter by user_id if provided (include NULL user_id during migration period)
                 if user_id is not None:
-                    query = query.filter(self.Task.user_id == user_id)
+                    # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
+                    from sqlalchemy import or_
+                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
                 task = query.first()
                 if not task:
                     return ''
@@ -720,11 +732,17 @@ class TaskManager:
         print("[TaskManager] Task deleted successfully.")
         return True
     
-    def _delete_by_id_db(self, task_id):
+    def _delete_by_id_db(self, task_id, user_id: Optional[int] = None):
         """Database-specific delete_by_id."""
         try:
             with self.db_session() as session:
-                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                query = session.query(self.Task).filter(self.Task.task_id == task_id)
+                # Filter by user_id if provided (include NULL user_id during migration period)
+                if user_id is not None:
+                    # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
+                    from sqlalchemy import or_
+                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
+                task = query.first()
                 if not task:
                     print("[TaskManager] No matching task to delete.")
                     return False
