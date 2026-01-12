@@ -9,3 +9,5 @@ statsmodels
 sqlalchemy>=2.0.0
 psycopg2-binary
 python-dotenv
+authlib>=1.2.0
+httpx>=0.24.0

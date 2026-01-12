@@ -134,29 +134,34 @@ class TaskManager:
         self.df.to_csv(self.tasks_file, index=False)
         self._reload_csv()
     
-    def get_task(self, task_id):
+    def get_task(self, task_id, user_id: Optional[int] = None):
         """Return a task row by id as a dict. Works with both CSV and database.
         
         Uses per-task caching to avoid repeated database queries. Cache is TTL-based (5 minutes).
+        
+        Args:
+            task_id: Task ID to retrieve
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
         """
         import time
         
-        # Check per-task cache first
+        # Check per-task cache first (cache key includes user_id for isolation)
+        cache_key = f"{task_id}:{user_id}" if user_id else task_id
         current_time = time.time()
-        if task_id in self._task_cache:
-            cached_task, cache_time = self._task_cache[task_id]
+        if cache_key in self._task_cache:
+            cached_task, cache_time = self._task_cache[cache_key]
             if (current_time - cache_time) < self._cache_ttl_seconds:
                 return cached_task.copy() if isinstance(cached_task, dict) else cached_task
         
         # Cache miss - load from database/CSV
         if self.use_db:
-            result = self._get_task_db(task_id)
+            result = self._get_task_db(task_id, user_id)
         else:
             result = self._get_task_csv(task_id)
         
         # Store in per-task cache
         if result is not None:
-            self._task_cache[task_id] = (result.copy() if isinstance(result, dict) else result, time.time())
+            self._task_cache[cache_key] = (result.copy() if isinstance(result, dict) else result, time.time())
         
         return result
     
@@ -167,12 +172,16 @@ class TaskManager:
             rows = self.df[self.df['task_id'] == task_id]
             return rows.iloc[0].to_dict() if not rows.empty else None
     
-    def _get_task_db(self, task_id):
+    def _get_task_db(self, task_id, user_id: Optional[int] = None):
         """Database-specific get_task."""
         try:
-            with perf_logger.operation("_get_task_db", task_id=task_id):
+            with perf_logger.operation("_get_task_db", task_id=task_id, user_id=user_id):
                 with self.db_session() as session:
-                    task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                    query = session.query(self.Task).filter(self.Task.task_id == task_id)
+                    # Filter by user_id if provided (allow NULL during migration period)
+                    if user_id is not None:
+                        query = query.filter(self.Task.user_id == user_id)
+                    task = query.first()
                     return task.to_dict() if task else None
         except Exception as e:
             if self.strict_mode:
@@ -182,29 +191,35 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._get_task_csv(task_id)
 
-    def list_tasks(self) -> List[str]:
+    def list_tasks(self, user_id: Optional[int] = None) -> List[str]:
         """Return list of task names. Works with both CSV and database.
         
         Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes).
+        
+        Args:
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
         """
         import time
         
-        # Check cache first
+        # Check cache first (cache key includes user_id for isolation)
+        cache_key = f"list:{user_id}" if user_id else "list:all"
         current_time = time.time()
-        if (self._tasks_list_cache is not None and 
-            self._tasks_list_cache_time is not None and
-            (current_time - self._tasks_list_cache_time) < self._cache_ttl_seconds):
-            return self._tasks_list_cache.copy()
+        if (hasattr(self, f'_tasks_list_cache_{cache_key}') and 
+            hasattr(self, f'_tasks_list_cache_time_{cache_key}')):
+            cache = getattr(self, f'_tasks_list_cache_{cache_key}')
+            cache_time = getattr(self, f'_tasks_list_cache_time_{cache_key}')
+            if cache is not None and cache_time is not None and (current_time - cache_time) < self._cache_ttl_seconds:
+                return cache.copy()
         
         # Cache miss - load from database/CSV
         if self.use_db:
-            result = self._list_tasks_db()
+            result = self._list_tasks_db(user_id)
         else:
             result = self._list_tasks_csv()
         
         # Store in cache
-        self._tasks_list_cache = result.copy() if isinstance(result, list) else result
-        self._tasks_list_cache_time = time.time()
+        setattr(self, f'_tasks_list_cache_{cache_key}', result.copy() if isinstance(result, list) else result)
+        setattr(self, f'_tasks_list_cache_time_{cache_key}', time.time())
         
         return result
     
@@ -213,11 +228,15 @@ class TaskManager:
         self._reload_csv()
         return list(self.df['name'].tolist())
     
-    def _list_tasks_db(self) -> List[str]:
+    def _list_tasks_db(self, user_id: Optional[int] = None) -> List[str]:
         """Database-specific list_tasks."""
         try:
             with self.db_session() as session:
-                tasks = session.query(self.Task).all()
+                query = session.query(self.Task)
+                # Filter by user_id if provided (allow NULL during migration period)
+                if user_id is not None:
+                    query = query.filter(self.Task.user_id == user_id)
+                tasks = query.all()
                 return [task.name for task in tasks]
         except Exception as e:
             if self.strict_mode:
@@ -232,29 +251,35 @@ class TaskManager:
         with perf_logger.operation("save_initialization_entry", instance_id=entry.get('instance_id')):
             self.initialization_entries.append(entry)
             print(f"Saved initialization entry: {entry}")
-    def get_all(self):
+    def get_all(self, user_id: Optional[int] = None):
         """Return all tasks as DataFrame (CSV) or list of dicts (database). Works with both backends.
         
         Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes).
+        
+        Args:
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
         """
         import time
         
-        # Check cache first
+        # Check cache first (cache key includes user_id for isolation)
+        cache_key = f"all:{user_id}" if user_id else "all:all"
         current_time = time.time()
-        if (self._tasks_all_cache is not None and 
-            self._tasks_all_cache_time is not None and
-            (current_time - self._tasks_all_cache_time) < self._cache_ttl_seconds):
-            return self._tasks_all_cache.copy()
+        if (hasattr(self, f'_tasks_all_cache_{cache_key}') and 
+            hasattr(self, f'_tasks_all_cache_time_{cache_key}')):
+            cache = getattr(self, f'_tasks_all_cache_{cache_key}')
+            cache_time = getattr(self, f'_tasks_all_cache_time_{cache_key}')
+            if cache is not None and cache_time is not None and (current_time - cache_time) < self._cache_ttl_seconds:
+                return cache.copy()
         
         # Cache miss - load from database/CSV
         if self.use_db:
-            result = self._get_all_db()
+            result = self._get_all_db(user_id)
         else:
             result = self._get_all_csv()
         
         # Store in cache
-        self._tasks_all_cache = result.copy()
-        self._tasks_all_cache_time = time.time()
+        setattr(self, f'_tasks_all_cache_{cache_key}', result.copy())
+        setattr(self, f'_tasks_all_cache_time_{cache_key}', time.time())
         
         return result
     
@@ -263,14 +288,18 @@ class TaskManager:
         self._reload_csv()
         return self.df.copy()
     
-    def _get_all_db(self):
+    def _get_all_db(self, user_id: Optional[int] = None):
         """Database-specific get_all. Returns DataFrame for compatibility."""
         try:
             with self.db_session() as session:
-                tasks = session.query(self.Task).all()
+                query = session.query(self.Task)
+                # Filter by user_id if provided (allow NULL during migration period)
+                if user_id is not None:
+                    query = query.filter(self.Task.user_id == user_id)
+                tasks = query.all()
                 if not tasks:
                     # Return empty DataFrame with expected columns
-                    return pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days'])
+                    return pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days','notes','user_id'])
                 # Convert to list of dicts, then to DataFrame
                 task_dicts = [task.to_dict() for task in tasks]
                 return pd.DataFrame(task_dicts)
@@ -282,7 +311,7 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._get_all_csv()
 
-    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
+    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None):
         """
         Creates a new task definition and returns task_id. Works with both CSV and database.
         
@@ -293,13 +322,14 @@ class TaskManager:
             routine_time: Time in HH:MM format (24-hour), default '00:00'
             completion_window_hours: Hours to complete task after initialization without penalty
             completion_window_days: Days to complete task after initialization without penalty
+            user_id: User ID to associate task with (required for database, optional for CSV during migration)
         """
         if routine_days_of_week is None:
             routine_days_of_week = []
         # Invalidate caches before creating
         self._invalidate_task_caches()
         if self.use_db:
-            return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
+            return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days, user_id)
         else:
             return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
     
@@ -345,7 +375,7 @@ class TaskManager:
         self._save_csv()
         return task_id
     
-    def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
+    def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None):
         """Database-specific create_task."""
         try:
             # Parse categories JSON string
@@ -376,6 +406,7 @@ class TaskManager:
                     task_id=task_id,
                     name=name,
                     description=description or '',
+                    user_id=user_id,
                     type=ttype,
                     version=1,
                     created_at=datetime.now(),
@@ -401,12 +432,18 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
 
-    def update_task(self, task_id, **kwargs):
-        """Update a task. Works with both CSV and database."""
+    def update_task(self, task_id, user_id: Optional[int] = None, **kwargs):
+        """Update a task. Works with both CSV and database.
+        
+        Args:
+            task_id: Task ID to update
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
+            **kwargs: Fields to update
+        """
         # Invalidate caches before updating
         self._invalidate_task_caches()
         if self.use_db:
-            return self._update_task_db(task_id, **kwargs)
+            return self._update_task_db(task_id, user_id, **kwargs)
         else:
             return self._update_task_csv(task_id, **kwargs)
     
@@ -484,10 +521,15 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._update_task_csv(task_id, **kwargs)
 
-    def find_by_name(self, name):
-        """Find a task by name. Works with both CSV and database."""
+    def find_by_name(self, name, user_id: Optional[int] = None):
+        """Find a task by name. Works with both CSV and database.
+        
+        Args:
+            name: Task name to search for
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
+        """
         if self.use_db:
-            return self._find_by_name_db(name)
+            return self._find_by_name_db(name, user_id)
         else:
             return self._find_by_name_csv(name)
     
@@ -497,11 +539,15 @@ class TaskManager:
         rows = self.df[self.df['name'] == name]
         return rows.iloc[0].to_dict() if not rows.empty else None
     
-    def _find_by_name_db(self, name):
+    def _find_by_name_db(self, name, user_id: Optional[int] = None):
         """Database-specific find_by_name."""
         try:
             with self.db_session() as session:
-                task = session.query(self.Task).filter(self.Task.name == name).first()
+                query = session.query(self.Task).filter(self.Task.name == name)
+                # Filter by user_id if provided (allow NULL during migration period)
+                if user_id is not None:
+                    query = query.filter(self.Task.user_id == user_id)
+                task = query.first()
                 return task.to_dict() if task else None
         except Exception as e:
             if self.strict_mode:
@@ -511,21 +557,28 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._find_by_name_csv(name)
 
-    def ensure_task_exists(self, name):
-        t = self.find_by_name(name)
+    def ensure_task_exists(self, name, user_id: Optional[int] = None):
+        """Ensure a task exists, creating it if necessary.
+        
+        Args:
+            name: Task name
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
+        """
+        t = self.find_by_name(name, user_id)
         if t:
             return t['task_id']
-        return self.create_task(name)
+        return self.create_task(name, user_id=user_id)
     
-    def append_task_notes(self, task_id: str, note: str):
+    def append_task_notes(self, task_id: str, note: str, user_id: Optional[int] = None):
         """Append a note to a task template (shared across all instances). Works with both CSV and database.
         
         Args:
             task_id: The task ID to append notes to
             note: The note text to append (will be timestamped and separated with '---')
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
         """
         if self.use_db:
-            return self._append_task_notes_db(task_id, note)
+            return self._append_task_notes_db(task_id, note, user_id)
         else:
             return self._append_task_notes_csv(task_id, note)
     
@@ -556,12 +609,16 @@ class TaskManager:
         self.df.at[idx, 'notes'] = new_notes
         self._save_csv()
     
-    def _append_task_notes_db(self, task_id: str, note: str):
+    def _append_task_notes_db(self, task_id: str, note: str, user_id: Optional[int] = None):
         """Database-specific append_task_notes."""
         try:
             from datetime import datetime
             with self.db_session() as session:
-                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                query = session.query(self.Task).filter(self.Task.task_id == task_id)
+                # Filter by user_id if provided (allow NULL during migration period)
+                if user_id is not None:
+                    query = query.filter(self.Task.user_id == user_id)
+                task = query.first()
                 if not task:
                     raise ValueError(f"Task {task_id} not found")
                 
@@ -588,17 +645,18 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._append_task_notes_csv(task_id, note)
     
-    def get_task_notes(self, task_id: str) -> str:
+    def get_task_notes(self, task_id: str, user_id: Optional[int] = None) -> str:
         """Get notes for a task template. Works with both CSV and database.
         
         Args:
             task_id: The task ID
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
             
         Returns:
             Notes string (empty string if no notes)
         """
         if self.use_db:
-            return self._get_task_notes_db(task_id)
+            return self._get_task_notes_db(task_id, user_id)
         else:
             return self._get_task_notes_csv(task_id)
     
@@ -613,11 +671,15 @@ class TaskManager:
         notes = self.df.at[idx, 'notes'] if 'notes' in self.df.columns else ''
         return notes if not pd.isna(notes) else ''
     
-    def _get_task_notes_db(self, task_id: str) -> str:
+    def _get_task_notes_db(self, task_id: str, user_id: Optional[int] = None) -> str:
         """Database-specific get_task_notes."""
         try:
             with self.db_session() as session:
-                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                query = session.query(self.Task).filter(self.Task.task_id == task_id)
+                # Filter by user_id if provided (allow NULL during migration period)
+                if user_id is not None:
+                    query = query.filter(self.Task.user_id == user_id)
+                task = query.first()
                 if not task:
                     return ''
                 return task.notes or ''
@@ -631,13 +693,18 @@ class TaskManager:
 
 
 
-    def delete_by_id(self, task_id):
-        """Remove a task template by id. Works with both CSV and database."""
+    def delete_by_id(self, task_id, user_id: Optional[int] = None):
+        """Remove a task template by id. Works with both CSV and database.
+        
+        Args:
+            task_id: Task ID to delete
+            user_id: User ID to filter by (required for database, optional for CSV during migration)
+        """
         print(f"[TaskManager] delete_by_id called with: {task_id}")
         # Invalidate caches before deleting
         self._invalidate_task_caches()
         if self.use_db:
-            return self._delete_by_id_db(task_id)
+            return self._delete_by_id_db(task_id, user_id)
         else:
             return self._delete_by_id_csv(task_id)
     

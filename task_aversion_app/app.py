@@ -3,6 +3,7 @@ from nicegui import ui
 from backend.task_manager import TaskManager
 from backend.emotion_manager import EmotionManager
 from backend.routine_scheduler import start_scheduler
+from backend.auth import get_current_user, oauth_callback
 
 from ui.dashboard import build_dashboard
 from ui.create_task import create_task_page
@@ -14,6 +15,9 @@ from ui.analytics_glossary import register_analytics_glossary
 from ui.relief_comparison_analytics import register_relief_comparison_page
 from ui.known_issues_page import register_known_issues_page
 from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handling
+# Import pages - these will auto-register via @ui.page() decorators
+# Import order matters - login page should be imported first
+from ui.login import login_page  # registers /login
 # import submodules without rebinding the nicegui `ui` object
 from ui import survey_page  # registers /survey
 from ui import settings_page  # registers /settings
@@ -42,13 +46,31 @@ emotion_manager = EmotionManager()
 
 
 def register_pages():
+    # OAuth callback route (must be registered before other routes)
+    from fastapi import Request
+    
+    @ui.page('/auth/callback')
+    async def auth_callback(request: Request):
+        # request is automatically injected by NiceGUI when page function has request parameter
+        await oauth_callback(request)
+    
+    # Note: login_page is already registered via @ui.page() decorator when imported
+    # No need to call it again
+    
     @ui.page('/')
     def index():
+        # Check authentication
+        user_id = get_current_user()
+        if user_id is None:
+            ui.navigate.to('/login')
+            return
+        
         # Check for gap handling needs before showing dashboard
         if check_and_redirect_to_gap_handling():
             return
         try:
-            build_dashboard(task_manager)
+            # Pass user_id to dashboard
+            build_dashboard(task_manager, user_id=user_id)
         except Exception as e:
             # Show user-friendly error page instead of crashing
             import traceback
@@ -75,6 +97,11 @@ def register_pages():
     
     @ui.page('/gap-handling')
     def gap_handling():
+        # Check authentication
+        user_id = get_current_user()
+        if user_id is None:
+            ui.navigate.to('/login')
+            return
         gap_handling_page()
 
     create_task_page(task_manager, emotion_manager)
@@ -106,5 +133,8 @@ if __name__ in {"__main__", "__mp_main__"}:
     # Start routine scheduler
     start_scheduler()
     host = os.getenv('NICEGUI_HOST', '127.0.0.1')  # Default to localhost, use env var in Docker
-    ui.run(title='Task Aversion System', port=8080, host=host, reload=False)
+    # Storage secret for browser storage (required for OAuth session management)
+    # Use environment variable or generate a default (not secure for production)
+    storage_secret = os.getenv('STORAGE_SECRET', 'dev-secret-change-in-production')
+    ui.run(title='Task Aversion System', port=8080, host=host, reload=False, storage_secret=storage_secret)
 

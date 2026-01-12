@@ -6,6 +6,7 @@ import os
 import time
 import logging
 from datetime import datetime
+from typing import Optional
 import plotly.express as px
 import plotly.graph_objects as go
 from backend.task_manager import TaskManager
@@ -63,6 +64,9 @@ def safe_log(level, message):
 
 tm = TaskManager()
 im = InstanceManager()
+
+# Global user_id for dashboard (set by build_dashboard)
+current_user_id = None
 
 # Global variables for initialized tasks search
 initialized_tasks_container = None
@@ -130,9 +134,10 @@ RECOMMENDATION_METRICS = [
 
 def init_quick(task_ref):
     """Initialize a task template by name or id."""
-    task = tm.get_task(task_ref)
+    global current_user_id
+    task = tm.get_task(task_ref, user_id=current_user_id)
     if not task:
-        task = tm.find_by_name(task_ref)
+        task = tm.find_by_name(task_ref, user_id=current_user_id)
     if not task:
         ui.notify("Task not found", color='negative')
         return
@@ -569,7 +574,8 @@ def refresh_initialized_tasks(search_query=None):
             task_notes = ''
             if task_id:
                 try:
-                    task_notes = str(tm.get_task_notes(task_id) or '').lower()
+                    global current_user_id
+                    task_notes = str(tm.get_task_notes(task_id, user_id=current_user_id) or '').lower()
                 except Exception:
                     pass
             
@@ -736,11 +742,12 @@ def refresh_templates(search_query=None):
     except:
         init_perf_logger = None
     
+    global current_user_id
     if init_perf_logger:
         with init_perf_logger.operation("tm.get_all"):
-            df = tm.get_all()
+            df = tm.get_all(user_id=current_user_id)
     else:
-        df = tm.get_all()
+        df = tm.get_all(user_id=current_user_id)
     print(f"[Dashboard] Retrieved dataframe: shape={df.shape if df is not None else 'None'}, empty={df.empty if df is not None else 'N/A'}")
     
     if df is None or df.empty:
@@ -1139,7 +1146,7 @@ def view_instance_notes(instance_id):
     # Get task-level notes (shared across all instances)
     task_id = instance.get('task_id')
     if task_id:
-        notes = tm.get_task_notes(task_id)
+        notes = tm.get_task_notes(task_id, user_id=current_user_id)
     else:
         notes = ''
     
@@ -1182,7 +1189,8 @@ def copy_instance(instance_id):
     
     # Get the task template
     task_id = instance.get('task_id')
-    task = tm.get_task(task_id)
+    global current_user_id
+    task = tm.get_task(task_id, user_id=current_user_id)
     if not task:
         ui.notify("Task template not found", color='negative')
         return
@@ -1547,6 +1555,7 @@ def edit_template(task):
             
             success = tm.update_task(
                 task_id,
+                user_id=current_user_id,
                 name=name_input.value.strip(),
                 description=desc_input.value or '',
                 task_type=task_type_select.value,
@@ -1751,6 +1760,7 @@ def copy_template(task):
                 categories=current_categories,
                 default_estimate_minutes=int(est_input.value or 0),
                 task_type=task_type_select.value,
+                user_id=current_user_id,
                 default_initial_aversion=default_aversion,
                 routine_frequency=routine_frequency.value,
                 routine_days_of_week=selected_days,
@@ -1776,7 +1786,7 @@ def copy_template(task):
 def delete_template(task_id):
     print(f"[Dashboard] delete_template called: {task_id}")
 
-    if tm.delete_by_id(task_id):
+    if tm.delete_by_id(task_id, user_id=current_user_id):
         ui.notify("Task deleted", color="positive")
     else:
         ui.notify("Delete failed", color="negative")
@@ -4068,7 +4078,17 @@ def open_metrics_config_dialog():
 # MAIN DASHBOARD
 # ----------------------------------------------------------
 
-def build_dashboard(task_manager):
+def build_dashboard(task_manager, user_id: Optional[int] = None):
+    """
+    Build the main dashboard.
+    
+    Args:
+        task_manager: TaskManager instance
+        user_id: Current user ID (required for data isolation)
+    """
+    global current_user_id
+    current_user_id = user_id
+    
     dashboard_start_time = time.perf_counter()
     init_perf_logger = get_init_perf_logger()
     init_perf_logger.log_event("dashboard_build_start")
