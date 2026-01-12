@@ -15,6 +15,7 @@ from backend.analytics import Analytics
 from backend.user_state import UserStateManager
 from backend.performance_logger import get_perf_logger as get_init_perf_logger
 from backend.recommendation_logger import recommendation_logger
+from backend.bootup_logger import get_bootup_logger
 
 # Setup performance logging for monitored metrics
 PERF_LOG_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'logs')
@@ -4105,7 +4106,240 @@ def build_dashboard(task_manager):
     dashboard_start_time = time.perf_counter()
     init_perf_logger = get_init_perf_logger()
     init_perf_logger.log_event("dashboard_build_start")
+    bootup_logger = get_bootup_logger()
     
+    # Add browser-side logging JavaScript
+    ui.add_head_html("""
+    <script>
+    (function() {
+        // Browser-side logging for page load and refresh tracking
+        let pageLoadStartTime = performance.now();
+        let reloadCount = 0;
+        let timerCount = 0;
+        let connectionFailureCount = 0;
+        let requestAttemptCount = 0;
+        const pageLoadId = 'load_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        
+        // Track fetch/XHR requests to detect connection failures
+        const originalFetch = window.fetch;
+        window.fetch = function(...args) {
+            requestAttemptCount++;
+            const requestUrl = args[0] instanceof Request ? args[0].url : args[0];
+            const requestStart = performance.now();
+            
+            return originalFetch.apply(this, args)
+                .then(response => {
+                    const duration = performance.now() - requestStart;
+                    if (!response.ok) {
+                        connectionFailureCount++;
+                        logBrowserEvent('fetch_failure', {
+                            url: requestUrl,
+                            status: response.status,
+                            status_text: response.statusText,
+                            duration_ms: duration,
+                            request_number: requestAttemptCount
+                        });
+                    }
+                    return response;
+                })
+                .catch(error => {
+                    connectionFailureCount++;
+                    const duration = performance.now() - requestStart;
+                    logBrowserEvent('connection_error', {
+                        url: requestUrl,
+                        error_type: error.name,
+                        error_message: error.message,
+                        duration_ms: duration,
+                        request_number: requestAttemptCount,
+                        connection_failures: connectionFailureCount
+                    });
+                    throw error;
+                });
+        };
+        
+        // Track XMLHttpRequest to catch old-style requests
+        const originalXHROpen = XMLHttpRequest.prototype.open;
+        const originalXHRSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+            this._requestUrl = url;
+            this._requestMethod = method;
+            this._requestStart = performance.now();
+            return originalXHROpen.apply(this, [method, url, ...rest]);
+        };
+        XMLHttpRequest.prototype.send = function(...args) {
+            requestAttemptCount++;
+            const xhr = this;
+            const url = xhr._requestUrl;
+            const method = xhr._requestMethod || 'GET';
+            
+            xhr.addEventListener('error', function() {
+                connectionFailureCount++;
+                const duration = performance.now() - (xhr._requestStart || performance.now());
+                logBrowserEvent('xhr_connection_error', {
+                    url: url,
+                    method: method,
+                    duration_ms: duration,
+                    request_number: requestAttemptCount,
+                    connection_failures: connectionFailureCount
+                });
+            });
+            
+            xhr.addEventListener('load', function() {
+                if (xhr.status >= 400) {
+                    connectionFailureCount++;
+                    const duration = performance.now() - (xhr._requestStart || performance.now());
+                    logBrowserEvent('xhr_failure', {
+                        url: url,
+                        method: method,
+                        status: xhr.status,
+                        status_text: xhr.statusText,
+                        duration_ms: duration,
+                        request_number: requestAttemptCount
+                    });
+                }
+            });
+            
+            return originalXHRSend.apply(this, args);
+        };
+        
+        // Track online/offline events
+        window.addEventListener('online', function() {
+            logBrowserEvent('network_online', {
+                connection_failures: connectionFailureCount,
+                request_attempts: requestAttemptCount
+            });
+        });
+        
+        window.addEventListener('offline', function() {
+            logBrowserEvent('network_offline', {
+                connection_failures: connectionFailureCount,
+                request_attempts: requestAttemptCount
+            });
+        });
+        
+        // Log browser event to server
+        function logBrowserEvent(eventType, eventData) {
+            try {
+                fetch('/api/log-browser-event', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        event_type: eventType,
+                        data: {
+                            ...eventData,
+                            page_load_id: pageLoadId,
+                            url: window.location.href,
+                            timestamp: new Date().toISOString(),
+                            performance_now: performance.now()
+                        }
+                    })
+                }).catch(err => {
+                    // Silently fail to avoid recursive logging issues
+                    console.error('[BootupLogger] Failed to log browser event:', err);
+                });
+            } catch (e) {
+                // Silently fail to avoid recursive logging issues
+                console.error('[BootupLogger] Error logging browser event:', e);
+            }
+        }
+        
+        // Log page load start
+        logBrowserEvent('page_load_start', {
+            path: window.location.pathname,
+            referrer: document.referrer,
+            navigation_type: performance.navigation ? performance.navigation.type : 'unknown'
+        });
+        
+        // Log when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                const domReadyTime = performance.now() - pageLoadStartTime;
+                logBrowserEvent('dom_ready', {
+                    dom_ready_time_ms: domReadyTime
+                });
+            });
+        } else {
+            const domReadyTime = performance.now() - pageLoadStartTime;
+            logBrowserEvent('dom_ready', {
+                dom_ready_time_ms: domReadyTime
+            });
+        }
+        
+        // Log when page is fully loaded
+        window.addEventListener('load', function() {
+            const loadTime = performance.now() - pageLoadStartTime;
+            logBrowserEvent('page_load_complete', {
+                load_time_ms: loadTime
+            });
+        });
+        
+        // Track page visibility changes (can indicate reloads)
+        document.addEventListener('visibilitychange', function() {
+            logBrowserEvent('visibility_change', {
+                hidden: document.hidden,
+                visibility_state: document.visibilityState
+            });
+        });
+        
+        // Override window.location.reload to track reloads
+        const originalReload = window.location.reload;
+        window.location.reload = function() {
+            reloadCount++;
+            logBrowserEvent('page_reload_triggered', {
+                reload_count: reloadCount,
+                stack: new Error().stack
+            });
+            return originalReload.apply(this, arguments);
+        };
+        
+        // Track beforeunload (often indicates navigation/reload)
+        window.addEventListener('beforeunload', function() {
+            logBrowserEvent('beforeunload', {
+                reload_count: reloadCount
+            });
+        });
+        
+        // Track hashchange (some navigation)
+        window.addEventListener('hashchange', function() {
+            logBrowserEvent('hashchange', {
+                new_url: window.location.href,
+                old_url: document.referrer
+            });
+        });
+        
+        // Track popstate (back/forward navigation)
+        window.addEventListener('popstate', function() {
+            logBrowserEvent('popstate', {
+                state: history.state,
+                url: window.location.href
+            });
+        });
+        
+        // Store original setTimeout to track timer creation
+        const originalSetTimeout = window.setTimeout;
+        window.setTimeout = function(func, delay) {
+            timerCount++;
+            if (typeof delay === 'number' && delay < 1000) {
+                logBrowserEvent('timer_created', {
+                    timer_id: timerCount,
+                    delay_ms: delay,
+                    is_short_delay: delay < 1000
+                });
+            }
+            return originalSetTimeout.apply(this, arguments);
+        };
+        
+        // Expose logging function globally for manual logging
+        window.bootupLogger = {
+            log: logBrowserEvent,
+            pageLoadId: pageLoadId,
+            reloadCount: reloadCount,
+            timerCount: timerCount
+        };
+    })();
+    </script>
+    """)
+
     ui.add_head_html("""
     <style>
         /* Zoom-responsive scaling - maintains bottom position */
