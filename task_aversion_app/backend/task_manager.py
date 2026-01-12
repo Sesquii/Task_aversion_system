@@ -6,6 +6,10 @@ from datetime import datetime
 from typing import List, Optional
 
 from backend.performance_logger import get_perf_logger
+from backend.security_utils import (
+    validate_task_name, validate_description, validate_note,
+    sanitize_for_storage, ValidationError
+)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 TASKS_FILE = 'data/tasks.csv'
@@ -71,11 +75,36 @@ class TaskManager:
     
     def _invalidate_task_caches(self):
         """Invalidate all task caches. Call this when tasks are created/updated/deleted."""
+        # Clear old-style cache attributes
         self._tasks_list_cache = None
         self._tasks_list_cache_time = None
         self._tasks_all_cache = None
         self._tasks_all_cache_time = None
         self._task_cache.clear()
+        
+        # Clear dynamic cache keys (used by get_all() and list_tasks() with user_id)
+        # These are stored as attributes like: _tasks_all_cache_all:1, _tasks_all_cache_time_all:1, etc.
+        # We need to iterate through all attributes and remove cache-related ones
+        attrs_to_remove = []
+        for attr_name in dir(self):
+            # Match patterns like:
+            # - _tasks_all_cache_all:1
+            # - _tasks_all_cache_time_all:1
+            # - _tasks_list_cache_all:1
+            # - _tasks_list_cache_time_all:1
+            if (attr_name.startswith('_tasks_all_cache_') or 
+                attr_name.startswith('_tasks_all_cache_time_') or
+                attr_name.startswith('_tasks_list_cache_') or
+                attr_name.startswith('_tasks_list_cache_time_')):
+                attrs_to_remove.append(attr_name)
+        
+        for attr_name in attrs_to_remove:
+            try:
+                delattr(self, attr_name)
+            except AttributeError:
+                pass  # Attribute doesn't exist, skip
+        
+        print(f"[TaskManager] Invalidated task caches (cleared {len(attrs_to_remove)} dynamic cache attributes)")
     
     def _init_csv(self):
         """Initialize CSV backend."""
@@ -329,7 +358,17 @@ class TaskManager:
             completion_window_hours: Hours to complete task after initialization without penalty
             completion_window_days: Days to complete task after initialization without penalty
             user_id: User ID to associate task with (required for database, optional for CSV during migration)
+            
+        Raises:
+            ValidationError: If input validation fails (name too long, etc.)
         """
+        # Validate and sanitize inputs
+        try:
+            name = validate_task_name(name)
+            description = validate_description(description)
+        except ValidationError as e:
+            raise  # Re-raise validation errors for UI to handle
+        
         if routine_days_of_week is None:
             routine_days_of_week = []
         # Invalidate caches before creating
@@ -584,7 +623,16 @@ class TaskManager:
             task_id: The task ID to append notes to
             note: The note text to append (will be timestamped and separated with '---')
             user_id: User ID to filter by (required for database, optional for CSV during migration)
+            
+        Raises:
+            ValidationError: If note validation fails (too long, etc.)
         """
+        # Validate and sanitize note
+        try:
+            note = validate_note(note)
+        except ValidationError as e:
+            raise  # Re-raise validation errors for UI to handle
+        
         if self.use_db:
             return self._append_task_notes_db(task_id, note, user_id)
         else:

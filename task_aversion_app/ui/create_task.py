@@ -1,5 +1,8 @@
 from nicegui import ui
 import json
+from backend.security_utils import ValidationError
+from backend.auth import get_current_user
+from ui.error_reporting import handle_error_with_ui
 
 def create_task_page(task_manager, emotion_manager):
 
@@ -113,21 +116,43 @@ def create_task_page(task_manager, emotion_manager):
                 if completion_window_days.value is not None and completion_window_days.value > 0:
                     completion_window_days_val = int(completion_window_days.value)
 
-                tid = task_manager.create_task(
-                    name.value.strip(),
-                    description=desc.value or '',
-                    categories=json.dumps([]),
-                    default_estimate_minutes=int(est.value or 0),
-                    task_type=task_type.value,
-                    default_initial_aversion=default_aversion,
-                    routine_frequency=routine_frequency.value,
-                    routine_days_of_week=selected_days,
-                    routine_time=time_str,
-                    completion_window_hours=completion_window_hours_val,
-                    completion_window_days=completion_window_days_val
-                )
+                try:
+                    user_id = get_current_user()
+                    tid = task_manager.create_task(
+                        name.value.strip(),
+                        description=desc.value or '',
+                        categories=json.dumps([]),
+                        default_estimate_minutes=int(est.value or 0),
+                        task_type=task_type.value,
+                        default_initial_aversion=default_aversion,
+                        routine_frequency=routine_frequency.value,
+                        routine_days_of_week=selected_days,
+                        routine_time=time_str,
+                        completion_window_hours=completion_window_hours_val,
+                        completion_window_days=completion_window_days_val,
+                        user_id=user_id
+                    )
 
-                ui.notify(f"Task created: {tid}", color='positive')
-                ui.navigate.to('/')
+                    ui.notify(f"Task created: {tid}", color='positive')
+                    
+                    # Signal dashboard to refresh templates
+                    from nicegui import app
+                    app.storage.general['refresh_templates'] = True
+                    
+                    ui.navigate.to('/')
+                except ValidationError as e:
+                    # Validation errors (e.g., name too long) - show user-friendly message
+                    ui.notify(str(e), color='negative')
+                except Exception as e:
+                    # Other errors - use error ID system
+                    handle_error_with_ui(
+                        'create_task',
+                        e,
+                        user_id=get_current_user(),
+                        context={
+                            'task_name': name.value[:50] if name.value else None,
+                            'task_type': task_type.value
+                        }
+                    )
 
             ui.button("Create Task", on_click=save_task)

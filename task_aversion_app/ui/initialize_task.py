@@ -34,8 +34,15 @@ def initialize_task_page(task_manager, emotion_manager):
             ui.navigate.to('/')
             return
 
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        if current_user_id is None:
+            ui.navigate.to('/login')
+            return
+        
         with perf_logger.operation("get_instance", instance_id=instance_id):
-            instance = im.get_instance(instance_id)
+            instance = im.get_instance(instance_id, user_id=current_user_id)
         
         if not instance:
             ui.notify("Instance not found", color='negative')
@@ -48,7 +55,7 @@ def initialize_task_page(task_manager, emotion_manager):
         is_completed_task = instance.get('completed_at') or instance.get('is_completed') in ('True', True, 'true')
         
         with perf_logger.operation("get_task", task_id=task_id):
-            task = task_manager.get_task(task_id)
+            task = task_manager.get_task(task_id, user_id=current_user_id)
         
         predicted_raw = instance.get('predicted') or '{}'
         try:
@@ -66,7 +73,7 @@ def initialize_task_page(task_manager, emotion_manager):
         
         # Get previous averages for this task
         with perf_logger.operation("get_previous_task_averages", task_id=task_id):
-            previous_averages = im.get_previous_task_averages(task_id) if task_id else {}
+            previous_averages = im.get_previous_task_averages(task_id, user_id=current_user_id) if task_id else {}
         
         # Get initial aversion (first time doing the task) and previous aversion
         with perf_logger.operation("get_initial_aversion", task_id=task_id):

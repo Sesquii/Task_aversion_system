@@ -36,8 +36,15 @@ def complete_task_page(task_manager, emotion_manager):
         current_actual_data = {}
         task_id = None
         
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        if current_user_id is None:
+            ui.navigate.to('/login')
+            return
+        
         if instance_id:
-            instance = im.get_instance(instance_id)
+            instance = im.get_instance(instance_id, user_id=current_user_id)
             if instance:
                 task_id = instance.get('task_id')
                 
@@ -748,12 +755,12 @@ def complete_task_page(task_manager, emotion_manager):
                             except json.JSONDecodeError:
                                 pass
                 else:
-                    result = im.complete_instance(iid, actual)
+                    result = im.complete_instance(iid, actual, user_id=current_user_id)
                     print("[complete_task] complete_instance result:", result)
-                    
+
                     # Log recommendation outcome if this was a recommended task
                     try:
-                        instance = im.get_instance(iid)
+                        instance = im.get_instance(iid, user_id=current_user_id)
                         if instance:
                             task_id = instance.get('task_id')
                             task_name = instance.get('task_name', '')

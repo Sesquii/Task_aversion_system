@@ -1,126 +1,96 @@
-feat: Implement OAuth authentication with Google (Phase 2B - Local Setup)
+Implement data isolation and security fixes for Phase 2B
 
-## Overview
-Implemented OAuth authentication system with Google OAuth provider, session management, and user data isolation. This is the foundation for multi-user support and secure authentication.
+This commit implements critical data isolation features and security fixes
+to ensure users can only access their own data. It also fixes several
+authentication and session management issues.
 
-## Core Features Implemented
+## Data Isolation Implementation
 
-### 1. OAuth Authentication Module (`backend/auth.py`)
-- Google OAuth 2.0 flow with CSRF protection (state parameter validation)
-- Session management with cross-tab sharing via browser storage
-- User creation/update from OAuth data
-- Session expiration (30 days default, configurable)
-- Automatic cleanup of expired sessions and OAuth states
-- IP address validation for additional security
-- UserStateManager migration during OAuth login
+- Added user_id filtering to all InstanceManager methods:
+  - list_active_instances() now requires and filters by user_id
+  - get_instance() verifies instance ownership before returning
+  - get_instances_by_task_id() filters by user_id
+  - get_previous_task_averages() filters by user_id
+  - list_recent_completed() filters by user_id
+  - list_recent_tasks() filters by user_id
+  - create_instance() accepts and stores user_id
+  - complete_instance() verifies ownership before completing
+  - cancel_instance() verifies ownership before cancelling
 
-### 2. Authentication Routes (`app.py`)
-- `/login` - Login page with Google OAuth button
-- `/auth/callback` - OAuth callback handler
-- Authentication middleware on protected routes
-- Automatic redirect to login for unauthenticated users
+- Implemented per-user caching in InstanceManager to prevent data leakage
+  between users when switching accounts
 
-### 3. Login UI (`ui/login.py`)
-- Clean login page with Google OAuth button
-- User status display when already logged in
-- Logout functionality
+- Updated all UI pages to pass user_id to backend methods:
+  - dashboard.py: All instance queries now use current_user_id
+  - initialize_task.py: Added authentication check and user_id passing
+  - complete_task.py: Added user_id verification for completion
+  - cancel_task.py: Added user_id verification for cancellation
+  - create_task.py: Already had user_id support
 
-### 4. TaskManager User Isolation (`backend/task_manager.py`)
-- Added `user_id` parameter to all methods:
-  - `get_task()`, `list_tasks()`, `get_all()`
-  - `create_task()`, `update_task()`, `delete_by_id()`
-  - `find_by_name()`, `get_task_notes()`, `append_task_notes()`
-  - `ensure_task_exists()`
-- All database queries filter by `user_id`
-- Backward compatible (allows NULL user_id during migration period)
+## Authentication & Session Management Fixes
 
-### 5. Dashboard Updates (`ui/dashboard.py`)
-- Updated to accept and use `user_id` parameter
-- All TaskManager calls now pass `user_id` for data isolation
-- Global `current_user_id` variable for dashboard functions
+- Fixed logout functionality to properly clear browser-side session tokens
+  using ui.run_javascript() for full page reload
 
-### 6. Environment Configuration
-- Added OAuth environment variables to `.env.example`:
-  - `GOOGLE_CLIENT_ID`
-  - `GOOGLE_CLIENT_SECRET`
-  - `OAUTH_REDIRECT_URI`
-  - `STORAGE_SECRET` (for browser storage)
-  - `SESSION_EXPIRY_DAYS`
-- Updated `requirements.txt` with `authlib>=1.2.0` and `httpx>=0.24.0`
+- Enhanced OAuth callback error handling with dedicated error page
+  (_show_csrf_error_page) that clears session on security failures
 
-## Security Features
+- Fixed username uniqueness constraint issue:
+  - Removed unique constraint from User.username in database model
+  - Added fallback logic in get_or_create_user_from_oauth to handle
+    IntegrityError gracefully
 
-### CSRF Protection
-- OAuth state parameter generation and validation
-- State stored server-side with expiration (10 minutes)
-- State cleared immediately after validation
-- IP address tracking (optional validation)
+- Improved session user_id retrieval throughout dashboard to always
+  get from current session rather than relying on stale global variables
 
-### Session Security
-- Random UUID session tokens
-- Server-side session storage (user_id not exposed to client)
-- Session expiration handling
-- Lazy cleanup of expired sessions
+## Security Enhancements
 
-### Input Validation (Planned)
-- Input sanitization, validation, and error handling are planned for next phase
+- Added user_id verification to complete_instance() and cancel_instance()
+  methods to prevent users from modifying other users' instances
 
-## Technical Details
+- All instance queries now return empty results if user_id is not provided
+  (security-by-default approach)
 
-### Session Storage Architecture
-- Browser storage: Session token (UUID) stored in `app.storage.browser`
-- Server storage: Session data (user_id, email, expiration) in `app.storage.general`
-- Cross-tab sharing: Session token in browser storage allows sharing across tabs
+- Fixed SyntaxError issues with global current_user_id declarations in
+  dashboard.py by moving declarations to top of functions
 
-### OAuth Flow
-1. User clicks "Sign in with Google"
-2. Generate state token, store server-side
-3. Redirect to Google OAuth
-4. Google redirects to `/auth/callback` with code and state
-5. Validate state parameter (CSRF protection)
-6. Exchange code for access token
-7. Get user info from Google API
-8. Create/update User record in database
-9. Migrate UserStateManager data (if anonymous user existed)
-10. Create session
-11. Redirect to dashboard
+## Database Migration Support
 
-### Database Schema
-- `User` model already exists with OAuth fields
-- Foreign keys (`user_id`) already added to Task, TaskInstance, Note tables
-- UserPreferences, PopupTrigger, PopupResponse, SurveyResponse still use String user_id (migration planned)
+- Created migrate_null_instances_to_user1.py script to COPY (not move)
+  all NULL user_id instances to User 1, preserving originals for dev branch
 
-## Files Created
-- `backend/auth.py` - OAuth authentication module
-- `ui/login.py` - Login page UI
-- `.env.example` - OAuth environment variables template
+- Created search_database_instances.py script to inspect database state
+  and verify data isolation
+
+- Added dashboard warning about copied instances causing doubled scores
+  on AUTH branch (temporary issue, will not be corrected)
+
+## Current State
+
+- Task templates: Currently shared (needs user-specific filtering)
+- Monitored metrics: Currently shared (needs user-specific filtering)
+- Analytics page: Currently shared (needs user-specific filtering)
+- Recent completions: Isolated per user ✅
+- Initialized tasks: Isolated per user ✅
+- Active tasks: Isolated per user ✅
+- Task instances: Isolated per user ✅
 
 ## Files Modified
-- `app.py` - Added OAuth routes and authentication middleware
-- `backend/task_manager.py` - Added user_id filtering to all methods
-- `ui/dashboard.py` - Updated to pass user_id to managers
-- `requirements.txt` - Added authlib and httpx
 
-## Testing Status
-- ✅ OAuth flow works locally
-- ✅ Login redirects to Google OAuth
-- ✅ Callback processes OAuth response
-- ✅ Session creation and validation
-- ✅ Dashboard loads after authentication
-- ⚠️ InstanceManager user isolation (pending)
-- ⚠️ Analytics user isolation (pending)
-- ⚠️ Other UI pages user_id integration (pending)
-- ⚠️ Data migration scripts (pending)
+- backend/instance_manager.py: Added user_id filtering to all methods
+- backend/auth.py: Enhanced logout, OAuth error handling, user creation
+- backend/database.py: Removed unique constraint from username
+- ui/dashboard.py: Updated all queries to use user_id, fixed global declarations
+- ui/initialize_task.py: Added authentication check and user_id passing
+- ui/complete_task.py: Added user_id verification
+- ui/cancel_task.py: Added user_id verification
+- ui/settings_page.py: Added logout button
+- ui/login.py: Fixed logout functionality
 
-## Next Steps
-1. Update InstanceManager for user isolation
-2. Update Analytics for user isolation
-3. Update all UI pages to pass user_id
-4. Create user_id type migration script (String to Integer)
-5. Implement input sanitization and validation
-6. Add error handling with error ID system
+## Migration Scripts
 
-## Notes
-- OAuth configured for localhost:8080
-- Production OAuth setup will require updating redirect URI in Google Cloud Console
-- User ID type migration (String to Integer) needed for UserPreferences, PopupTrigger, PopupResponse, SurveyResponse tables
+- migrate_null_instances_to_user1.py: Copies NULL instances to User 1
+- search_database_instances.py: Database inspection tool
+
+This commit ensures proper data isolation while maintaining backward
+compatibility with existing NULL user_id instances for the dev branch.

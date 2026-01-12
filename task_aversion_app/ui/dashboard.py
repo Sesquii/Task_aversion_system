@@ -1,5 +1,5 @@
 # ui/dashboard.py
-from nicegui import ui
+from nicegui import ui, app
 import json
 import html
 import os
@@ -135,6 +135,17 @@ RECOMMENDATION_METRICS = [
 def init_quick(task_ref):
     """Initialize a task template by name or id."""
     global current_user_id
+    # CRITICAL: Always get user_id from current session
+    from backend.auth import get_current_user
+    session_user_id = get_current_user()
+    if session_user_id is None:
+        ui.notify("Not authenticated", color='negative')
+        ui.navigate.to('/login')
+        return
+    
+    # Update global for backward compatibility
+    current_user_id = session_user_id
+    
     task = tm.get_task(task_ref, user_id=current_user_id)
     if not task:
         task = tm.find_by_name(task_ref, user_id=current_user_id)
@@ -153,13 +164,24 @@ def init_quick(task_ref):
         task['name'],
         task_version=task.get('version') or 1,
         predicted={'time_estimate_minutes': default_estimate},
+        user_id=current_user_id
     )
     ui.navigate.to(f'/initialize-task?instance_id={inst_id}')
 
 
 def get_current_task():
     """Get the currently running task (one with started_at set and not completed)."""
-    active = im.list_active_instances()
+    global current_user_id
+    # CRITICAL: Always get user_id from current session
+    from backend.auth import get_current_user
+    session_user_id = get_current_user()
+    if session_user_id is None:
+        return None
+    
+    # Update global for backward compatibility
+    current_user_id = session_user_id
+    
+    active = im.list_active_instances(user_id=current_user_id)
     for inst in active:
         if inst.get('started_at') and inst.get('started_at').strip():
             return inst
@@ -266,7 +288,7 @@ def open_pause_dialog(instance_id):
             try:
                 # Get the current instance and update its actual JSON directly
                 # This avoids recalculating time since we already paused
-                instance = im.get_instance(instance_id)
+                instance = im.get_instance(instance_id, user_id=current_user_id)
                 if instance:
                     import json
                     actual_str = instance.get("actual") or "{}"
@@ -321,7 +343,8 @@ def update_ongoing_timer(instance_id, timer_element):
         return
     
     # Check if instance is still active
-    instance = im.get_instance(instance_id)
+    global current_user_id
+    instance = im.get_instance(instance_id, user_id=current_user_id)
     if not instance or not instance.get('started_at'):
         # Instance no longer active or not started, stop timer
         try:
@@ -429,7 +452,7 @@ def update_ongoing_timer(instance_id, timer_element):
                 # Error checking client, stop timer to be safe
                 return
             
-            active_instances = im.list_active_instances()
+            active_instances = im.list_active_instances(user_id=current_user_id)
             is_still_active = any(inst.get('instance_id') == instance_id for inst in active_instances)
             if is_still_active:
                 # Create next timer with error handling in the callback
@@ -489,7 +512,20 @@ def refresh_initialized_tasks(search_query=None):
     Args:
         search_query: Optional string to filter tasks by name, description, notes, or pause notes
     """
-    global initialized_tasks_container, initialized_search_input_ref
+    global initialized_tasks_container, initialized_search_input_ref, current_user_id
+    
+    # CRITICAL: Always get user_id from current session, not global variable
+    # This ensures data isolation when users switch accounts
+    from backend.auth import get_current_user
+    session_user_id = get_current_user()
+    
+    if session_user_id is None:
+        print("[Dashboard] WARNING: No authenticated user in refresh_initialized_tasks(), skipping refresh")
+        return
+    
+    # Update global for backward compatibility, but use session_user_id for queries
+    current_user_id = session_user_id
+    
     # #region agent log
     debug_log('dashboard.py:470', 'refresh_initialized_tasks called', {'search_query': search_query, 'container_is_none': initialized_tasks_container is None, 'container_id': str(id(initialized_tasks_container)) if initialized_tasks_container else None, 'input_ref_is_none': initialized_search_input_ref is None}, 'H1')
     # #endregion
@@ -525,14 +561,18 @@ def refresh_initialized_tasks(search_query=None):
         return
     
     # Get active instances (excluding current task)
+    # Always use session_user_id (from current session) not global current_user_id
+    print(f"[Dashboard] refresh_initialized_tasks: session_user_id={session_user_id}")
     if init_perf_logger:
         with init_perf_logger.operation("list_active_instances"):
-            active = im.list_active_instances()
+            active = im.list_active_instances(user_id=session_user_id)
         with init_perf_logger.operation("get_current_task"):
             current_task = get_current_task()
     else:
-        active = im.list_active_instances()
+        active = im.list_active_instances(user_id=session_user_id)
         current_task = get_current_task()
+    
+    print(f"[Dashboard] refresh_initialized_tasks: found {len(active)} active instances")
     
     # Filter out current task from active list
     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
@@ -574,8 +614,7 @@ def refresh_initialized_tasks(search_query=None):
             task_notes = ''
             if task_id:
                 try:
-                    global current_user_id
-                    task_notes = str(tm.get_task_notes(task_id, user_id=current_user_id) or '').lower()
+                    task_notes = str(tm.get_task_notes(task_id, user_id=session_user_id) or '').lower()
                 except Exception:
                     pass
             
@@ -743,11 +782,34 @@ def refresh_templates(search_query=None):
         init_perf_logger = None
     
     global current_user_id
+    
+    # CRITICAL: Always get user_id from current session, not global variable
+    # This ensures data isolation when users switch accounts
+    from backend.auth import get_current_user
+    session_user_id = get_current_user()
+    
+    if session_user_id is None:
+        print("[Dashboard] WARNING: No authenticated user in refresh_templates(), redirecting to login")
+        ui.navigate.to('/login')
+        return
+    
+    # Update global for backward compatibility, but use session_user_id for queries
+    current_user_id = session_user_id
+    
+    # If refresh flag is set, invalidate cache before fetching
+    needs_refresh = app.storage.general.get('refresh_templates', False)
+    if needs_refresh:
+        print("[Dashboard] Refresh flag detected in refresh_templates(), invalidating TaskManager cache")
+        tm._invalidate_task_caches()
+        # Don't clear flag yet - we'll clear it after successful refresh
+        # This ensures if refresh is called multiple times, cache stays invalidated
+    
+    # Always use session_user_id (from current session) not global current_user_id
     if init_perf_logger:
         with init_perf_logger.operation("tm.get_all"):
-            df = tm.get_all(user_id=current_user_id)
+            df = tm.get_all(user_id=session_user_id)
     else:
-        df = tm.get_all(user_id=current_user_id)
+        df = tm.get_all(user_id=session_user_id)
     print(f"[Dashboard] Retrieved dataframe: shape={df.shape if df is not None else 'None'}, empty={df.empty if df is not None else 'N/A'}")
     
     if df is None or df.empty:
@@ -823,6 +885,12 @@ def refresh_templates(search_query=None):
     if init_perf_logger:
         init_perf_logger.log_timing("refresh_templates_total", refresh_duration, search_query=search_query)
     print(f"[Dashboard] refresh_templates() completed successfully in {refresh_duration:.2f}ms")
+    
+    # Clear refresh flag after successful refresh
+    if app.storage.general.get('refresh_templates', False):
+        print("[Dashboard] Clearing refresh_templates flag after successful refresh")
+        app.storage.general.pop('refresh_templates', None)
+    
     # Re-initialize context menus after templates are refreshed
     ui.run_javascript("setTimeout(initContextMenus, 100);")
 
@@ -1138,7 +1206,8 @@ def add_instance_note(instance_id):
 
 def view_instance_notes(instance_id):
     """View all notes for an instance (task-level notes + pause notes if any)."""
-    instance = im.get_instance(instance_id)
+    global current_user_id
+    instance = im.get_instance(instance_id, user_id=current_user_id)
     if not instance:
         ui.notify("Instance not found", color='negative')
         return
@@ -1182,14 +1251,24 @@ def view_instance_notes(instance_id):
 
 def copy_instance(instance_id):
     """Create a new instance based on an existing instance."""
-    instance = im.get_instance(instance_id)
+    global current_user_id
+    # CRITICAL: Always get user_id from current session
+    from backend.auth import get_current_user
+    session_user_id = get_current_user()
+    if session_user_id is None:
+        ui.notify("Not authenticated", color='negative')
+        return
+    
+    # Update global for backward compatibility
+    current_user_id = session_user_id
+    
+    instance = im.get_instance(instance_id, user_id=current_user_id)
     if not instance:
         ui.notify("Instance not found", color='negative')
         return
     
     # Get the task template
     task_id = instance.get('task_id')
-    global current_user_id
     task = tm.get_task(task_id, user_id=current_user_id)
     if not task:
         ui.notify("Task template not found", color='negative')
@@ -1207,7 +1286,8 @@ def copy_instance(instance_id):
         task_id,
         task['name'],
         task_version=task.get('version') or 1,
-        predicted=predicted_data
+        predicted=predicted_data,
+        user_id=current_user_id  # CRITICAL: Pass user_id for data isolation
     )
     
     if new_instance_id:
@@ -1219,7 +1299,8 @@ def copy_instance(instance_id):
 
 def view_initialized_instance(instance_id):
     """View an initialized instance's expected values, time, and notes in a friendly UI."""
-    instance = im.get_instance(instance_id)
+    global current_user_id
+    instance = im.get_instance(instance_id, user_id=current_user_id)
     if not instance:
         ui.notify("Instance not found", color='negative')
         return
@@ -1373,7 +1454,8 @@ def view_initialized_instance(instance_id):
 
 def edit_instance(instance_id):
     """Edit a completed instance - navigate to completion page in edit mode."""
-    instance = im.get_instance(instance_id)
+    global current_user_id
+    instance = im.get_instance(instance_id, user_id=current_user_id)
     if not instance:
         ui.notify("Instance not found", color='negative')
         return
@@ -1391,7 +1473,8 @@ def edit_instance(instance_id):
 
 def edit_completed_instance(instance_id):
     """Edit a completed instance - navigate to completion page with edit mode."""
-    instance = im.get_instance(instance_id)
+    global current_user_id
+    instance = im.get_instance(instance_id, user_id=current_user_id)
     if not instance:
         ui.notify("Instance not found", color='negative')
         return
@@ -1803,13 +1886,14 @@ def delete_template(task_id):
 def format_colored_tooltip(predicted_data, task_id):
     """Format predicted data as HTML with color-coded values based on thresholds and averages."""
     # Get averages for this task
-    averages = im.get_previous_task_averages(task_id) if task_id else {}
+    global current_user_id
+    averages = im.get_previous_task_averages(task_id, user_id=current_user_id) if task_id else {}
     
     # Calculate average time estimate from previous instances
     avg_time_estimate = None
     if task_id:
         # Get all instances for this task (including completed)
-        all_instances = im.get_instances_by_task_id(task_id, include_completed=True)
+        all_instances = im.get_instances_by_task_id(task_id, include_completed=True, user_id=current_user_id)
         # Filter to only initialized instances
         initialized = [
             inst for inst in all_instances
@@ -4087,7 +4171,29 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
         user_id: Current user ID (required for data isolation)
     """
     global current_user_id
-    current_user_id = user_id
+    
+    # CRITICAL: Always get user_id from current session to ensure data isolation
+    # If user_id is None or doesn't match session, get from session
+    from backend.auth import get_current_user
+    session_user_id = get_current_user()
+    
+    if session_user_id is None:
+        print("[Dashboard] WARNING: No authenticated user, redirecting to login")
+        ui.navigate.to('/login')
+        return
+    
+    # Use session user_id (most authoritative), fallback to passed user_id
+    if user_id is not None and user_id != session_user_id:
+        print(f"[Dashboard] WARNING: user_id mismatch! Passed: {user_id}, Session: {session_user_id}. Using session user_id.")
+    
+    # Always use session user_id for data isolation
+    # CRITICAL: Update global variable so other functions can use it
+    current_user_id = session_user_id
+    print(f"[Dashboard] build_dashboard: Set current_user_id={current_user_id} (session_user_id={session_user_id})")
+    
+    # Invalidate cache when dashboard is built (in case user switched)
+    tm._invalidate_task_caches()
+    im._invalidate_instance_caches()  # Also invalidate instance cache
     
     dashboard_start_time = time.perf_counter()
     init_perf_logger = get_init_perf_logger()
@@ -4914,7 +5020,9 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                             completed_scroll = ui.column().classes("w-full mt-2").style("overflow-y: auto; overflow-x: hidden; max-height: 400px;")
                             with completed_scroll:
                                 # Get recent tasks (completed + cancelled) and display them
-                                recent_tasks = im.list_recent_tasks(limit=20) if hasattr(im, "list_recent_tasks") else []
+                                # Get recent completed tasks for current user
+                                # Get recent completed tasks for current user
+                                recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) if hasattr(im, "list_recent_tasks") else []
                                 
                                 if not recent_tasks:
                                     ui.label("No recent tasks").classes("text-xs text-gray-500")
@@ -5022,6 +5130,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         # #endregion
                     
                     # Call refresh - it will retry automatically if container not ready
+                    # Note: refresh_templates() will check for refresh flag and invalidate cache if needed
                     # #region agent log
                     debug_log('dashboard.py:4546', 'About to call initial refresh_templates', {'container_exists': template_col is not None}, 'H5')
                     # #endregion
@@ -5042,11 +5151,11 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                 with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;").props('id="tas-active-tasks" data-tooltip-id="active_tasks"'):
                     if init_perf_logger:
                         with init_perf_logger.operation("list_active_instances"):
-                            active = im.list_active_instances()
+                            active = im.list_active_instances(user_id=current_user_id)
                         with init_perf_logger.operation("get_current_task"):
                             current_task = get_current_task()
                     else:
-                        active = im.list_active_instances()
+                        active = im.list_active_instances(user_id=current_user_id)
                         current_task = get_current_task()
                     # Filter out current task from active list
                     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
@@ -5754,7 +5863,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"
@@ -6196,7 +6305,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"
@@ -6638,7 +6747,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"
@@ -7080,7 +7189,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"
@@ -7522,7 +7631,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"
@@ -7964,7 +8073,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"
@@ -8406,7 +8515,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"
@@ -8848,7 +8957,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     instance_id = rec.get('instance_id')
                     if instance_id:
                         # Check if instance is paused
-                        instance = im.get_instance(instance_id)
+                        instance = im.get_instance(instance_id, user_id=current_user_id)
                         is_paused = False
                         if instance:
                             actual_str = instance.get("actual") or "{}"

@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
+from backend.security_utils import validate_survey_response, ValidationError
+
 
 DATA_DIR = os.path.join(Path(__file__).resolve().parent.parent, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -56,6 +58,18 @@ class SurveyManager:
         response_value: Optional[str] = "",
         response_text: Optional[str] = "",
     ) -> str:
+        """
+        Record a survey response.
+        
+        Raises:
+            ValidationError: If response_text validation fails (too long, etc.)
+        """
+        # Validate and sanitize response_text
+        try:
+            response_text = validate_survey_response(response_text) if response_text else ""
+        except ValidationError as e:
+            raise  # Re-raise validation errors for UI to handle
+        
         self._reload()
         rid = self._next_id()
         row = {
@@ -64,7 +78,7 @@ class SurveyManager:
             "question_category": question_category,
             "question_id": question_id,
             "response_value": response_value or "",
-            "response_text": response_text or "",
+            "response_text": response_text,
             "timestamp": datetime.utcnow().isoformat(),
         }
         self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)

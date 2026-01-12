@@ -2,6 +2,7 @@ from nicegui import ui
 from backend.user_state import UserStateManager
 from backend.instance_manager import InstanceManager
 from backend.analytics import Analytics
+from backend.auth import get_current_user, logout
 import json
 
 analytics = Analytics()
@@ -30,13 +31,42 @@ def get_all_cancellation_categories():
 
 @ui.page("/settings")
 def settings_page():
+    # Check authentication
+    user_id = get_current_user()
+    if user_id is None:
+        ui.navigate.to('/login')
+        return
+    
     def go_survey():
         ui.navigate.to("/survey")
+    
+    def handle_logout():
+        """Logout and redirect to login page."""
+        # Clear session
+        success = logout()
+        if success:
+            ui.notify("Logged out successfully", color="positive")
+        else:
+            ui.notify("Error during logout", color="negative")
+        
+        # Use a small delay to ensure logout completes, then force full page reload
+        def do_redirect():
+            # Force a full page reload to clear any cached session state
+            ui.run_javascript('window.location.href = "/login";')
+        
+        # Small delay to ensure storage operations complete
+        ui.timer(0.1, do_redirect, once=True)
     
     # def go_data_guide():
     #     ui.navigate.to("/data-guide")
 
     ui.label("Settings").classes("text-2xl font-bold mb-2")
+    
+    # Logout button at the top
+    with ui.card().classes("w-full max-w-xl p-4 gap-3 mb-4 bg-red-50 border-2 border-red-200"):
+        ui.label("Account").classes("text-lg font-semibold text-red-700")
+        ui.button("🚪 Logout", on_click=handle_logout, color='red').classes("w-full")
+        ui.label("Log out of your account. You will need to log in again to access your data.").classes("text-xs text-gray-600 mt-1")
     with ui.card().classes("w-full max-w-xl p-4 gap-3"):
         ui.label("Surveys").classes("text-lg font-semibold")
         ui.button("Take Mental Health Survey", on_click=go_survey)

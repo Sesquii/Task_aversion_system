@@ -186,10 +186,73 @@ def cleanup_expired_sessions_lazy():
 
 
 def logout():
-    """Clear the current user session."""
-    session_token = app.storage.browser.pop('session_token', None)
-    if session_token:
-        app.storage.general.pop(f'session:{session_token}', None)
+    """Clear the current user session from both browser and server storage."""
+    try:
+        # Get session token before clearing
+        session_token = app.storage.browser.get('session_token')
+        
+        # Clear server-side session data first
+        if session_token:
+            session_key = f'session:{session_token}'
+            app.storage.general.pop(session_key, None)
+            print(f"[Auth] Cleared server-side session: {session_key}")
+        
+        # Clear browser-side session token (CRITICAL: must clear this too)
+        app.storage.browser.pop('session_token', None)
+        
+        # Also clear any login redirect state
+        app.storage.browser.pop('login_redirect', None)
+        
+        if session_token:
+            print(f"[Auth] Logged out user, cleared session token: {session_token[:8]}...")
+        else:
+            print("[Auth] Logout called but no session token found")
+            
+        return True
+    except Exception as e:
+        print(f"[Auth] Error during logout: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def _show_csrf_error_page(title: str, message: str):
+    """
+    Display a CSRF error page with clear messaging.
+    Clears any existing session to prevent unauthorized access.
+    
+    Args:
+        title: Error title
+        message: Error message to display
+    """
+    # Clear any existing session when CSRF validation fails
+    # This ensures the user cannot access protected routes
+    logout()
+    
+    ui.page_title("Security Error - Authentication Failed")
+    
+    with ui.column().classes("w-full h-screen items-center justify-center gap-4 p-8"):
+        with ui.card().classes("w-full max-w-md p-6 bg-red-50 border-2 border-red-300"):
+            ui.icon("security", size="lg", color="red").classes("mx-auto mb-4")
+            ui.label(title).classes("text-2xl font-bold text-red-700 mb-2 text-center")
+            ui.label(message).classes("text-base text-red-600 mb-4 text-center")
+            
+            ui.separator().classes("my-4")
+            
+            ui.label("What happened?").classes("text-sm font-semibold text-gray-700 mb-2")
+            ui.label(
+                "This error occurs when the authentication request cannot be verified. "
+                "This is a security feature that protects against unauthorized access attempts. "
+                "Your session has been cleared for security."
+            ).classes("text-sm text-gray-600 mb-4")
+            
+            ui.label("What should I do?").classes("text-sm font-semibold text-gray-700 mb-2")
+            ui.label(
+                "You must log in again using the button below. "
+                "Any previous session has been cleared for security reasons."
+            ).classes("text-sm text-gray-600 mb-6")
+            
+            ui.button("Go to Login", on_click=lambda: ui.navigate.to('/login'), color='primary').classes("w-full")
 
 
 def require_auth(original_url: Optional[str] = None):
@@ -246,7 +309,30 @@ def get_or_create_user_from_oauth(google_id: str, email: str, name: Optional[str
         if user:
             # Update last login time
             user.last_login = datetime.utcnow()
-            session.commit()
+            # Only update username if it's different and won't cause a conflict
+            if name and name != user.username:
+                # Check if another user already has this username
+                existing_user_with_name = session.query(User).filter(
+                    User.username == name,
+                    User.user_id != user.user_id
+                ).first()
+                if not existing_user_with_name:
+                    # Safe to update username
+                    try:
+                        user.username = name
+                        session.commit()
+                    except Exception as e:
+                        # If update fails (e.g., unique constraint), rollback and keep existing username
+                        session.rollback()
+                        print(f"[Auth] Could not update username to '{name}': {e}, keeping existing username")
+                        user.last_login = datetime.utcnow()  # Still update last_login
+                        session.commit()
+                else:
+                    # Username conflict - keep existing username
+                    print(f"[Auth] Username '{name}' already exists for another user, keeping existing username")
+                    session.commit()
+            else:
+                session.commit()
             return user.user_id
         
         # Check if user exists by email (in case google_id changed)
@@ -255,25 +341,68 @@ def get_or_create_user_from_oauth(google_id: str, email: str, name: Optional[str
             # Update google_id and last login
             user.google_id = google_id
             user.last_login = datetime.utcnow()
+            # Only update username if it's different and won't cause a conflict
+            if name and name != user.username:
+                # Check if another user already has this username
+                existing_user_with_name = session.query(User).filter(
+                    User.username == name,
+                    User.user_id != user.user_id
+                ).first()
+                if not existing_user_with_name:
+                    # Safe to update username
+                    user.username = name
+                else:
+                    # Username conflict - keep existing username or set to None
+                    print(f"[Auth] Username '{name}' already exists for another user, keeping existing username")
             session.commit()
             return user.user_id
         
         # Create new user
-        new_user = User(
-            email=email,
-            username=name,  # Optional username
-            google_id=google_id,
-            oauth_provider='google',
-            email_verified=True,  # Google emails are pre-verified
-            is_active=True,
-            created_at=datetime.utcnow(),
-            last_login=datetime.utcnow()
-        )
-        session.add(new_user)
-        session.commit()
-        session.refresh(new_user)
-        
-        return new_user.user_id
+        # Note: username is NOT unique, but database may still have constraint
+        # Handle gracefully by catching IntegrityError
+        try:
+            new_user = User(
+                email=email,
+                username=name,  # Optional username (should not be unique)
+                google_id=google_id,
+                oauth_provider='google',
+                email_verified=True,  # Google emails are pre-verified
+                is_active=True,
+                created_at=datetime.utcnow(),
+                last_login=datetime.utcnow()
+            )
+            session.add(new_user)
+            session.commit()
+            session.refresh(new_user)
+            
+            return new_user.user_id
+        except Exception as e:
+            # If there's a constraint error (database still has unique constraint), retry without username
+            from sqlalchemy.exc import IntegrityError
+            if isinstance(e, IntegrityError) and 'username' in str(e).lower():
+                session.rollback()
+                print(f"[Auth] Warning: Database still has UNIQUE constraint on username: {e}")
+                print(f"[Auth] Creating user without username (username is optional)...")
+                
+                # Retry without username (username is optional)
+                new_user = User(
+                    email=email,
+                    username=None,  # Skip username if there's a conflict
+                    google_id=google_id,
+                    oauth_provider='google',
+                    email_verified=True,
+                    is_active=True,
+                    created_at=datetime.utcnow(),
+                    last_login=datetime.utcnow()
+                )
+                session.add(new_user)
+                session.commit()
+                session.refresh(new_user)
+                
+                return new_user.user_id
+            else:
+                # Re-raise if it's a different error
+                raise
 
 
 def migrate_user_preferences(old_string_user_id: str, new_integer_user_id: int) -> bool:
@@ -453,13 +582,13 @@ async def oauth_callback(request: Request):
         if error:
             error_description = request.query_params.get('error_description', 'Unknown error')
             print(f"[Auth] OAuth error: {error} - {error_description}")
-            ui.notify(f"Authentication failed: {error_description}", color='negative')
-            ui.navigate.to('/login')
+            _show_csrf_error_page("Authentication Failed", 
+                                 f"Google OAuth returned an error: {error_description}")
             return
         
         if not code or not state:
-            ui.notify("Invalid OAuth callback. Missing code or state parameter.", color='negative')
-            ui.navigate.to('/login')
+            _show_csrf_error_page("Invalid Authentication Request", 
+                                 "The authentication callback is missing required parameters. Please try logging in again.")
             return
         
         # Validate state parameter (CSRF protection)
@@ -469,16 +598,16 @@ async def oauth_callback(request: Request):
         
         if not stored_state_data:
             print(f"[Auth] CSRF: Invalid state parameter. State not found.")
-            ui.notify("Security error: Invalid authentication state.", color='negative')
-            ui.navigate.to('/login')
+            _show_csrf_error_page("Invalid authentication state", 
+                                 "The authentication request could not be verified. This may indicate a security issue.")
             return
         
         # Validate state value matches
         if stored_state_data.get('state') != state:
             print(f"[Auth] CSRF: State value mismatch.")
-            ui.notify("Security error: Invalid authentication state.", color='negative')
             app.storage.general.pop(state_key, None)  # Clear invalid state
-            ui.navigate.to('/login')
+            _show_csrf_error_page("Invalid authentication state", 
+                                 "The authentication state does not match. This may indicate a CSRF attack attempt.")
             return
         
         # Check expiration
@@ -488,9 +617,9 @@ async def oauth_callback(request: Request):
                 expires_at = datetime.fromisoformat(expires_at_str)
                 if datetime.utcnow() >= expires_at:
                     print(f"[Auth] CSRF: State expired.")
-                    ui.notify("Security error: Authentication state expired. Please try again.", color='negative')
                     app.storage.general.pop(state_key, None)
-                    ui.navigate.to('/login')
+                    _show_csrf_error_page("Authentication state expired", 
+                                         "The authentication request has expired. Please try logging in again.")
                     return
             except (ValueError, TypeError):
                 print(f"[Auth] Warning: Invalid expiration date in state data.")
@@ -529,16 +658,19 @@ async def oauth_callback(request: Request):
                 error_data = token_response.json() if token_response.headers.get('content-type', '').startswith('application/json') else {}
                 error_msg = error_data.get('error_description', f"HTTP {token_response.status_code}")
                 print(f"[Auth] Token exchange failed: {error_msg}")
-                ui.notify(f"Authentication failed: {error_msg}", color='negative')
-                ui.navigate.to('/login')
+                print(f"[Auth] Token response status: {token_response.status_code}")
+                print(f"[Auth] Token response body: {token_response.text[:500]}")
+                _show_csrf_error_page("Authentication Failed", 
+                                     f"Token exchange failed: {error_msg}. Please try logging in again.")
                 return
             
             token_data = token_response.json()
             access_token = token_data.get('access_token')
             
             if not access_token:
-                ui.notify("Authentication failed: No access token received.", color='negative')
-                ui.navigate.to('/login')
+                print(f"[Auth] No access token in response. Token data: {token_data}")
+                _show_csrf_error_page("Authentication Failed", 
+                                     "No access token received from Google. Please try logging in again.")
                 return
             
             # Get user info from Google API
@@ -550,8 +682,9 @@ async def oauth_callback(request: Request):
             if userinfo_response.status_code != 200:
                 error_msg = f"HTTP {userinfo_response.status_code}"
                 print(f"[Auth] UserInfo fetch failed: {error_msg}")
-                ui.notify(f"Authentication failed: Could not fetch user information.", color='negative')
-                ui.navigate.to('/login')
+                print(f"[Auth] UserInfo response body: {userinfo_response.text[:500]}")
+                _show_csrf_error_page("Authentication Failed", 
+                                     f"Could not fetch user information from Google: {error_msg}. Please try logging in again.")
                 return
             
             userinfo = userinfo_response.json()
@@ -560,8 +693,9 @@ async def oauth_callback(request: Request):
             name = userinfo.get('name')
             
             if not google_id or not email:
-                ui.notify("Authentication failed: Missing user information.", color='negative')
-                ui.navigate.to('/login')
+                print(f"[Auth] Missing user information. userinfo: {userinfo}")
+                _show_csrf_error_page("Authentication Failed", 
+                                     "Missing user information from Google. Please try logging in again.")
                 return
             
             # Create or update user in database
@@ -587,16 +721,24 @@ async def oauth_callback(request: Request):
             
             # Create session
             create_session(user_id, email)
+            print(f"[Auth] OAuth callback successful: Created session for user_id={user_id}, email={email}")
             
             # Redirect to original URL or dashboard
             redirect_url = app.storage.browser.pop('login_redirect', '/')
-            ui.navigate.to(redirect_url)
+            print(f"[Auth] Redirecting to: {redirect_url}")
             
+            # Use JavaScript redirect to ensure it works properly
+            ui.run_javascript(f'window.location.href = "{redirect_url}";')
+            
+            # Show welcome message (may not display if redirect happens quickly)
             ui.notify(f"Welcome, {name or email}!", color='positive')
     
     except Exception as e:
         print(f"[Auth] OAuth callback error: {e}")
         import traceback
         traceback.print_exc()
+        error_details = traceback.format_exc()
+        print(f"[Auth] Full error traceback:\n{error_details}")
         ui.notify("An error occurred during authentication. Please try again.", color='negative')
-        ui.navigate.to('/login')
+        # Use JavaScript redirect to ensure it works
+        ui.run_javascript('window.location.href = "/login";')

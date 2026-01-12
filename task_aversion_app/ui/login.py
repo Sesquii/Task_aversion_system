@@ -30,7 +30,7 @@ def login_page():
                 
                 with ui.row().classes('gap-2 mt-4'):
                     ui.button('Go to Dashboard', on_click=lambda: ui.navigate.to('/')).classes('flex-1')
-                    ui.button('Logout', on_click=handle_logout).classes('flex-1')
+                    ui.button('Logout', on_click=lambda: handle_logout_and_reload()).classes('flex-1')
     else:
         # Show login form
         with ui.column().classes('w-full max-w-md mx-auto mt-16 gap-6'):
@@ -66,4 +66,22 @@ def handle_logout():
     """Handle logout action."""
     logout()
     ui.notify('Logged out successfully', color='positive')
-    ui.navigate.to('/login')
+    # Force a full page reload to clear any cached session state
+    ui.run_javascript('window.location.href = "/login";')
+
+def handle_logout_and_reload():
+    """Handle logout and force page reload to clear session state."""
+    # Clear session
+    success = logout()
+    if success:
+        ui.notify('Logged out successfully', color='positive')
+    else:
+        ui.notify('Error during logout', color='negative')
+    
+    # Use a small delay to ensure logout completes, then force full page reload
+    def do_redirect():
+        # Force a full page reload to clear any cached session state
+        ui.run_javascript('window.location.href = "/login";')
+    
+    # Small delay to ensure storage operations complete
+    ui.timer(0.1, do_redirect, once=True)

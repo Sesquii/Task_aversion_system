@@ -112,7 +112,18 @@ class NotesManager:
                 self.add_note("suno after music walks seems useful")
 
     def add_note(self, content: str) -> str:
-        """Add a new note. Returns the note_id."""
+        """Add a new note. Returns the note_id.
+        
+        Raises:
+            ValidationError: If note validation fails (too long, etc.)
+        """
+        # Validate and sanitize note content
+        from backend.security_utils import validate_note, ValidationError
+        try:
+            content = validate_note(content)
+        except ValidationError as e:
+            raise  # Re-raise validation errors for UI to handle
+        
         note_id = self._next_id()
         timestamp = datetime.utcnow()
         

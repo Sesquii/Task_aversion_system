@@ -2,6 +2,7 @@ from nicegui import ui
 from fastapi import Request
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
+from backend.auth import get_current_user
 
 im = InstanceManager()
 user_state = UserStateManager()
@@ -30,6 +31,12 @@ def cancel_task_page(task_manager, emotion_manager):
 
     @ui.page('/cancel_task')
     def page(request: Request):
+        # Get current user for data isolation
+        current_user_id = get_current_user()
+        if current_user_id is None:
+            ui.navigate.to('/login')
+            return
+        
         ui.label("Cancel Task").classes("text-xl font-bold mb-4")
 
         params = dict(request.query_params)
@@ -93,7 +100,7 @@ def cancel_task_page(task_manager, emotion_manager):
                 }
 
                 try:
-                    im.cancel_instance(iid, actual)
+                    im.cancel_instance(iid, actual, user_id=current_user_id)
                 except Exception as exc:
                     ui.notify(str(exc), color='negative')
                     return

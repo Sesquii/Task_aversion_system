@@ -104,7 +104,7 @@ class User(Base):
     
     # User identification
     email = Column(String(255), unique=True, nullable=False, index=True)
-    username = Column(String(100), unique=True, nullable=True)  # Optional username
+    username = Column(String(100), nullable=True)  # Optional username (NOT unique - multiple users can have same name)
     
     # OAuth provider information
     google_id = Column(String(255), unique=True, nullable=True, index=True)  # Google OAuth ID
