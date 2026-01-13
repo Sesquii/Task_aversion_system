@@ -38,6 +38,9 @@ run.log
 # Data files - keep local, don't track in git
 task_aversion_app/data/
 
+# NiceGUI storage (session data, user-specific)
+task_aversion_app/.nicegui/
+
 # Jupyter Notebooks (if you use them)
 .ipynb_checkpoints
 
@@ -47,3 +50,4 @@ build/
 *.egg-info/
 
 task_aversion_app/data/task_instances.csv
+task_aversion_app/.nicegui/storage-general.json

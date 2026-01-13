@@ -34,7 +34,6 @@ authentication and session management issues.
 
 - Enhanced OAuth callback error handling with dedicated error page
   (_show_csrf_error_page) that clears session on security failures
-
 - Fixed username uniqueness constraint issue:
   - Removed unique constraint from User.username in database model
   - Added fallback logic in get_or_create_user_from_oauth to handle
