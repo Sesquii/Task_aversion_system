@@ -304,7 +304,7 @@ def complete_task_page(task_manager, emotion_manager):
             # Combine: initial emotions (for comparison) + persistent emotions (for current state)
             all_emotions = list(set(initial_emotions + persistent_emotion_list))
         
-        # Container for emotion sliders
+        # Container for emotion sliders (created first but populated after input/button)
         emotion_sliders_container = ui.column().classes("w-full gap-2")
         emotion_sliders = {}
         
@@ -350,6 +350,29 @@ def complete_task_page(task_manager, emotion_manager):
                         pass
                 return 50
         
+        # Single input for emotions (comma-separated) - placed above sliders
+        ui.label("Track emotions by listing them (comma-separated)").classes("text-xs text-gray-500")
+        emotions_input = ui.input(
+            label="Emotions",
+            value=", ".join(all_emotions) if all_emotions else "",
+            placeholder="e.g., Excitement, Anxiety, Relief"
+        )
+        # Edit mode allows full editing now
+
+        def parse_emotions_input():
+            raw = emotions_input.value or ''
+            parts = [p.strip() for p in raw.replace(';', ',').split(',') if p.strip()]
+            seen = set()
+            ordered = []
+            for p in parts:
+                key = p.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(p)
+                emotion_manager.add_emotion(p)
+            return ordered
+
         def update_emotion_sliders():
             """Update the emotion sliders"""
             emotion_sliders_container.clear()
@@ -384,32 +407,6 @@ def complete_task_page(task_manager, emotion_manager):
                             ui.label(change_text).classes("text-xs text-gray-500 ml-[120px]")
                         except (ValueError, TypeError):
                             pass
-        
-        # Initialize emotion sliders
-        update_emotion_sliders()
-        
-        # Single input for emotions (comma-separated) - disabled in edit mode
-        ui.label("Track emotions by listing them (comma-separated)").classes("text-xs text-gray-500 mt-4")
-        emotions_input = ui.input(
-            label="Emotions",
-            value=", ".join(all_emotions) if all_emotions else "",
-            placeholder="e.g., Excitement, Anxiety, Relief"
-        )
-        # Edit mode allows full editing now
-
-        def parse_emotions_input():
-            raw = emotions_input.value or ''
-            parts = [p.strip() for p in raw.replace(';', ',').split(',') if p.strip()]
-            seen = set()
-            ordered = []
-            for p in parts:
-                key = p.lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                ordered.append(p)
-                emotion_manager.add_emotion(p)
-            return ordered
 
         def apply_emotion_input():
             nonlocal all_emotions
@@ -418,6 +415,9 @@ def complete_task_page(task_manager, emotion_manager):
 
         update_emotions_btn = ui.button("Update emotions", on_click=apply_emotion_input).classes("mb-4")
         # Edit mode allows full editing now
+        
+        # Initialize emotion sliders
+        update_emotion_sliders()
 
         ui.label("Completion %").classes("text-lg font-semibold")
         ui.label("Enter percentage completed. Use values > 100% if you completed more work than expected.").classes("text-xs text-gray-500 mb-2")

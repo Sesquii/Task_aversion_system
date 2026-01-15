@@ -304,6 +304,12 @@ def initialize_task_page(task_manager, emotion_manager):
                 # This ensures emotions continuously update across pages
                 emotion_values_dict = user_state.get_persistent_emotions()
 
+            # Container for emotion sliders (created first but populated after input/button)
+            emotion_sliders_container = ui.column().classes("w-full gap-2")
+
+            # Dictionary to store emotion sliders
+            emotion_sliders = {}
+
             # Single text input for emotions (comma-separated or one at a time)
             existing_emotions = list(emotion_values_dict.keys()) if emotion_values_dict else []
             emotions_input = ui.input(
@@ -325,12 +331,6 @@ def initialize_task_page(task_manager, emotion_manager):
                         # Persist to emotion store for future sessions
                         emotion_manager.add_emotion(p)
                 return ordered
-
-            # Container for emotion sliders
-            emotion_sliders_container = ui.column().classes("w-full gap-2")
-
-            # Dictionary to store emotion sliders
-            emotion_sliders = {}
 
             def update_emotion_sliders():
                 """Update the emotion sliders based on selected emotions"""
