@@ -2,54 +2,47 @@
 # Execute these commands in order to commit only files changed in this session
 
 # Step 1: Stage modified files
-git add task_aversion_app/app.py
-git add task_aversion_app/backend/analytics.py
-git add task_aversion_app/backend/user_state.py
+git add task_aversion_app/backend/auth.py
 
-# Step 2: Stage new files
-git add task_aversion_app/backend/productivity_tracker.py
-git add task_aversion_app/ui/productivity_goals_experimental.py
-
-# Step 3: Verify what will be committed
+# Step 2: Verify what will be committed
 git status
 
-# Step 4: Review the staged changes (optional)
+# Step 3: Review the staged changes (optional)
 git diff --cached
 
-# Step 5: Commit with message
-git commit -m "feat(productivity): add productivity goal tracking system
+# Step 4: Commit with message
+git commit -m "feat(auth): clear all cached data on user logout
 
-Add productivity goal tracking feature with experimental UI and backend
-support for goal-based productivity score adjustments.
+Add comprehensive cache clearing functionality to logout process to ensure
+users get fresh data when logging in and prevent data leakage between sessions.
 
 Changes:
-- Add productivity goal settings management in UserStateManager
-  * get_productivity_goal_settings() - retrieve goal tracking settings
-  * set_productivity_goal_settings() - persist goal tracking settings
-  * Supports goal_hours_per_week, starting_hours_per_week, initialization
-    method, auto-adjustment tracking, and user override flags
-- Add productivity tracker backend module for goal calculations
-- Add experimental productivity goals UI page
-- Register experimental UI route in app.py
-- Update analytics.py to support goal-based productivity score adjustments
-  * Add goal_hours_per_week and weekly_productive_hours parameters to
-    calculate_productivity_score()
-  * Apply goal achievement multiplier (±20% max) based on weekly goal
-    completion ratio
-
-Files created:
-- task_aversion_app/backend/productivity_tracker.py
-- task_aversion_app/ui/productivity_goals_experimental.py
+- Add clear_all_caches() function to clear all application caches
+  * Clears Analytics class-level caches (relief summary, composite scores,
+    instances, dashboard metrics, time tracking, trend series, attribute
+    distribution, stress dimension, rankings, leaderboard)
+  * Clears InstanceManager class-level caches (shared active instances,
+    recent completed instances, per-user cache)
+  * Clears TaskManager instance caches (task lists, task data) via global
+    instance from app module
+- Update logout() function to call clear_all_caches() after clearing session
+  * Ensures all cached data is cleared when user logs out
+  * Prevents stale cache data from persisting across user sessions
+  * Includes error handling for each cache clearing operation
 
 Files modified:
-- task_aversion_app/app.py (add experimental UI import)
-- task_aversion_app/backend/analytics.py (goal-based score adjustments)
-- task_aversion_app/backend/user_state.py (goal settings management)
+- task_aversion_app/backend/auth.py
+  * Added clear_all_caches() function with comprehensive cache clearing
+  * Updated logout() to call clear_all_caches() after session cleanup
 
 Purpose:
-This feature enables users to set weekly productivity hour goals and
-receive score adjustments based on goal achievement. The system supports
-automatic initialization from historical data, manual setting, or hybrid
-approaches. Goal achievement ratios above 120% receive bonuses, while
-ratios below 80% receive penalties, encouraging consistent productivity
-goal adherence."
+This change ensures that when a user logs out, all cached data is cleared
+from memory. This prevents:
+- Data leakage between user sessions
+- Stale cache data being served to new users
+- Performance issues from accumulated cache data
+- Security concerns with cached user-specific data
+
+The implementation handles cases where modules may not be loaded yet and
+includes proper error handling to ensure logout always succeeds even if
+cache clearing encounters issues."

@@ -185,8 +185,95 @@ def cleanup_expired_sessions_lazy():
         app.storage.general.pop(key, None)
 
 
+def clear_all_caches():
+    """
+    Clear all cached data across the application.
+    This includes Analytics, InstanceManager, and TaskManager caches.
+    """
+    try:
+        # Clear Analytics class-level caches
+        try:
+            from backend.analytics import Analytics
+            # Clear all Analytics class-level cache variables
+            Analytics._relief_summary_cache = None
+            Analytics._relief_summary_cache_time = None
+            Analytics._composite_scores_cache = None
+            Analytics._composite_scores_cache_time = None
+            Analytics._instances_cache_all = None
+            Analytics._instances_cache_all_time = None
+            Analytics._instances_cache_completed = None
+            Analytics._instances_cache_completed_time = None
+            Analytics._dashboard_metrics_cache = None
+            Analytics._dashboard_metrics_cache_time = None
+            Analytics._time_tracking_cache = None
+            Analytics._time_tracking_cache_time = None
+            Analytics._time_tracking_cache_params = None
+            Analytics._trend_series_cache = None
+            Analytics._trend_series_cache_time = None
+            Analytics._attribute_distribution_cache = None
+            Analytics._attribute_distribution_cache_time = None
+            Analytics._stress_dimension_cache = None
+            Analytics._stress_dimension_cache_time = None
+            Analytics._rankings_cache = {}
+            Analytics._leaderboard_cache = None
+            Analytics._leaderboard_cache_time = None
+            Analytics._leaderboard_cache_top_n = None
+            print("[Auth] Cleared Analytics caches")
+        except Exception as e:
+            print(f"[Auth] Error clearing Analytics caches: {e}")
+        
+        # Clear InstanceManager class-level caches
+        try:
+            from backend.instance_manager import InstanceManager
+            InstanceManager._shared_active_instances_cache = None
+            InstanceManager._shared_active_instances_cache_time = None
+            InstanceManager._shared_recent_completed_cache.clear()
+            if hasattr(InstanceManager, '_per_user_cache'):
+                InstanceManager._per_user_cache.clear()
+            print("[Auth] Cleared InstanceManager caches")
+        except Exception as e:
+            print(f"[Auth] Error clearing InstanceManager caches: {e}")
+        
+        # Clear TaskManager instance caches
+        # Note: We need to access the global instance from app.py, but to avoid circular imports,
+        # we'll try to get it from sys.modules if the app module is already loaded
+        try:
+            import sys
+            task_manager = None
+            
+            # Try to get the global task_manager instance from app module
+            if 'app' in sys.modules:
+                app_module = sys.modules['app']
+                if hasattr(app_module, 'task_manager'):
+                    task_manager = app_module.task_manager
+            
+            if task_manager is not None:
+                task_manager._invalidate_task_caches()
+                print("[Auth] Cleared TaskManager caches")
+            else:
+                # If app module not loaded yet, we can't clear instance caches
+                # This is okay - they'll be cleared when the app restarts or when
+                # the next user logs in and uses TaskManager
+                print("[Auth] TaskManager instance not available for cache clearing (app module not loaded)")
+        except Exception as e:
+            print(f"[Auth] Error clearing TaskManager caches: {e}")
+        
+    except Exception as e:
+        print(f"[Auth] Error in clear_all_caches: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def logout():
-    """Clear the current user session from both browser and server storage."""
+    """Clear the current user session from both browser and server storage.
+    
+    This function comprehensively clears:
+    - Server-side session data
+    - Browser-side session token and redirect state
+    - Legacy anonymous user IDs (tas_user_id, user_id)
+    - All application caches (Analytics, InstanceManager, TaskManager)
+    - UI refresh flags (refresh_templates)
+    """
     try:
         # Get session token before clearing
         session_token = app.storage.browser.get('session_token')
@@ -200,8 +287,19 @@ def logout():
         # Clear browser-side session token (CRITICAL: must clear this too)
         app.storage.browser.pop('session_token', None)
         
-        # Also clear any login redirect state
+        # Clear login redirect state
         app.storage.browser.pop('login_redirect', None)
+        
+        # Clear legacy anonymous user IDs (from pre-OAuth system)
+        # These are stored in browser localStorage and should be cleared on logout
+        app.storage.browser.pop('tas_user_id', None)
+        app.storage.browser.pop('user_id', None)
+        
+        # Clear UI refresh flags (global but safe to clear on logout)
+        app.storage.general.pop('refresh_templates', None)
+        
+        # Clear all cached data (Analytics, InstanceManager, TaskManager)
+        clear_all_caches()
         
         if session_token:
             print(f"[Auth] Logged out user, cleared session token: {session_token[:8]}...")

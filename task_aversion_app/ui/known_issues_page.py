@@ -65,6 +65,10 @@ def build_known_issues_page():
         
         with ui.column().classes("gap-3"):
             with ui.card().classes("p-4 bg-yellow-50 border-l-4 border-yellow-400"):
+                ui.label("Browser Caching on Login/Logout").classes("text-lg font-semibold mb-2")
+                ui.label("If you log in and out on the same system, your analytics and monitored metrics may temporarily show old user data due to browser caching. This is a browser caching issue only - your data is not exposed publicly and will refresh to show the correct user's data after the cache clears. Refreshing the page or waiting a few moments should resolve this.").classes("text-sm")
+            
+            with ui.card().classes("p-4 bg-yellow-50 border-l-4 border-yellow-400"):
                 ui.label("Current Emotions Display").classes("text-lg font-semibold mb-2")
                 ui.label("'Current emotions' from a task initialized but having a delay to activation will actually display the initialization emotions instead of the most recently completed task emotions.").classes("text-sm")
     

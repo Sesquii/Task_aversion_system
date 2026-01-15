@@ -65,6 +65,18 @@ def build_analytics_page():
         "text-gray-500 mb-4"
     )
     
+    # Browser caching notice
+    with ui.card().classes("p-3 mb-4 bg-yellow-50 border-l-4 border-yellow-400"):
+        with ui.row().classes("items-start gap-2"):
+            ui.icon("info", size="md").classes("text-yellow-600 mt-0.5")
+            with ui.column().classes("flex-1 gap-1"):
+                ui.label("Browser Caching Notice").classes("text-sm font-semibold text-yellow-800")
+                ui.label(
+                    "If you log in and out on the same system, your analytics and monitored metrics may temporarily show old user data due to browser caching. "
+                    "This is a browser caching issue only - your data is not exposed publicly and will refresh to show the correct user's data after the cache clears. "
+                    "Refreshing the page or waiting a few moments should resolve this."
+                ).classes("text-xs text-yellow-700")
+    
     # Get current user_id
     from backend.auth import get_current_user
     current_user_id = get_current_user()
