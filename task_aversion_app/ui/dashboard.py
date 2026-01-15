@@ -2500,22 +2500,14 @@ def render_monitored_metrics_section(container):
                     result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
             
             if needs_productivity_score:
-                # For productivity_score, we need weekly_productivity_score from relief_summary
-                # Note: get_relief_summary() is cached, so if it was already called, this is fast
-                # If productivity_time was already loaded above, we might have the cache
-                if 'productivity_time_minutes' in result['relief_summary'] and hasattr(an, '_relief_summary_cache'):
-                    # Try to get from cache if available
-                    if an._relief_summary_cache is not None:
-                        result['relief_summary']['weekly_productivity_score'] = an._relief_summary_cache.get('weekly_productivity_score', 0.0)
-                    else:
-                        relief = an.get_relief_summary()
-                        result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
-                else:
-                    relief = an.get_relief_summary()
-                    result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
-                    # Also get productivity_time_minutes if we didn't already
-                    if needs_productivity_time and 'productivity_time_minutes' not in result['relief_summary']:
-                        result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
+                # For productivity_score, always call get_relief_summary() to ensure fresh calculation
+                # Don't rely on cache - force recalculation to ensure accuracy
+                # The cache might be stale, especially if data was just updated
+                relief = an.get_relief_summary()
+                result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
+                # Also get productivity_time_minutes if we didn't already
+                if needs_productivity_time and 'productivity_time_minutes' not in result['relief_summary']:
+                    result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
         
         # Metrics that come from quality_metrics (dashboard_metrics)
         # Only get the specific metrics we need, not all dashboard metrics
@@ -2648,12 +2640,29 @@ def render_monitored_metrics_section(container):
                     except: pass
                     # #endregion
                     
+                    # Force cache refresh for productivity_score to ensure fresh data
+                    # This addresses the issue where productivity_score was stale until analytics page was visited
+                    if 'productivity_score' in selected_metrics:
+                        from backend.analytics import Analytics
+                        Analytics._invalidate_relief_summary_cache()
+                    
                     try:
                         with init_perf_logger.operation("get_targeted_metric_values"):
                             targeted_data = get_targeted_metric_values(selected_metrics, an)
                             load_state['relief_summary'] = targeted_data.get('relief_summary', {})
                             load_state['quality_metrics'] = targeted_data.get('quality_metrics', {})
                             load_state['composite_scores'] = targeted_data.get('composite_scores', {})
+                            
+                            # Validate that productivity_score is not zero if we have data
+                            if 'productivity_score' in selected_metrics:
+                                weekly_score = load_state['relief_summary'].get('weekly_productivity_score', 0.0)
+                                if weekly_score == 0.0:
+                                    # Force recalculation - cache might have been stale
+                                    Analytics._invalidate_relief_summary_cache()
+                                    relief = an.get_relief_summary()
+                                    load_state['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
+                                    if 'productivity_time_minutes' not in load_state['relief_summary']:
+                                        load_state['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
                     except Exception as e:
                         print(f"[Dashboard] Error getting targeted metric values: {e}")
                         import traceback
@@ -2752,6 +2761,14 @@ def render_monitored_metrics_section(container):
                     # Cancel timer
                     if load_state['timer']:
                         load_state['timer'].cancel()
+                    
+                    # Force cache refresh for productivity_score to ensure fresh data
+                    # This addresses the issue where productivity_score was stale until analytics page was visited
+                    if 'productivity_score' in selected_metrics:
+                        from backend.analytics import Analytics
+                        Analytics._invalidate_relief_summary_cache()
+                        # Recalculate relief_summary with fresh cache
+                        load_state['relief_summary'] = an.get_relief_summary()
                     
                     # Final update of all metric cards with loaded data
                     try:
@@ -3208,8 +3225,25 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             # Calculate baseline
             if history_data and len(history_data.get('dates', [])) > 0:
                 value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
-                baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
-                baseline_value = baseline_daily * 7.0
+                if value_key and value_key in history_data and len(history_data.get(value_key, [])) > 0:
+                    baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
+                    # Only use calculated baseline if it's valid (not zero and different from current)
+                    if baseline_daily > 0:
+                        baseline_value = baseline_daily * 7.0
+                    else:
+                        # Fallback: calculate from actual history values
+                        values = history_data.get(value_key, [])
+                        if values and len(values) > 0:
+                            # Filter out zeros and calculate average
+                            valid_values = [v for v in values if v and v > 0]
+                            if valid_values:
+                                baseline_value = (sum(valid_values) / len(valid_values)) * 7.0
+                            else:
+                                baseline_value = current_value
+                        else:
+                            baseline_value = current_value
+                else:
+                    baseline_value = current_value
             else:
                 baseline_value = current_value
             
@@ -3318,20 +3352,28 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                         )
                         
                         if fig:
-                            # Render chart to HTML and move to tooltip (same logic as _render_metrics_cards)
-                            chart_html = fig.to_html(include_plotlyjs=False, div_id=f"chart-{metric_config['tooltip_id']}")
+                            # Render chart using Plotly directly in a hidden container, then move to tooltip
                             tooltip_id = metric_config['tooltip_id']
                             
-                            # Use JavaScript to move chart into tooltip container
+                            # Create a temporary hidden container for the chart
+                            with ui.element('div').props(f'id="chart-temp-{tooltip_id}"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
+                                ui.plotly(fig)
+                            
+                            # Use JavaScript to move chart into tooltip container after a short delay
+                            # This ensures Plotly has time to render the chart
                             ui.run_javascript(f'''
-                                (function() {{
-                                    var chartDiv = document.getElementById("chart-{tooltip_id}");
+                                setTimeout(function() {{
+                                    var tempDiv = document.getElementById("chart-temp-{tooltip_id}");
                                     var tooltipDiv = document.getElementById("tooltip-{tooltip_id}");
-                                    if (chartDiv && tooltipDiv) {{
-                                        tooltipDiv.innerHTML = chartDiv.innerHTML;
-                                        chartDiv.remove();
+                                    if (tempDiv && tooltipDiv) {{
+                                        // Find the Plotly chart div inside the temp container
+                                        var plotlyDiv = tempDiv.querySelector(".plotly");
+                                        if (plotlyDiv) {{
+                                            tooltipDiv.innerHTML = plotlyDiv.outerHTML;
+                                        }}
+                                        tempDiv.remove();
                                     }}
-                                }})();
+                                }}, 500);
                             ''')
                 except Exception as e:
                     print(f"[Dashboard] Error creating tooltip chart for {metric_key}: {e}")

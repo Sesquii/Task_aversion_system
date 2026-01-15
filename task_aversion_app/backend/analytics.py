@@ -2628,9 +2628,15 @@ class Analytics:
         self._leaderboard_cache = None
         self._leaderboard_cache_time = None
         self._leaderboard_cache_top_n = None
-        self._time_tracking_cache = None
-        self._time_tracking_cache_time = None
-        self._time_tracking_cache_params = None
+        # Also invalidate relief_summary cache since it depends on instances
+        Analytics._relief_summary_cache = None
+        Analytics._relief_summary_cache_time = None
+    
+    @staticmethod
+    def _invalidate_relief_summary_cache():
+        """Invalidate the relief_summary cache. Call this when productivity/relief calculations need refresh."""
+        Analytics._relief_summary_cache = None
+        Analytics._relief_summary_cache_time = None
     
     def _get_user_id(self, user_id: Optional[int] = None) -> Optional[int]:
         """Get user_id from parameter or current authenticated user.
@@ -12244,6 +12250,9 @@ class Analytics:
                 ),
                 axis=1
             )
+            # Invalidate relief_summary cache since productivity_score calculation may have changed
+            # This ensures monitored metrics get fresh data when viewing trends
+            Analytics._invalidate_relief_summary_cache()
         elif attribute_key == 'grit_score':
             # Calculate grit score for trend data
             # Count how many times each task has been completed

@@ -1,64 +1,65 @@
-# Fix Cache Invalidation Issues and Improve Pause/Resume Functionality
+# Optimize Monitored Metrics: Fix Cache, Baseline, and Graph Loading Issues
 
 ## Summary
-Fixed critical cache invalidation timing issues that caused completed and cancelled tasks to persist in the UI, and improved pause/resume functionality to preserve duration data. Implemented shared cache across all InstanceManager instances to ensure consistency.
+Fixed critical issues in the monitored metrics system where productivity score was stale until visiting the analytics page, baseline averages were identical to main values, graphs weren't loading, and zero values appeared incorrectly. Implemented proper cache invalidation, improved baseline calculations, and fixed tooltip chart rendering.
 
 ## Changes Made
 
 ### Cache Invalidation Fixes
-- **Moved cache invalidation to after database commits**: Cache was being invalidated before data was written, causing stale data to be cached. Now invalidates after commits complete.
-- **Implemented shared class-level cache**: Each UI module was creating its own InstanceManager instance with separate caches, causing inconsistencies. Changed to class-level shared cache so all instances see the same data.
-- **Fixed cache invalidation for all write operations**: 
-  - `complete_instance` - invalidates after completion
-  - `cancel_instance` - invalidates after cancellation  
-  - `delete_instance` - invalidates after deletion
-  - `pause_instance` - invalidates after pausing
-  - `resume_instance` - invalidates after resuming
-  - `start_instance` - invalidates after starting
+- **Added `_invalidate_relief_summary_cache()` static method**: Allows explicit cache invalidation when productivity calculations need refresh
+- **Auto-invalidate cache when analytics page loads trends**: When `get_attribute_trends()` calculates `productivity_score` for trends, it now invalidates the relief_summary cache to ensure fresh data
+- **Force cache refresh in monitored metrics**: When loading `productivity_score` in monitored metrics, the cache is now invalidated before fetching data to prevent stale values
+- **Validate and fix zero values**: Added detection for when `productivity_score` is zero but shouldn't be, forcing cache invalidation and recalculation
 
-### Pause/Resume Improvements
-- **Preserved duration data across pause/resume cycles**: `time_spent_before_pause` is now properly maintained and accumulated across multiple pause/resume cycles.
-- **Added cache invalidation to pause/resume operations**: Ensures duration data is immediately available after resuming.
-- **Fixed UI refresh timing**: Added small delay before page reload to ensure cache invalidation completes before UI updates.
+### Baseline Calculation Improvements
+- **Enhanced baseline calculation logic**: Improved handling of empty or invalid history data with proper fallback logic
+- **Calculate baseline from actual values**: When standard baseline calculation returns zero, now calculates from actual history values instead of defaulting to current value
+- **Prevent identical averages**: Fixed issue where baseline averages were identical to main values by properly validating history data before using it
 
-### Code Quality
-- **Removed duplicate `resume_instance` function** in dashboard.py
-- **Consistent cache invalidation pattern**: All database write operations now invalidate cache outside session context for reliability
+### Graph Loading Fixes
+- **Fixed tooltip chart rendering**: Changed from HTML string injection to proper Plotly rendering in temporary hidden container
+- **Added proper timing for chart initialization**: Charts now render with 500ms delay to ensure Plotly has time to initialize before moving to tooltip
+- **Improved JavaScript chart movement**: Updated chart movement logic to properly find and move Plotly chart elements
+
+### Data Refresh Improvements
+- **Removed stale cache reliance**: Monitored metrics no longer rely on potentially stale cache for `productivity_score`
+- **Always fetch fresh data for productivity_score**: Changed `get_targeted_metric_values()` to always call `get_relief_summary()` for productivity_score instead of trying to use cache
+- **Cache invalidation on final render**: Added cache invalidation check in final render step to ensure fresh data
 
 ## Issues Fixed
-- ✅ Completed tasks now immediately removed from active tasks list
-- ✅ Cancelled tasks now immediately removed from active tasks list  
-- ✅ Duration data (`time_spent_before_pause`) preserved and displayed correctly after resume
-- ✅ All UI modules now see consistent, up-to-date data
-
-## Known Issues
-- ⚠️ Pause functionality is still inconsistent - may need further investigation and testing
+- ✅ Productivity score now updates correctly without visiting analytics page
+- ✅ Baseline averages are calculated correctly from history data (not identical to main values)
+- ✅ Graphs now load properly in tooltips
+- ✅ Zero values only appear when there's actually no data
+- ✅ Monitored metrics refresh correctly when data changes
 
 ## Technical Details
 
-### Shared Cache Implementation
-- Changed instance-level cache variables to class-level:
-  - `self._active_instances_cache` → `InstanceManager._shared_active_instances_cache`
-  - `self._recent_completed_cache` → `InstanceManager._shared_recent_completed_cache`
-- Updated `_invalidate_instance_caches()` to clear shared cache
-- Updated `list_active_instances()` and `list_recently_completed()` to use shared cache
+### Cache Invalidation Implementation
+- Added static method `Analytics._invalidate_relief_summary_cache()` to clear class-level cache
+- Cache is invalidated in `get_attribute_trends()` when calculating `productivity_score` for trends
+- Cache is invalidated before loading `productivity_score` in monitored metrics
+- Cache is validated and refreshed if zero value detected when data should exist
 
-### Cache Invalidation Timing
-- Moved invalidation outside database session contexts in:
-  - `_complete_instance_db()`
-  - `_cancel_instance_db()`
-  - `_pause_instance_db()`
-  - `_resume_instance_db()`
-  - `_delete_instance_db()`
-- Ensures cache is cleared after transaction commits and session closes
+### Baseline Calculation Logic
+- Enhanced `get_baseline_value()` usage with proper validation
+- Added fallback to calculate from actual history values when standard method fails
+- Validates that value_key exists and has data before using baseline calculation
+- Filters out zeros when calculating baseline from history values
+
+### Chart Rendering Improvements
+- Changed from `fig.to_html()` string injection to `ui.plotly()` rendering
+- Creates temporary hidden container for chart initialization
+- Uses JavaScript with timeout to move chart after Plotly renders
+- Properly finds Plotly chart elements using querySelector
 
 ## Files Modified
-- `task_aversion_app/backend/instance_manager.py` - Shared cache implementation and cache invalidation fixes
-- `task_aversion_app/ui/dashboard.py` - Removed duplicate function, improved resume timing
-- `task_aversion_app/ui/cancel_task.py` - Navigation improvements
+- `task_aversion_app/backend/analytics.py` - Added cache invalidation method and trigger in get_attribute_trends
+- `task_aversion_app/ui/dashboard.py` - Fixed cache refresh, baseline calculation, graph loading, and zero value handling
 
 ## Testing Recommendations
-- Test completing tasks and verify they disappear from active list immediately
-- Test cancelling tasks and verify they disappear from active list immediately
-- Test pausing and resuming tasks multiple times and verify duration accumulates correctly
-- Test pause functionality for consistency issues
+- Test productivity score updates immediately after completing tasks without visiting analytics page
+- Test baseline averages show correct historical averages (not identical to current value)
+- Test tooltip graphs load and display correctly when hovering over monitored metrics
+- Test zero values only appear when there's actually no data
+- Test navigating to analytics page and back - productivity score should remain correct
