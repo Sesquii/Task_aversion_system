@@ -125,7 +125,17 @@ def backfill_aversion(dry_run=True, default_value=0, use_database=None):
                 # Check if task has been done before
                 task_id = instance.get('task_id')
                 if task_id:
-                    initial_aversion = im.get_initial_aversion(task_id) if hasattr(im, 'get_initial_aversion') else None
+                    # Get user_id from instance for proper data isolation
+                    user_id = instance.get('user_id')
+                    # Convert string user_id to int if needed
+                    if user_id is not None:
+                        try:
+                            user_id = int(user_id) if isinstance(user_id, (str, int)) else None
+                        except (ValueError, TypeError):
+                            user_id = None
+                    # Note: For backfill scripts, we intentionally pass user_id=None if not available
+                    # to allow processing across all users when user_id is missing from historical data
+                    initial_aversion = im.get_initial_aversion(task_id, user_id=user_id) if hasattr(im, 'get_initial_aversion') else None
                     if initial_aversion is None:
                         # This might be the first time, set initial_aversion too
                         predicted['initial_aversion'] = backfill_value

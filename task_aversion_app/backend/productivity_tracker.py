@@ -140,30 +140,14 @@ class ProductivityTracker:
             }
         
         # Get task types
-        # Note: ProductivityTracker uses string user_ids (legacy), not integer user_ids
-        # For data isolation, we use CSV mode for unauthenticated/legacy users
-        # If database mode is required, user_id must be converted from string to int
-        try:
-            # Try to get tasks - will fail in database mode without proper user_id
-            # This is intentional: unauthenticated users should use CSV mode
-            tasks_df = self.task_manager.get_all(user_id=None)
-        except ValueError:
-            # Database mode requires user_id - fall back to CSV for legacy compatibility
-            # TODO: Convert string user_id to int user_id for proper database support
-            import os
-            original_use_csv = os.getenv('USE_CSV', '')
-            os.environ['USE_CSV'] = '1'  # Temporarily use CSV mode
+        # Convert string user_id to int if needed for database mode
+        user_id_int = None
+        if user_id:
             try:
-                # Recreate TaskManager in CSV mode
-                from .task_manager import TaskManager
-                csv_task_manager = TaskManager()
-                tasks_df = csv_task_manager.get_all(user_id=None)
-            finally:
-                # Restore original setting
-                if original_use_csv:
-                    os.environ['USE_CSV'] = original_use_csv
-                elif 'USE_CSV' in os.environ:
-                    del os.environ['USE_CSV']
+                user_id_int = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else user_id
+            except (ValueError, TypeError):
+                user_id_int = None
+        tasks_df = self.task_manager.get_all(user_id=user_id_int)
         task_type_map = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             for _, row in tasks_df.iterrows():
@@ -398,6 +382,13 @@ class ProductivityTracker:
                 (self.instance_manager.df['completed_at'].notna())
             ].copy()
             
+            # CRITICAL: Filter by user_id for data isolation
+            if user_id_int is not None and 'user_id' in completed.columns:
+                completed = completed[completed['user_id'] == user_id_int]
+            elif user_id_int is None:
+                print("[ProductivityTracker] WARNING: _get_completed_instances() called without valid user_id in CSV mode - returning empty for security")
+                return pd.DataFrame()
+            
             # Parse JSON fields (same pattern as analytics.py)
             if 'actual' in completed.columns:
                 completed['actual_dict'] = completed['actual'].apply(_safe_json)
@@ -434,7 +425,14 @@ class ProductivityTracker:
         ]
         
         # Get task types and filter to productive
-        tasks_df = self.task_manager.get_all()
+        # Convert string user_id to int if needed for database mode
+        user_id_int = None
+        if user_id:
+            try:
+                user_id_int = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else user_id
+            except (ValueError, TypeError):
+                user_id_int = None
+        tasks_df = self.task_manager.get_all(user_id=user_id_int)
         task_type_map = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             for _, row in tasks_df.iterrows():
@@ -617,30 +615,14 @@ class ProductivityTracker:
         analytics = Analytics()
         
         # Get task types
-        # Note: ProductivityTracker uses string user_ids (legacy), not integer user_ids
-        # For data isolation, we use CSV mode for unauthenticated/legacy users
-        # If database mode is required, user_id must be converted from string to int
-        try:
-            # Try to get tasks - will fail in database mode without proper user_id
-            # This is intentional: unauthenticated users should use CSV mode
-            tasks_df = self.task_manager.get_all(user_id=None)
-        except ValueError:
-            # Database mode requires user_id - fall back to CSV for legacy compatibility
-            # TODO: Convert string user_id to int user_id for proper database support
-            import os
-            original_use_csv = os.getenv('USE_CSV', '')
-            os.environ['USE_CSV'] = '1'  # Temporarily use CSV mode
+        # Convert string user_id to int if needed for database mode
+        user_id_int = None
+        if user_id:
             try:
-                # Recreate TaskManager in CSV mode
-                from .task_manager import TaskManager
-                csv_task_manager = TaskManager()
-                tasks_df = csv_task_manager.get_all(user_id=None)
-            finally:
-                # Restore original setting
-                if original_use_csv:
-                    os.environ['USE_CSV'] = original_use_csv
-                elif 'USE_CSV' in os.environ:
-                    del os.environ['USE_CSV']
+                user_id_int = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else user_id
+            except (ValueError, TypeError):
+                user_id_int = None
+        tasks_df = self.task_manager.get_all(user_id=user_id_int)
         task_type_map = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             for _, row in tasks_df.iterrows():
@@ -936,30 +918,14 @@ class ProductivityTracker:
             return []
         
         # Get task types
-        # Note: ProductivityTracker uses string user_ids (legacy), not integer user_ids
-        # For data isolation, we use CSV mode for unauthenticated/legacy users
-        # If database mode is required, user_id must be converted from string to int
-        try:
-            # Try to get tasks - will fail in database mode without proper user_id
-            # This is intentional: unauthenticated users should use CSV mode
-            tasks_df = self.task_manager.get_all(user_id=None)
-        except ValueError:
-            # Database mode requires user_id - fall back to CSV for legacy compatibility
-            # TODO: Convert string user_id to int user_id for proper database support
-            import os
-            original_use_csv = os.getenv('USE_CSV', '')
-            os.environ['USE_CSV'] = '1'  # Temporarily use CSV mode
+        # Convert string user_id to int if needed for database mode
+        user_id_int = None
+        if user_id:
             try:
-                # Recreate TaskManager in CSV mode
-                from .task_manager import TaskManager
-                csv_task_manager = TaskManager()
-                tasks_df = csv_task_manager.get_all(user_id=None)
-            finally:
-                # Restore original setting
-                if original_use_csv:
-                    os.environ['USE_CSV'] = original_use_csv
-                elif 'USE_CSV' in os.environ:
-                    del os.environ['USE_CSV']
+                user_id_int = int(user_id) if isinstance(user_id, str) and user_id.isdigit() else user_id
+            except (ValueError, TypeError):
+                user_id_int = None
+        tasks_df = self.task_manager.get_all(user_id=user_id_int)
         task_type_map = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             for _, row in tasks_df.iterrows():

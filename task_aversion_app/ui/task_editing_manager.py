@@ -1,3 +1,4 @@
+from typing import Optional
 from nicegui import ui
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
@@ -24,9 +25,16 @@ DEFAULT_CANCELLATION_CATEGORIES = {
 ITEMS_PER_PAGE = 25
 
 
-def get_all_cancellation_categories():
-    """Get all cancellation categories (default + custom)."""
-    custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
+def get_all_cancellation_categories(user_id: Optional[int] = None):
+    """Get all cancellation categories (default + custom).
+    
+    Args:
+        user_id: User ID to get custom categories for. If None, gets current user.
+    """
+    if user_id is None:
+        user_id = get_current_user()
+    user_id_str = str(user_id) if user_id is not None else DEFAULT_USER_ID
+    custom_categories = user_state.get_cancellation_categories(user_id_str)
     all_categories = {**DEFAULT_CANCELLATION_CATEGORIES, **custom_categories}
     return all_categories
 
@@ -179,7 +187,7 @@ def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback):
     with ui.dialog() as dialog, ui.card().classes("w-full max-w-md p-4 gap-3"):
         ui.label("Edit Cancelled Task").classes("text-lg font-semibold")
         
-        all_cats = get_all_cancellation_categories()
+        all_cats = get_all_cancellation_categories(user_id=user_id)
         edit_category_select = ui.select(
             options=all_cats,
             label='Cancellation Category',
@@ -288,7 +296,7 @@ def task_editing_manager_page():
                                             actual_data = {}
                                     
                                     category = actual_data.get('cancellation_category', 'other')
-                                    all_categories = get_all_cancellation_categories()
+                                    all_categories = get_all_cancellation_categories(user_id=user_id)
                                     category_label = all_categories.get(category, category or 'Other reason')
                                     
                                     ui.label(f"Category: {category_label}").classes("text-xs text-gray-600")

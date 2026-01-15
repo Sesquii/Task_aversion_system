@@ -153,13 +153,46 @@ class RoutineScheduler:
         task_id = task.get('task_id')
         task_name = task.get('name', 'Unknown Task')
         
+        # Get user_id from task for data isolation (extract early for filtering)
+        task_user_id = task.get('user_id')
+        if task_user_id is None:
+            # Task has no user_id - this shouldn't happen in database mode
+            # but we'll allow it for CSV mode compatibility
+            print(f"[RoutineScheduler] WARNING: Task {task_name} has no user_id, creating instance without user_id")
+        
         # Check if we already initialized this task today (avoid duplicates)
         # Look for instances created today for this task
         today_start = scheduled_time.replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = today_start + timedelta(days=1)
         
-        # Get all instances for this task
-        all_instances = self.instance_manager.df
+        # Get instances for this task, filtered by user_id for data isolation
+        # Use _load_instances or get_instance methods if available, otherwise filter DataFrame
+        try:
+            # Try to use a method that respects user_id filtering
+            if hasattr(self.instance_manager, '_load_instances'):
+                # Convert user_id to int if it's a string
+                user_id_int = None
+                if task_user_id is not None:
+                    try:
+                        user_id_int = int(task_user_id) if isinstance(task_user_id, str) and task_user_id.isdigit() else task_user_id
+                    except (ValueError, TypeError):
+                        pass
+                
+                all_instances = self.instance_manager._load_instances(user_id=user_id_int)
+            else:
+                # Fallback to DataFrame access with user_id filtering
+                self.instance_manager._reload()
+                all_instances = self.instance_manager.df
+                if task_user_id is not None and 'user_id' in all_instances.columns:
+                    # Filter by user_id for data isolation
+                    all_instances = all_instances[all_instances['user_id'] == task_user_id]
+        except Exception as e:
+            print(f"[RoutineScheduler] Error loading instances: {e}, falling back to direct DataFrame access")
+            self.instance_manager._reload()
+            all_instances = self.instance_manager.df
+            if task_user_id is not None and 'user_id' in all_instances.columns:
+                all_instances = all_instances[all_instances['user_id'] == task_user_id]
+        
         if not all_instances.empty:
             task_instances = all_instances[all_instances['task_id'] == task_id]
             
@@ -188,10 +221,11 @@ class RoutineScheduler:
             task_id=task_id,
             task_name=task_name,
             task_version=task.get('version') or 1,
-            predicted={'time_estimate_minutes': default_estimate}
+            predicted={'time_estimate_minutes': default_estimate},
+            user_id=task_user_id
         )
         
-        print(f"[RoutineScheduler] Initialized routine task: {task_name} (instance: {instance_id})")
+        print(f"[RoutineScheduler] Initialized routine task: {task_name} (instance: {instance_id}, user_id: {task_user_id})")
     
     def get_scheduled_tasks(self) -> List[dict]:
         """

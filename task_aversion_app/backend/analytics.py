@@ -1391,13 +1391,14 @@ class Analytics:
         except (KeyError, TypeError, ValueError, AttributeError):
             return 0.0
     
-    def _calculate_perseverance_persistence_stats(self, instances_df: Optional[pd.DataFrame] = None) -> Dict[str, Dict[str, float]]:
+    def _calculate_perseverance_persistence_stats(self, instances_df: Optional[pd.DataFrame] = None, user_id: Optional[int] = None) -> Dict[str, Dict[str, float]]:
         """Calculate statistics (mean, median, std) for perseverance and persistence factors.
         
         Used for dynamic threshold calculation and exponential bonus scaling.
         
         Args:
             instances_df: Optional DataFrame of instances. If None, loads from database/CSV.
+            user_id: Optional user_id for data isolation. If None, tries to get from auth.
         
         Returns:
             Dict with 'perseverance' and 'persistence' keys, each containing:
@@ -1408,9 +1409,8 @@ class Analytics:
         """
         try:
             if instances_df is None:
-                from .instance_manager import InstanceManager
-                instance_manager = InstanceManager()
-                instances_df = instance_manager.get_all_instances()
+                user_id = self._get_user_id(user_id)
+                instances_df = self._load_instances(user_id=user_id)
             
             # Filter completed instances
             if 'completed_at' not in instances_df.columns:
@@ -1502,7 +1502,7 @@ class Analytics:
             }
     
     def _detect_suddenly_challenging(self, row: pd.Series, task_id: str, 
-                                     lookback_instances: int = 10) -> Tuple[bool, float]:
+                                     lookback_instances: int = 10, user_id: Optional[int] = None) -> Tuple[bool, float]:
         """Detect if this task instance represents a sudden challenge on a routine task.
         
         A "suddenly challenging" scenario occurs when:
@@ -1514,6 +1514,7 @@ class Analytics:
             row: Current task instance row
             task_id: Task identifier
             lookback_instances: Number of recent instances to compare against
+            user_id: Optional user_id for data isolation. If None, tries to get from auth.
         
         Returns:
             Tuple of (is_suddenly_challenging: bool, challenge_bonus: float)
@@ -1532,9 +1533,8 @@ class Analytics:
                 return False, 0.0
             
             # Get recent instances of this task
-            from .instance_manager import InstanceManager
-            instance_manager = InstanceManager()
-            all_instances = instance_manager.get_all_instances()
+            user_id = self._get_user_id(user_id)
+            all_instances = self._load_instances(user_id=user_id)
             
             # Filter to this task, completed instances
             if 'completed_at' not in all_instances.columns:
@@ -1654,7 +1654,8 @@ class Analytics:
             
             # Get statistics (median-based)
             if stats_cache is None:
-                stats = self._calculate_perseverance_persistence_stats()
+                user_id_for_stats = self._get_user_id(None)
+                stats = self._calculate_perseverance_persistence_stats(user_id=user_id_for_stats)
             else:
                 stats = stats_cache
             
@@ -1740,7 +1741,8 @@ class Analytics:
                 load_bonus = min(0.10, combined_load / 1000.0)  # Up to 10% for load=100
                 
                 # Detect "suddenly challenging" scenario
-                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id)
+                user_id_for_detect = self._get_user_id(None)
+                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id, user_id=user_id_for_detect)
                 
                 # Calculate total bonus (all components)
                 total_bonus = base_synergy + synergy_component + load_bonus
@@ -1813,7 +1815,8 @@ class Analytics:
             
             # Get statistics (mean-based)
             if stats_cache is None:
-                stats = self._calculate_perseverance_persistence_stats()
+                user_id_for_stats = self._get_user_id(None)
+                stats = self._calculate_perseverance_persistence_stats(user_id=user_id_for_stats)
             else:
                 stats = stats_cache
             
@@ -1898,7 +1901,8 @@ class Analytics:
                 load_bonus = min(0.10, combined_load / 1000.0)  # Up to 10% for load=100
                 
                 # Detect "suddenly challenging" scenario
-                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id)
+                user_id_for_detect = self._get_user_id(None)
+                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id, user_id=user_id_for_detect)
                 
                 # Calculate total bonus (all components)
                 total_bonus = base_synergy + synergy_component + load_bonus
@@ -1979,7 +1983,8 @@ class Analytics:
             
             # Get statistics (HYBRID: persistence=median, perseverance=mean)
             if stats_cache is None:
-                stats = self._calculate_perseverance_persistence_stats()
+                user_id_for_stats = self._get_user_id(None)
+                stats = self._calculate_perseverance_persistence_stats(user_id=user_id_for_stats)
             else:
                 stats = stats_cache
             
@@ -2065,7 +2070,8 @@ class Analytics:
                 load_bonus = min(0.10, combined_load / 1000.0)  # Up to 10% for load=100
                 
                 # Detect "suddenly challenging" scenario - up to 25% bonus
-                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id)
+                user_id_for_detect = self._get_user_id(None)
+                is_sudden_challenge, challenge_bonus = self._detect_suddenly_challenging(row, task_id, user_id=user_id_for_detect)
                 
                 # Calculate total bonus (all components)
                 total_bonus = base_synergy + synergy_component + load_bonus
@@ -2204,9 +2210,18 @@ class Analytics:
             from .database import get_session, PopupTrigger
             
             task_manager = TaskManager()
-            # Note: user_id is string here ('default'), TaskManager expects int, so pass None
-            # This function uses string user_ids for legacy compatibility
-            tasks_df = task_manager.get_all(user_id=None)
+            # Convert string user_id to int for TaskManager.get_all()
+            # TaskManager expects int user_id for database mode
+            user_id_int = None
+            if isinstance(user_id, str) and user_id.isdigit():
+                user_id_int = int(user_id)
+            elif user_id != "default":
+                # Try to get current user if user_id is not "default"
+                user_id_int = self._get_user_id(None)
+            else:
+                # For "default", try to get current authenticated user
+                user_id_int = self._get_user_id(None)
+            tasks_df = task_manager.get_all(user_id=user_id_int)
             
             if tasks_df.empty:
                 return 1.0  # Default neutral factor if no tasks
@@ -3912,7 +3927,7 @@ class Analytics:
         # Load tasks to get task_type
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         if tasks_df.empty or 'task_type' not in tasks_df.columns:
             return {
@@ -4362,7 +4377,7 @@ class Analytics:
         # Load tasks to get task_type
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         if tasks_df.empty or 'task_type' not in tasks_df.columns:
             return {
@@ -4716,7 +4731,7 @@ class Analytics:
                 dashboard_metric_keys.append('counts.avg_daily_self_care_tasks')
         
         # Get dashboard metrics (selectively if requested)
-        metrics_data = self.get_dashboard_metrics(metrics=dashboard_metric_keys)
+        metrics_data = self.get_dashboard_metrics(metrics=dashboard_metric_keys, user_id=user_id)
         
         # Quality scores (0-100 range)
         if needs_metric('avg_stress_level') or needs_metric('avg_net_wellbeing') or needs_metric('avg_stress_efficiency') or needs_metric('avg_relief'):
@@ -4745,14 +4760,14 @@ class Analytics:
         
         # Relief summary (only if needed)
         if needs_metric('weekly_relief_score'):
-            relief_summary = self.get_relief_summary()
+            relief_summary = self.get_relief_summary(user_id=user_id)
             # Normalize weekly relief to 0-100 (assuming typical range 0-1000)
             weekly_relief = float(relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0))
             scores['weekly_relief_score'] = min(100.0, weekly_relief / 10.0)  # Scale down if needed
         
         # Time tracking consistency score (only if needed)
         if needs_metric('tracking_consistency_score'):
-            tracking_data = self.calculate_time_tracking_consistency_score(days=days)
+            tracking_data = self.calculate_time_tracking_consistency_score(days=days, user_id=user_id)
             scores['tracking_consistency_score'] = float(tracking_data.get('tracking_consistency_score', 0.0))
         
         # Counts (normalize to 0-100)
@@ -4825,7 +4840,17 @@ class Analytics:
                     # #endregion
                     from .instance_manager import InstanceManager
                     instance_manager = InstanceManager()
-                    state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    # Convert string user_id to int for database queries
+                    user_id_int = None
+                    if isinstance(user_id, str) and user_id.isdigit():
+                        user_id_int = int(user_id)
+                    elif user_id != "default":
+                        # Try to get current user if user_id is not "default"
+                        user_id_int = self._get_user_id(None)
+                    else:
+                        # For "default", try to get current authenticated user
+                        user_id_int = self._get_user_id(None)
+                    state['instances'] = instance_manager.list_recent_completed(limit=50, user_id=user_id_int)
                     # #region agent log
                     load_instances_duration = time_module.perf_counter() - load_instances_start
                     try:
@@ -4861,7 +4886,17 @@ class Analytics:
                     # #endregion
                     from .instance_manager import InstanceManager
                     instance_manager = InstanceManager()
-                    state['instances'] = instance_manager.list_recent_completed(limit=50)
+                    # Convert string user_id to int for database queries
+                    user_id_int = None
+                    if isinstance(user_id, str) and user_id.isdigit():
+                        user_id_int = int(user_id)
+                    elif user_id != "default":
+                        # Try to get current user if user_id is not "default"
+                        user_id_int = self._get_user_id(None)
+                    else:
+                        # For "default", try to get current authenticated user
+                        user_id_int = self._get_user_id(None)
+                    state['instances'] = instance_manager.list_recent_completed(limit=50, user_id=user_id_int)
                     # #region agent log
                     load_instances_duration = time_module.perf_counter() - load_instances_start
                     try:
@@ -4885,7 +4920,17 @@ class Analytics:
                 # #endregion
                 from .instance_manager import InstanceManager
                 instance_manager = InstanceManager()
-                state['instances'] = instance_manager.list_recent_completed(limit=50)
+                # Convert string user_id to int for list_recent_completed()
+                user_id_int = None
+                if isinstance(user_id, str) and user_id.isdigit():
+                    user_id_int = int(user_id)
+                elif user_id != "default":
+                    # Try to get current user if user_id is not "default"
+                    user_id_int = self._get_user_id(None)
+                else:
+                    # For "default", try to get current authenticated user
+                    user_id_int = self._get_user_id(None)
+                state['instances'] = instance_manager.list_recent_completed(limit=50, user_id=user_id_int)
                 # #region agent log
                 load_instances_duration = time_module.perf_counter() - load_instances_start
                 try:
@@ -5173,7 +5218,8 @@ class Analytics:
         clustering_score = 0.5  # Default neutral
         
         try:
-            df = self._load_instances()
+            user_id = self._get_user_id(None)
+            df = self._load_instances(user_id=user_id)
             if not df.empty:
                 # Get completed tasks only
                 completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5221,7 +5267,8 @@ class Analytics:
         volume_score = 0.5  # Default neutral
         
         try:
-            df = self._load_instances()
+            user_id = self._get_user_id(None)
+            df = self._load_instances(user_id=user_id)
             if not df.empty:
                 # Get completed tasks only
                 completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5261,7 +5308,8 @@ class Analytics:
         
         try:
             if task_id:
-                df = self._load_instances()
+                user_id = self._get_user_id(None)
+                df = self._load_instances(user_id=user_id)
                 if not df.empty:
                     # Get completed tasks only
                     completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5298,7 +5346,8 @@ class Analytics:
         acceleration_score = 0.5  # Default neutral
         
         try:
-            df = self._load_instances()
+            user_id = self._get_user_id(None)
+            df = self._load_instances(user_id=user_id)
             if not df.empty and duration_minutes:
                 # Get completed tasks only
                 completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5497,7 +5546,8 @@ class Analytics:
                     completion_count = task_completion_counts[task_id]
                 else:
                     # Calculate from data
-                    df = self._load_instances()
+                    user_id = self._get_user_id(None)
+                    df = self._load_instances(user_id=user_id)
                     if not df.empty:
                         # Get completed tasks only
                         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5537,7 +5587,8 @@ class Analytics:
         
         try:
             if task_id:
-                df = self._load_instances()
+                user_id = self._get_user_id(None)
+                df = self._load_instances(user_id=user_id)
                 if not df.empty:
                     # Get completed tasks only
                     completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5731,7 +5782,8 @@ class Analytics:
                     completion_count = task_completion_counts[task_id]
                 else:
                     # Calculate from data
-                    df = self._load_instances()
+                    user_id = self._get_user_id(None)
+                    df = self._load_instances(user_id=user_id)
                     if not df.empty:
                         # Get completed tasks only
                         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5772,7 +5824,8 @@ class Analytics:
         
         try:
             if task_id:
-                df = self._load_instances()
+                user_id = self._get_user_id(None)
+                df = self._load_instances(user_id=user_id)
                 if not df.empty:
                     # Get completed tasks only
                     completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -6639,7 +6692,7 @@ class Analytics:
         daily_scores_list = []
         for i in range(days):
             target_date = start_date + timedelta(days=i)
-            daily_scores = self.calculate_daily_scores(target_date=target_date)
+            daily_scores = self.calculate_daily_scores(target_date=target_date, user_id=user_id)
             if daily_scores.get('productivity_score', 0) > 0 or \
                daily_scores.get('execution_score', 0) > 0 or \
                daily_scores.get('grit_score', 0) > 0:
@@ -7584,7 +7637,7 @@ class Analytics:
             if 'tasks_df' not in locals():
                 from .task_manager import TaskManager
                 task_manager = TaskManager()
-                tasks_df = task_manager.get_all()
+                tasks_df = task_manager.get_all(user_id=user_id)
             if not tasks_df.empty and 'task_type' in tasks_df.columns:
                 completed = completed.merge(
                     tasks_df[['task_id', 'task_type']],
@@ -7686,14 +7739,16 @@ class Analytics:
         goal_hours_per_week = None
         weekly_productive_hours = None
         try:
-            goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+            # Convert user_id to string for UserStateManager (expects str)
+            user_id_str = str(user_id) if user_id is not None else "default_user"
+            goal_settings = UserStateManager().get_productivity_goal_settings(user_id_str)
             goal_hours_per_week = goal_settings.get('goal_hours_per_week')
             if goal_hours_per_week:
                 goal_hours_per_week = float(goal_hours_per_week)
                 # Calculate weekly productive hours (Work + Self Care only)
                 from .productivity_tracker import ProductivityTracker
                 tracker = ProductivityTracker()
-                weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                weekly_data = tracker.calculate_weekly_productivity_hours(user_id_str)
                 weekly_productive_hours = weekly_data.get('total_hours', 0.0)
                 if weekly_productive_hours <= 0:
                     weekly_productive_hours = None
@@ -7872,7 +7927,8 @@ class Analytics:
         except: pass
         # #endregion
         
-        df = self._load_instances()
+        user_id = self._get_user_id(None)
+        df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8033,7 +8089,8 @@ class Analytics:
             Dict with 'dates' (list of date strings), 'relief_points' (list of relief points per day),
             'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
         """
-        df = self._load_instances()
+        user_id = self._get_user_id(None)
+        df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8149,7 +8206,8 @@ class Analytics:
         except: pass
         # #endregion
         
-        df = self._load_instances()
+        user_id = self._get_user_id(None)
+        df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8396,7 +8454,8 @@ class Analytics:
 
     def get_efficiency_summary(self) -> Dict[str, any]:
         """Calculate efficiency statistics for completed tasks."""
-        df = self._load_instances()
+        user_id = self._get_user_id(None)
+        df = self._load_instances(user_id=user_id)
         
         if df.empty:
             return {
@@ -8469,7 +8528,8 @@ class Analytics:
         Returns average relief points (actual - expected) per task.
         Negative values indicate tasks that consistently underdeliver on expected relief.
         """
-        df = self._load_instances()
+        user_id = self._get_user_id(None)
+        df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8577,7 +8637,8 @@ class Analytics:
         if metric_key in metric_routes:
             return metric_routes[metric_key](days=days)
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8698,7 +8759,8 @@ class Analytics:
         Returns {task_id: avg_efficiency_score}
         Useful for recommending tasks that have historically been efficient.
         """
-        df = self._load_instances()
+        user_id = self._get_user_id(None)
+        df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8738,7 +8800,8 @@ class Analytics:
         from datetime import datetime, timedelta
         from collections import Counter
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8838,7 +8901,8 @@ class Analytics:
         from datetime import datetime, timedelta
         from collections import Counter
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9035,7 +9099,7 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_stress_level_history(self, days: int = 90) -> Dict[str, any]:
+    def get_stress_level_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily stress_level data for trend analysis.
         
         Optimized method that extracts stress_level directly from dataframe columns
@@ -9043,6 +9107,7 @@ class Analytics:
         
         Args:
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of values per day),
@@ -9050,7 +9115,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty or 'stress_level' not in completed.columns:
@@ -9125,13 +9191,14 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_net_wellbeing_history(self, days: int = 90) -> Dict[str, any]:
+    def get_net_wellbeing_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily net_wellbeing data for trend analysis.
         
         Optimized method that extracts net_wellbeing directly from dataframe columns.
         
         Args:
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of values per day),
@@ -9139,7 +9206,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty or 'net_wellbeing' not in completed.columns:
@@ -9214,13 +9282,14 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_net_wellbeing_normalized_history(self, days: int = 90) -> Dict[str, any]:
+    def get_net_wellbeing_normalized_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily net_wellbeing_normalized data for trend analysis.
         
         Optimized method that extracts net_wellbeing_normalized directly from dataframe columns.
         
         Args:
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of values per day),
@@ -9228,7 +9297,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty or 'net_wellbeing_normalized' not in completed.columns:
@@ -9317,7 +9387,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9411,13 +9482,14 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_behavioral_score_history(self, days: int = 90) -> Dict[str, any]:
+    def get_behavioral_score_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily behavioral_score data for trend analysis.
         
         Optimized method that extracts behavioral_score directly from dataframe columns.
         
         Args:
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of values per day),
@@ -9425,7 +9497,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty or 'behavioral_score' not in completed.columns:
@@ -9500,13 +9573,14 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_stress_efficiency_history(self, days: int = 90) -> Dict[str, any]:
+    def get_stress_efficiency_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily stress_efficiency data for trend analysis.
         
         Optimized method that extracts stress_efficiency directly from dataframe columns.
         
         Args:
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of values per day),
@@ -9514,7 +9588,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty or 'stress_efficiency' not in completed.columns:
@@ -9589,13 +9664,14 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_expected_relief_history(self, days: int = 90) -> Dict[str, any]:
+    def get_expected_relief_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily expected_relief data for trend analysis.
         
         Optimized method that extracts expected_relief directly from dataframe columns.
         
         Args:
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of values per day),
@@ -9603,7 +9679,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty or 'expected_relief' not in completed.columns:
@@ -9692,7 +9769,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9788,7 +9866,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9883,7 +9962,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9978,7 +10058,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10075,7 +10156,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10188,7 +10270,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10301,7 +10384,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10394,7 +10478,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10483,7 +10568,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10572,7 +10658,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10661,7 +10748,8 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
-        df = self._load_instances(completed_only=True)
+        user_id = self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -10756,12 +10844,13 @@ class Analytics:
             'three_month_average': three_month_average,
         }
 
-    def get_task_performance_ranking(self, metric: str = 'relief', top_n: int = 5) -> List[Dict[str, any]]:
+    def get_task_performance_ranking(self, metric: str = 'relief', top_n: int = 5, user_id: Optional[int] = None) -> List[Dict[str, any]]:
         """Get top/bottom performing tasks by various metrics.
         
         Args:
             metric: 'relief', 'stress_efficiency', 'behavioral_score', 'stress_level'
             top_n: Number of top tasks to return
+            user_id: User ID for data isolation
         
         Returns:
             List of dicts with task_id, task_name, metric_value, and count
@@ -10770,17 +10859,20 @@ class Analytics:
         import copy
         start = time.perf_counter()
         
-        # Check cache (keyed by metric and top_n)
+        # Get user_id if not provided
+        user_id = self._get_user_id(user_id)
+        
+        # Check cache (keyed by metric, top_n, and user_id)
+        # TODO: Make cache user-specific
         cache_key = (metric, top_n)
         current_time = time.time()
-        if cache_key in self._rankings_cache:
+        if (user_id is None and cache_key in self._rankings_cache):
             cached_result, cached_time = self._rankings_cache[cache_key]
             if cached_time is not None and (current_time - cached_time) < self._cache_ttl_seconds:
                 duration = (time.perf_counter() - start) * 1000
                 print(f"[Analytics] get_task_performance_ranking (cached): {duration:.2f}ms (metric: {metric}, top_n: {top_n})")
                 return copy.deepcopy(cached_result)
-        
-        df = self._load_instances()
+        df = self._load_instances(user_id=user_id)
         
         # Filter completed instances - check for column existence and use fallback if needed
         if 'completed_at' in df.columns:
@@ -10855,11 +10947,12 @@ class Analytics:
         print(f"[Analytics] get_task_performance_ranking: {duration:.2f}ms (metric: {metric}, top_n: {top_n})")
         return result
 
-    def get_stress_efficiency_leaderboard(self, top_n: int = 10) -> List[Dict[str, any]]:
+    def get_stress_efficiency_leaderboard(self, top_n: int = 10, user_id: Optional[int] = None) -> List[Dict[str, any]]:
         """Get tasks with highest stress efficiency (relief per unit of stress).
         
         Args:
             top_n: Number of top tasks to return
+            user_id: Optional user ID for data isolation
         
         Returns:
             List of dicts with task_id, task_name, stress_efficiency, avg_relief, avg_stress, and count
@@ -10867,8 +10960,11 @@ class Analytics:
         import time
         start = time.perf_counter()
         
-        # Check cache (keyed by top_n)
+        user_id = self._get_user_id(user_id)
+        
+        # Check cache (keyed by top_n and user_id)
         current_time = time.time()
+        cache_key = f"{user_id}_{top_n}"
         if (self._leaderboard_cache is not None and 
             self._leaderboard_cache_time is not None and
             self._leaderboard_cache_top_n == top_n and
@@ -10877,7 +10973,7 @@ class Analytics:
             print(f"[Analytics] get_stress_efficiency_leaderboard (cached): {duration:.2f}ms (top_n: {top_n})")
             return copy.deepcopy(self._leaderboard_cache)
         
-        df = self._load_instances()
+        df = self._load_instances(user_id=user_id)
         
         # Check if DataFrame is empty or missing required columns
         if df.empty or 'completed_at' not in df.columns:
@@ -10989,7 +11085,7 @@ class Analytics:
             return []
         
         # Load historical instance data to inform recommendations
-        instances_df = self._load_instances()
+        instances_df = self._load_instances(user_id=user_id)
         
         # Get historical averages per task from completed instances
         completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy() if not instances_df.empty else pd.DataFrame()
@@ -11162,7 +11258,7 @@ class Analytics:
             return []
         
         # Load historical instance data to inform recommendations
-        instances_df = self._load_instances()
+        instances_df = self._load_instances(user_id=user_id)
         
         # Get historical averages per task from completed instances
         completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy() if not instances_df.empty else pd.DataFrame()
@@ -11863,20 +11959,23 @@ class Analytics:
     # ------------------------------------------------------------------
     # Analytics datasets for charts
     # ------------------------------------------------------------------
-    def trend_series(self) -> pd.DataFrame:
+    def trend_series(self, user_id: Optional[int] = None) -> pd.DataFrame:
         import time
         start = time.perf_counter()
         
-        # Check cache
+        # Get user_id if not provided
+        user_id = self._get_user_id(user_id)
+        
+        # Check cache (cache key should include user_id, but for now we'll skip cache if user_id is provided)
+        # TODO: Make cache user-specific
         current_time = time.time()
-        if (self._trend_series_cache is not None and 
+        if (user_id is None and self._trend_series_cache is not None and 
             self._trend_series_cache_time is not None and
             (current_time - self._trend_series_cache_time) < self._cache_ttl_seconds):
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] trend_series (cached): {duration:.2f}ms")
             return self._trend_series_cache.copy()
-        
-        df = self._load_instances()
+        df = self._load_instances(user_id=user_id)
         if df.empty:
             result = pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
             self._trend_series_cache = result.copy()
@@ -11924,9 +12023,11 @@ class Analytics:
         print(f"[Analytics] trend_series: {duration:.2f}ms")
         return result
 
-    def attribute_distribution(self) -> pd.DataFrame:
+    def attribute_distribution(self, user_id: Optional[int] = None) -> pd.DataFrame:
         import time
         start = time.perf_counter()
+        
+        user_id = self._get_user_id(user_id)
         
         # Check cache
         current_time = time.time()
@@ -11937,7 +12038,7 @@ class Analytics:
             print(f"[Analytics] attribute_distribution (cached): {duration:.2f}ms")
             return self._attribute_distribution_cache.copy()
         
-        df = self._load_instances()
+        df = self._load_instances(user_id=user_id)
         if df.empty:
             result = pd.DataFrame(columns=['attribute', 'value'])
             self._attribute_distribution_cache = result.copy()
@@ -12112,13 +12213,15 @@ class Analytics:
             goal_hours_per_week = None
             weekly_productive_hours = None
             try:
-                goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+                # Convert user_id to string for UserStateManager (expects str)
+                user_id_str = str(user_id) if user_id is not None else "default_user"
+                goal_settings = UserStateManager().get_productivity_goal_settings(user_id_str)
                 goal_hours_per_week = goal_settings.get('goal_hours_per_week')
                 if goal_hours_per_week:
                     goal_hours_per_week = float(goal_hours_per_week)
                     from .productivity_tracker import ProductivityTracker
                     tracker = ProductivityTracker()
-                    weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                    weekly_data = tracker.calculate_weekly_productivity_hours(user_id_str)
                     weekly_productive_hours = weekly_data.get('total_hours', 0.0)
                     if weekly_productive_hours <= 0:
                         weekly_productive_hours = None
@@ -12409,7 +12512,7 @@ class Analytics:
             # But ensure they exist by checking the dataframe
             if attribute_key not in completed.columns:
                 # Recalculate if missing (shouldn't happen, but safety check)
-                completed = self._load_instances()
+                completed = self._load_instances(user_id=user_id)
                 completed = completed[completed['completed_at'].astype(str).str.len() > 0].copy()
                 completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
                 completed = completed[completed['completed_at_dt'].notna()]
@@ -12458,6 +12561,7 @@ class Analytics:
         aggregation: str = 'mean',
         days: int = 90,
         normalize: bool = False,
+        user_id: Optional[int] = None,
     ) -> Dict[str, Dict[str, any]]:
         """Return trends for multiple attributes; optionally normalize each series (min-max)."""
         import time
@@ -12465,7 +12569,7 @@ class Analytics:
         trends = {}
         attribute_keys = attribute_keys or []
         for key in attribute_keys:
-            data = self.get_attribute_trends(key, aggregation, days)
+            data = self.get_attribute_trends(key, aggregation, days, user_id=user_id)
             values = data.get('values') or []
             if normalize and values:
                 v_min = min(values)
@@ -12482,13 +12586,18 @@ class Analytics:
         print(f"[Analytics] get_multi_attribute_trends: {duration:.2f}ms (attributes: {len(attribute_keys)})")
         return trends
 
-    def get_stress_dimension_data(self) -> Dict[str, Dict[str, float]]:
+    def get_stress_dimension_data(self, user_id: Optional[int] = None) -> Dict[str, Dict[str, float]]:
         """
         Calculate stress dimension values for cognitive, emotional, and physical stress.
         Returns dictionary with totals, 7-day averages, and daily values for each dimension.
+        
+        Args:
+            user_id: Optional user ID for data isolation
         """
         import time
         start = time.perf_counter()
+        
+        user_id = self._get_user_id(user_id)
         
         # Check cache
         current_time = time.time()
@@ -12500,7 +12609,7 @@ class Analytics:
             # Deep copy to prevent mutation
             return copy.deepcopy(self._stress_dimension_cache)
         
-        df = self._load_instances()
+        df = self._load_instances(user_id=user_id)
         
         # Check if DataFrame is empty or missing required column
         if df.empty or 'completed_at' not in df.columns:
@@ -12662,9 +12771,10 @@ class Analytics:
             'meta': meta.get(method, {}),
         }
 
-    def find_threshold_relationships(self, dependent_var: str, independent_var: str, bins: int = 10) -> Dict[str, any]:
+    def find_threshold_relationships(self, dependent_var: str, independent_var: str, bins: int = 10, user_id: Optional[int] = None) -> Dict[str, any]:
         """Bin independent variable and summarize dependent averages to surface threshold ranges."""
-        df = self._load_instances()
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         if completed.empty or dependent_var not in completed.columns or independent_var not in completed.columns:
             return {'bins': [], 'best_max': None, 'best_min': None}
@@ -12836,13 +12946,15 @@ class Analytics:
             goal_hours_per_week = None
             weekly_productive_hours = None
             try:
-                goal_settings = UserStateManager().get_productivity_goal_settings("default_user")
+                # Convert user_id to string for UserStateManager (expects str)
+                user_id_str = str(user_id) if user_id is not None else "default_user"
+                goal_settings = UserStateManager().get_productivity_goal_settings(user_id_str)
                 goal_hours_per_week = goal_settings.get('goal_hours_per_week')
                 if goal_hours_per_week:
                     goal_hours_per_week = float(goal_hours_per_week)
                     from .productivity_tracker import ProductivityTracker
                     tracker = ProductivityTracker()
-                    weekly_data = tracker.calculate_weekly_productivity_hours("default_user")
+                    weekly_data = tracker.calculate_weekly_productivity_hours(user_id_str)
                     weekly_productive_hours = weekly_data.get('total_hours', 0.0)
                     if weekly_productive_hours <= 0:
                         weekly_productive_hours = None
@@ -12994,8 +13106,11 @@ class Analytics:
             result['time_data'] = time_data
         return result
 
-    def get_emotional_flow_data(self) -> Dict[str, any]:
+    def get_emotional_flow_data(self, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get comprehensive emotional flow data for analytics.
+        
+        Args:
+            user_id: User ID for data isolation
         
         Returns:
             Dictionary containing:
@@ -13010,7 +13125,8 @@ class Analytics:
             - spikes: List of tasks with emotional spikes
             - correlations: Correlation data for emotions with other metrics
         """
-        df = self._load_instances()
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(user_id=user_id)
         if df.empty:
             return {
                 'avg_emotional_load': 0,
@@ -13219,7 +13335,7 @@ class Analytics:
     # Batched methods for performance optimization (Phase 2)
     # ------------------------------------------------------------------
     
-    def get_analytics_page_data(self, days: int = 7) -> Dict[str, any]:
+    def get_analytics_page_data(self, days: int = 7, user_id: Optional[int] = None) -> Dict[str, any]:
         """Batched method to get all main analytics page data in one call.
         
         Combines:
@@ -13231,6 +13347,7 @@ class Analytics:
         
         Args:
             days: Number of days for time tracking consistency (default 7)
+            user_id: User ID for data isolation
         
         Returns:
             Dict with keys: 'dashboard_metrics', 'relief_summary', 'time_tracking'
@@ -13238,10 +13355,13 @@ class Analytics:
         import time
         start = time.perf_counter()
         
+        # Get user_id if not provided
+        user_id = self._get_user_id(user_id)
+        
         # Get all three datasets (they may use caching internally)
-        dashboard_metrics = self.get_dashboard_metrics()
-        relief_summary = self.get_relief_summary()
-        time_tracking = self.calculate_time_tracking_consistency_score(days=days)
+        dashboard_metrics = self.get_dashboard_metrics(user_id=user_id)
+        relief_summary = self.get_relief_summary(user_id=user_id)
+        time_tracking = self.calculate_time_tracking_consistency_score(days=days, user_id=user_id)
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_analytics_page_data (batched): {duration:.2f}ms")
@@ -13252,7 +13372,7 @@ class Analytics:
             'time_tracking': time_tracking,
         }
     
-    def get_chart_data(self) -> Dict[str, any]:
+    def get_chart_data(self, user_id: Optional[int] = None) -> Dict[str, any]:
         """Batched method to get all chart data in one call.
         
         Combines:
@@ -13262,16 +13382,22 @@ class Analytics:
         
         This reduces multiple sequential calls to a single batched call.
         
+        Args:
+            user_id: User ID for data isolation
+        
         Returns:
             Dict with keys: 'trend_series', 'attribute_distribution', 'stress_dimension_data'
         """
         import time
         start = time.perf_counter()
         
+        # Get user_id if not provided
+        user_id = self._get_user_id(user_id)
+        
         # Get all three chart datasets
-        trend_series_df = self.trend_series()
-        attribute_dist_df = self.attribute_distribution()
-        stress_dimension = self.get_stress_dimension_data()
+        trend_series_df = self.trend_series(user_id=user_id)
+        attribute_dist_df = self.attribute_distribution(user_id=user_id)
+        stress_dimension = self.get_stress_dimension_data(user_id=user_id)
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_chart_data (batched): {duration:.2f}ms")
@@ -13282,7 +13408,7 @@ class Analytics:
             'stress_dimension_data': stress_dimension,
         }
     
-    def get_rankings_data(self, top_n: int = 5, leaderboard_n: int = 10) -> Dict[str, List[Dict[str, any]]]:
+    def get_rankings_data(self, top_n: int = 5, leaderboard_n: int = 10, user_id: Optional[int] = None) -> Dict[str, List[Dict[str, any]]]:
         """Batched method to get all task ranking data in one call.
         
         Combines:
@@ -13294,6 +13420,7 @@ class Analytics:
         Args:
             top_n: Number of top tasks for each ranking (default 5)
             leaderboard_n: Number of tasks for stress efficiency leaderboard (default 10)
+            user_id: User ID for data isolation
         
         Returns:
             Dict with keys:
@@ -13306,12 +13433,15 @@ class Analytics:
         import time
         start = time.perf_counter()
         
+        # Get user_id if not provided
+        user_id = self._get_user_id(user_id)
+        
         # Get all rankings in one batch
-        relief_ranking = self.get_task_performance_ranking('relief', top_n=top_n)
-        stress_efficiency_ranking = self.get_task_performance_ranking('stress_efficiency', top_n=top_n)
-        behavioral_ranking = self.get_task_performance_ranking('behavioral_score', top_n=top_n)
-        stress_level_ranking = self.get_task_performance_ranking('stress_level', top_n=top_n)
-        leaderboard = self.get_stress_efficiency_leaderboard(top_n=leaderboard_n)
+        relief_ranking = self.get_task_performance_ranking('relief', top_n=top_n, user_id=user_id)
+        stress_efficiency_ranking = self.get_task_performance_ranking('stress_efficiency', top_n=top_n, user_id=user_id)
+        behavioral_ranking = self.get_task_performance_ranking('behavioral_score', top_n=top_n, user_id=user_id)
+        stress_level_ranking = self.get_task_performance_ranking('stress_level', top_n=top_n, user_id=user_id)
+        leaderboard = self.get_stress_efficiency_leaderboard(top_n=leaderboard_n, user_id=user_id)
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_rankings_data (batched): {duration:.2f}ms")

@@ -30,9 +30,14 @@ def composite_score_weights_page():
     ui.label("Composite Score Weights").classes("text-2xl font-bold mb-2")
     ui.label("Adjust the importance of each component in your composite score. Weights are automatically normalized.").classes("text-gray-600 mb-4")
     
+    # Get current user_id
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
     # Get current weights
-    current_weights = user_state.get_score_weights(DEFAULT_USER_ID) or DEFAULT_WEIGHTS.copy()
-    all_scores = analytics.get_all_scores_for_composite(days=7)
+    current_weights = user_state.get_score_weights(user_id_str) or DEFAULT_WEIGHTS.copy()
+    all_scores = analytics.get_all_scores_for_composite(days=7, user_id=current_user_id)
     
     weight_inputs = {}
     

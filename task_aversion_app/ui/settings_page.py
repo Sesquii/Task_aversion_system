@@ -24,7 +24,11 @@ DEFAULT_CANCELLATION_CATEGORIES = {
 
 def get_all_cancellation_categories():
     """Get all cancellation categories (default + custom)."""
-    custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
+    custom_categories = user_state.get_cancellation_categories(user_id_str)
     all_categories = {**DEFAULT_CANCELLATION_CATEGORIES, **custom_categories}
     return all_categories
 
@@ -85,7 +89,9 @@ def settings_page():
         with ui.card().classes("p-3 mt-2 bg-gray-50"):
             ui.label("Productivity Goal Hours").classes("text-sm font-semibold mb-2")
             
-            goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+            # Get user_id for data isolation
+            current_user_id_str = str(user_id) if user_id is not None else DEFAULT_USER_ID
+            goal_settings = user_state.get_productivity_goal_settings(current_user_id_str)
             current_goal = goal_settings.get('goal_hours_per_week', 30.0)
             
             goal_input = ui.number(
@@ -107,9 +113,9 @@ def settings_page():
                     'goal_hours_per_week': new_goal
                 }
                 # Preserve other settings
-                existing = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+                existing = user_state.get_productivity_goal_settings(current_user_id_str)
                 settings.update(existing)
-                user_state.set_productivity_goal_settings(DEFAULT_USER_ID, settings)
+                user_state.set_productivity_goal_settings(current_user_id_str, settings)
                 ui.notify("Goal hours saved!", color="positive")
                 # Update display
                 daily_target_new = new_goal / 5.0

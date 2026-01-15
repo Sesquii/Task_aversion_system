@@ -148,7 +148,8 @@ class GoalRecommendationAnalyzer:
             return {}
         
         # Get task information
-        tasks_df = self.task_manager.get_all()
+        # Note: Analysis script - using user_id=None for analysis across all data
+        tasks_df = self.task_manager.get_all(user_id=None)
         task_info = {}
         if not tasks_df.empty:
             for _, task_row in tasks_df.iterrows():

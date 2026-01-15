@@ -192,9 +192,9 @@ def goals_page(request: Request = None):
                                         # Calculate baseline from historical data
                                         try:
                                             # Get completed instances for this task
-                                            from backend.instance_manager import InstanceManager
-                                            im = InstanceManager()
-                                            instances = im.get_all_instances()
+                                            from backend.analytics import Analytics
+                                            analytics_instance = Analytics()
+                                            instances = analytics_instance._load_instances(user_id=current_user_id)
                                             task_instances = instances[instances['task_id'] == task_id]
                                             completed = task_instances[task_instances['status'] == 'completed']
                                             

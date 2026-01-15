@@ -186,7 +186,7 @@ class TaskManager:
         if self.use_db:
             result = self._get_task_db(task_id, user_id)
         else:
-            result = self._get_task_csv(task_id)
+            result = self._get_task_csv(task_id, user_id)
         
         # Store in per-task cache
         if result is not None:
@@ -194,11 +194,20 @@ class TaskManager:
         
         return result
     
-    def _get_task_csv(self, task_id):
+    def _get_task_csv(self, task_id, user_id: Optional[int] = None):
         """CSV-specific get_task."""
-        with perf_logger.operation("_get_task_csv", task_id=task_id):
+        with perf_logger.operation("_get_task_csv", task_id=task_id, user_id=user_id):
             self._reload_csv()
             rows = self.df[self.df['task_id'] == task_id]
+            # Filter by user_id for data isolation if provided
+            if user_id is not None and 'user_id' in rows.columns:
+                # Convert user_id to string for CSV comparison (CSV stores as string)
+                user_id_str = str(user_id)
+                rows = rows[rows['user_id'] == user_id_str]
+            elif user_id is not None and 'user_id' not in rows.columns:
+                # CSV doesn't have user_id column - return None for security (data isolation)
+                print(f"[TaskManager] WARNING: CSV mode - user_id filtering requested but 'user_id' column not found. Returning None for data isolation.")
+                return None
             return rows.iloc[0].to_dict() if not rows.empty else None
     
     def _get_task_db(self, task_id, user_id: Optional[int] = None):
@@ -220,7 +229,7 @@ class TaskManager:
             print(f"[TaskManager] Database error in get_task: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._get_task_csv(task_id)
+            return self._get_task_csv(task_id, user_id)
 
     def list_tasks(self, user_id: Optional[int] = None) -> List[str]:
         """Return list of task names. Works with both CSV and database.
@@ -318,7 +327,7 @@ class TaskManager:
         if self.use_db:
             result = self._get_all_db(user_id)
         else:
-            result = self._get_all_csv()
+            result = self._get_all_csv(user_id)
         
         # Store in cache
         setattr(self, f'_tasks_all_cache_{cache_key}', result.copy())
@@ -326,10 +335,20 @@ class TaskManager:
         
         return result
     
-    def _get_all_csv(self):
+    def _get_all_csv(self, user_id: Optional[int] = None):
         """CSV-specific get_all."""
         self._reload_csv()
-        return self.df.copy()
+        df = self.df.copy()
+        # Filter by user_id for data isolation if provided
+        if user_id is not None and 'user_id' in df.columns:
+            # Convert user_id to string for CSV comparison (CSV stores as string)
+            user_id_str = str(user_id)
+            df = df[df['user_id'] == user_id_str]
+        elif user_id is not None and 'user_id' not in df.columns:
+            # CSV doesn't have user_id column - return empty DataFrame for security (data isolation)
+            print(f"[TaskManager] WARNING: CSV mode - user_id filtering requested but 'user_id' column not found. Returning empty DataFrame for data isolation.")
+            return pd.DataFrame(columns=df.columns)
+        return df
     
     def _get_all_db(self, user_id: int):
         """Database-specific get_all. Returns DataFrame for compatibility.
@@ -356,7 +375,7 @@ class TaskManager:
             print(f"[TaskManager] Database error in get_all: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._get_all_csv()
+            return self._get_all_csv(user_id)
 
     def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None):
         """
@@ -502,14 +521,29 @@ class TaskManager:
         if self.use_db:
             return self._update_task_db(task_id, user_id, **kwargs)
         else:
-            return self._update_task_csv(task_id, **kwargs)
+            return self._update_task_csv(task_id, user_id, **kwargs)
     
-    def _update_task_csv(self, task_id, **kwargs):
+    def _update_task_csv(self, task_id, user_id: Optional[int] = None, **kwargs):
         """CSV-specific update_task."""
         self._reload_csv()
-        if task_id not in self.df['task_id'].values:
+        matches = self.df.index[self.df['task_id'] == task_id]
+        if len(matches) == 0:
             return False
-        idx = self.df.index[self.df['task_id'] == task_id][0]
+        
+        # Filter by user_id for data isolation if provided
+        if user_id is not None and 'user_id' in self.df.columns:
+            # Convert user_id to string for CSV comparison (CSV stores as string)
+            user_id_str = str(user_id)
+            matches = matches[self.df.loc[matches, 'user_id'] == user_id_str]
+            if len(matches) == 0:
+                print(f"[TaskManager] Task {task_id} not found or access denied (user_id mismatch)")
+                return False
+        elif user_id is not None and 'user_id' not in self.df.columns:
+            # CSV doesn't have user_id column - deny access for security (data isolation)
+            print(f"[TaskManager] WARNING: CSV mode - user_id verification requested but 'user_id' column not found. Denying access for data isolation.")
+            return False
+        
+        idx = matches[0]
         # Ensure task_type column exists
         if 'task_type' not in self.df.columns:
             self.df['task_type'] = 'Work'
@@ -594,7 +628,7 @@ class TaskManager:
             print(f"[TaskManager] Database error in update_task: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._update_task_csv(task_id, **kwargs)
+            return self._update_task_csv(task_id, user_id, **kwargs)
 
     def find_by_name(self, name, user_id: Optional[int] = None):
         """Find a task by name. Works with both CSV and database.
@@ -606,12 +640,21 @@ class TaskManager:
         if self.use_db:
             return self._find_by_name_db(name, user_id)
         else:
-            return self._find_by_name_csv(name)
+            return self._find_by_name_csv(name, user_id)
     
-    def _find_by_name_csv(self, name):
+    def _find_by_name_csv(self, name, user_id: Optional[int] = None):
         """CSV-specific find_by_name."""
         self._reload_csv()
         rows = self.df[self.df['name'] == name]
+        # Filter by user_id for data isolation if provided
+        if user_id is not None and 'user_id' in rows.columns:
+            # Convert user_id to string for CSV comparison (CSV stores as string)
+            user_id_str = str(user_id)
+            rows = rows[rows['user_id'] == user_id_str]
+        elif user_id is not None and 'user_id' not in rows.columns:
+            # CSV doesn't have user_id column - return None for security (data isolation)
+            print(f"[TaskManager] WARNING: CSV mode - user_id filtering requested but 'user_id' column not found. Returning None for data isolation.")
+            return None
         return rows.iloc[0].to_dict() if not rows.empty else None
     
     def _find_by_name_db(self, name, user_id: Optional[int] = None):
@@ -632,7 +675,7 @@ class TaskManager:
             print(f"[TaskManager] Database error in find_by_name: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._find_by_name_csv(name)
+            return self._find_by_name_csv(name, user_id)
 
     def ensure_task_exists(self, name, user_id: Optional[int] = None):
         """Ensure a task exists, creating it if necessary.
@@ -666,15 +709,27 @@ class TaskManager:
         if self.use_db:
             return self._append_task_notes_db(task_id, note, user_id)
         else:
-            return self._append_task_notes_csv(task_id, note)
+            return self._append_task_notes_csv(task_id, note, user_id)
     
-    def _append_task_notes_csv(self, task_id: str, note: str):
+    def _append_task_notes_csv(self, task_id: str, note: str, user_id: Optional[int] = None):
         """CSV-specific append_task_notes."""
         from datetime import datetime
         self._reload_csv()
         matches = self.df.index[self.df['task_id'] == task_id]
         if len(matches) == 0:
             raise ValueError(f"Task {task_id} not found")
+        
+        # Filter by user_id for data isolation if provided
+        if user_id is not None and 'user_id' in self.df.columns:
+            # Convert user_id to string for CSV comparison (CSV stores as string)
+            user_id_str = str(user_id)
+            matches = matches[self.df.loc[matches, 'user_id'] == user_id_str]
+            if len(matches) == 0:
+                raise ValueError(f"Task {task_id} not found or access denied (user_id mismatch)")
+        elif user_id is not None and 'user_id' not in self.df.columns:
+            # CSV doesn't have user_id column - deny access for security (data isolation)
+            print(f"[TaskManager] WARNING: CSV mode - user_id verification requested but 'user_id' column not found. Denying access for data isolation.")
+            raise ValueError(f"Task {task_id} access denied (user_id verification not available in CSV mode)")
         
         idx = matches[0]
         
@@ -731,7 +786,7 @@ class TaskManager:
             print(f"[TaskManager] Database error in append_task_notes: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._append_task_notes_csv(task_id, note)
+            return self._append_task_notes_csv(task_id, note, user_id)
     
     def get_task_notes(self, task_id: str, user_id: Optional[int] = None) -> str:
         """Get notes for a task template. Works with both CSV and database.
@@ -746,13 +801,26 @@ class TaskManager:
         if self.use_db:
             return self._get_task_notes_db(task_id, user_id)
         else:
-            return self._get_task_notes_csv(task_id)
+            return self._get_task_notes_csv(task_id, user_id)
     
-    def _get_task_notes_csv(self, task_id: str) -> str:
+    def _get_task_notes_csv(self, task_id: str, user_id: Optional[int] = None) -> str:
         """CSV-specific get_task_notes."""
         self._reload_csv()
         matches = self.df.index[self.df['task_id'] == task_id]
         if len(matches) == 0:
+            return ''
+        
+        # Filter by user_id for data isolation if provided
+        if user_id is not None and 'user_id' in self.df.columns:
+            # Convert user_id to string for CSV comparison (CSV stores as string)
+            user_id_str = str(user_id)
+            matches = matches[self.df.loc[matches, 'user_id'] == user_id_str]
+            if len(matches) == 0:
+                # Task not found or access denied - return empty string for security
+                return ''
+        elif user_id is not None and 'user_id' not in self.df.columns:
+            # CSV doesn't have user_id column - return empty string for security (data isolation)
+            print(f"[TaskManager] WARNING: CSV mode - user_id verification requested but 'user_id' column not found. Returning empty string for data isolation.")
             return ''
         
         idx = matches[0]
@@ -779,7 +847,7 @@ class TaskManager:
             print(f"[TaskManager] Database error in get_task_notes: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._get_task_notes_csv(task_id)
+            return self._get_task_notes_csv(task_id, user_id)
 
 
 
@@ -796,11 +864,29 @@ class TaskManager:
         if self.use_db:
             return self._delete_by_id_db(task_id, user_id)
         else:
-            return self._delete_by_id_csv(task_id)
+            return self._delete_by_id_csv(task_id, user_id)
     
-    def _delete_by_id_csv(self, task_id):
+    def _delete_by_id_csv(self, task_id, user_id: Optional[int] = None):
         """CSV-specific delete_by_id."""
         self._reload_csv()
+        matches = self.df.index[self.df['task_id'] == task_id]
+        if len(matches) == 0:
+            print("[TaskManager] No matching task to delete.")
+            return False
+        
+        # Filter by user_id for data isolation if provided
+        if user_id is not None and 'user_id' in self.df.columns:
+            # Convert user_id to string for CSV comparison (CSV stores as string)
+            user_id_str = str(user_id)
+            matches = matches[self.df.loc[matches, 'user_id'] == user_id_str]
+            if len(matches) == 0:
+                print(f"[TaskManager] Task {task_id} not found or access denied (user_id mismatch)")
+                return False
+        elif user_id is not None and 'user_id' not in self.df.columns:
+            # CSV doesn't have user_id column - deny access for security (data isolation)
+            print(f"[TaskManager] WARNING: CSV mode - user_id verification requested but 'user_id' column not found. Denying access for data isolation.")
+            return False
+        
         before = len(self.df)
         self.df = self.df[self.df['task_id'] != task_id]
         if len(self.df) == before:
@@ -834,15 +920,19 @@ class TaskManager:
             print(f"[TaskManager] Database error in delete_by_id: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._delete_by_id_csv(task_id)
+            return self._delete_by_id_csv(task_id, user_id)
 
 
-    def get_recent(self, limit=5):
+    def get_recent(self, limit=5, user_id: Optional[int] = None):
         """Return tasks sorted by most recently completed instance.
 
         Falls back to task creation time if no completed instances exist.
+        
+        Args:
+            limit: Maximum number of tasks to return
+            user_id: Optional user_id for data isolation
         """
-        print(f"[TaskManager] get_recent called (limit={limit})")
+        print(f"[TaskManager] get_recent called (limit={limit}, user_id={user_id})")
 
         # Try to rank tasks by most recent completion
         try:
@@ -868,7 +958,7 @@ class TaskManager:
 
                 # Join with task metadata for stable names/descriptions.
                 # Use an inner merge so we only return tasks that still exist.
-                tasks_df = self.get_all()
+                tasks_df = self.get_all(user_id=user_id)
                 merged = inst_df.merge(
                     tasks_df,
                     how="inner",
@@ -890,7 +980,7 @@ class TaskManager:
             print(f"[TaskManager] get_recent fell back to created_at due to: {e}")
 
         # Fallback: use creation time if no completions available
-        df = self.get_all()
+        df = self.get_all(user_id=user_id)
         if df is None or df.empty:
             return []
         df = df.sort_values("created_at", ascending=False)

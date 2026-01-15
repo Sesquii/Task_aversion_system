@@ -43,14 +43,16 @@ DEFAULT_WEIGHTS = {
 def summary_page():
     """Summary page showing composite score and component contributions."""
     
-    # Get user ID (using a simple approach - in production you'd get this from session)
-    user_id = "default_user"  # TODO: Get from session/auth
+    # Get current user_id
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
     
     # Get current weights
-    current_weights = user_state.get_score_weights(user_id) or DEFAULT_WEIGHTS.copy()
+    current_weights = user_state.get_score_weights(user_id_str) or DEFAULT_WEIGHTS.copy()
     
     # Get all scores
-    all_scores = analytics.get_all_scores_for_composite(days=7)
+    all_scores = analytics.get_all_scores_for_composite(days=7, user_id=current_user_id)
     
     # Calculate composite score
     composite_result = analytics.calculate_composite_score(

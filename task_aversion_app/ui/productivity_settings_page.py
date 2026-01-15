@@ -421,7 +421,7 @@ def productivity_settings_page(request: Request = None):
                 
                 # Get productivity scores over time using full calculation
                 try:
-                    df = analytics._load_instances(completed_only=True)
+                    df = analytics._load_instances(completed_only=True, user_id=current_user_id)
                     if df.empty:
                         with chart_container:
                             ui.label("No completed tasks yet. Complete some tasks to see productivity trends.").classes(

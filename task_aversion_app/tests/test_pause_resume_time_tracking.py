@@ -56,16 +56,17 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         instance_id = self.instance_manager.create_instance(
             self.task_id,
             "Test Task for Pause/Resume",
-            task_version=1
+            task_version=1,
+            user_id=None
         )
         print(f"Created instance: {instance_id}")
         
         # Start the task
-        self.instance_manager.start_instance(instance_id)
+        self.instance_manager.start_instance(instance_id, user_id=None)
         print("Started instance")
         
         # Get instance to verify started_at
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         started_at_str = instance.get('started_at', '')
         print(f"started_at after start: '{started_at_str}'")
         self.assertNotEqual(started_at_str, '', "started_at should be set")
@@ -74,11 +75,11 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         time.sleep(0.1)  # 100ms = ~0.0017 minutes
         
         # Pause the task
-        self.instance_manager.pause_instance(instance_id, reason="Test pause", completion_percentage=0.0)
+        self.instance_manager.pause_instance(instance_id, reason="Test pause", completion_percentage=0.0, user_id=None)
         print("Paused instance")
         
         # Get instance and check time_spent_before_pause
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         actual_str = instance.get('actual', '{}')
         print(f"actual JSON string: {actual_str}")
         
@@ -103,21 +104,22 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         instance_id = self.instance_manager.create_instance(
             self.task_id,
             "Test Task for Multiple Pauses",
-            task_version=1
+            task_version=1,
+            user_id=None
         )
         print(f"Created instance: {instance_id}")
         
         # First work session
         print("\n--- First Work Session ---")
-        self.instance_manager.start_instance(instance_id)
-        instance = self.instance_manager.get_instance(instance_id)
+        self.instance_manager.start_instance(instance_id, user_id=None)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         started_at_1 = instance.get('started_at', '')
         print(f"Started at: '{started_at_1}'")
         
         time.sleep(0.1)  # Work for 100ms
         
-        self.instance_manager.pause_instance(instance_id, reason="First pause", completion_percentage=0.0)
-        instance = self.instance_manager.get_instance(instance_id)
+        self.instance_manager.pause_instance(instance_id, reason="First pause", completion_percentage=0.0, user_id=None)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         actual_str = instance.get('actual', '{}')
         actual_data = json.loads(actual_str) if actual_str else {}
         time_after_first = actual_data.get('time_spent_before_pause', 0.0)
@@ -126,8 +128,8 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         
         # Second work session
         print("\n--- Second Work Session ---")
-        self.instance_manager.start_instance(instance_id)
-        instance = self.instance_manager.get_instance(instance_id)
+        self.instance_manager.start_instance(instance_id, user_id=None)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         started_at_2 = instance.get('started_at', '')
         print(f"Started at: '{started_at_2}'")
         self.assertNotEqual(started_at_2, '', "started_at should be set on resume")
@@ -141,8 +143,8 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         
         time.sleep(0.1)  # Work for another 100ms
         
-        self.instance_manager.pause_instance(instance_id, reason="Second pause", completion_percentage=0.0)
-        instance = self.instance_manager.get_instance(instance_id)
+        self.instance_manager.pause_instance(instance_id, reason="Second pause", completion_percentage=0.0, user_id=None)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         actual_str = instance.get('actual', '{}')
         actual_data = json.loads(actual_str) if actual_str else {}
         time_after_second = actual_data.get('time_spent_before_pause', 0.0)
@@ -154,11 +156,11 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         
         # Third work session
         print("\n--- Third Work Session ---")
-        self.instance_manager.start_instance(instance_id)
+        self.instance_manager.start_instance(instance_id, user_id=None)
         time.sleep(0.1)  # Work for another 100ms
         
-        self.instance_manager.pause_instance(instance_id, reason="Third pause", completion_percentage=0.0)
-        instance = self.instance_manager.get_instance(instance_id)
+        self.instance_manager.pause_instance(instance_id, reason="Third pause", completion_percentage=0.0, user_id=None)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         actual_str = instance.get('actual', '{}')
         actual_data = json.loads(actual_str) if actual_str else {}
         time_after_third = actual_data.get('time_spent_before_pause', 0.0)
@@ -177,14 +179,15 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         instance_id = self.instance_manager.create_instance(
             self.task_id,
             "Test Task Not Started",
-            task_version=1
+            task_version=1,
+            user_id=None
         )
         print(f"Created instance: {instance_id} (not started)")
         
         # Try to pause (should not accumulate time since never started)
-        self.instance_manager.pause_instance(instance_id, reason="Pause without start", completion_percentage=0.0)
+        self.instance_manager.pause_instance(instance_id, reason="Pause without start", completion_percentage=0.0, user_id=None)
         
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         actual_str = instance.get('actual', '{}')
         actual_data = json.loads(actual_str) if actual_str else {}
         time_spent = actual_data.get('time_spent_before_pause', 0.0)
@@ -201,26 +204,27 @@ class TestPauseResumeTimeTracking(unittest.TestCase):
         instance_id = self.instance_manager.create_instance(
             self.task_id,
             "Test Task Resume",
-            task_version=1
+            task_version=1,
+            user_id=None
         )
         
         # Start and pause to accumulate some time
-        self.instance_manager.start_instance(instance_id)
+        self.instance_manager.start_instance(instance_id, user_id=None)
         time.sleep(0.1)
-        self.instance_manager.pause_instance(instance_id, reason="Initial pause", completion_percentage=0.0)
+        self.instance_manager.pause_instance(instance_id, reason="Initial pause", completion_percentage=0.0, user_id=None)
         
         # Get accumulated time
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         actual_str = instance.get('actual', '{}')
         actual_data = json.loads(actual_str) if actual_str else {}
         initial_time = actual_data.get('time_spent_before_pause', 0.0)
         print(f"Initial accumulated time: {initial_time} minutes")
         
         # Resume
-        self.instance_manager.start_instance(instance_id)
+        self.instance_manager.start_instance(instance_id, user_id=None)
         
         # Verify time is still in actual_data
-        instance = self.instance_manager.get_instance(instance_id)
+        instance = self.instance_manager.get_instance(instance_id, user_id=None)
         actual_str = instance.get('actual', '{}')
         actual_data = json.loads(actual_str) if actual_str else {}
         preserved_time = actual_data.get('time_spent_before_pause', 0.0)

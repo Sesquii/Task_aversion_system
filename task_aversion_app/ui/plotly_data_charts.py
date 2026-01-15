@@ -24,11 +24,15 @@ def get_user_instances(limit=100):
         
         from backend.instance_manager import InstanceManager
         from backend.analytics import Analytics
+        from backend.auth import get_current_user
         
         instance_manager = InstanceManager()
         analytics = Analytics()
         
-        instances = instance_manager.list_recent_completed(limit=limit)
+        # Get current user for data isolation
+        current_user_id = get_current_user()
+        
+        instances = instance_manager.list_recent_completed(limit=limit, user_id=current_user_id)
         return instances, analytics
     except Exception as e:
         print(f"[PlotlyCharts] Error loading instances: {e}")
@@ -438,16 +442,20 @@ def generate_goal_adjustment_plotly() -> Optional[go.Figure]:
         
         from backend.user_state import UserStateManager
         from backend.productivity_tracker import ProductivityTracker
+        from backend.auth import get_current_user
+        
+        # Get current user for data isolation
+        current_user_id = get_current_user()
+        user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
         
         user_state = UserStateManager()
         tracker = ProductivityTracker()
-        DEFAULT_USER_ID = "default_user"
         
-        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        goal_settings = user_state.get_productivity_goal_settings(user_id_str)
         goal_hours = goal_settings.get('goal_hours_per_week', 40.0)
         
         # Get weekly history data
-        history = tracker.get_productivity_history(DEFAULT_USER_ID, weeks=12)
+        history = tracker.get_productivity_history(user_id_str, weeks=12)
         if not history:
             return None
         
@@ -927,8 +935,12 @@ def generate_work_volume_score_plotly() -> Optional[go.Figure]:
         if not analytics:
             return None
         
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
         # Get work volume metrics
-        volume_metrics = analytics.get_daily_work_volume_metrics(days=30)
+        volume_metrics = analytics.get_daily_work_volume_metrics(days=30, user_id=current_user_id)
         avg_daily_work_time = volume_metrics.get('avg_daily_work_time', 0.0)
         work_volume_score = volume_metrics.get('work_volume_score', 0.0)
         work_consistency_score = volume_metrics.get('work_consistency_score', 50.0)
@@ -1024,16 +1036,23 @@ def generate_volumetric_productivity_plotly() -> Optional[go.Figure]:
         if not instances or not analytics:
             return None
         
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        if current_user_id is None:
+            # Fallback to default_user for backward compatibility
+            current_user_id = None
+        
         # Get target hours from settings
         from backend.user_state import UserStateManager
         user_state = UserStateManager()
-        DEFAULT_USER_ID = "default_user"
-        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
+        goal_settings = user_state.get_productivity_goal_settings(user_id_str)
         goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
         target_hours_per_day = goal_hours_per_week / 5.0  # Assume 5 work days
         
         # Get metrics
-        metrics = analytics.get_dashboard_metrics()
+        metrics = analytics.get_dashboard_metrics(user_id=current_user_id)
         productivity_volume = metrics.get('productivity_volume', {})
         
         base_productivity = productivity_volume.get('avg_base_productivity', 0.0)

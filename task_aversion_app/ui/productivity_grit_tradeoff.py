@@ -86,7 +86,7 @@ def productivity_grit_tradeoff_page():
         # Calculate weekly average time
         weekly_avg_time = 0.0
         try:
-            work_volume_metrics = analytics.get_daily_work_volume_metrics(days=7)
+            work_volume_metrics = analytics.get_daily_work_volume_metrics(days=7, user_id=current_user_id)
             weekly_avg_time = work_volume_metrics.get('avg_daily_work_time', 0.0) * 7.0
         except Exception:
             pass

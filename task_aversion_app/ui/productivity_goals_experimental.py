@@ -18,6 +18,15 @@ tracker = ProductivityTracker()
 @ui.page("/goals/productivity-hours")
 def productivity_goals_page():
     """Productivity hours goal tracking page."""
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
+    
+    # Convert user_id to string for UserStateManager methods
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
     
     ui.label("Productivity Hours Goal Tracking").classes("text-3xl font-bold mb-4")
     ui.label("Track weekly productivity hours vs goals with rolling 7-day or Monday-based week calculations.").classes("text-gray-600 mb-6")
@@ -27,7 +36,7 @@ def productivity_goals_page():
         ui.label("Goal Settings").classes("text-xl font-semibold mb-4")
         
         # Load current settings
-        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        goal_settings = user_state.get_productivity_goal_settings(user_id_str)
         current_goal = goal_settings.get('goal_hours_per_week', 40.0)
         current_starting = goal_settings.get('starting_hours_per_week')
         init_method = goal_settings.get('initialization_method')
@@ -60,7 +69,7 @@ def productivity_goals_page():
                     'starting_hours_per_week': new_starting,
                     'initialization_method': init_method or 'manual'
                 }
-                user_state.set_productivity_goal_settings(DEFAULT_USER_ID, settings)
+                user_state.set_productivity_goal_settings(user_id_str, settings)
                 ui.notify("Goals saved!", color="positive")
                 # Refresh the page to update displays
                 ui.navigate.to("/goals/productivity-hours")
@@ -72,7 +81,7 @@ def productivity_goals_page():
         
         # Auto-estimate button
         def estimate_starting():
-            estimated = tracker.estimate_starting_hours_auto(DEFAULT_USER_ID, factor=10.0)
+            estimated = tracker.estimate_starting_hours_auto(user_id_str, factor=10.0)
             if estimated:
                 starting_input.set_value(estimated)
                 ui.notify(f"Auto-estimated starting hours: {estimated} hours/week", color="info")
@@ -86,7 +95,7 @@ def productivity_goals_page():
         ui.label("Current Week Performance").classes("text-xl font-semibold mb-4")
         
         # Get week calculation mode setting
-        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        goal_settings = user_state.get_productivity_goal_settings(user_id_str)
         week_calculation_mode = goal_settings.get('week_calculation_mode', 'rolling')
         use_rolling = (week_calculation_mode == 'rolling')
         
@@ -104,15 +113,15 @@ def productivity_goals_page():
             
             def update_mode():
                 new_mode = mode_select.value
-                current_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+                current_settings = user_state.get_productivity_goal_settings(user_id_str)
                 current_settings['week_calculation_mode'] = new_mode
-                user_state.set_productivity_goal_settings(DEFAULT_USER_ID, current_settings)
+                user_state.set_productivity_goal_settings(user_id_str, current_settings)
                 ui.navigate.to("/goals/productivity-hours")
             
             mode_select.on('update:model-value', lambda e: update_mode())
         
-        comparison = tracker.compare_to_goal(DEFAULT_USER_ID, use_rolling=use_rolling)
-        weekly_data = tracker.get_current_week_performance(DEFAULT_USER_ID, use_rolling=use_rolling)
+        comparison = tracker.compare_to_goal(user_id_str, use_rolling=use_rolling)
+        weekly_data = tracker.get_current_week_performance(user_id_str, use_rolling=use_rolling)
         
         actual_hours = comparison.get('actual_hours', 0.0)
         goal_hours = comparison.get('goal_hours', 40.0)
@@ -122,10 +131,10 @@ def productivity_goals_page():
         # Calculate pace for Monday-based mode
         pace_data = None
         if not use_rolling:
-            pace_data = tracker.calculate_monday_week_pace(DEFAULT_USER_ID, goal_hours)
+            pace_data = tracker.calculate_monday_week_pace(user_id_str, goal_hours)
         
         # Calculate productivity points target
-        points_target = tracker.calculate_productivity_points_target(DEFAULT_USER_ID, goal_hours)
+        points_target = tracker.calculate_productivity_points_target(user_id_str, goal_hours)
         target_points = points_target.get('target_points', 0.0)
         avg_score_per_hour = points_target.get('avg_score_per_hour', 0.0)
         confidence = points_target.get('confidence', 'low')
@@ -226,17 +235,17 @@ def productivity_goals_page():
                         ui.label(f"{day_data['hours']:.1f}h").classes("text-sm font-semibold")
     
     # Record current week snapshot if needed
-    tracker.get_or_record_current_week(DEFAULT_USER_ID)
+    tracker.get_or_record_current_week(user_id_str)
     
     # Historical Trends Section
     with ui.card().classes("w-full max-w-7xl p-4 mb-4"):
         ui.label("Historical Trends (Daily)").classes("text-xl font-semibold mb-4")
         
         # Get daily productivity data (last 90 days)
-        daily_data = tracker.get_daily_productivity_data(DEFAULT_USER_ID, days=90)
+        daily_data = tracker.get_daily_productivity_data(user_id_str, days=90)
         
         # Get goal hours for reference line
-        goal_settings = user_state.get_productivity_goal_settings(DEFAULT_USER_ID)
+        goal_settings = user_state.get_productivity_goal_settings(user_id_str)
         goal_hours_per_week = goal_settings.get('goal_hours_per_week', 40.0)
         goal_hours_per_day = goal_hours_per_week / 7.0
         

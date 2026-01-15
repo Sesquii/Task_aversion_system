@@ -17,7 +17,10 @@ DEFAULT_CANCELLATION_CATEGORIES = {
 
 def get_all_cancellation_categories():
     """Get all cancellation categories (default + custom)."""
-    custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    custom_categories = user_state.get_cancellation_categories(user_id_str)
     all_categories = {**DEFAULT_CANCELLATION_CATEGORIES, **custom_categories}
     return all_categories
 

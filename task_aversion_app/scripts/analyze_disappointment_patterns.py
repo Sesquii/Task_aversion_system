@@ -25,8 +25,9 @@ def load_instances_with_disappointment() -> pd.DataFrame:
     
     analytics = Analytics()
     
+    # Analysis script: intentionally use user_id=None to load all instances across all users
     # Load all instances
-    df = analytics._load_instances(completed_only=False)
+    df = analytics._load_instances(completed_only=False, user_id=None)
     
     if df.empty:
         print("[WARNING] No instances found in database")

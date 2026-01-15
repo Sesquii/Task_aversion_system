@@ -56,15 +56,20 @@ def main():
     task_manager = TaskManager()
     
     # Load all instances
+    # Get user_id for data isolation (debug script - use None for CSV mode compatibility)
+    from backend.auth import get_current_user
+    user_id = get_current_user()
+    
     print("[INFO] Loading task instances...")
-    df = analytics._load_instances()
+    df = analytics._load_instances(user_id=user_id)
     
     if df.empty:
         print("[ERROR] No task instances found!")
         return
     
     # Load tasks to get task_type
-    tasks_df = task_manager.get_all()
+    # Note: Analysis script - using user_id=None for analysis across all data
+    tasks_df = task_manager.get_all(user_id=None)
     if not tasks_df.empty and 'task_type' in tasks_df.columns:
         df = df.merge(
             tasks_df[['task_id', 'task_type', 'name']],

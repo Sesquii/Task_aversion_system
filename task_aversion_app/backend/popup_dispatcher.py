@@ -267,7 +267,14 @@ class PopupDispatcher:
         import pandas as pd
         
         analytics = Analytics()
-        df = analytics._load_instances()
+        # Convert string user_id to int for database queries
+        user_id_int = None
+        try:
+            if user_id and user_id != 'default':
+                user_id_int = int(user_id) if user_id.isdigit() else None
+        except (ValueError, AttributeError):
+            pass
+        df = analytics._load_instances(user_id=user_id_int)
         
         if df.empty:
             return None
@@ -391,7 +398,14 @@ class PopupDispatcher:
         import pandas as pd
         
         analytics = Analytics()
-        df = analytics._load_instances()
+        # Convert string user_id to int for database queries
+        user_id_int = None
+        try:
+            if user_id and user_id != 'default':
+                user_id_int = int(user_id) if user_id.isdigit() else None
+        except (ValueError, AttributeError):
+            pass
+        df = analytics._load_instances(user_id=user_id_int)
         
         if df.empty:
             return None

@@ -1,11 +1,18 @@
 from nicegui import ui
 from datetime import datetime
+from backend.auth import get_current_user
 
 def build_add_log_page(task_manager):
 
     print("DEBUG: build_add_log_page() called")
 
-    existing_tasks = task_manager.get_all_tasks()
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.label("Please log in to access this page.").classes("text-red-500")
+        return
+    
+    existing_tasks = task_manager.list_tasks(user_id=current_user_id)
     print("DEBUG: existing_tasks =", existing_tasks)
 
     ui.label("Add Task Log Entry").classes("text-2xl font-bold mb-4")

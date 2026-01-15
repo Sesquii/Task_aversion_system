@@ -130,7 +130,8 @@ def main():
     # Load data (same approach as compare script)
     print("[INFO] Loading task instances...")
     analytics = Analytics()
-    df = analytics._load_instances(completed_only=False)
+    # Analysis script: intentionally use user_id=None to load all instances across all users
+    df = analytics._load_instances(completed_only=False, user_id=None)
     
     if df.empty:
         print("[ERROR] No instances found")

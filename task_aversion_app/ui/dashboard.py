@@ -190,13 +190,20 @@ def get_current_task():
 
 def start_instance(instance_id, container=None):
     """Start an instance (first time) and update the container to show ongoing time."""
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.notify("Not authenticated", color='negative')
+        return
+    
     # Check if there's already a current task running
     current = get_current_task()
     if current and current.get('instance_id') != instance_id:
         ui.notify("You need to finish the current task first", color='warning')
         return
     
-    im.start_instance(instance_id)
+    im.start_instance(instance_id, user_id=current_user_id)
     ui.notify("Instance started", color='positive')
     
     # Reload the page to update the current task display
@@ -204,13 +211,20 @@ def start_instance(instance_id, container=None):
 
 def resume_instance(instance_id, container=None):
     """Resume a paused instance and update the container to show ongoing time."""
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.notify("Not authenticated", color='negative')
+        return
+    
     # Check if there's already a current task running
     current = get_current_task()
     if current and current.get('instance_id') != instance_id:
         ui.notify("You need to finish the current task first", color='warning')
         return
     
-    im.resume_instance(instance_id)
+    im.resume_instance(instance_id, user_id=current_user_id)
     ui.notify("Instance resumed", color='positive')
     
     # Reload the page to update the current task display
@@ -239,9 +253,16 @@ def open_pause_dialog(instance_id):
     The task is paused immediately when the dialog opens, and the dialog is just for
     collecting optional notes and completion percentage.
     """
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.notify("Not authenticated", color='negative')
+        return
+    
     # Pause the task immediately (with no reason/completion yet)
     try:
-        im.pause_instance(instance_id, reason=None, completion_percentage=0.0)
+        im.pause_instance(instance_id, reason=None, completion_percentage=0.0, user_id=current_user_id)
         ui.notify("Task paused", color='info')
     except Exception as exc:
         ui.notify(f"Error pausing task: {str(exc)}", color='negative')
@@ -308,7 +329,13 @@ def open_pause_dialog(instance_id):
                     # Save the updated actual data by updating the instance directly
                     # We need to call pause_instance again but it will preserve time_spent_before_pause
                     # since the task is already paused (started_at is empty)
-                    im.pause_instance(instance_id, reason_text if reason_text else None, completion_pct)
+                    # Get current user for data isolation
+                    from backend.auth import get_current_user
+                    current_user_id = get_current_user()
+                    if current_user_id is None:
+                        ui.notify("Not authenticated", color='negative')
+                        return
+                    im.pause_instance(instance_id, reason_text if reason_text else None, completion_pct, user_id=current_user_id)
                     ui.notify("Pause notes updated", color='positive')
                 dialog.close()
                 ui.navigate.reload()
@@ -1114,11 +1141,16 @@ def reset_metric_score(metric_key: str):
 def edit_monitored_metrics_config():
     """Edit monitored metrics configuration."""
     from backend.user_state import UserStateManager
+    from backend.auth import get_current_user
+    
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
+    
     user_state = UserStateManager()
-    DEFAULT_USER_ID = "default_user"
     
     # Get current config
-    config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+    config = user_state.get_monitored_metrics_config(user_id_str)
     current_selected = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
     current_baseline = config.get('coloration_baseline', 'last_3_months')
     
@@ -1179,7 +1211,7 @@ def edit_monitored_metrics_config():
                         'selected_metrics': selected,
                         'coloration_baseline': baseline_select.value
                     }
-                    user_state.set_monitored_metrics_config(new_config, DEFAULT_USER_ID)
+                    user_state.set_monitored_metrics_config(new_config, user_id_str)
                     ui.notify("Configuration saved", color='positive')
                     dialog.close()
                     ui.navigate.reload()
@@ -2360,6 +2392,7 @@ def render_monitored_metrics_section(container):
     """
     from datetime import datetime, timedelta
     import json
+    from backend.auth import get_current_user
     
     # #region agent log
     try:
@@ -2372,8 +2405,12 @@ def render_monitored_metrics_section(container):
     init_perf_logger = get_init_perf_logger()
     init_perf_logger.log_event("render_monitored_metrics_start")
     
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
     # Get configuration
-    config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+    config = user_state.get_monitored_metrics_config(user_id_str)
     selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
     coloration_baseline = config.get('coloration_baseline', 'last_3_months')
     
@@ -2532,7 +2569,7 @@ def render_monitored_metrics_section(container):
         if composite_metric_keys:
             # Call get_all_scores_for_composite() with selective calculation
             # (execution_score is handled separately in chunks)
-            all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys)) if hasattr(an, 'get_all_scores_for_composite') else {}
+            all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys), user_id=current_user_id) if hasattr(an, 'get_all_scores_for_composite') else {}
             
             # Extract only the metrics we need
             for key in composite_metric_keys:
@@ -3017,7 +3054,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                                 if val is not None:
                                     return float(val)
                             # Fallback: calculate from instances
-                            df = analytics_instance._load_instances()
+                            df = analytics_instance._load_instances(user_id=current_user_id)
                             if not df.empty:
                                 completed = df[df['completed_at'].astype(str).str.len() > 0]
                                 if not completed.empty:
@@ -3750,7 +3787,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
                     get_composite_start = time.perf_counter()
                     try:
                         if hasattr(an, 'get_all_scores_for_composite'):
-                            composite_scores = an.get_all_scores_for_composite(days=7) or {}
+                            composite_scores = an.get_all_scores_for_composite(days=7, user_id=current_user_id) or {}
                         else:
                             composite_scores = {}
                     except:
@@ -4074,6 +4111,8 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
 def open_metrics_config_dialog():
     """Open dialog to configure monitored metrics."""
     import json
+    from backend.auth import get_current_user
+    
     # #region agent log
     try:
         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -4081,7 +4120,11 @@ def open_metrics_config_dialog():
     except: pass
     # #endregion
     
-    config = user_state.get_monitored_metrics_config(DEFAULT_USER_ID)
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
+    config = user_state.get_monitored_metrics_config(user_id_str)
     selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
     coloration_baseline = config.get('coloration_baseline', 'last_3_months')
     
@@ -4159,7 +4202,7 @@ def open_metrics_config_dialog():
                     'selected_metrics': new_selected,
                     'coloration_baseline': baseline_select.value
                 }
-                user_state.set_monitored_metrics_config(new_config, DEFAULT_USER_ID)
+                user_state.set_monitored_metrics_config(new_config, user_id_str)
                 ui.notify("Configuration saved", color='positive')
                 dialog.close()
                 ui.navigate.reload()
@@ -5009,7 +5052,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         with ui.card().classes("w-full p-2"):
                             ui.markdown("### Quick Tasks (Last 5)")
                             
-                            recent = tm.get_recent(limit=5) if hasattr(tm, "get_recent") else []
+                            recent = tm.get_recent(limit=5, user_id=current_user_id) if hasattr(tm, "get_recent") else []
                             
                             if not recent:
                                 ui.label("No recent tasks").classes("text-xs text-gray-500")
@@ -5192,7 +5235,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         # Get task type from task
                         task_id = inst.get('task_id')
                         if task_id:
-                            task = task_manager.get_task(task_id)
+                            task = task_manager.get_task(task_id, user_id=current_user_id)
                             if task:
                                 task_type = task.get('task_type', 'Work')
                                 # Normalize task type (handle variations like 'self care', 'selfcare', 'self-care')
@@ -5570,7 +5613,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:
@@ -6012,7 +6059,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:
@@ -6454,7 +6505,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:
@@ -6896,7 +6951,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:
@@ -7338,7 +7397,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:
@@ -7780,7 +7843,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:
@@ -8222,7 +8289,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:
@@ -8664,7 +8735,11 @@ def build_recently_completed_panel():
     def refresh_completed():
         completed_container.clear()
         
-        recent_tasks = im.list_recent_tasks(limit=20) \
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
             if hasattr(im, "list_recent_tasks") else []
         
         if not recent_tasks:

@@ -1683,7 +1683,7 @@ class InstanceManager:
         # Append note to task template via TaskManager
         from backend.task_manager import TaskManager
         task_manager = TaskManager()
-        task_manager.append_task_notes(task_id, note)
+        task_manager.append_task_notes(task_id, note, user_id=user_id)
     
     def cancel_instance(self, instance_id, actual: dict, user_id: Optional[int] = None):
         """Cancel a task instance. Works with both CSV and database.
@@ -3052,14 +3052,19 @@ class InstanceManager:
             self.use_db = False
             return self._get_initial_aversion_csv(task_id)
 
-    def has_completed_task(self, task_id: str) -> bool:
-        """Check if this task has been completed at least once."""
+    def has_completed_task(self, task_id: str, user_id: Optional[int] = None) -> bool:
+        """Check if this task has been completed at least once.
+        
+        Args:
+            task_id: Task ID to check
+            user_id: User ID to filter by (required for data isolation)
+        """
         if self.use_db:
-            return self._has_completed_task_db(task_id)
+            return self._has_completed_task_db(task_id, user_id)
         else:
-            return self._has_completed_task_csv(task_id)
+            return self._has_completed_task_csv(task_id, user_id)
     
-    def _has_completed_task_csv(self, task_id: str) -> bool:
+    def _has_completed_task_csv(self, task_id: str, user_id: Optional[int] = None) -> bool:
         """CSV-specific has_completed_task."""
         with perf_logger.operation("_has_completed_task_csv", task_id=task_id):
             self._reload()
@@ -3068,6 +3073,16 @@ class InstanceManager:
             
             # Filter to this task_id first
             task_instances = self.df[self.df['task_id'] == task_id]
+            if task_instances.empty:
+                return False
+            
+            # CRITICAL: Filter by user_id for data isolation
+            if user_id is not None:
+                task_instances = task_instances[task_instances['user_id'].astype(str) == str(user_id)]
+            else:
+                print("[InstanceManager] WARNING: _has_completed_task_csv() called without user_id - returning False for security")
+                return False
+            
             if task_instances.empty:
                 return False
             
@@ -3085,7 +3100,7 @@ class InstanceManager:
             
             return bool(has_completed)
     
-    def _has_completed_task_db(self, task_id: str) -> bool:
+    def _has_completed_task_db(self, task_id: str, user_id: Optional[int] = None) -> bool:
         """Database-specific has_completed_task."""
         try:
             if not task_id:
@@ -3094,9 +3109,18 @@ class InstanceManager:
             with perf_logger.operation("_has_completed_task_db", task_id=task_id):
                 with self.db_session() as session:
                     # Check if any instance has is_completed=True, completed_at set, or status='completed'
-                    count = session.query(self.TaskInstance).filter(
+                    query = session.query(self.TaskInstance).filter(
                         self.TaskInstance.task_id == task_id
-                    ).filter(
+                    )
+                    
+                    # CRITICAL: Filter by user_id for data isolation
+                    if user_id is not None:
+                        query = query.filter(self.TaskInstance.user_id == user_id)
+                    else:
+                        print("[InstanceManager] WARNING: _has_completed_task_db() called without user_id - returning False for security")
+                        return False
+                    
+                    count = query.filter(
                         (self.TaskInstance.is_completed == True) |
                         (self.TaskInstance.completed_at.isnot(None)) |
                         (self.TaskInstance.status == 'completed')
@@ -3108,7 +3132,7 @@ class InstanceManager:
                 raise RuntimeError(f"Database error in has_completed_task and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in has_completed_task: {e}, falling back to CSV")
             self.use_db = False
-            return self._has_completed_task_csv(task_id)
+            return self._has_completed_task_csv(task_id, user_id)
 
     def get_previous_aversion_average(self, task_id: str) -> Optional[float]:
         """Get average aversion from previous initialized instances of the same task.

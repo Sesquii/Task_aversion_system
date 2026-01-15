@@ -1,3 +1,4 @@
+from typing import Optional
 from nicegui import ui
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
@@ -24,9 +25,17 @@ DEFAULT_CANCELLATION_CATEGORIES = {
 }
 
 
-def get_all_cancellation_categories():
-    """Get all cancellation categories (default + custom)."""
-    custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
+def get_all_cancellation_categories(user_id: Optional[int] = None):
+    """Get all cancellation categories (default + custom).
+    
+    Args:
+        user_id: User ID to get custom categories for. If None, gets current user.
+    """
+    if user_id is None:
+        from backend.auth import get_current_user
+        user_id = get_current_user()
+    user_id_str = str(user_id) if user_id is not None else DEFAULT_USER_ID
+    custom_categories = user_state.get_cancellation_categories(user_id_str)
     all_categories = {**DEFAULT_CANCELLATION_CATEGORIES, **custom_categories}
     return all_categories
 
@@ -93,7 +102,7 @@ def cancelled_tasks_page():
                                     actual_data = {}
                             
                             category = actual_data.get('cancellation_category', 'other')
-                            all_categories = get_all_cancellation_categories()
+                            all_categories = get_all_cancellation_categories(user_id=user_id)
                             category_label = all_categories.get(category, category or 'Other reason')
                             notes = actual_data.get('reason_for_canceling', '')
                             
@@ -141,7 +150,7 @@ def cancelled_tasks_page():
                                 with ui.dialog() as dialog, ui.card().classes("w-full max-w-md p-4 gap-3"):
                                     ui.label("Edit Cancelled Task").classes("text-lg font-semibold")
                                     
-                                    all_cats = get_all_cancellation_categories()
+                                    all_cats = get_all_cancellation_categories(user_id=user_id)
                                     edit_category_select = ui.select(
                                         options=all_cats,
                                         label='Cancellation Category',
@@ -193,7 +202,7 @@ def cancelled_tasks_page():
         
         # Group by category
         by_category = defaultdict(list)
-        all_categories = get_all_cancellation_categories()
+        all_categories = get_all_cancellation_categories(user_id=user_id)
         
         for inst in instances:
             actual_data = inst.get('actual', '{}')
@@ -255,7 +264,7 @@ def cancelled_tasks_page():
     # Filter controls
     with ui.row().classes("w-full gap-3 items-end mb-4"):
         category_filter = ui.select(
-            options={'all': 'All Categories', **get_all_cancellation_categories()},
+            options={'all': 'All Categories', **get_all_cancellation_categories(user_id=user_id)},
             label='Filter by Category',
             value='all'
         ).classes("flex-1").props("dense outlined")
@@ -263,7 +272,7 @@ def cancelled_tasks_page():
         def refresh_category_filter():
             """Refresh the category filter dropdown options."""
             current_value = category_filter.value
-            new_options = {'all': 'All Categories', **get_all_cancellation_categories()}
+            new_options = {'all': 'All Categories', **get_all_cancellation_categories(user_id=user_id)}
             # Update options - try set_options first, fall back to direct assignment
             if hasattr(category_filter, 'set_options'):
                 category_filter.set_options(new_options)
@@ -365,7 +374,7 @@ def cancelled_tasks_page():
                     time_estimate = float(predicted.get('time_estimate_minutes', 0) or 0)
                     total_penalty += (time_estimate / 10.0) * penalty
                 
-                all_categories = get_all_cancellation_categories()
+                all_categories = get_all_cancellation_categories(user_id=user_id)
                 
                 with ui.column().classes("w-full gap-4"):
                     # Category breakdown
@@ -407,8 +416,9 @@ def cancelled_tasks_page():
         def refresh_categories_list():
             categories_list_container.clear()
             with categories_list_container:
-                all_categories = get_all_cancellation_categories()
-                custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
+                all_categories = get_all_cancellation_categories(user_id=user_id)
+                user_id_str = str(user_id) if user_id is not None else DEFAULT_USER_ID
+                custom_categories = user_state.get_cancellation_categories(user_id_str)
                 
                 if not all_categories:
                     ui.label("No categories found.").classes("text-gray-500 p-4")
@@ -456,7 +466,7 @@ def cancelled_tasks_page():
                                     key = sanitize_category_key(label)
                                     
                                     # Check if key already exists
-                                    all_cats = get_all_cancellation_categories()
+                                    all_cats = get_all_cancellation_categories(user_id=user_id)
                                     if key in all_cats:
                                         # Make it unique
                                         counter = 1

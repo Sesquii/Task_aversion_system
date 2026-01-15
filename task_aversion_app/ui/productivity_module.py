@@ -208,6 +208,15 @@ def productivity_module_page():
     ⚠️ FLAGGED FOR REMOVAL AFTER REVIEW ⚠️
     This page appears to be redundant/useless. Review and remove if confirmed.
     """
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
+    
+    # Convert user_id to string for UserStateManager methods
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
     
     ui.add_head_html("""
     <style>
@@ -464,8 +473,8 @@ def productivity_module_page():
         def load_and_display_current_week():
             """Load and display current week's data."""
             data_display.clear()
-            weekly_data = tracker.calculate_weekly_productivity_hours(DEFAULT_USER_ID)
-            comparison = tracker.compare_to_goal(DEFAULT_USER_ID)
+            weekly_data = tracker.calculate_weekly_productivity_hours(user_id_str)
+            comparison = tracker.compare_to_goal(user_id_str)
             
             with data_display:
                 ui.label("Current Week Data").classes("text-lg font-semibold mb-2")
@@ -505,7 +514,7 @@ def productivity_module_page():
         
         def record_snapshot_and_notify():
             """Record snapshot and notify."""
-            result = tracker.record_weekly_snapshot(DEFAULT_USER_ID)
+            result = tracker.record_weekly_snapshot(user_id_str)
             ui.notify(
                 f"Recorded: {result.get('actual_hours', 0):.1f}h, "
                 f"{result.get('productivity_score', 0):.1f} points",
@@ -537,15 +546,25 @@ def productivity_module_page():
 
 def load_current_week_data():
     """Load current week's productivity data."""
-    weekly_data = tracker.calculate_weekly_productivity_hours(DEFAULT_USER_ID)
-    comparison = tracker.compare_to_goal(DEFAULT_USER_ID)
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
+    weekly_data = tracker.calculate_weekly_productivity_hours(user_id_str)
+    comparison = tracker.compare_to_goal(user_id_str)
     
     ui.notify(f"Loaded: {weekly_data.get('total_hours', 0):.1f} hours, {comparison.get('percentage_of_goal', 0):.1f}% of goal", color="info")
 
 
 def record_snapshot():
     """Record current week's snapshot."""
-    result = tracker.record_weekly_snapshot(DEFAULT_USER_ID)
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
+    result = tracker.record_weekly_snapshot(user_id_str)
     ui.notify(f"Recorded snapshot: {result.get('actual_hours', 0):.1f} hours, {result.get('productivity_score', 0):.1f} points", color="positive")
 
 

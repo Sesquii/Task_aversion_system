@@ -65,6 +65,10 @@ def build_analytics_page():
         "text-gray-500 mb-4"
     )
     
+    # Get current user_id
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    
     # Analytics Module Navigation
     with ui.card().classes("p-4 mb-4 bg-blue-50 border border-blue-200"):
         ui.label("Analytics Modules").classes("text-lg font-semibold mb-2")
@@ -86,9 +90,10 @@ def build_analytics_page():
     # Composite Score Summary
     from backend.user_state import UserStateManager
     user_state = UserStateManager()
-    DEFAULT_USER_ID = "default_user"
+    # Convert int user_id to string for UserStateManager methods
+    user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
     
-    current_weights = user_state.get_score_weights(DEFAULT_USER_ID) or {}
+    current_weights = user_state.get_score_weights(user_id_str) or {}
     
     # Composite Score section - load asynchronously to avoid timeout
     composite_container = ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200")
@@ -113,7 +118,7 @@ def build_analytics_page():
             # #endregion
             
             get_scores_start = time.perf_counter()
-            all_scores = analytics_service.get_all_scores_for_composite(days=7)
+            all_scores = analytics_service.get_all_scores_for_composite(days=7, user_id=current_user_id)
             get_scores_duration = (time.perf_counter() - get_scores_start) * 1000
             
             # #region agent log
@@ -141,7 +146,7 @@ def build_analytics_page():
     ui.timer(0.1, load_composite_score, once=True)
 
     # Get all main analytics data in one batched call (Phase 2 optimization)
-    page_data = analytics_service.get_analytics_page_data(days=7)
+    page_data = analytics_service.get_analytics_page_data(days=7, user_id=current_user_id)
     metrics = page_data['dashboard_metrics']
     relief_summary = page_data['relief_summary']
     tracking_data = page_data['time_tracking']
@@ -242,9 +247,7 @@ def build_analytics_page():
                     )
     
     # Get target hours from settings for display
-    from backend.user_state import UserStateManager
-    user_state = UserStateManager()
-    goal_settings = user_state.get_productivity_goal_settings("default_user")
+    goal_settings = user_state.get_productivity_goal_settings(user_id_str)
     goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
     target_hours_per_day = goal_hours_per_week / 5.0  # Assume 5 work days
     
@@ -469,28 +472,28 @@ def build_analytics_page():
                         ui.label(f"{sensitive_score:.1f}").classes("text-sm font-bold text-purple-600")
 
     # Get all chart data in one batched call (Phase 2 optimization)
-    chart_data = analytics_service.get_chart_data()
+    chart_data = analytics_service.get_chart_data(user_id=current_user_id)
     
     with ui.row().classes("analytics-grid flex-wrap w-full"):
-        _render_time_chart(chart_data['trend_series'])
-        _render_attribute_box(chart_data['attribute_distribution'])
+        _render_time_chart(chart_data['trend_series'], user_id=current_user_id)
+        _render_attribute_box(chart_data['attribute_distribution'], user_id=current_user_id)
 
-    _render_trends_section()
-    _render_stress_metrics_section(chart_data['stress_dimension_data'])
+    _render_trends_section(user_id=current_user_id)
+    _render_stress_metrics_section(chart_data['stress_dimension_data'], user_id=current_user_id)
     
     # Get all rankings data in one batched call (Phase 2 optimization)
-    rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10)
+    rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10, user_id=current_user_id)
     
-    _render_task_rankings(rankings_data)
-    _render_stress_efficiency_leaderboard(rankings_data['stress_efficiency_leaderboard'])
-    _render_metric_comparison(metrics)
-    _render_correlation_explorer()
+    _render_task_rankings(rankings_data, user_id=current_user_id)
+    _render_stress_efficiency_leaderboard(rankings_data['stress_efficiency_leaderboard'], user_id=current_user_id)
+    _render_metric_comparison(metrics, user_id=current_user_id)
+    _render_correlation_explorer(user_id=current_user_id)
 
 
-def _render_time_chart(df=None):
+def _render_time_chart(df=None, user_id=None):
     """Render time chart. If df is provided, use it (batched), otherwise fetch."""
     if df is None:
-        df = analytics_service.trend_series()
+        df = analytics_service.trend_series(user_id=user_id)
     with ui.card().classes("p-3 grow"):
         ui.label("Total relief trend").classes("font-bold text-md mb-2")
         if df.empty:
@@ -507,10 +510,10 @@ def _render_time_chart(df=None):
         ui.plotly(fig)
 
 
-def _render_attribute_box(df=None):
+def _render_attribute_box(df=None, user_id=None):
     """Render attribute box chart. If df is provided, use it (batched), otherwise fetch."""
     if df is None:
-        df = analytics_service.attribute_distribution()
+        df = analytics_service.attribute_distribution(user_id=user_id)
     with ui.card().classes("p-3 grow"):
         ui.label("Attribute distribution").classes("font-bold text-md mb-2")
         if df.empty:
@@ -527,7 +530,7 @@ def _render_attribute_box(df=None):
         ui.plotly(fig)
 
 
-def _render_trends_section():
+def _render_trends_section(user_id=None):
     with ui.card().classes("p-3 w-full"):
         ui.label("Trends").classes("font-bold text-lg mb-2")
         ui.label("View daily trends for any attribute or calculated metric.").classes("text-xs text-gray-500 mb-2")
@@ -591,6 +594,7 @@ def _render_trends_section():
                 aggregation=aggregation,
                 days=days,
                 normalize=normalize,
+                user_id=user_id,
             )
 
             rows = []
@@ -622,11 +626,12 @@ def _render_trends_section():
         update_chart()
 
 
-def _render_stress_metrics_section(stress_data=None):
+def _render_stress_metrics_section(stress_data=None, user_id=None):
     """Render stress dimension metrics with bar charts and line graphs.
     
     Args:
         stress_data: Optional pre-fetched stress dimension data (for batching)
+        user_id: User ID for data isolation
     """
     ui.separator().classes("my-4")
     with ui.card().classes("p-4 w-full"):
@@ -644,7 +649,7 @@ def _render_stress_metrics_section(stress_data=None):
         
         # Get stress dimension data if not provided
         if stress_data is None:
-            stress_data = analytics_service.get_stress_dimension_data()
+            stress_data = analytics_service.get_stress_dimension_data(user_id=user_id)
         
         # Calculate daily averages (overall, not just 7-day)
         cognitive_daily_avg = calc_daily_avg(stress_data.get('cognitive', {}).get('daily', []))
@@ -825,11 +830,12 @@ def _render_stress_metrics_section(stress_data=None):
                 ui.label(f"Daily Avg: {physical_daily_avg:.1f}").classes("text-sm")
 
 
-def _render_metric_comparison(metrics=None):
+def _render_metric_comparison(metrics=None, user_id=None):
     """Render a flexible metric comparison tool with scatter plots.
     
     Args:
         metrics: Optional pre-fetched dashboard metrics (for batching)
+        user_id: User ID for data isolation
     """
     ui.separator().classes("my-4")
     with ui.card().classes("p-4 w-full"):
@@ -861,7 +867,7 @@ def _render_metric_comparison(metrics=None):
             # Get metrics if not provided
             nonlocal metrics
             if metrics is None:
-                metrics = analytics_service.get_dashboard_metrics()
+                metrics = analytics_service.get_dashboard_metrics(user_id=user_id)
             chart_area.clear()
             stats_area.clear()
             
@@ -879,8 +885,8 @@ def _render_metric_comparison(metrics=None):
                 return
             
             # Get scatter data
-            scatter = analytics_service.get_scatter_data(x_attr, y_attr)
-            stats = analytics_service.calculate_correlation(x_attr, y_attr, method='pearson')
+            scatter = analytics_service.get_scatter_data(x_attr, y_attr, user_id=user_id)
+            stats = analytics_service.calculate_correlation(x_attr, y_attr, method='pearson', user_id=user_id)
             
             label_x = ATTRIBUTE_LABELS.get(x_attr, x_attr)
             label_y = ATTRIBUTE_LABELS.get(y_attr, y_attr)
@@ -1230,7 +1236,7 @@ def _render_metric_comparison(metrics=None):
         render_comparison()
 
 
-def _render_correlation_explorer():
+def _render_correlation_explorer(user_id=None):
     ui.separator().classes("my-4")
     with ui.expansion("Developer Tools: Correlation Explorer", icon="science", value=False):
         with ui.card().classes("p-3 w-full"):
@@ -1280,12 +1286,13 @@ def _render_correlation_explorer():
                         ui.label("Choose two different attributes to compare.").classes("text-xs text-gray-500")
                     return
 
-                scatter = analytics_service.get_scatter_data(x_attr, y_attr)
-                stats = analytics_service.calculate_correlation(x_attr, y_attr, method=method)
+                scatter = analytics_service.get_scatter_data(x_attr, y_attr, user_id=user_id)
+                stats = analytics_service.calculate_correlation(x_attr, y_attr, method=method, user_id=user_id)
                 thresholds = analytics_service.find_threshold_relationships(
                     dependent_var=y_attr,
                     independent_var=x_attr,
                     bins=bins,
+                    user_id=user_id,
                 )
 
                 label_x = ATTRIBUTE_LABELS.get(x_attr, x_attr)
@@ -1348,18 +1355,19 @@ def _render_correlation_explorer():
             render_correlation()
 
 
-def _render_task_rankings(rankings_data=None):
+def _render_task_rankings(rankings_data=None, user_id=None):
     """Render task performance rankings.
     
     Args:
         rankings_data: Optional pre-fetched rankings data (for batching)
+        user_id: User ID for data isolation
     """
     ui.separator()
     ui.label("Task Performance Rankings").classes("text-xl font-semibold mt-4")
     
     # Get rankings data if not provided
     if rankings_data is None:
-        rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10)
+        rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10, user_id=user_id)
     
     with ui.row().classes("gap-4 flex-wrap mt-2"):
         # Top tasks by relief
@@ -1403,18 +1411,19 @@ def _render_task_rankings(rankings_data=None):
                     ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
 
 
-def _render_stress_efficiency_leaderboard(leaderboard=None):
+def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
     """Render stress efficiency leaderboard.
     
     Args:
         leaderboard: Optional pre-fetched leaderboard data (for batching)
+        user_id: User ID for data isolation
     """
     ui.separator()
     ui.label("Stress Efficiency Leaderboard").classes("text-xl font-semibold mt-4")
     ui.label("Tasks that give you the most relief per unit of stress").classes("text-sm text-gray-500 mb-2")
     
     if leaderboard is None:
-        leaderboard = analytics_service.get_stress_efficiency_leaderboard(top_n=10)
+        leaderboard = analytics_service.get_stress_efficiency_leaderboard(top_n=10, user_id=user_id)
     
     if not leaderboard:
         ui.label("No data yet. Complete some tasks to see your stress efficiency leaders.").classes("text-xs text-gray-500")
@@ -1446,6 +1455,10 @@ def build_emotional_flow_page():
     """Emotional Flow Analytics - tracks emotion changes and patterns."""
     ui.add_head_html("<style>.analytics-grid { gap: 1rem; }</style>")
     
+    # Get current user_id
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    
     # Navigation
     with ui.row().classes("gap-2 mb-4"):
         ui.button("← Back to Analytics", on_click=lambda: ui.navigate.to('/analytics')).props("outlined")
@@ -1456,7 +1469,7 @@ def build_emotional_flow_page():
     )
     
     # Get emotional flow data
-    flow_data = analytics_service.get_emotional_flow_data()
+    flow_data = analytics_service.get_emotional_flow_data(user_id=current_user_id)
     
     # Summary metrics
     with ui.row().classes("gap-3 flex-wrap mb-4"):

@@ -77,12 +77,12 @@ def initialize_task_page(task_manager, emotion_manager):
         
         # Get initial aversion (first time doing the task) and previous aversion
         with perf_logger.operation("get_initial_aversion", task_id=task_id):
-            initial_aversion = im.get_initial_aversion(task_id) if task_id else None
+            initial_aversion = im.get_initial_aversion(task_id, user_id=current_user_id) if task_id else None
         previous_aversion = previous_averages.get('expected_aversion')
         
         # Check if task has been completed at least once
         with perf_logger.operation("has_completed_task", task_id=task_id):
-            has_completed = im.has_completed_task(task_id) if task_id else False
+            has_completed = im.has_completed_task(task_id, user_id=current_user_id) if task_id else False
         
         page_load_duration = (time.perf_counter() - page_start_time) * 1000
         perf_logger.log_timing("initialize_task_page_load_total", page_load_duration, instance_id=instance_id, task_id=task_id)

@@ -216,7 +216,8 @@ class ProductivityTrendAnalyzer:
         # Get task types
         from backend.task_manager import TaskManager
         tm = TaskManager()
-        tasks_df = tm.get_all()
+        # Note: Analysis script - using user_id=None for analysis across all data
+        tasks_df = tm.get_all(user_id=None)
         task_type_map = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             for _, row in tasks_df.iterrows():
@@ -830,7 +831,8 @@ class ProductivityTrendAnalyzer:
         # Get task information for categorization
         from backend.task_manager import TaskManager
         tm = TaskManager()
-        tasks_df = tm.get_all()
+        # Note: Analysis script - using user_id=None for analysis across all data
+        tasks_df = tm.get_all(user_id=None)
         task_info = {}
         if not tasks_df.empty:
             for _, task_row in tasks_df.iterrows():

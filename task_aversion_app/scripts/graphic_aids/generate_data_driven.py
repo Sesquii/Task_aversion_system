@@ -33,7 +33,8 @@ def get_user_instances(limit=100):
         instance_manager = InstanceManager()
         analytics = Analytics()
         
-        instances = instance_manager.list_recent_completed(limit=limit)
+        # Analysis script: intentionally use user_id=None to load all instances across all users
+        instances = instance_manager.list_recent_completed(limit=limit, user_id=None)
         return instances, analytics
     except Exception as e:
         print(f"[GraphicAids] Error loading instances: {e}")

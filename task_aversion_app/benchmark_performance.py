@@ -122,7 +122,7 @@ class PerformanceBenchmark:
         print("="*60)
         
         dashboard_ops = {
-            'list_tasks': lambda: self.tm.list_tasks(),
+            'list_tasks': lambda: self.tm.list_tasks(user_id=None),  # Benchmark script: intentionally use user_id=None
             'list_active_instances': lambda: self.im.list_active_instances(user_id=None),  # CSV mode allows None
             'get_relief_summary': lambda: self.analytics.get_relief_summary(),
             'get_dashboard_metrics': lambda: self.analytics.get_dashboard_metrics(),
@@ -150,9 +150,10 @@ class PerformanceBenchmark:
         print("BENCHMARKING ANALYTICS OPERATIONS")
         print("="*60)
         
+        # Benchmark script: intentionally use user_id=None to load all instances across all users
         analytics_ops = {
-            'load_instances_all': lambda: self.analytics._load_instances(completed_only=False),
-            'load_instances_completed': lambda: self.analytics._load_instances(completed_only=True),
+            'load_instances_all': lambda: self.analytics._load_instances(completed_only=False, user_id=None),
+            'load_instances_completed': lambda: self.analytics._load_instances(completed_only=True, user_id=None),
             'get_all_scores_for_composite': lambda: self.analytics.get_all_scores_for_composite(days=7),
             'calculate_time_tracking_consistency': lambda: self.analytics.calculate_time_tracking_consistency_score(days=7),
         }
@@ -182,7 +183,7 @@ class PerformanceBenchmark:
         def simulate_load():
             """Simulate what happens when dashboard loads."""
             # These are the key operations that happen on dashboard load
-            self.tm.list_tasks()
+            self.tm.list_tasks(user_id=None)  # Benchmark script: intentionally use user_id=None
             self.im.list_active_instances(user_id=None)  # CSV mode allows None
             self.analytics.get_relief_summary()
             self.analytics.get_dashboard_metrics()
@@ -242,12 +243,14 @@ class PerformanceBenchmark:
         print("="*60)
         
         try:
-            tasks = self.tm.list_tasks()
-            active_instances = self.im.list_active_instances()
+            # Benchmark script: intentionally use user_id=None to analyze data across all users
+            tasks = self.tm.list_tasks(user_id=None)
+            active_instances = self.im.list_active_instances(user_id=None)
             
             # Load instances DataFrame to get comprehensive stats
             try:
-                df = self.analytics._load_instances(completed_only=False)
+                # Benchmark script: intentionally use user_id=None to load all instances across all users
+                df = self.analytics._load_instances(completed_only=False, user_id=None)
                 total_instances = len(df)
                 completed_instances = len(df[df.get('is_completed', pd.Series([False]*len(df))) == True]) if 'is_completed' in df.columns else 0
                 active_count = len(df[df.get('status', pd.Series(['']*len(df))) == 'active']) if 'status' in df.columns else len(active_instances)

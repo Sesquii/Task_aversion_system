@@ -1,3 +1,4 @@
+from typing import Optional
 from nicegui import ui
 from fastapi import Request
 from backend.instance_manager import InstanceManager
@@ -19,9 +20,15 @@ DEFAULT_CANCELLATION_CATEGORIES = {
 }
 
 
-def get_all_cancellation_categories():
-    """Get all cancellation categories (default + custom)."""
-    custom_categories = user_state.get_cancellation_categories(DEFAULT_USER_ID)
+def get_all_cancellation_categories(user_id: Optional[str] = None):
+    """Get all cancellation categories (default + custom).
+    
+    Args:
+        user_id: User ID to get custom categories for. If None, uses DEFAULT_USER_ID.
+    """
+    if user_id is None:
+        user_id = DEFAULT_USER_ID
+    custom_categories = user_state.get_cancellation_categories(user_id)
     # Merge custom with default (custom takes precedence if key conflicts)
     all_categories = {**DEFAULT_CANCELLATION_CATEGORIES, **custom_categories}
     return all_categories
@@ -68,7 +75,8 @@ def cancel_task_page(task_manager, emotion_manager):
             ui.separator()
 
             # Load all categories (default + custom)
-            all_categories = get_all_cancellation_categories()
+            current_user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+            all_categories = get_all_cancellation_categories(user_id=current_user_id_str)
             
             ui.label("Cancellation Category (Required)").classes("text-sm font-semibold")
             cancellation_category = ui.select(

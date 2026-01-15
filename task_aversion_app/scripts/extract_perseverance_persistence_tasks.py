@@ -23,10 +23,14 @@ from backend.instance_manager import InstanceManager
 
 
 def load_task_instances() -> pd.DataFrame:
-    """Load task instances from database or CSV."""
+    """Load task instances from database or CSV.
+    
+    Note: Analysis script - uses user_id=None to analyze data across all users.
+    """
     try:
-        instance_manager = InstanceManager()
-        instances = instance_manager.get_all_instances()
+        analytics = Analytics()
+        # Analysis script: intentionally use user_id=None to analyze across all users
+        instances = analytics._load_instances(user_id=None)
         return instances
     except Exception as e:
         print(f"[WARNING] Could not load from database: {e}")
