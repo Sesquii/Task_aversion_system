@@ -277,8 +277,20 @@ class ProductivityTracker:
         """Get all completed task instances as DataFrame.
         
         Uses the same pattern as analytics.py: defaults to database unless USE_CSV is set.
+        
+        Args:
+            user_id: User ID (string format, will be converted to int for database queries)
         """
         import json
+        from typing import Optional
+        
+        # Convert string user_id to int for database queries
+        user_id_int: Optional[int] = None
+        try:
+            if user_id and user_id != 'default_user':
+                user_id_int = int(user_id) if user_id.isdigit() else None
+        except (ValueError, AttributeError):
+            pass
         
         # Default to database (SQLite) unless USE_CSV is explicitly set
         use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
@@ -313,10 +325,19 @@ class ProductivityTracker:
                 from .database import get_session, TaskInstance
                 session = get_session()
                 try:
-                    instances = session.query(TaskInstance).filter(
+                    query = session.query(TaskInstance).filter(
                         TaskInstance.is_completed == True,
                         TaskInstance.completed_at.isnot(None)
-                    ).all()
+                    )
+                    
+                    # CRITICAL: Filter by user_id for data isolation
+                    if user_id_int is not None:
+                        query = query.filter(TaskInstance.user_id == user_id_int)
+                    else:
+                        print("[ProductivityTracker] WARNING: _get_completed_instances() called without valid user_id - returning empty for security")
+                        return pd.DataFrame()
+                    
+                    instances = query.all()
                     
                     if not instances:
                         return pd.DataFrame()

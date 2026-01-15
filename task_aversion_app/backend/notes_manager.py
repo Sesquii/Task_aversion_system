@@ -60,8 +60,8 @@ class NotesManager:
             self._init_csv()
             print("[NotesManager] Using CSV backend")
         
-        # Initialize default note if needed
-        self._initialize_default_note()
+        # Initialize default note if needed (will be called per-user when needed)
+        # Note: _initialize_default_note() now requires user_id, so we skip it here
 
     def _init_csv(self):
         """Initialize CSV backend."""
@@ -99,20 +99,33 @@ class NotesManager:
         """Generate next note ID."""
         return f"note-{int(datetime.utcnow().timestamp()*1000)}"
 
-    def _initialize_default_note(self):
-        """Initialize with default note if no notes exist."""
+    def _initialize_default_note(self, user_id: Optional[int] = None):
+        """Initialize with default note if no notes exist for the user.
+        
+        Args:
+            user_id: User ID to check notes for (required for database, optional for CSV during migration)
+        """
         if self.use_db:
             with self.db_session() as session:
-                note_count = session.query(self.Note).count()
+                query = session.query(self.Note)
+                # Filter by user_id if provided (include NULL user_id during migration period)
+                if user_id is not None:
+                    from sqlalchemy import or_
+                    query = query.filter(or_(self.Note.user_id == user_id, self.Note.user_id.is_(None)))
+                note_count = query.count()
                 if note_count == 0:
-                    self.add_note("suno after music walks seems useful")
+                    self.add_note("suno after music walks seems useful", user_id=user_id)
         else:
             self._reload_csv()
             if self.df.empty:
-                self.add_note("suno after music walks seems useful")
+                self.add_note("suno after music walks seems useful", user_id=user_id)
 
-    def add_note(self, content: str) -> str:
+    def add_note(self, content: str, user_id: Optional[int] = None) -> str:
         """Add a new note. Returns the note_id.
+        
+        Args:
+            content: Note content
+            user_id: User ID to associate note with (required for database, optional for CSV during migration)
         
         Raises:
             ValidationError: If note validation fails (too long, etc.)
@@ -132,7 +145,8 @@ class NotesManager:
                 note = self.Note(
                     note_id=note_id,
                     content=content,
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    user_id=user_id
                 )
                 session.add(note)
                 session.commit()
@@ -142,33 +156,68 @@ class NotesManager:
                 "note_id": note_id,
                 "content": content,
                 "timestamp": timestamp.isoformat(),
+                "user_id": str(user_id) if user_id is not None else '',
             }
             self.df = pd.concat([self.df, pd.DataFrame([row])], ignore_index=True)
             self._save_csv()
         
         return note_id
 
-    def get_all_notes(self) -> List[Dict[str, Any]]:
-        """Get all notes, sorted by timestamp (newest first)."""
+    def get_all_notes(self, user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get all notes for a user, sorted by timestamp (newest first).
+        
+        Args:
+            user_id: User ID to filter by (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[NotesManager] WARNING: get_all_notes() called without user_id - returning empty for security")
+            return []
+        
         if self.use_db:
             with self.db_session() as session:
-                notes = session.query(self.Note).order_by(self.Note.timestamp.desc()).all()
+                from sqlalchemy import or_
+                # Filter by user_id (include NULL user_id during migration period)
+                query = session.query(self.Note).filter(
+                    or_(self.Note.user_id == user_id, self.Note.user_id.is_(None))
+                )
+                notes = query.order_by(self.Note.timestamp.desc()).all()
                 return [note.to_dict() for note in notes]
         else:
             self._reload_csv()
             if self.df.empty:
                 return []
+            # Filter by user_id
+            df = self.df.copy()
+            df = df[df['user_id'].astype(str) == str(user_id)]
             # Convert to records and sort by timestamp descending
-            notes = self.df.to_dict(orient="records")
+            notes = df.to_dict(orient="records")
             # Sort by timestamp descending (newest first)
             notes.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
             return notes
 
-    def delete_note(self, note_id: str) -> bool:
-        """Delete a note by note_id. Returns True if deleted, False if not found."""
+    def delete_note(self, note_id: str, user_id: Optional[int] = None) -> bool:
+        """Delete a note by note_id. Returns True if deleted, False if not found.
+        
+        Args:
+            note_id: Note ID to delete
+            user_id: User ID to verify ownership (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[NotesManager] WARNING: delete_note() called without user_id - returning False for security")
+            return False
+        
         if self.use_db:
             with self.db_session() as session:
-                note = session.query(self.Note).filter(self.Note.note_id == note_id).first()
+                from sqlalchemy import or_
+                # Filter by note_id and user_id (include NULL user_id during migration period)
+                query = session.query(self.Note).filter(
+                    self.Note.note_id == note_id
+                ).filter(
+                    or_(self.Note.user_id == user_id, self.Note.user_id.is_(None))
+                )
+                note = query.first()
                 if note:
                     session.delete(note)
                     session.commit()
@@ -178,9 +227,14 @@ class NotesManager:
             self._reload_csv()
             if self.df.empty:
                 return False
-            original_len = len(self.df)
-            self.df = self.df[self.df["note_id"] != note_id]
-            if len(self.df) < original_len:
+            # Filter by user_id
+            df = self.df.copy()
+            df = df[df['user_id'].astype(str) == str(user_id)]
+            original_len = len(df)
+            df = df[df["note_id"] != note_id]
+            if len(df) < original_len:
+                # Update self.df with filtered result
+                self.df = df
                 self._save_csv()
                 return True
             return False

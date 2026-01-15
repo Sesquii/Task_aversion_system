@@ -444,16 +444,17 @@ class InstanceManager:
             self.use_db = False
             return self._create_instance_csv(task_id, task_name, task_version, predicted, user_id=user_id)
 
-    def pause_instance(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
+    def pause_instance(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0, user_id: Optional[int] = None):
         """Pause an active instance and move it back to initialized state. Works with both CSV and database.
         
         Args:
             instance_id: The instance ID to pause
             reason: Optional reason for pausing
             completion_percentage: Completion percentage (0-100) when pausing
+            user_id: User ID to verify ownership (required for data isolation)
         """
         if self.use_db:
-            return self._pause_instance_db(instance_id, reason, completion_percentage)
+            return self._pause_instance_db(instance_id, reason, completion_percentage, user_id)
         else:
             return self._pause_instance_csv(instance_id, reason, completion_percentage)
     
@@ -595,19 +596,34 @@ class InstanceManager:
         # Invalidate caches AFTER pausing to ensure fresh data on next read
         self._invalidate_instance_caches()
     
-    def _pause_instance_db(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
-        """Database-specific pause_instance."""
+    def _pause_instance_db(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0, user_id: Optional[int] = None):
+        """Database-specific pause_instance.
+        
+        Args:
+            instance_id: Instance ID to pause
+            reason: Optional reason for pausing
+            completion_percentage: Completion percentage (0-100) when pausing
+            user_id: User ID to filter by (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[InstanceManager] WARNING: _pause_instance_db() called without user_id - returning False for security")
+            return False
+        
         try:
             import json
             import sys
             sys.stderr.write(f"\n[PAUSE DEBUG] Pausing instance {instance_id} (Database backend)\n")
             sys.stderr.flush()
             with self.db_session() as session:
-                instance = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.instance_id == instance_id
-                ).first()
+                )
+                # CRITICAL: Filter by user_id for data isolation
+                query = query.filter(self.TaskInstance.user_id == user_id)
+                instance = query.first()
                 if not instance:
-                    raise ValueError(f"Instance {instance_id} not found")
+                    raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
                 
                 # Get existing actual data first to preserve time_spent_before_pause if resuming after multiple pauses
                 actual_data = instance.actual or {}
@@ -901,40 +917,69 @@ class InstanceManager:
             self.use_db = False
             return self._list_active_instances_csv(user_id=user_id)
 
-    def list_cancelled_instances(self):
-        """List all cancelled task instances. Works with both CSV and database."""
+    def list_cancelled_instances(self, user_id: Optional[int] = None):
+        """List all cancelled task instances for a user. Works with both CSV and database.
+        
+        Args:
+            user_id: User ID to filter by (required for data isolation)
+        """
         if self.use_db:
-            return self._list_cancelled_instances_db()
+            return self._list_cancelled_instances_db(user_id)
         else:
-            return self._list_cancelled_instances_csv()
+            return self._list_cancelled_instances_csv(user_id)
     
-    def _list_cancelled_instances_csv(self):
-        """CSV-specific list_cancelled_instances."""
+    def _list_cancelled_instances_csv(self, user_id: Optional[int] = None):
+        """CSV-specific list_cancelled_instances.
+        
+        Args:
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         self._reload()
         status_series = self.df['status'].str.lower()
         df = self.df[
             (status_series == 'cancelled') & (self.df['is_deleted'] != 'True')
         ]
+        
+        # CRITICAL: Filter by user_id for data isolation
+        if user_id is not None:
+            df = df[df['user_id'].astype(str) == str(user_id)]
+        else:
+            print("[InstanceManager] WARNING: _list_cancelled_instances_csv() called without user_id - returning empty for security")
+            return []
+        
         # Sort by cancelled_at descending (most recent first)
         if 'cancelled_at' in df.columns:
             df = df.sort_values('cancelled_at', ascending=False, na_position='last')
         return df.to_dict(orient='records')
     
-    def _list_cancelled_instances_db(self):
-        """Database-specific list_cancelled_instances."""
+    def _list_cancelled_instances_db(self, user_id: Optional[int] = None):
+        """Database-specific list_cancelled_instances.
+        
+        Args:
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         try:
             with self.db_session() as session:
-                instances = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.status == 'cancelled',
                     self.TaskInstance.is_deleted == False
-                ).order_by(self.TaskInstance.cancelled_at.desc()).all()
+                )
+                
+                # CRITICAL: Filter by user_id for data isolation
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                else:
+                    print("[InstanceManager] WARNING: _list_cancelled_instances_db() called without user_id - returning empty for security")
+                    return []
+                
+                instances = query.order_by(self.TaskInstance.cancelled_at.desc()).all()
                 return [instance.to_dict() for instance in instances]
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in list_cancelled_instances and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in list_cancelled_instances: {e}, falling back to CSV")
             self.use_db = False
-            return self._list_cancelled_instances_csv()
+            return self._list_cancelled_instances_csv(user_id)
 
     def get_instance(self, instance_id, user_id: Optional[int] = None):
         """Get a task instance by ID. Works with both CSV and database.
@@ -947,17 +992,17 @@ class InstanceManager:
             Instance dict if found and belongs to user, None otherwise
         """
         if self.use_db:
-            instance = self._get_instance_db(instance_id)
+            instance = self._get_instance_db(instance_id, user_id)
         else:
             instance = self._get_instance_csv(instance_id)
-        
-        # CRITICAL: Verify instance belongs to user_id for data isolation
-        if instance and user_id is not None:
-            instance_user_id = instance.get('user_id')
-            # Convert to string for CSV comparison, int for DB comparison
-            if str(instance_user_id) != str(user_id):
-                print(f"[InstanceManager] SECURITY: User {user_id} attempted to access instance {instance_id} belonging to user {instance_user_id}")
-                return None  # Don't return instance if it doesn't belong to the user
+            
+            # CRITICAL: Verify instance belongs to user_id for data isolation (CSV fallback)
+            if instance and user_id is not None:
+                instance_user_id = instance.get('user_id')
+                # Convert to string for CSV comparison
+                if str(instance_user_id) != str(user_id):
+                    print(f"[InstanceManager] SECURITY: User {user_id} attempted to access instance {instance_id} belonging to user {instance_user_id}")
+                    return None  # Don't return instance if it doesn't belong to the user
         
         return instance
     
@@ -971,14 +1016,28 @@ class InstanceManager:
             row = rows.iloc[0].to_dict()
             return row
     
-    def _get_instance_db(self, instance_id):
-        """Database-specific get_instance."""
+    def _get_instance_db(self, instance_id, user_id: Optional[int] = None):
+        """Database-specific get_instance.
+        
+        Args:
+            instance_id: Instance ID to retrieve
+            user_id: User ID to filter by (required for data isolation)
+        """
         try:
             with perf_logger.operation("_get_instance_db", instance_id=instance_id):
                 with self.db_session() as session:
-                    instance = session.query(self.TaskInstance).filter(
+                    query = session.query(self.TaskInstance).filter(
                         self.TaskInstance.instance_id == instance_id
-                    ).first()
+                    )
+                    
+                    # CRITICAL: Filter by user_id for data isolation
+                    if user_id is not None:
+                        query = query.filter(self.TaskInstance.user_id == user_id)
+                    else:
+                        print("[InstanceManager] WARNING: _get_instance_db() called without user_id - returning None for security")
+                        return None
+                    
+                    instance = query.first()
                     return instance.to_dict() if instance else None
         except Exception as e:
             if self.strict_mode:
@@ -987,21 +1046,30 @@ class InstanceManager:
             self.use_db = False
             return self._get_instance_csv(instance_id)
 
-    def start_instance(self, instance_id):
-        """Start a task instance (first time, not resuming). Works with both CSV and database."""
+    def start_instance(self, instance_id, user_id: Optional[int] = None):
+        """Start a task instance (first time, not resuming). Works with both CSV and database.
+        
+        Args:
+            instance_id: Instance ID to start
+            user_id: User ID to verify ownership (required for data isolation)
+        """
         if self.use_db:
-            return self._start_instance_db(instance_id)
+            return self._start_instance_db(instance_id, user_id)
         else:
             return self._start_instance_csv(instance_id)
     
-    def resume_instance(self, instance_id):
+    def resume_instance(self, instance_id, user_id: Optional[int] = None):
         """Resume a paused task instance. Works with both CSV and database.
         
         This is separate from start_instance() to clearly track resume operations.
         Stores resume_started_at timestamp in actual JSON for precise time tracking.
+        
+        Args:
+            instance_id: Instance ID to resume
+            user_id: User ID to verify ownership (required for data isolation)
         """
         if self.use_db:
-            return self._resume_instance_db(instance_id)
+            return self._resume_instance_db(instance_id, user_id)
         else:
             return self._resume_instance_csv(instance_id)
     
@@ -1120,18 +1188,31 @@ class InstanceManager:
         # Invalidate caches AFTER resuming to ensure fresh data on next read
         self._invalidate_instance_caches()
     
-    def _start_instance_db(self, instance_id):
-        """Database-specific start_instance (first time start, not resuming)."""
+    def _start_instance_db(self, instance_id, user_id: Optional[int] = None):
+        """Database-specific start_instance (first time start, not resuming).
+        
+        Args:
+            instance_id: Instance ID to start
+            user_id: User ID to filter by (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[InstanceManager] WARNING: _start_instance_db() called without user_id - returning False for security")
+            return False
+        
         try:
             import sys
             sys.stderr.write(f"\n[START DEBUG] Starting instance {instance_id} (Database backend) - FIRST TIME\n")
             sys.stderr.flush()
             with self.db_session() as session:
-                instance = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.instance_id == instance_id
-                ).first()
+                )
+                # CRITICAL: Filter by user_id for data isolation
+                query = query.filter(self.TaskInstance.user_id == user_id)
+                instance = query.first()
                 if not instance:
-                    raise ValueError(f"Instance {instance_id} not found")
+                    raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
                 
                 # Check existing state before starting
                 previous_started_at = instance.started_at
@@ -1172,18 +1253,31 @@ class InstanceManager:
             self.use_db = False
             return self._start_instance_csv(instance_id)
     
-    def _resume_instance_db(self, instance_id):
-        """Database-specific resume_instance (resuming a paused task)."""
+    def _resume_instance_db(self, instance_id, user_id: Optional[int] = None):
+        """Database-specific resume_instance (resuming a paused task).
+        
+        Args:
+            instance_id: Instance ID to resume
+            user_id: User ID to filter by (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[InstanceManager] WARNING: _resume_instance_db() called without user_id - returning False for security")
+            return False
+        
         try:
             import sys
             sys.stderr.write(f"\n[RESUME DEBUG] Resuming instance {instance_id} (Database backend)\n")
             sys.stderr.flush()
             with self.db_session() as session:
-                instance = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.instance_id == instance_id
-                ).first()
+                )
+                # CRITICAL: Filter by user_id for data isolation
+                query = query.filter(self.TaskInstance.user_id == user_id)
+                instance = query.first()
                 if not instance:
-                    raise ValueError(f"Instance {instance_id} not found")
+                    raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
                 
                 # Check existing state before resuming
                 previous_started_at = instance.started_at
@@ -1669,10 +1763,16 @@ class InstanceManager:
         # Do this outside the session context to ensure it always runs
         self._invalidate_instance_caches()
 
-    def update_cancelled_instance(self, instance_id, cancellation_data: dict):
-        """Update cancellation data for an already-cancelled instance. Works with both CSV and database."""
+    def update_cancelled_instance(self, instance_id, cancellation_data: dict, user_id: Optional[int] = None):
+        """Update cancellation data for an already-cancelled instance. Works with both CSV and database.
+        
+        Args:
+            instance_id: Instance ID to update
+            cancellation_data: Cancellation data to merge
+            user_id: User ID to verify ownership (required for data isolation)
+        """
         if self.use_db:
-            return self._update_cancelled_instance_db(instance_id, cancellation_data)
+            return self._update_cancelled_instance_db(instance_id, cancellation_data, user_id)
         else:
             return self._update_cancelled_instance_csv(instance_id, cancellation_data)
     
@@ -1703,15 +1803,29 @@ class InstanceManager:
         self.df.at[idx, 'actual'] = json.dumps(updated_actual)
         self._save()
     
-    def _update_cancelled_instance_db(self, instance_id, cancellation_data: dict):
-        """Database-specific update_cancelled_instance."""
+    def _update_cancelled_instance_db(self, instance_id, cancellation_data: dict, user_id: Optional[int] = None):
+        """Database-specific update_cancelled_instance.
+        
+        Args:
+            instance_id: Instance ID to update
+            cancellation_data: Cancellation data to merge
+            user_id: User ID to filter by (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[InstanceManager] WARNING: _update_cancelled_instance_db() called without user_id - returning False for security")
+            return False
+        
         try:
             with self.db_session() as session:
-                instance = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.instance_id == instance_id
-                ).first()
+                )
+                # CRITICAL: Filter by user_id for data isolation
+                query = query.filter(self.TaskInstance.user_id == user_id)
+                instance = query.first()
                 if not instance:
-                    raise ValueError(f"Instance {instance_id} not found")
+                    raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
                 
                 if instance.status != 'cancelled':
                     raise ValueError(f"Instance {instance_id} is not cancelled")
@@ -1730,10 +1844,16 @@ class InstanceManager:
             self.use_db = False
             return self._update_cancelled_instance_csv(instance_id, cancellation_data)
 
-    def add_prediction_to_instance(self, instance_id, predicted: dict):
-        """Add prediction data to an instance. Works with both CSV and database."""
+    def add_prediction_to_instance(self, instance_id, predicted: dict, user_id: Optional[int] = None):
+        """Add prediction data to an instance. Works with both CSV and database.
+        
+        Args:
+            instance_id: Instance ID to add prediction to
+            predicted: Prediction data dictionary
+            user_id: User ID to verify ownership (required for data isolation)
+        """
         if self.use_db:
-            return self._add_prediction_to_instance_db(instance_id, predicted)
+            return self._add_prediction_to_instance_db(instance_id, predicted, user_id)
         else:
             return self._add_prediction_to_instance_csv(instance_id, predicted)
     
@@ -1751,16 +1871,30 @@ class InstanceManager:
             self._update_attributes_from_payload(idx, predicted)
             self._save()
     
-    def _add_prediction_to_instance_db(self, instance_id, predicted: dict):
-        """Database-specific add_prediction_to_instance."""
+    def _add_prediction_to_instance_db(self, instance_id, predicted: dict, user_id: Optional[int] = None):
+        """Database-specific add_prediction_to_instance.
+        
+        Args:
+            instance_id: Instance ID to add prediction to
+            predicted: Prediction data dictionary
+            user_id: User ID to filter by (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[InstanceManager] WARNING: _add_prediction_to_instance_db() called without user_id - returning False for security")
+            return False
+        
         try:
             with perf_logger.operation("_add_prediction_to_instance_db", instance_id=instance_id):
                 with self.db_session() as session:
-                    instance = session.query(self.TaskInstance).filter(
+                    query = session.query(self.TaskInstance).filter(
                         self.TaskInstance.instance_id == instance_id
-                    ).first()
+                    )
+                    # CRITICAL: Filter by user_id for data isolation
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                    instance = query.first()
                     if not instance:
-                        raise ValueError(f"Instance {instance_id} not found")
+                        raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
                     
                     # Update predicted JSON
                     instance.predicted = predicted or {}
@@ -1786,11 +1920,16 @@ class InstanceManager:
 
 
 
-    def delete_instance(self, instance_id):
-        """Delete a task instance. Works with both CSV and database."""
+    def delete_instance(self, instance_id, user_id: Optional[int] = None):
+        """Delete a task instance. Works with both CSV and database.
+        
+        Args:
+            instance_id: Instance ID to delete
+            user_id: User ID to verify ownership (required for data isolation)
+        """
         # Note: Cache invalidation happens AFTER deleting in _delete_instance_db/_delete_instance_csv
         if self.use_db:
-            return self._delete_instance_db(instance_id)
+            return self._delete_instance_db(instance_id, user_id)
         else:
             return self._delete_instance_csv(instance_id)
     
@@ -1809,16 +1948,29 @@ class InstanceManager:
         self._invalidate_instance_caches()
         return True
     
-    def _delete_instance_db(self, instance_id):
-        """Database-specific delete_instance."""
+    def _delete_instance_db(self, instance_id, user_id: Optional[int] = None):
+        """Database-specific delete_instance.
+        
+        Args:
+            instance_id: Instance ID to delete
+            user_id: User ID to filter by (required for data isolation)
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[InstanceManager] WARNING: _delete_instance_db() called without user_id - returning False for security")
+            return False
+        
         try:
             print(f"[InstanceManager] delete_instance called with: {instance_id}")
             with self.db_session() as session:
-                instance = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.instance_id == instance_id
-                ).first()
+                )
+                # CRITICAL: Filter by user_id for data isolation
+                query = query.filter(self.TaskInstance.user_id == user_id)
+                instance = query.first()
                 if not instance:
-                    print("[InstanceManager] No matching instance to delete.")
+                    print(f"[InstanceManager] No matching instance to delete (instance_id={instance_id}, user_id={user_id}).")
                     return False
                 
                 session.delete(instance)
@@ -2189,16 +2341,24 @@ class InstanceManager:
             self.use_db = False
             return self._list_recent_tasks_csv(limit, user_id=user_id)
     
-    def backfill_attributes_from_json(self):
+    def backfill_attributes_from_json(self, user_id: Optional[int] = None):
         """Backfill empty attribute columns from JSON data in predicted/actual columns.
-        This is a migration method to fix existing data. Works with both CSV and database."""
+        This is a migration method to fix existing data. Works with both CSV and database.
+        
+        Args:
+            user_id: User ID to filter by. If None, processes all users (migration mode - use with caution).
+        """
         if self.use_db:
-            return self._backfill_attributes_from_json_db()
+            return self._backfill_attributes_from_json_db(user_id)
         else:
-            return self._backfill_attributes_from_json_csv()
+            return self._backfill_attributes_from_json_csv(user_id)
     
-    def _backfill_attributes_from_json_csv(self):
-        """CSV-specific backfill_attributes_from_json."""
+    def _backfill_attributes_from_json_csv(self, user_id: Optional[int] = None):
+        """CSV-specific backfill_attributes_from_json.
+        
+        Args:
+            user_id: User ID to filter by. If None, processes all users (migration mode - use with caution).
+        """
         import json
         self._reload()
         updated_count = 0
@@ -2213,7 +2373,14 @@ class InstanceManager:
                 return True
             return False
         
-        for idx in self.df.index:
+        # CRITICAL: Filter by user_id for data isolation
+        df_to_process = self.df.copy()
+        if user_id is not None:
+            df_to_process = df_to_process[df_to_process['user_id'].astype(str) == str(user_id)]
+        else:
+            print("[InstanceManager] WARNING: _backfill_attributes_from_json_csv() called without user_id - processing all users (migration mode)")
+        
+        for idx in df_to_process.index:
             row_updated = False
             
             # Try to extract from actual JSON first (most accurate)
@@ -2283,8 +2450,12 @@ class InstanceManager:
         
         return updated_count
     
-    def _backfill_attributes_from_json_db(self):
-        """Database-specific backfill_attributes_from_json."""
+    def _backfill_attributes_from_json_db(self, user_id: Optional[int] = None):
+        """Database-specific backfill_attributes_from_json.
+        
+        Args:
+            user_id: User ID to filter by. If None, processes all users (migration mode - use with caution).
+        """
         try:
             import json
             updated_count = 0
@@ -2299,7 +2470,15 @@ class InstanceManager:
             
             with self.db_session() as session:
                 # Get all instances
-                instances = session.query(self.TaskInstance).all()
+                query = session.query(self.TaskInstance)
+                
+                # CRITICAL: Filter by user_id for data isolation
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                else:
+                    print("[InstanceManager] WARNING: _backfill_attributes_from_json_db() called without user_id - processing all users (migration mode)")
+                
+                instances = query.all()
                 
                 for instance in instances:
                     row_updated = False
@@ -2601,17 +2780,22 @@ class InstanceManager:
             self.use_db = False
             return self._get_previous_task_averages_csv(task_id)
 
-    def get_previous_actual_averages(self, task_id: str) -> dict:
+    def get_previous_actual_averages(self, task_id: str, user_id: Optional[int] = None) -> dict:
         """Get average values from previous completed instances of the same task.
         Returns a dict with keys: actual_relief, actual_cognitive, 
         actual_emotional, actual_physical.
-        Values are scaled to 0-100 range."""
+        Values are scaled to 0-100 range.
+        
+        Args:
+            task_id: Task ID to get averages for
+            user_id: User ID to filter by (required for data isolation)
+        """
         if self.use_db:
-            return self._get_previous_actual_averages_db(task_id)
+            return self._get_previous_actual_averages_db(task_id, user_id)
         else:
-            return self._get_previous_actual_averages_csv(task_id)
+            return self._get_previous_actual_averages_csv(task_id, user_id)
     
-    def _get_previous_actual_averages_csv(self, task_id: str) -> dict:
+    def _get_previous_actual_averages_csv(self, task_id: str, user_id: Optional[int] = None) -> dict:
         """CSV-specific get_previous_actual_averages."""
         import json
         self._reload()
@@ -2621,6 +2805,13 @@ class InstanceManager:
             (self.df['task_id'] == task_id) & 
             (self.df['completed_at'].astype(str).str.strip() != '')
         ].copy()
+        
+        # CRITICAL: Filter by user_id for data isolation
+        if user_id is not None:
+            completed = completed[completed['user_id'].astype(str) == str(user_id)]
+        else:
+            print("[InstanceManager] WARNING: _get_previous_actual_averages_csv() called without user_id - returning empty for security")
+            return {}
         
         if completed.empty:
             return {}
@@ -2669,15 +2860,29 @@ class InstanceManager:
         
         return result
     
-    def _get_previous_actual_averages_db(self, task_id: str) -> dict:
-        """Database-specific get_previous_actual_averages."""
+    def _get_previous_actual_averages_db(self, task_id: str, user_id: Optional[int] = None) -> dict:
+        """Database-specific get_previous_actual_averages.
+        
+        Args:
+            task_id: Task ID to get averages for
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         try:
             with self.db_session() as session:
                 # Get all completed instances for this task
-                instances = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.task_id == task_id,
                     self.TaskInstance.completed_at.isnot(None)
-                ).all()
+                )
+                
+                # CRITICAL: Filter by user_id for data isolation
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                else:
+                    print("[InstanceManager] WARNING: get_previous_actual_averages_db() called without user_id - returning empty for security")
+                    return {}
+                
+                instances = query.all()
                 
                 if not instances:
                     return {}
@@ -2727,16 +2932,21 @@ class InstanceManager:
             self.use_db = False
             return self._get_previous_actual_averages_csv(task_id)
 
-    def get_initial_aversion(self, task_id: str) -> Optional[float]:
+    def get_initial_aversion(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
         """Get the initial aversion value for a task (from the first initialized instance).
         Returns None if this is the first time doing the task.
-        Values are scaled to 0-100 range."""
+        Values are scaled to 0-100 range.
+        
+        Args:
+            task_id: Task ID to get initial aversion for
+            user_id: User ID to filter by (required for data isolation)
+        """
         if self.use_db:
-            return self._get_initial_aversion_db(task_id)
+            return self._get_initial_aversion_db(task_id, user_id)
         else:
-            return self._get_initial_aversion_csv(task_id)
+            return self._get_initial_aversion_csv(task_id, user_id)
     
-    def _get_initial_aversion_csv(self, task_id: str) -> Optional[float]:
+    def _get_initial_aversion_csv(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
         """CSV-specific get_initial_aversion."""
         import json
         with perf_logger.operation("_get_initial_aversion_csv", task_id=task_id):
@@ -2747,6 +2957,13 @@ class InstanceManager:
                 (self.df['task_id'] == task_id) & 
                 (self.df['initialized_at'].astype(str).str.strip() != '')
             ].copy()
+            
+            # CRITICAL: Filter by user_id for data isolation
+            if user_id is not None:
+                initialized = initialized[initialized['user_id'].astype(str) == str(user_id)]
+            else:
+                print("[InstanceManager] WARNING: _get_initial_aversion_csv() called without user_id - returning None for security")
+                return None
             
             if initialized.empty:
                 return None
@@ -2777,17 +2994,31 @@ class InstanceManager:
             
             return None
     
-    def _get_initial_aversion_db(self, task_id: str) -> Optional[float]:
-        """Database-specific get_initial_aversion."""
+    def _get_initial_aversion_db(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
+        """Database-specific get_initial_aversion.
+        
+        Args:
+            task_id: Task ID to get initial aversion for
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         try:
             import json
             with perf_logger.operation("_get_initial_aversion_db", task_id=task_id):
                 with self.db_session() as session:
                     # Get all initialized instances for this task, sorted by initialized_at
-                    instances = session.query(self.TaskInstance).filter(
+                    query = session.query(self.TaskInstance).filter(
                         self.TaskInstance.task_id == task_id,
                         self.TaskInstance.initialized_at.isnot(None)
-                    ).order_by(self.TaskInstance.initialized_at.asc()).all()
+                    )
+                    
+                    # CRITICAL: Filter by user_id for data isolation
+                    if user_id is not None:
+                        query = query.filter(self.TaskInstance.user_id == user_id)
+                    else:
+                        print("[InstanceManager] WARNING: get_initial_aversion_db() called without user_id - returning None for security")
+                        return None
+                    
+                    instances = query.order_by(self.TaskInstance.initialized_at.asc()).all()
                 
                     if not instances:
                         return None
@@ -2882,7 +3113,7 @@ class InstanceManager:
         else:
             return self._get_previous_aversion_average_csv(task_id)
     
-    def _get_previous_aversion_average_csv(self, task_id: str) -> Optional[float]:
+    def _get_previous_aversion_average_csv(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
         """CSV-specific get_previous_aversion_average."""
         import json
         self._reload()
@@ -2921,15 +3152,29 @@ class InstanceManager:
             return round(sum(aversion_values) / len(aversion_values))
         return None
     
-    def _get_previous_aversion_average_db(self, task_id: str) -> Optional[float]:
-        """Database-specific get_previous_aversion_average."""
+    def _get_previous_aversion_average_db(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
+        """Database-specific get_previous_aversion_average.
+        
+        Args:
+            task_id: Task ID to get average for
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         try:
             with self.db_session() as session:
                 # Get all initialized instances for this task (completed or not)
-                instances = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.task_id == task_id,
                     self.TaskInstance.initialized_at.isnot(None)
-                ).all()
+                )
+                
+                # CRITICAL: Filter by user_id for data isolation
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                else:
+                    print("[InstanceManager] WARNING: get_previous_aversion_average_db() called without user_id - returning None for security")
+                    return None
+                
+                instances = query.all()
                 
                 if not instances:
                     return None
@@ -2960,16 +3205,21 @@ class InstanceManager:
             self.use_db = False
             return self._get_previous_aversion_average_csv(task_id)
 
-    def get_baseline_aversion_robust(self, task_id: str) -> Optional[float]:
+    def get_baseline_aversion_robust(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
         """Get robust baseline aversion using median (less sensitive to outliers).
         Returns None if no previous instances exist.
-        Values are scaled to 0-100 range."""
+        Values are scaled to 0-100 range.
+        
+        Args:
+            task_id: Task ID to get baseline for
+            user_id: User ID to filter by (required for data isolation)
+        """
         if self.use_db:
-            return self._get_baseline_aversion_robust_db(task_id)
+            return self._get_baseline_aversion_robust_db(task_id, user_id)
         else:
-            return self._get_baseline_aversion_robust_csv(task_id)
+            return self._get_baseline_aversion_robust_csv(task_id, user_id)
     
-    def _get_baseline_aversion_robust_csv(self, task_id: str) -> Optional[float]:
+    def _get_baseline_aversion_robust_csv(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
         """CSV-specific get_baseline_aversion_robust."""
         import json
         import numpy as np
@@ -2984,6 +3234,13 @@ class InstanceManager:
             (self.df['task_id'] == task_id) & 
             (self.df['initialized_at'].astype(str).str.strip() != '')
         ].copy()
+        
+        # CRITICAL: Filter by user_id for data isolation
+        if user_id is not None:
+            initialized = initialized[initialized['user_id'].astype(str) == str(user_id)]
+        else:
+            print("[InstanceManager] WARNING: _get_baseline_aversion_robust_csv() called without user_id - returning None for security")
+            return None
         
         if initialized.empty:
             return None
@@ -3016,16 +3273,30 @@ class InstanceManager:
         baseline = float(np.median(aversion_values))
         return round(baseline)
     
-    def _get_baseline_aversion_robust_db(self, task_id: str) -> Optional[float]:
-        """Database-specific get_baseline_aversion_robust."""
+    def _get_baseline_aversion_robust_db(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
+        """Database-specific get_baseline_aversion_robust.
+        
+        Args:
+            task_id: Task ID to get baseline for
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         try:
             import numpy as np
             with self.db_session() as session:
                 # Get all initialized instances for this task (completed or not)
-                instances = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.task_id == task_id,
                     self.TaskInstance.initialized_at.isnot(None)
-                ).all()
+                )
+                
+                # CRITICAL: Filter by user_id for data isolation
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                else:
+                    print("[InstanceManager] WARNING: get_baseline_aversion_robust_db() called without user_id - returning None for security")
+                    return None
+                
+                instances = query.all()
                 
                 if not instances:
                     return None
@@ -3059,29 +3330,43 @@ class InstanceManager:
             self.use_db = False
             return self._get_baseline_aversion_robust_csv(task_id)
     
-    def get_baseline_aversion_sensitive(self, task_id: str) -> Optional[float]:
+    def get_baseline_aversion_sensitive(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
         """Get sensitive baseline aversion using trimmed mean (more sensitive to trends).
         Excludes outliers using IQR method, then calculates mean of remaining values.
         Returns None if no previous instances exist.
-        Values are scaled to 0-100 range."""
+        Values are scaled to 0-100 range.
+        
+        Args:
+            task_id: Task ID to get baseline for
+            user_id: User ID to filter by (required for data isolation)
+        """
         if self.use_db:
-            return self._get_baseline_aversion_sensitive_db(task_id)
+            return self._get_baseline_aversion_sensitive_db(task_id, user_id)
         else:
-            return self._get_baseline_aversion_sensitive_csv(task_id)
+            return self._get_baseline_aversion_sensitive_csv(task_id, user_id)
     
-    def get_batch_baseline_aversions(self, task_ids: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
+    def get_batch_baseline_aversions(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, Dict[str, Optional[float]]]:
         """Batch-load baseline aversions for multiple task_ids at once.
+        
+        Args:
+            task_ids: List of task IDs to get baselines for
+            user_id: User ID to filter by (required for data isolation)
         
         Returns:
             Dict mapping task_id to {'robust': float or None, 'sensitive': float or None}
         """
         if self.use_db:
-            return self._get_batch_baseline_aversions_db(task_ids)
+            return self._get_batch_baseline_aversions_db(task_ids, user_id)
         else:
-            return self._get_batch_baseline_aversions_csv(task_ids)
+            return self._get_batch_baseline_aversions_csv(task_ids, user_id)
     
-    def _get_batch_baseline_aversions_db(self, task_ids: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
-        """Database-specific batch baseline aversion loader."""
+    def _get_batch_baseline_aversions_db(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, Dict[str, Optional[float]]]:
+        """Database-specific batch baseline aversion loader.
+        
+        Args:
+            task_ids: List of task IDs to get baselines for
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         import numpy as np
         result = {task_id: {'robust': None, 'sensitive': None} for task_id in task_ids}
         
@@ -3091,10 +3376,19 @@ class InstanceManager:
         try:
             with self.db_session() as session:
                 # Load all instances for all task_ids in one query
-                instances = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.task_id.in_(task_ids),
                     self.TaskInstance.initialized_at.isnot(None)
-                ).all()
+                )
+                
+                # CRITICAL: Filter by user_id for data isolation
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                else:
+                    print("[InstanceManager] WARNING: get_batch_baseline_aversions_db() called without user_id - returning empty for security")
+                    return result
+                
+                instances = query.all()
                 
                 # Group by task_id
                 task_aversion_values = {task_id: [] for task_id in task_ids}
@@ -3144,8 +3438,13 @@ class InstanceManager:
         
         return result
     
-    def _get_batch_baseline_aversions_csv(self, task_ids: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
-        """CSV-specific batch baseline aversion loader."""
+    def _get_batch_baseline_aversions_csv(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, Dict[str, Optional[float]]]:
+        """CSV-specific batch baseline aversion loader.
+        
+        Args:
+            task_ids: List of task IDs to get baselines for
+            user_id: User ID to filter by (required for data isolation)
+        """
         import json
         import numpy as np
         result = {task_id: {'robust': None, 'sensitive': None} for task_id in task_ids}
@@ -3164,6 +3463,13 @@ class InstanceManager:
             (self.df['task_id'].isin(task_ids)) & 
             (self.df['initialized_at'].astype(str).str.strip() != '')
         ].copy()
+        
+        # CRITICAL: Filter by user_id for data isolation
+        if user_id is not None:
+            initialized = initialized[initialized['user_id'].astype(str) == str(user_id)]
+        else:
+            print("[InstanceManager] WARNING: _get_batch_baseline_aversions_csv() called without user_id - returning empty for security")
+            return result
         
         if initialized.empty:
             return result
@@ -3216,7 +3522,7 @@ class InstanceManager:
         
         return result
     
-    def _get_baseline_aversion_sensitive_csv(self, task_id: str) -> Optional[float]:
+    def _get_baseline_aversion_sensitive_csv(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
         """CSV-specific get_baseline_aversion_sensitive."""
         import json
         import numpy as np
@@ -3231,6 +3537,13 @@ class InstanceManager:
             (self.df['task_id'] == task_id) & 
             (self.df['initialized_at'].astype(str).str.strip() != '')
         ].copy()
+        
+        # CRITICAL: Filter by user_id for data isolation
+        if user_id is not None:
+            initialized = initialized[initialized['user_id'].astype(str) == str(user_id)]
+        else:
+            print("[InstanceManager] WARNING: _get_baseline_aversion_sensitive_csv() called without user_id - returning None for security")
+            return None
         
         if initialized.empty:
             return None
@@ -3283,16 +3596,30 @@ class InstanceManager:
         baseline = float(np.mean(filtered_values))
         return round(baseline)
     
-    def _get_baseline_aversion_sensitive_db(self, task_id: str) -> Optional[float]:
-        """Database-specific get_baseline_aversion_sensitive."""
+    def _get_baseline_aversion_sensitive_db(self, task_id: str, user_id: Optional[int] = None) -> Optional[float]:
+        """Database-specific get_baseline_aversion_sensitive.
+        
+        Args:
+            task_id: Task ID to get baseline for
+            user_id: Filter instances by user_id (required for data isolation)
+        """
         try:
             import numpy as np
             with self.db_session() as session:
                 # Get all initialized instances for this task (completed or not)
-                instances = session.query(self.TaskInstance).filter(
+                query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.task_id == task_id,
                     self.TaskInstance.initialized_at.isnot(None)
-                ).all()
+                )
+                
+                # CRITICAL: Filter by user_id for data isolation
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                else:
+                    print("[InstanceManager] WARNING: get_baseline_aversion_sensitive_db() called without user_id - returning None for security")
+                    return None
+                
+                instances = query.all()
                 
                 if not instances:
                     return None

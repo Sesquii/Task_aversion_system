@@ -2,6 +2,7 @@ from nicegui import ui
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
+from backend.auth import get_current_user
 import json
 import re
 from collections import defaultdict
@@ -59,6 +60,11 @@ def get_cancellation_penalties():
 
 @ui.page("/cancelled-tasks")
 def cancelled_tasks_page():
+    # Get current user ID
+    user_id = get_current_user()
+    if user_id is None:
+        ui.navigate.to('/login')
+        return
     ui.label("Cancelled Tasks Analytics").classes("text-2xl font-bold mb-4")
     ui.label("View and analyze cancelled task patterns. Edit tasks and configure penalties in Settings.").classes("text-gray-600 mb-4")
     
@@ -273,7 +279,7 @@ def cancelled_tasks_page():
             view_container.clear()
             with view_container:
                 try:
-                    cancelled_instances = im.list_cancelled_instances()
+                    cancelled_instances = im.list_cancelled_instances(user_id=user_id)
                     
                     # Filter by category if selected
                     selected_category = category_filter.value
@@ -322,7 +328,7 @@ def cancelled_tasks_page():
         
         def render_statistics():
             try:
-                cancelled_instances = im.list_cancelled_instances()
+                cancelled_instances = im.list_cancelled_instances(user_id=user_id)
                 
                 if not cancelled_instances:
                     ui.label("No cancelled tasks to analyze.").classes("text-gray-500 p-4")

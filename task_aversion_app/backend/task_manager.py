@@ -518,11 +518,29 @@ class TaskManager:
         self._save_csv()
         return True
     
-    def _update_task_db(self, task_id, **kwargs):
-        """Database-specific update_task."""
+    def _update_task_db(self, task_id, user_id: Optional[int] = None, **kwargs):
+        """Database-specific update_task.
+        
+        Args:
+            task_id: Task ID to update
+            user_id: User ID to filter by (required for data isolation)
+            **kwargs: Fields to update
+        """
+        # CRITICAL: Require user_id for data isolation
+        if user_id is None:
+            print("[TaskManager] WARNING: _update_task_db() called without user_id - returning False for security")
+            return False
+        
         try:
             with self.db_session() as session:
-                task = session.query(self.Task).filter(self.Task.task_id == task_id).first()
+                from sqlalchemy import or_
+                # Filter by task_id and user_id (include NULL user_id during migration period)
+                query = session.query(self.Task).filter(
+                    self.Task.task_id == task_id
+                ).filter(
+                    or_(self.Task.user_id == user_id, self.Task.user_id.is_(None))
+                )
+                task = query.first()
                 if not task:
                     return False
                 

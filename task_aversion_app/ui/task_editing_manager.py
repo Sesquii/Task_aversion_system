@@ -2,6 +2,7 @@ from nicegui import ui
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
+from backend.auth import get_current_user
 import json
 from datetime import datetime
 
@@ -65,8 +66,9 @@ def _list_all_completed_instances_db():
 
 def get_all_tasks_chronologically():
     """Get all completed and cancelled tasks, sorted by most recent timestamp first."""
+    user_id = get_current_user()
     completed = list_all_completed_instances()
-    cancelled = im.list_cancelled_instances()
+    cancelled = im.list_cancelled_instances(user_id=user_id) if user_id else []
     
     # Add status label and timestamp to each task
     all_tasks = []
@@ -216,6 +218,11 @@ def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback):
 
 @ui.page("/task-editing-manager")
 def task_editing_manager_page():
+    # Get current user ID
+    user_id = get_current_user()
+    if user_id is None:
+        ui.navigate.to('/login')
+        return
     ui.label("Task Editing Manager").classes("text-2xl font-bold mb-4")
     ui.label("Edit completed and cancelled task instances.").classes("text-gray-600 mb-4")
     

@@ -20,14 +20,21 @@ from backend.user_state import UserStateManager, PREFS_FILE
 
 def export_all_data_to_csv(
     data_dir: Optional[str] = None,
-    include_user_preferences: bool = True
+    include_user_preferences: bool = True,
+    user_id: Optional[int] = None
 ) -> Tuple[Dict[str, int], List[str]]:
     """
-    Export all database tables and user preferences to CSV files.
+    Export database tables and user preferences to CSV files.
+    
+    **SECURITY:** This function REQUIRES user_id to ensure users can only export their own data.
+    All user-specific tables are filtered by user_id. Shared reference tables (Emotion) are exported
+    without filtering as they contain no user-specific data.
     
     Args:
         data_dir: Directory to save CSV files. If None, uses default data directory.
         include_user_preferences: Whether to export user_preferences.csv
+        user_id: REQUIRED user ID to filter by. If None, raises ValueError for security.
+                 Only exports data for that specific user.
     
     Returns:
         Tuple of (export_counts dict, list of exported file paths)
@@ -35,8 +42,12 @@ def export_all_data_to_csv(
         exported_files: List of file paths that were created
     
     Raises:
+        ValueError: If user_id is None (security requirement)
         Exception: If export fails
     """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for export. Users can only export their own data.")
     if data_dir is None:
         data_dir = os.path.join(Path(__file__).resolve().parent.parent, "data")
     
@@ -48,7 +59,8 @@ def export_all_data_to_csv(
     
     try:
         # Export Tasks (always create file, even if empty)
-        tasks = session.query(Task).all()
+        # CRITICAL: Filter by user_id for data isolation
+        tasks = session.query(Task).filter(Task.user_id == user_id).all()
         tasks_file = os.path.join(data_dir, 'tasks.csv')
         if tasks:
             tasks_data = [task.to_dict() for task in tasks]
@@ -67,7 +79,8 @@ def export_all_data_to_csv(
         exported_files.append(tasks_file)
         
         # Export TaskInstances (always create file, even if empty)
-        instances = session.query(TaskInstance).all()
+        # CRITICAL: Filter by user_id for data isolation
+        instances = session.query(TaskInstance).filter(TaskInstance.user_id == user_id).all()
         instances_file = os.path.join(data_dir, 'task_instances.csv')
         if instances:
             instances_data = [instance.to_dict() for instance in instances]
@@ -89,6 +102,8 @@ def export_all_data_to_csv(
         exported_files.append(instances_file)
         
         # Export Emotions (always create file, even if empty)
+        # NOTE: Emotion table is a shared reference table (no user_id column)
+        # All users share the same emotion list, so we export all emotions
         emotions = session.query(Emotion).all()
         emotions_file = os.path.join(data_dir, 'emotions.csv')
         if emotions:
@@ -104,7 +119,9 @@ def export_all_data_to_csv(
         exported_files.append(emotions_file)
         
         # Export PopupTriggers (always create file, even if empty)
-        popup_triggers = session.query(PopupTrigger).all()
+        # CRITICAL: Filter by user_id for data isolation
+        # PopupTrigger.user_id is Integer, filter by it
+        popup_triggers = session.query(PopupTrigger).filter(PopupTrigger.user_id == user_id).all()
         triggers_file = os.path.join(data_dir, 'popup_triggers.csv')
         if popup_triggers:
             triggers_data = [trigger.to_dict() for trigger in popup_triggers]
@@ -120,7 +137,9 @@ def export_all_data_to_csv(
         exported_files.append(triggers_file)
         
         # Export PopupResponses (always create file, even if empty)
-        popup_responses = session.query(PopupResponse).all()
+        # CRITICAL: Filter by user_id for data isolation
+        # PopupResponse.user_id is String, so we need to handle string comparison
+        popup_responses = session.query(PopupResponse).filter(PopupResponse.user_id == str(user_id)).all()
         responses_file = os.path.join(data_dir, 'popup_responses.csv')
         if popup_responses:
             responses_data = [response.to_dict() for response in popup_responses]
@@ -136,7 +155,8 @@ def export_all_data_to_csv(
         exported_files.append(responses_file)
         
         # Export Notes (always create file, even if empty)
-        notes = session.query(Note).all()
+        # CRITICAL: Filter by user_id for data isolation
+        notes = session.query(Note).filter(Note.user_id == user_id).all()
         notes_file = os.path.join(data_dir, 'notes.csv')
         if notes:
             notes_data = [note.to_dict() for note in notes]
@@ -151,7 +171,9 @@ def export_all_data_to_csv(
         exported_files.append(notes_file)
         
         # Export SurveyResponses (always create file, even if empty)
-        survey_responses = session.query(SurveyResponse).all()
+        # CRITICAL: Filter by user_id for data isolation
+        # SurveyResponse.user_id is String, so we need to handle string comparison
+        survey_responses = session.query(SurveyResponse).filter(SurveyResponse.user_id == str(user_id)).all()
         survey_responses_file = os.path.join(data_dir, 'survey_responses.csv')
         if survey_responses:
             responses_data = [response.to_dict() for response in survey_responses]
@@ -224,26 +246,29 @@ def get_export_summary(export_counts: Dict[str, int]) -> str:
     return "\n".join(lines)
 
 
-def create_data_zip(data_dir: Optional[str] = None) -> str:
+def create_data_zip(data_dir: Optional[str] = None, user_id: Optional[int] = None) -> str:
     """
-    Create a ZIP file containing all CSV data files.
+    Create a ZIP file containing all CSV data files for a specific user.
     
     Args:
         data_dir: Directory containing CSV files. If None, uses default data directory.
+        user_id: REQUIRED user ID to filter by. If None, raises ValueError for security.
     
     Returns:
         Path to the created ZIP file
     
     Raises:
+        ValueError: If user_id is None (security requirement)
         Exception: If ZIP creation fails
     """
     if data_dir is None:
         data_dir = os.path.join(Path(__file__).resolve().parent.parent, "data")
     
-    # First, ensure all data is exported to CSV
+    # First, ensure all data is exported to CSV (user-specific)
     export_counts, exported_files = export_all_data_to_csv(
         data_dir=data_dir,
-        include_user_preferences=True
+        include_user_preferences=True,
+        user_id=user_id
     )
     
     # Create ZIP file in temp directory

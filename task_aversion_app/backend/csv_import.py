@@ -401,15 +401,31 @@ def safe_int(value, default=0):
         return default
 
 
-def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, backup_dir: Optional[str] = None) -> Tuple[int, int, int]:
+def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, backup_dir: Optional[str] = None, user_id: Optional[int] = None) -> Tuple[int, int, int]:
     """
     Import tasks from CSV file into database.
     Handles missing columns gracefully by using defaults.
     Attempts to add extra CSV columns to database, falls back to backup CSV if needed.
     
+    **SECURITY:** All imported tasks are assigned to the provided user_id, overriding any user_id in the CSV.
+    This ensures imported data belongs to the importing user.
+    
+    Args:
+        csv_path: Path to CSV file
+        session: Database session
+        skip_existing: If True, skip records that already exist
+        backup_dir: Directory for backup CSV files
+        user_id: REQUIRED user ID. All imported tasks will be assigned to this user.
+    
     Returns:
         Tuple of (imported_count, skipped_count, error_count)
+    
+    Raises:
+        ValueError: If user_id is None (security requirement)
     """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import data for themselves.")
     imported = 0
     skipped = 0
     errors = 0
@@ -435,10 +451,11 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                   f"Only processing first {MAX_ROWS_PER_CSV} rows.")
             df = df.head(MAX_ROWS_PER_CSV)
         
-        # Get existing task IDs
+                # Get existing task IDs for this user only
         existing_task_ids = set()
         if skip_existing:
-            existing_tasks = session.query(Task).all()
+            # CRITICAL: Only check for existing records for this user
+            existing_tasks = session.query(Task).filter(Task.user_id == user_id).all()
             existing_task_ids = {task.task_id for task in existing_tasks}
         
         for idx, row in df.iterrows():
@@ -497,13 +514,26 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                         completion_window_days = None
                 
                 notes = str(safe_get(row, 'notes', '')).strip()
-                user_id = safe_int(safe_get(row, 'user_id', ''), None)  # user_id is optional (nullable)
+                
+                # CRITICAL SECURITY CHECK: Validate CSV user_id matches logged-in user_id
+                # Skip rows where user_id doesn't match to prevent cross-user data editing
+                csv_user_id = safe_int(safe_get(row, 'user_id', ''), None)
+                if csv_user_id is not None and csv_user_id != user_id:
+                    print(f"[Import] SECURITY: Skipping task {task_id} - CSV user_id ({csv_user_id}) does not match logged-in user_id ({user_id})")
+                    skipped += 1
+                    continue
+                
+                # CRITICAL: Override any user_id from CSV with the provided user_id for security
+                # This ensures imported data always belongs to the importing user
                 
                 # Parse created_at - optional field
                 created_at = parse_datetime(safe_get(row, 'created_at', ''))
                 
-                # Create or update task
-                existing_task = session.query(Task).filter(Task.task_id == task_id).first()
+                # Create or update task (filter by both task_id and user_id for security)
+                existing_task = session.query(Task).filter(
+                    Task.task_id == task_id,
+                    Task.user_id == user_id
+                ).first()
                 if existing_task and not skip_existing:
                     # Update existing - only update fields that exist in CSV
                     existing_task.name = name
@@ -535,8 +565,8 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                         existing_task.completion_window_days = completion_window_days
                     if 'notes' in row.index:
                         existing_task.notes = notes
-                    if 'user_id' in row.index:
-                        existing_task.user_id = user_id
+                    # CRITICAL: Always set user_id to the provided user_id (override CSV value)
+                    existing_task.user_id = user_id
                     if created_at:
                         existing_task.created_at = created_at
                     
@@ -579,7 +609,7 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                         completion_window_hours=completion_window_hours,
                         completion_window_days=completion_window_days,
                         notes=notes,
-                        user_id=user_id  # Can be None for existing anonymous data
+                        user_id=user_id  # CRITICAL: Always use provided user_id (override CSV value)
                     )
                     
                     # Set extra columns that were added to database
@@ -637,15 +667,31 @@ def safe_float(value, default=None):
         return default
 
 
-def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool = True, backup_dir: Optional[str] = None) -> Tuple[int, int, int]:
+def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool = True, backup_dir: Optional[str] = None, user_id: Optional[int] = None) -> Tuple[int, int, int]:
     """
     Import task instances from CSV file into database.
     Handles missing columns gracefully by using defaults.
     Attempts to add extra CSV columns to database, falls back to backup CSV if needed.
     
+    **SECURITY:** All imported instances are assigned to the provided user_id, overriding any user_id in the CSV.
+    This ensures imported data belongs to the importing user.
+    
+    Args:
+        csv_path: Path to CSV file
+        session: Database session
+        skip_existing: If True, skip records that already exist
+        backup_dir: Directory for backup CSV files
+        user_id: REQUIRED user ID. All imported instances will be assigned to this user.
+    
     Returns:
         Tuple of (imported_count, skipped_count, error_count)
+    
+    Raises:
+        ValueError: If user_id is None (security requirement)
     """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import data for themselves.")
     imported = 0
     skipped = 0
     errors = 0
@@ -671,10 +717,11 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                   f"Only processing first {MAX_ROWS_PER_CSV} rows.")
             df = df.head(MAX_ROWS_PER_CSV)
         
-        # Get existing instance IDs
+        # Get existing instance IDs for this user only
         existing_instance_ids = set()
         if skip_existing:
-            existing_instances = session.query(TaskInstance).all()
+            # CRITICAL: Only check for existing records for this user
+            existing_instances = session.query(TaskInstance).filter(TaskInstance.user_id == user_id).all()
             existing_instance_ids = {instance.instance_id for instance in existing_instances}
         
         for idx, row in df.iterrows():
@@ -733,7 +780,17 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                 disappointment_factor = safe_float(safe_get(row, 'disappointment_factor', ''), None)
                 
                 skills_improved = str(safe_get(row, 'skills_improved', '')).strip()
-                user_id = safe_int(safe_get(row, 'user_id', ''), None)  # user_id is optional (nullable)
+                
+                # CRITICAL SECURITY CHECK: Validate CSV user_id matches logged-in user_id
+                # Skip rows where user_id doesn't match to prevent cross-user data editing
+                csv_user_id = safe_int(safe_get(row, 'user_id', ''), None)
+                if csv_user_id is not None and csv_user_id != user_id:
+                    print(f"[Import] SECURITY: Skipping instance {instance_id} - CSV user_id ({csv_user_id}) does not match logged-in user_id ({user_id})")
+                    skipped += 1
+                    continue
+                
+                # CRITICAL: Override any user_id from CSV with the provided user_id for security
+                # This ensures imported data always belongs to the importing user
                 
                 # Parse datetime fields - use safe_get
                 created_at = parse_datetime(safe_get(row, 'created_at', ''))
@@ -742,8 +799,11 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                 completed_at = parse_datetime(safe_get(row, 'completed_at', ''))
                 cancelled_at = parse_datetime(safe_get(row, 'cancelled_at', ''))
                 
-                # Create or update instance
-                existing_instance = session.query(TaskInstance).filter(TaskInstance.instance_id == instance_id).first()
+                # Create or update instance (filter by both instance_id and user_id for security)
+                existing_instance = session.query(TaskInstance).filter(
+                    TaskInstance.instance_id == instance_id,
+                    TaskInstance.user_id == user_id
+                ).first()
                 if existing_instance and not skip_existing:
                     # Update existing - only update fields that exist in CSV
                     existing_instance.task_id = task_id
@@ -769,8 +829,8 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                             setattr(existing_instance, field, locals()[field])
                     if 'skills_improved' in row.index:
                         existing_instance.skills_improved = skills_improved
-                    if 'user_id' in row.index:
-                        existing_instance.user_id = user_id
+                    # CRITICAL: Always set user_id to the provided user_id (override CSV value)
+                    existing_instance.user_id = user_id
                     if created_at:
                         existing_instance.created_at = created_at
                     if initialized_at:
@@ -834,7 +894,7 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                         skills_improved=skills_improved,
                         serendipity_factor=serendipity_factor,
                         disappointment_factor=disappointment_factor,
-                        user_id=user_id  # Can be None for existing anonymous data
+                        user_id=user_id  # CRITICAL: Always use provided user_id (override CSV value)
                     )
                     
                     # Set extra columns that were added to database
@@ -913,6 +973,8 @@ def import_emotions_from_csv(csv_path: str, session, skip_existing: bool = True,
         
         existing_emotions = set()
         if skip_existing:
+            # NOTE: Emotion table doesn't have user_id (shared reference table)
+            # Querying all emotions is intentional and correct for import functionality
             existing = session.query(Emotion).all()
             existing_emotions = {e.emotion.lower() for e in existing}
         
@@ -973,8 +1035,28 @@ def import_emotions_from_csv(csv_path: str, session, skip_existing: bool = True,
     return imported, skipped, errors
 
 
-def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True) -> Tuple[int, int, int]:
-    """Import notes from CSV file into database. Handles missing columns gracefully."""
+def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True, user_id: Optional[int] = None) -> Tuple[int, int, int]:
+    """
+    Import notes from CSV file into database. Handles missing columns gracefully.
+    
+    **SECURITY:** All imported notes are assigned to the provided user_id, overriding any user_id in the CSV.
+    This ensures imported data belongs to the importing user.
+    
+    Args:
+        csv_path: Path to CSV file
+        session: Database session
+        skip_existing: If True, skip records that already exist
+        user_id: REQUIRED user ID. All imported notes will be assigned to this user.
+    
+    Returns:
+        Tuple of (imported_count, skipped_count, error_count)
+    
+    Raises:
+        ValueError: If user_id is None (security requirement)
+    """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import data for themselves.")
     imported = 0
     skipped = 0
     errors = 0
@@ -997,7 +1079,8 @@ def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True) ->
         
         existing_note_ids = set()
         if skip_existing:
-            existing_notes = session.query(Note).all()
+            # CRITICAL: Only check for existing records for this user
+            existing_notes = session.query(Note).filter(Note.user_id == user_id).all()
             existing_note_ids = {note.note_id for note in existing_notes}
         
         for idx, row in df.iterrows():
@@ -1017,15 +1100,28 @@ def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True) ->
                     continue
                 
                 timestamp = parse_datetime(safe_get(row, 'timestamp', '')) or datetime.utcnow()
-                user_id = safe_int(safe_get(row, 'user_id', ''), None)  # user_id is optional (nullable)
                 
-                existing_note = session.query(Note).filter(Note.note_id == note_id).first()
+                # CRITICAL SECURITY CHECK: Validate CSV user_id matches logged-in user_id
+                # Skip rows where user_id doesn't match to prevent cross-user data editing
+                csv_user_id = safe_int(safe_get(row, 'user_id', ''), None)
+                if csv_user_id is not None and csv_user_id != user_id:
+                    print(f"[Import] SECURITY: Skipping note {note_id} - CSV user_id ({csv_user_id}) does not match logged-in user_id ({user_id})")
+                    skipped += 1
+                    continue
+                
+                # CRITICAL: Override any user_id from CSV with the provided user_id for security
+                # This ensures imported data always belongs to the importing user
+                
+                existing_note = session.query(Note).filter(
+                    Note.note_id == note_id,
+                    Note.user_id == user_id
+                ).first()
                 if not existing_note:
                     note = Note(
                         note_id=note_id,
                         content=content,
                         timestamp=timestamp,
-                        user_id=user_id  # Can be None for existing anonymous data
+                        user_id=user_id  # CRITICAL: Always use provided user_id (override CSV value)
                     )
                     session.add(note)
                     imported += 1
@@ -1052,8 +1148,28 @@ def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True) ->
     return imported, skipped, errors
 
 
-def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool = True) -> Tuple[int, int, int]:
-    """Import popup triggers from CSV file into database. Handles missing columns gracefully."""
+def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool = True, user_id: Optional[int] = None) -> Tuple[int, int, int]:
+    """
+    Import popup triggers from CSV file into database. Handles missing columns gracefully.
+    
+    **SECURITY:** All imported triggers are assigned to the provided user_id, overriding any user_id in the CSV.
+    This ensures imported data belongs to the importing user.
+    
+    Args:
+        csv_path: Path to CSV file
+        session: Database session
+        skip_existing: If True, skip records that already exist
+        user_id: REQUIRED user ID. All imported triggers will be assigned to this user.
+    
+    Returns:
+        Tuple of (imported_count, skipped_count, error_count)
+    
+    Raises:
+        ValueError: If user_id is None (security requirement)
+    """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import data for themselves.")
     imported = 0
     skipped = 0
     errors = 0
@@ -1076,7 +1192,19 @@ def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool =
         
         for idx, row in df.iterrows():
             trigger_id = str(safe_get(row, 'trigger_id', '')).strip()
-            user_id = str(safe_get(row, 'user_id', 'default')).strip() or 'default'
+            
+            # CRITICAL SECURITY CHECK: Validate CSV user_id matches logged-in user_id
+            # Skip rows where user_id doesn't match to prevent cross-user data editing
+            csv_user_id_str = str(safe_get(row, 'user_id', '')).strip()
+            csv_user_id_int = safe_int(csv_user_id_str, None)
+            if csv_user_id_int is not None and csv_user_id_int != user_id:
+                print(f"[Import] SECURITY: Skipping popup trigger {trigger_id} - CSV user_id ({csv_user_id_int}) does not match logged-in user_id ({user_id})")
+                skipped += 1
+                continue
+            
+            # CRITICAL: Override any user_id from CSV with the provided user_id for security
+            # Convert integer user_id to string for PopupTrigger (which uses string user_id)
+            user_id_str = str(user_id)
             if not trigger_id:
                 errors += 1
                 continue
@@ -1085,7 +1213,7 @@ def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool =
                 # Check if exists (by trigger_id and user_id)
                 existing = session.query(PopupTrigger).filter(
                     PopupTrigger.trigger_id == trigger_id,
-                    PopupTrigger.user_id == user_id
+                    PopupTrigger.user_id == user_id_str
                 ).first()
                 
                 if skip_existing and existing:
@@ -1123,7 +1251,7 @@ def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool =
                 elif not existing:
                     # Create
                     trigger = PopupTrigger(
-                        user_id=user_id,
+                        user_id=user_id_str,  # CRITICAL: Always use provided user_id (override CSV value)
                         trigger_id=trigger_id,
                         task_id=task_id,
                         count=count,
@@ -1159,8 +1287,28 @@ def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool =
     return imported, skipped, errors
 
 
-def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool = True) -> Tuple[int, int, int]:
-    """Import popup responses from CSV file into database. Handles missing columns gracefully."""
+def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool = True, user_id: Optional[int] = None) -> Tuple[int, int, int]:
+    """
+    Import popup responses from CSV file into database. Handles missing columns gracefully.
+    
+    **SECURITY:** All imported responses are assigned to the provided user_id, overriding any user_id in the CSV.
+    This ensures imported data belongs to the importing user.
+    
+    Args:
+        csv_path: Path to CSV file
+        session: Database session
+        skip_existing: If True, skip records that already exist
+        user_id: REQUIRED user ID. All imported responses will be assigned to this user.
+    
+    Returns:
+        Tuple of (imported_count, skipped_count, error_count)
+    
+    Raises:
+        ValueError: If user_id is None (security requirement)
+    """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import data for themselves.")
     imported = 0
     skipped = 0
     errors = 0
@@ -1183,7 +1331,18 @@ def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool 
         
         for idx, row in df.iterrows():
             try:
-                user_id = str(safe_get(row, 'user_id', 'default')).strip() or 'default'
+                # CRITICAL SECURITY CHECK: Validate CSV user_id matches logged-in user_id
+                # Skip rows where user_id doesn't match to prevent cross-user data editing
+                csv_user_id_str = str(safe_get(row, 'user_id', '')).strip()
+                csv_user_id_int = safe_int(csv_user_id_str, None)
+                if csv_user_id_int is not None and csv_user_id_int != user_id:
+                    print(f"[Import] SECURITY: Skipping popup response - CSV user_id ({csv_user_id_int}) does not match logged-in user_id ({user_id})")
+                    skipped += 1
+                    continue
+                
+                # CRITICAL: Override any user_id from CSV with the provided user_id for security
+                # Convert integer user_id to string for PopupResponse (which uses string user_id)
+                user_id_str = str(user_id)
                 trigger_id = str(safe_get(row, 'trigger_id', '')).strip()
                 if not trigger_id:
                     errors += 1
@@ -1207,7 +1366,7 @@ def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool 
                 
                 # Popup responses can have duplicates, so we don't skip based on existence
                 response = PopupResponse(
-                    user_id=user_id,
+                    user_id=user_id_str,  # CRITICAL: Always use provided user_id (override CSV value)
                     trigger_id=trigger_id,
                     task_id=task_id,
                     instance_id=instance_id,
@@ -1240,8 +1399,28 @@ def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool 
     return imported, skipped, errors
 
 
-def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool = True) -> Tuple[int, int, int]:
-    """Import survey responses from CSV file into database. Handles missing columns gracefully."""
+def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool = True, user_id: Optional[int] = None) -> Tuple[int, int, int]:
+    """
+    Import survey responses from CSV file into database. Handles missing columns gracefully.
+    
+    **SECURITY:** All imported responses are assigned to the provided user_id, overriding any user_id in the CSV.
+    This ensures imported data belongs to the importing user.
+    
+    Args:
+        csv_path: Path to CSV file
+        session: Database session
+        skip_existing: If True, skip records that already exist
+        user_id: REQUIRED user ID. All imported responses will be assigned to this user.
+    
+    Returns:
+        Tuple of (imported_count, skipped_count, error_count)
+    
+    Raises:
+        ValueError: If user_id is None (security requirement)
+    """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import data for themselves.")
     imported = 0
     skipped = 0
     errors = 0
@@ -1264,7 +1443,9 @@ def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool
         
         existing_response_ids = set()
         if skip_existing:
-            existing_responses = session.query(SurveyResponse).all()
+            # CRITICAL: Only check for existing records for this user
+            # Convert integer user_id to string for SurveyResponse (which uses string user_id)
+            existing_responses = session.query(SurveyResponse).filter(SurveyResponse.user_id == str(user_id)).all()
             existing_response_ids = {response.response_id for response in existing_responses}
         
         for idx, row in df.iterrows():
@@ -1278,11 +1459,22 @@ def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool
                 continue
             
             try:
-                user_id = str(safe_get(row, 'user_id', '')).strip()
+                # CRITICAL SECURITY CHECK: Validate CSV user_id matches logged-in user_id
+                # Skip rows where user_id doesn't match to prevent cross-user data editing
+                csv_user_id_str = str(safe_get(row, 'user_id', '')).strip()
+                csv_user_id_int = safe_int(csv_user_id_str, None)
+                if csv_user_id_int is not None and csv_user_id_int != user_id:
+                    print(f"[Import] SECURITY: Skipping survey response {response_id} - CSV user_id ({csv_user_id_int}) does not match logged-in user_id ({user_id})")
+                    skipped += 1
+                    continue
+                
+                # CRITICAL: Override any user_id from CSV with the provided user_id for security
+                # Convert integer user_id to string for SurveyResponse (which uses string user_id)
+                user_id_str = str(user_id)
                 question_category = str(safe_get(row, 'question_category', '')).strip()
                 question_id = str(safe_get(row, 'question_id', '')).strip()
                 
-                if not user_id or not question_category or not question_id:
+                if not question_category or not question_id:
                     errors += 1
                     continue
                 
@@ -1290,11 +1482,14 @@ def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool
                 response_text = str(safe_get(row, 'response_text', '')).strip() or None
                 timestamp = parse_datetime(safe_get(row, 'timestamp', '')) or datetime.utcnow()
                 
-                existing_response = session.query(SurveyResponse).filter(SurveyResponse.response_id == response_id).first()
+                existing_response = session.query(SurveyResponse).filter(
+                    SurveyResponse.response_id == response_id,
+                    SurveyResponse.user_id == user_id_str
+                ).first()
                 if not existing_response:
                     response = SurveyResponse(
                         response_id=response_id,
-                        user_id=user_id,
+                        user_id=user_id_str,  # CRITICAL: Always use provided user_id (override CSV value)
                         question_category=question_category,
                         question_id=question_id,
                         response_value=response_value,
@@ -1371,17 +1566,21 @@ def import_user_preferences_from_csv(csv_path: str) -> Tuple[int, int]:
     return imported, errors
 
 
-def import_from_zip(zip_path: str, skip_existing: bool = True) -> Dict[str, Dict[str, int]]:
+def import_from_zip(zip_path: str, skip_existing: bool = True, user_id: Optional[int] = None) -> Dict[str, Dict[str, int]]:
     """
     Import all CSV files from a ZIP archive into the database.
     Handles extra CSV columns by attempting to add them to database schema.
     Falls back to backup CSV files if schema updates fail.
     Includes abuse prevention measures.
     
+    **SECURITY:** All imported data is assigned to the provided user_id, overriding any user_id in the CSV files.
+    This ensures imported data belongs to the importing user.
+    
     Security:
     - REJECTS ZIPs with unexpected/additional files (security)
     - ACCEPTS ZIPs with only expected files (even if some are missing for old version compatibility)
     - Missing files are handled gracefully (will use default/empty values)
+    - REQUIRES user_id to ensure users can only import data for themselves
     
     Expected files (all must be present or none):
     - tasks.csv
@@ -1401,11 +1600,18 @@ def import_from_zip(zip_path: str, skip_existing: bool = True) -> Dict[str, Dict
     Args:
         zip_path: Path to ZIP file
         skip_existing: If True, skip records that already exist
+        user_id: REQUIRED user ID. All imported data will be assigned to this user.
     
     Returns:
         Dictionary mapping table names to import statistics (imported, skipped, errors)
         Includes '_error' key if import is rejected due to validation failure
+    
+    Raises:
+        ValueError: If user_id is None (security requirement)
     """
+    # CRITICAL: Require user_id for data isolation
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import data for themselves.")
     results = {}
     temp_dir = tempfile.mkdtemp()
     backup_dir = os.path.join(temp_dir, 'backup_extra_columns')
@@ -1500,13 +1706,35 @@ def import_from_zip(zip_path: str, skip_existing: bool = True) -> Dict[str, Dict
                 if csv_path and os.path.exists(csv_path):
                     try:
                         if import_func:
-                            imported, skipped, errors = import_func(csv_path, session, skip_existing, backup_dir)
+                            # CRITICAL: Pass user_id to all import functions for data isolation
+                            # Check function signature to determine which parameters it needs
+                            import inspect
+                            sig = inspect.signature(import_func)
+                            params = list(sig.parameters.keys())
+                            
+                            # Build arguments based on function signature
+                            kwargs = {
+                                'csv_path': csv_path,
+                                'session': session,
+                                'skip_existing': skip_existing,
+                                'user_id': user_id
+                            }
+                            
+                            # Add backup_dir if function accepts it
+                            if 'backup_dir' in params:
+                                kwargs['backup_dir'] = backup_dir
+                            
+                            # Call function with appropriate arguments
+                            result = import_func(**{k: v for k, v in kwargs.items() if k in params})
+                            imported, skipped, errors = result
                             results[table_name] = {
                                 'imported': imported,
                                 'skipped': skipped,
                                 'errors': errors
                             }
                         elif table_name == 'user_preferences':
+                            # user_preferences import doesn't need user_id (it reads from CSV)
+                            # but we should still filter by user_id for security
                             imported, errors = import_user_preferences_from_csv(csv_path)
                             results[table_name] = {
                                 'imported': imported,

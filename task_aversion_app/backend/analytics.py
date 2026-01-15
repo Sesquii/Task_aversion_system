@@ -2601,7 +2601,7 @@ class Analytics:
         self._time_tracking_cache_time = None
         self._time_tracking_cache_params = None
     
-    def _load_instances(self, completed_only: bool = False) -> pd.DataFrame:
+    def _load_instances(self, completed_only: bool = False, user_id: Optional[int] = None) -> pd.DataFrame:
         """Load instances from database or CSV.
         
         Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes)
@@ -2609,11 +2609,12 @@ class Analytics:
         
         Args:
             completed_only: If True, only load completed instances (optimization for relief_summary)
+            user_id: User ID to filter by (required for data isolation)
         """
         import time
         
-        # Check cache first
-        cache_key = 'completed' if completed_only else 'all'
+        # Check cache first (cache key includes user_id for isolation)
+        cache_key = f"{'completed' if completed_only else 'all'}:{user_id}"
         current_time = time.time()
         
         if completed_only:
@@ -2646,21 +2647,32 @@ class Analytics:
         
         if use_db:
             # Load from database
+            # CRITICAL: Require user_id for data isolation - return early if not provided
+            if user_id is None:
+                print("[Analytics] WARNING: _load_instances() called without user_id - returning empty for security")
+                return pd.DataFrame()
+            
             try:
                 from backend.database import get_session, TaskInstance
                 session = get_session()
                 try:
                     # OPTIMIZATION: Only load completed instances if requested
                     # OPTIMIZATION: Use indexed column for filtering
+                    # CRITICAL: Always include user_id filter in initial query for security and performance
                     if completed_only:
                         # Filter to only completed instances at database level (much faster)
                         # Uses index on completed_at for fast filtering
-                        instances = session.query(TaskInstance).filter(
+                        query = session.query(TaskInstance).filter(
+                            TaskInstance.user_id == user_id,
                             TaskInstance.completed_at.isnot(None),
                             TaskInstance.completed_at != ''
-                        ).all()
+                        )
                     else:
-                        instances = session.query(TaskInstance).all()
+                        query = session.query(TaskInstance).filter(
+                            TaskInstance.user_id == user_id
+                        )
+                    
+                    instances = query.all()
                     if not instances:
                         return pd.DataFrame()
                     

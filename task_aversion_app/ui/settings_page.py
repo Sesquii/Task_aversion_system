@@ -129,8 +129,14 @@ def settings_page():
                 import tempfile
                 from pathlib import Path
                 
-                # Create ZIP file
-                zip_path = create_data_zip()
+                # CRITICAL: Get current logged-in user_id for data isolation
+                current_user_id = get_current_user()
+                if current_user_id is None:
+                    ui.notify("You must be logged in to export data.", color="negative")
+                    return
+                
+                # Create ZIP file - pass user_id to ensure users can only export their own data
+                zip_path = create_data_zip(user_id=current_user_id)
                 zip_filename = os.path.basename(zip_path)
                 
                 # Read zip file content as bytes
@@ -202,8 +208,14 @@ def settings_page():
                 temp_file.close()
                 
                 try:
-                    # Import data
-                    results = import_from_zip(temp_file.name, skip_existing=True)
+                    # CRITICAL: Get current logged-in user_id for data isolation
+                    current_user_id = get_current_user()
+                    if current_user_id is None:
+                        ui.notify("You must be logged in to import data.", color="negative")
+                        return
+                    
+                    # Import data - pass user_id to ensure users can only import their own data
+                    results = import_from_zip(temp_file.name, skip_existing=True, user_id=current_user_id)
                     
                     # Build summary message
                     summary_lines = ["Import completed:"]

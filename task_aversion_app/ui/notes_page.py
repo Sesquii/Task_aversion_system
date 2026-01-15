@@ -1,6 +1,7 @@
 # ui/notes_page.py
 from nicegui import ui
 from backend.notes_manager import NotesManager
+from backend.auth import get_current_user
 from datetime import datetime
 
 notes_manager = NotesManager()
@@ -9,6 +10,12 @@ notes_manager = NotesManager()
 @ui.page('/notes')
 def notes_page():
     """Notes page for behavioral and emotional pattern observations."""
+    
+    # Get current user ID
+    user_id = get_current_user()
+    if user_id is None:
+        ui.navigate.to('/login')
+        return
     
     ui.label("Notes").classes("text-2xl font-bold mb-2")
     ui.label("Draft notes on behavioral and emotional patterns, or observations from analytics.").classes(
@@ -35,7 +42,7 @@ def notes_page():
                     if not content:
                         ui.notify("Note content cannot be empty.", color="negative")
                         return
-                    notes_manager.add_note(content)
+                    notes_manager.add_note(content, user_id=user_id)
                     note_input.value = ""
                     ui.notify("Note saved.", color="positive")
                     refresh_notes()
@@ -47,7 +54,7 @@ def notes_page():
             # Display existing notes
             ui.label("All Notes").classes("text-lg font-semibold mb-2")
             
-            all_notes = notes_manager.get_all_notes()
+            all_notes = notes_manager.get_all_notes(user_id=user_id)
             if not all_notes:
                 ui.label("No notes yet. Create your first note above.").classes("text-gray-500 italic")
             else:
@@ -72,7 +79,7 @@ def notes_page():
                                 ui.label(f"Created: {formatted_time}").classes("text-xs text-gray-500")
                                 
                                 def delete_note_handler(note_id=note.get("note_id")):
-                                    if notes_manager.delete_note(note_id):
+                                    if notes_manager.delete_note(note_id, user_id=user_id):
                                         ui.notify("Note deleted.", color="positive")
                                         refresh_notes()
                                     else:
