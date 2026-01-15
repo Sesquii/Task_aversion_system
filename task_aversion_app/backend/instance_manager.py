@@ -1665,8 +1665,14 @@ class InstanceManager:
             instance_id: The instance ID (used to get the task_id)
             note: The note text to append (will be timestamped and separated with '---')
         """
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        user_id = get_current_user()
+        if user_id is None:
+            raise ValueError("User must be logged in to append instance notes")
+        
         # Get the task_id from the instance
-        instance = self.get_instance(instance_id)
+        instance = self.get_instance(instance_id, user_id=user_id)
         if not instance:
             raise ValueError(f"Instance {instance_id} not found")
         
@@ -2565,9 +2571,9 @@ class InstanceManager:
         expected_physical_load, expected_emotional_load, motivation, expected_aversion.
         Values are scaled to 0-100 range."""
         if self.use_db:
-            return self._get_previous_task_averages_db(task_id)
+            return self._get_previous_task_averages_db(task_id, user_id=user_id)
         else:
-            return self._get_previous_task_averages_csv(task_id)
+            return self._get_previous_task_averages_csv(task_id, user_id=user_id)
     
     def _get_previous_task_averages_csv(self, task_id: str, user_id: Optional[int] = None) -> dict:
         """CSV-specific get_previous_task_averages.
@@ -2778,7 +2784,7 @@ class InstanceManager:
                 raise RuntimeError(f"Database error in get_previous_task_averages and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in get_previous_task_averages: {e}, falling back to CSV")
             self.use_db = False
-            return self._get_previous_task_averages_csv(task_id)
+            return self._get_previous_task_averages_csv(task_id, user_id=user_id)
 
     def get_previous_actual_averages(self, task_id: str, user_id: Optional[int] = None) -> dict:
         """Get average values from previous completed instances of the same task.

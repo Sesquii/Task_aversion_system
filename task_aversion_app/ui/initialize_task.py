@@ -612,7 +612,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 try:
                     # This will set initialized_at if not already set
                     with perf_logger.operation("add_prediction_to_instance", instance_id=instance_id):
-                        im.add_prediction_to_instance(instance_id, predicted_payload)
+                        im.add_prediction_to_instance(instance_id, predicted_payload, user_id=current_user_id)
                     
                     # If editing a completed task, mark it as edited
                     if edit_mode and is_completed_task:

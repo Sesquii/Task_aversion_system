@@ -533,8 +533,8 @@ def complete_task_page(task_manager, emotion_manager):
                 ui.notify("Instance ID required", color='negative')
                 return
             
-            # Validate that the instance exists
-            instance_check = im.get_instance(iid)
+            # Validate that the instance exists (with user_id for data isolation)
+            instance_check = im.get_instance(iid, user_id=current_user_id)
             if not instance_check:
                 ui.notify(f"Instance {iid} not found", color='negative')
                 return
@@ -732,7 +732,7 @@ def complete_task_page(task_manager, emotion_manager):
                 # If editing, use update method instead of complete_instance to preserve completion status
                 if edit_mode:
                     # Update the actual data directly
-                    instance = im.get_instance(iid)
+                    instance = im.get_instance(iid, user_id=current_user_id)
                     if instance:
                         # Update actual data
                         from ui.task_editing_manager import _update_actual_data_db, _update_actual_data_csv
@@ -751,7 +751,7 @@ def complete_task_page(task_manager, emotion_manager):
                                 if 'initialization_expected_aversion' not in predicted_dict:
                                     original_aversion = predicted_dict.get('expected_aversion', updated_aversion)
                                     predicted_dict['initialization_expected_aversion'] = original_aversion
-                                im.add_prediction_to_instance(iid, predicted_dict)
+                                im.add_prediction_to_instance(iid, predicted_dict, user_id=current_user_id)
                             except json.JSONDecodeError:
                                 pass
                 else:
@@ -799,7 +799,7 @@ def complete_task_page(task_manager, emotion_manager):
                     if aversion_slider is not None:
                         updated_aversion = int(aversion_slider.value)
                         # Get current predicted data and update expected_aversion
-                        instance = im.get_instance(iid)
+                        instance = im.get_instance(iid, user_id=current_user_id)
                         if instance:
                             predicted_raw = instance.get('predicted') or '{}'
                             try:

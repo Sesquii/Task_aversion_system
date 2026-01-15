@@ -497,7 +497,18 @@ def update_ongoing_timer(instance_id, timer_element):
 
 
 def show_details(instance_id):
-    inst = InstanceManager.get_instance(instance_id)
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    user_id = get_current_user()
+    if user_id is None:
+        ui.notify("Must be logged in to view instance details", color='negative')
+        return
+    
+    # Use instance manager instance (not class method)
+    inst = im.get_instance(instance_id, user_id=user_id)
+    if not inst:
+        ui.notify("Instance not found", color='negative')
+        return
 
     with ui.dialog() as dialog, ui.card():
         ui.label(f"Instance ID: {instance_id}")

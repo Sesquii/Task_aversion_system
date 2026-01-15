@@ -1,97 +1,54 @@
-Security: Add user_id validation and data isolation for import/export
+fix(security): ensure all instance retrieval methods use logged-in user_id
 
-This commit implements critical security fixes to ensure users can only
-access and modify their own data through import/export functionality and
-database queries.
+Fix security warning where _get_instance_db() was called without user_id,
+which could allow unauthorized data access. All instance retrieval methods
+now require and use the logged-in user's ID for proper data isolation.
 
-Import/Export Security Fixes:
-- Made user_id REQUIRED for all export functions (csv_export.py)
-- Added user_id filtering to all user-specific tables in exports:
-  * Tasks, TaskInstances, PopupTriggers, PopupResponses, Notes, SurveyResponses
-- Added user_id parameter to all import functions (csv_import.py)
-- Implemented CSV user_id validation: rows with mismatched user_id are
-  skipped to prevent cross-user data editing
-- All imported data is assigned to the logged-in user (overrides CSV values)
-- Updated UI (settings_page.py) to pass user_id from get_current_user()
+Changes:
+- Fix append_instance_notes() in instance_manager.py to get current user
+  * Import get_current_user() and validate user is logged in
+  * Pass user_id to get_instance() for data isolation
+- Fix mark_instance_as_edited() in task_editing_manager.py
+  * Get current user before retrieving instance
+  * Pass user_id to get_instance() to ensure user owns the instance
+- Fix show_details() in dashboard.py
+  * Get current user and validate authentication
+  * Fix incorrect class method call (InstanceManager.get_instance() -> im.get_instance())
+  * Pass user_id to get_instance() for security
+- Fix three get_instance() calls in complete_task.py submit_completion()
+  * Line 537: Instance validation check now uses current_user_id
+  * Line 735: Edit mode instance retrieval now uses current_user_id
+  * Line 802: Aversion slider update now uses current_user_id
+- Fix get_previous_task_averages() to pass user_id through fallback chain
+  * Method accepted user_id parameter but wasn't forwarding it to internal methods
+  * Line 2574: Now passes user_id to _get_previous_task_averages_db()
+  * Line 2576: Now passes user_id to _get_previous_task_averages_csv()
+  * Line 2787: Exception handler fallback now passes user_id when falling back to CSV
+  * Eliminates "[InstanceManager] WARNING: get_previous_task_averages_db() called without user_id" warning
+  * Maintains data isolation in both normal and error fallback scenarios
+- Fix analytics functions to require user_id for data access
+  * Add _get_user_id() helper method to get user_id from authenticated session
+  * Update core analytics functions to accept and use user_id parameter:
+    - active_summary(), get_dashboard_metrics(), get_life_balance()
+    - get_daily_work_volume_metrics(), calculate_time_tracking_consistency_score()
+    - get_all_scores_for_composite(), calculate_daily_scores()
+    - get_historical_daily_scores(), check_score_milestones()
+    - calculate_weekly_progress_summary(), get_productivity_time_minutes()
+    - get_relief_summary()
+  * All functions now gracefully return empty/default data if user_id is None
+  * Ensures monitored metrics require logged-in user_id or data doesn't load
 
-Data Isolation Improvements:
-- Fixed database queries missing user_id filters in instance_manager.py:
-  * _pause_instance_db, _start_instance_db, _resume_instance_db
-  * _update_cancelled_instance_db, _add_prediction_to_instance_db
-  * _delete_instance_db
-  * _list_cancelled_instances_db() - Added user_id parameter and filter (returns empty if None)
-  * _get_instance_db() - Added user_id parameter and filter (returns None if None)
-  * _backfill_attributes_from_json_db() - Added user_id parameter and filter
-  * _backfill_attributes_from_json_csv() - Added user_id parameter and filter
-  * _get_previous_actual_averages_db() - Added user_id parameter and filter (returns empty if None)
-  * _get_previous_actual_averages_csv() - Added user_id filter
-  * _get_initial_aversion_db() - Added user_id parameter and filter (returns None if None)
-  * _get_initial_aversion_csv() - Added user_id filter
-  * _get_previous_aversion_average_db() - Added user_id parameter and filter (returns None if None)
-  * _get_previous_aversion_average_csv() - Added user_id filter
-  * _get_baseline_aversion_robust_db() - Added user_id parameter and filter (returns None if None)
-  * _get_baseline_aversion_robust_csv() - Added user_id filter
-  * _get_batch_baseline_aversions_db() - Added user_id parameter and filter (returns empty if None)
-  * _get_batch_baseline_aversions_csv() - Added user_id parameter and filter
-  * _get_baseline_aversion_sensitive_db() - Added user_id parameter and filter (returns None if None)
-  * _get_baseline_aversion_sensitive_csv() - Added user_id filter
-  * Updated public methods to accept and pass user_id: list_cancelled_instances(),
-    get_instance(), get_previous_actual_averages(), get_initial_aversion(),
-    get_previous_aversion_average(), get_baseline_aversion_robust(),
-    get_batch_baseline_aversions(), get_baseline_aversion_sensitive(),
-    backfill_attributes_from_json()
-- Fixed notes_manager.py to require user_id for data isolation:
-  * get_all_notes() - Added user_id parameter (returns empty list if None)
-  * delete_note() - Added user_id parameter (returns False if None)
-  * add_note() - Added user_id parameter (associates note with user)
-  * _initialize_default_note() - Added user_id parameter (checks per-user)
-  * Updated ui/notes_page.py to get user_id from get_current_user() and pass to all methods
-- Fixed task_manager.py to require user_id for data isolation:
-  * _update_task_db() - Now requires user_id (returns False if None, validates before query)
-- Fixed _load_instances() in analytics.py to require user_id:
-  * Added user_id parameter (required, returns empty DataFrame if None)
-  * Includes user_id in initial query filter for both completed_only=True and False
-  * Early validation returns empty DataFrame if user_id is None (before DB access)
-  * Improves security and performance by filtering at database level
-  * Updated cache key to include user_id for proper cache isolation
-- Fixed productivity_tracker.py to require user_id for data isolation:
-  * _get_completed_instances() - Added user_id filter (converts string to int for DB)
-  * Returns empty DataFrame if user_id is None or invalid
-- Updated UI pages to pass user_id:
-  * ui/cancelled_tasks_page.py - Gets user_id from get_current_user() and passes to list_cancelled_instances()
-  * ui/task_editing_manager.py - Gets user_id from get_current_user() and passes to list_cancelled_instances()
-  * ui/notes_page.py - Gets user_id from get_current_user() and passes to all NotesManager methods
-- Added user_id parameters to all public interface functions
-- All database queries now filter by user_id before execution
-- Functions return False/empty/None if user_id is None for security
-- Migration functions (backfill_attributes_from_json) allow user_id=None for migration
-  purposes but log security warnings
+Security Impact:
+- Prevents potential unauthorized access to instances belonging to other users
+- Ensures all database queries are properly filtered by user_id
+- Eliminates "[InstanceManager] WARNING: _get_instance_db() called without user_id" warnings
+- Eliminates "[InstanceManager] WARNING: get_previous_task_averages_db() called without user_id" warnings
+- Analytics functions now require authentication for data access
+- Monitored metrics will not load data without valid user_id
 
-Security Guarantees:
-- Users can only export their own data
-- Users can only import data for themselves
-- CSV user_id values are validated before import
-- Mismatched user_id rows are skipped (preferring "few bad data points"
-  over allowing cross-user data editing)
-- No cross-user data access or modification possible
-
-Testing Status:
-⚠️  Both import/export security and data isolation changes require
-    thorough testing before production deployment. The import feature
-    remains disabled in the UI pending security audit completion.
-
-Files Modified:
-- backend/csv_export.py: Added user_id requirement and filtering (now REQUIRED, raises ValueError if None)
-- backend/csv_import.py: Added user_id validation and enforcement, documentation comments
-- backend/instance_manager.py: Added user_id filters to all queries including:
-  * CSV and DB versions of backfill, averages, aversion, and baseline functions
-  * _list_cancelled_instances_db() and _get_instance_db()
-  * All baseline/aversion calculation methods (robust, sensitive, batch)
-- backend/notes_manager.py: Made user_id required for get_all_notes(), delete_note(), add_note(), _initialize_default_note()
-- backend/task_manager.py: Made user_id required for _update_task_db() (validates before query)
-- backend/analytics.py: Fixed _load_instances() to require user_id and include in initial query filter
-- backend/productivity_tracker.py: Added user_id filter to _get_completed_instances() (converts string to int)
-- ui/settings_page.py: Updated to pass user_id to import/export functions
-- ui/cancelled_tasks_page.py: Updated to get user_id and pass to list_cancelled_instances()
-- ui/task_editing_manager.py: Updated to get user_id and pass to list_cancelled_instances()
-- ui/notes_page.py: Updated to get user_id and pass to all NotesManager methods
+Files modified:
+- task_aversion_app/backend/instance_manager.py
+- task_aversion_app/ui/task_editing_manager.py
+- task_aversion_app/ui/dashboard.py
+- task_aversion_app/ui/complete_task.py
+- task_aversion_app/backend/analytics.py

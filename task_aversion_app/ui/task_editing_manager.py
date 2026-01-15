@@ -100,7 +100,13 @@ def get_all_tasks_chronologically():
 
 def mark_instance_as_edited(instance_id):
     """Mark an instance as edited by adding is_edited flag to actual data."""
-    instance = im.get_instance(instance_id)
+    # Get current user for data isolation
+    user_id = get_current_user()
+    if user_id is None:
+        print("[task_editing_manager] WARNING: mark_instance_as_edited() called without logged-in user")
+        return False
+    
+    instance = im.get_instance(instance_id, user_id=user_id)
     if not instance:
         return False
     
