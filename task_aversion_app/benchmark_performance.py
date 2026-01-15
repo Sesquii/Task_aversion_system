@@ -24,6 +24,10 @@ import pandas as pd
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Set to use CSV mode for benchmark script (data isolation not required)
+os.environ['USE_CSV'] = 'true'
+os.environ.pop('DATABASE_URL', None)
+
 from backend.task_manager import TaskManager
 from backend.instance_manager import InstanceManager
 from backend.analytics import Analytics
@@ -119,7 +123,7 @@ class PerformanceBenchmark:
         
         dashboard_ops = {
             'list_tasks': lambda: self.tm.list_tasks(),
-            'list_active_instances': lambda: self.im.list_active_instances(),
+            'list_active_instances': lambda: self.im.list_active_instances(user_id=None),  # CSV mode allows None
             'get_relief_summary': lambda: self.analytics.get_relief_summary(),
             'get_dashboard_metrics': lambda: self.analytics.get_dashboard_metrics(),
         }
@@ -179,7 +183,7 @@ class PerformanceBenchmark:
             """Simulate what happens when dashboard loads."""
             # These are the key operations that happen on dashboard load
             self.tm.list_tasks()
-            self.im.list_active_instances()
+            self.im.list_active_instances(user_id=None)  # CSV mode allows None
             self.analytics.get_relief_summary()
             self.analytics.get_dashboard_metrics()
         

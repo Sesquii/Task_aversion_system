@@ -49,7 +49,7 @@ def cancel_task_page(task_manager, emotion_manager):
             )
 
             if not instance_id:
-                active = im.list_active_instances()
+                active = im.list_active_instances(user_id=current_user_id)
                 if active:
                     inst_select = ui.select(
                         options=[f"{r['instance_id']} | {r['task_name']}" for r in active],

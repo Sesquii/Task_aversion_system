@@ -64,7 +64,26 @@ class RoutineScheduler:
         current_weekday = now.weekday()  # 0=Monday, 6=Sunday
         
         # Get all tasks
-        all_tasks = self.task_manager.get_all()
+        # Note: RoutineScheduler is a background service that needs to check tasks for all users
+        # For data isolation, we use CSV mode for background services
+        # TODO: Consider iterating over all users for proper multi-user database support
+        try:
+            all_tasks = self.task_manager.get_all(user_id=None)
+        except ValueError:
+            # Database mode requires user_id - use CSV mode for background services
+            import os
+            original_use_csv = os.getenv('USE_CSV', '')
+            os.environ['USE_CSV'] = '1'  # Temporarily use CSV mode
+            try:
+                from backend.task_manager import TaskManager
+                csv_task_manager = TaskManager()
+                all_tasks = csv_task_manager.get_all(user_id=None)
+            finally:
+                # Restore original setting
+                if original_use_csv:
+                    os.environ['USE_CSV'] = original_use_csv
+                elif 'USE_CSV' in os.environ:
+                    del os.environ['USE_CSV']
         
         if all_tasks is None or all_tasks.empty:
             return
@@ -181,7 +200,26 @@ class RoutineScheduler:
         Returns:
             List of task dictionaries with routine schedules
         """
-        all_tasks = self.task_manager.get_all()
+        # Note: RoutineScheduler is a background service that needs to check tasks for all users
+        # For data isolation, we use CSV mode for background services
+        # TODO: Consider iterating over all users for proper multi-user database support
+        try:
+            all_tasks = self.task_manager.get_all(user_id=None)
+        except ValueError:
+            # Database mode requires user_id - use CSV mode for background services
+            import os
+            original_use_csv = os.getenv('USE_CSV', '')
+            os.environ['USE_CSV'] = '1'  # Temporarily use CSV mode
+            try:
+                from backend.task_manager import TaskManager
+                csv_task_manager = TaskManager()
+                all_tasks = csv_task_manager.get_all(user_id=None)
+            finally:
+                # Restore original setting
+                if original_use_csv:
+                    os.environ['USE_CSV'] = original_use_csv
+                elif 'USE_CSV' in os.environ:
+                    del os.environ['USE_CSV']
         if all_tasks is None or all_tasks.empty:
             return []
         

@@ -1,54 +1,100 @@
-fix(security): ensure all instance retrieval methods use logged-in user_id
+Enforce data isolation: Require user_id in database mode
 
-Fix security warning where _get_instance_db() was called without user_id,
-which could allow unauthorized data access. All instance retrieval methods
-now require and use the logged-in user's ID for proper data isolation.
+This commit enforces strict data isolation by requiring user_id parameters
+in database mode while allowing CSV mode for unauthenticated users and
+utility scripts. This ensures users can only access their own data.
 
-Changes:
-- Fix append_instance_notes() in instance_manager.py to get current user
-  * Import get_current_user() and validate user is logged in
-  * Pass user_id to get_instance() for data isolation
-- Fix mark_instance_as_edited() in task_editing_manager.py
-  * Get current user before retrieving instance
-  * Pass user_id to get_instance() to ensure user owns the instance
-- Fix show_details() in dashboard.py
-  * Get current user and validate authentication
-  * Fix incorrect class method call (InstanceManager.get_instance() -> im.get_instance())
-  * Pass user_id to get_instance() for security
-- Fix three get_instance() calls in complete_task.py submit_completion()
-  * Line 537: Instance validation check now uses current_user_id
-  * Line 735: Edit mode instance retrieval now uses current_user_id
-  * Line 802: Aversion slider update now uses current_user_id
-- Fix get_previous_task_averages() to pass user_id through fallback chain
-  * Method accepted user_id parameter but wasn't forwarding it to internal methods
-  * Line 2574: Now passes user_id to _get_previous_task_averages_db()
-  * Line 2576: Now passes user_id to _get_previous_task_averages_csv()
-  * Line 2787: Exception handler fallback now passes user_id when falling back to CSV
-  * Eliminates "[InstanceManager] WARNING: get_previous_task_averages_db() called without user_id" warning
-  * Maintains data isolation in both normal and error fallback scenarios
-- Fix analytics functions to require user_id for data access
-  * Add _get_user_id() helper method to get user_id from authenticated session
-  * Update core analytics functions to accept and use user_id parameter:
-    - active_summary(), get_dashboard_metrics(), get_life_balance()
-    - get_daily_work_volume_metrics(), calculate_time_tracking_consistency_score()
-    - get_all_scores_for_composite(), calculate_daily_scores()
-    - get_historical_daily_scores(), check_score_milestones()
-    - calculate_weekly_progress_summary(), get_productivity_time_minutes()
-    - get_relief_summary()
-  * All functions now gracefully return empty/default data if user_id is None
-  * Ensures monitored metrics require logged-in user_id or data doesn't load
+CRITICAL CHANGES:
+=================
 
-Security Impact:
-- Prevents potential unauthorized access to instances belonging to other users
-- Ensures all database queries are properly filtered by user_id
-- Eliminates "[InstanceManager] WARNING: _get_instance_db() called without user_id" warnings
-- Eliminates "[InstanceManager] WARNING: get_previous_task_averages_db() called without user_id" warnings
-- Analytics functions now require authentication for data access
-- Monitored metrics will not load data without valid user_id
+1. TaskManager.get_all() now REQUIRES user_id in database mode
+   - Raises ValueError if user_id is None in database mode
+   - CSV mode still allows user_id=None for backward compatibility
+   - Database queries strictly filter by user_id (no NULL user_id access)
 
-Files modified:
-- task_aversion_app/backend/instance_manager.py
-- task_aversion_app/ui/task_editing_manager.py
-- task_aversion_app/ui/dashboard.py
-- task_aversion_app/ui/complete_task.py
-- task_aversion_app/backend/analytics.py
+2. InstanceManager.list_active_instances() requires user_id
+   - Returns empty list if user_id is None (security measure)
+   - All calls updated to pass user_id
+
+3. Analytics functions updated to require/accept user_id
+   - All get_all() calls now pass user_id
+   - Functions that didn't have user_id parameter now accept it
+   - Helper functions updated to propagate user_id
+
+BACKEND FIXES:
+==============
+
+- task_manager.py:
+  * get_all() requires user_id in database mode (raises ValueError if None)
+  * _get_all_db() strictly filters by user_id (no NULL access)
+  * CSV mode allows user_id=None for unauthenticated users
+
+- analytics.py:
+  * recommendations_from_instances() - added user_id parameter
+  * recommendations() - added user_id parameter  
+  * recommendations_by_category() - added user_id parameter
+  * get_attribute_trends() - passes user_id to get_all()
+  * calculate_daily_scores() - passes user_id to get_all()
+  * get_scatter_data() - added user_id parameter
+  * calculate_correlation() - added user_id parameter
+  * calculate_overall_improvement_from_instance() - added user_id parameter
+  * All get_all() calls in get_dashboard_metrics() now pass user_id
+  * Fixed 20+ instances of get_all() calls missing user_id
+
+- productivity_tracker.py:
+  * All get_all() calls updated (4 instances)
+  * Falls back to CSV mode for legacy string user_ids
+  * Note: Uses string user_ids, needs conversion for full database support
+
+- routine_scheduler.py:
+  * Background service falls back to CSV mode when user_id unavailable
+  * Updated both _check_and_initialize_tasks() and get_scheduled_tasks()
+  * TODO: Consider iterating over all users for multi-user support
+
+UTILITY SCRIPTS:
+===============
+
+- check_today_hours.py:
+  * Set to use CSV mode (USE_CSV=true) for utility script
+  * Updated get_all() call to pass user_id=None (allowed in CSV mode)
+
+- benchmark_performance.py:
+  * Set to use CSV mode (USE_CSV=true) for benchmark script
+  * Updated list_active_instances() calls to pass user_id=None
+
+DATA ISOLATION POLICY:
+======================
+
+Database Mode (Authenticated Users):
+- user_id is REQUIRED for all data access
+- Raises ValueError if user_id is None
+- Strict filtering ensures users only see their own data
+- NULL user_id data remains in database for migration but is inaccessible
+
+CSV Mode (Unauthenticated/Legacy):
+- user_id=None is allowed for backward compatibility
+- Used by utility scripts, tests, and legacy code
+- Background services automatically fall back to CSV if needed
+
+Migration Strategy:
+- Old data with NULL user_id remains in database
+- Can be migrated to user_id=1 or specific users via migration scripts
+- Not accessible through normal queries (data isolation enforced)
+
+SECURITY IMPROVEMENTS:
+=====================
+
+1. Prevents cross-user data access in database mode
+2. Enforces authentication requirement for database access
+3. Clear separation between authenticated (database) and unauthenticated (CSV) modes
+4. All UI pages already authenticate users before data access
+
+TESTING NOTES:
+=============
+
+- test_pause_resume_time_tracking.py uses CSV mode (user_id=None allowed)
+- Standalone scripts use CSV mode for utility purposes
+- All production UI code requires authentication and passes user_id
+
+This change ensures proper data isolation while maintaining backward
+compatibility for unauthenticated users and utility scripts through CSV mode.

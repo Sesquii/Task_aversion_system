@@ -522,7 +522,7 @@ def generate_goal_adjustment_plotly() -> Optional[go.Figure]:
     return fig
 
 
-def generate_thoroughness_note_coverage_plotly() -> Optional[go.Figure]:
+def generate_thoroughness_note_coverage_plotly(user_id: Optional[int] = None) -> Optional[go.Figure]:
     """Generate note coverage visualization showing percentage of tasks with notes."""
     try:
         import sys
@@ -534,10 +534,15 @@ def generate_thoroughness_note_coverage_plotly() -> Optional[go.Figure]:
         
         from backend.task_manager import TaskManager
         from backend.analytics import Analytics
+        from backend.auth import get_current_user
+        
+        # Get user_id if not provided
+        if user_id is None:
+            user_id = get_current_user()
         
         task_manager = TaskManager()
         analytics = Analytics()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         if tasks_df.empty:
             return None
@@ -594,7 +599,7 @@ def generate_thoroughness_note_coverage_plotly() -> Optional[go.Figure]:
         return None
 
 
-def generate_thoroughness_note_length_plotly() -> Optional[go.Figure]:
+def generate_thoroughness_note_length_plotly(user_id: Optional[int] = None) -> Optional[go.Figure]:
     """Generate note length distribution visualization."""
     try:
         import sys
@@ -606,10 +611,15 @@ def generate_thoroughness_note_length_plotly() -> Optional[go.Figure]:
         
         from backend.task_manager import TaskManager
         from backend.analytics import Analytics
+        from backend.auth import get_current_user
+        
+        # Get user_id if not provided
+        if user_id is None:
+            user_id = get_current_user()
         
         task_manager = TaskManager()
         analytics = Analytics()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         if tasks_df.empty:
             return None
@@ -784,7 +794,7 @@ def generate_thoroughness_popup_penalty_plotly() -> Optional[go.Figure]:
         return None
 
 
-def generate_thoroughness_factor_overview_plotly() -> Optional[go.Figure]:
+def generate_thoroughness_factor_overview_plotly(user_id: Optional[int] = None) -> Optional[go.Figure]:
     """Generate overview chart showing all thoroughness components."""
     try:
         import sys
@@ -795,6 +805,11 @@ def generate_thoroughness_factor_overview_plotly() -> Optional[go.Figure]:
             sys.path.insert(0, parent_dir)
         
         from backend.analytics import Analytics
+        from backend.auth import get_current_user
+        
+        # Get user_id if not provided
+        if user_id is None:
+            user_id = get_current_user()
         
         analytics = Analytics()
         
@@ -809,7 +824,7 @@ def generate_thoroughness_factor_overview_plotly() -> Optional[go.Figure]:
         from datetime import datetime, timedelta
         
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         if tasks_df.empty:
             return None

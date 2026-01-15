@@ -28,6 +28,13 @@ def register_factors_comparison_page():
 
 def build_factors_comparison_page():
     """Build the factors comparison analytics page."""
+    from backend.auth import get_current_user
+    
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
     ui.page_title('Factors Comparison Analytics')
     
     with ui.header().classes("bg-indigo-600 text-white"):
@@ -100,7 +107,7 @@ def build_factors_comparison_page():
                         
                         # Step 1: Load instances
                         print("STEP 1: Loading instances from analytics service...")
-                        df = analytics_service._load_instances()
+                        df = analytics_service._load_instances(user_id=current_user_id)
                         print(f"  ✓ Loaded {len(df)} total instances")
                         print(f"  ✓ Columns: {list(df.columns)}")
                         print()
@@ -149,7 +156,7 @@ def build_factors_comparison_page():
                         
                         # Step 4: Get factors comparison data
                         print("STEP 4: Calling get_factors_comparison_data()...")
-                        data = get_factors_comparison_data()
+                        data = get_factors_comparison_data(user_id=current_user_id)
                         print(f"  ✓ Returned data keys: {list(data.keys())}")
                         print(f"  ✓ total_tasks: {data.get('total_tasks', 'N/A')}")
                         print()
@@ -254,14 +261,19 @@ def build_factors_comparison_page():
         _render_factors_task_details(data)
 
 
-def get_factors_comparison_data(days: int = 90) -> Dict:
+def get_factors_comparison_data(days: int = 90, user_id: Optional[int] = None) -> Dict:
     """Get factors comparison data from analytics service.
-    
+
     Uses pre-calculated factors from _load_instances() which already computes
     serendipity_factor and disappointment_factor based on net_relief.
     """
+    from backend.auth import get_current_user
+    
+    # Get user_id if not provided
+    if user_id is None:
+        user_id = get_current_user()
     # Use _load_instances() which already calculates factors
-    df = analytics_service._load_instances()
+    df = analytics_service._load_instances(user_id=user_id)
     completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
     
     if completed.empty:
@@ -434,7 +446,7 @@ def get_factors_comparison_data(days: int = 90) -> Dict:
     # Get task names if available
     from backend.task_manager import TaskManager
     task_manager = TaskManager()
-    tasks_df = task_manager.get_all()
+    tasks_df = task_manager.get_all(user_id=user_id)
     
     if not tasks_df.empty and 'task_name' in tasks_df.columns:
         factors_data = factors_data.merge(

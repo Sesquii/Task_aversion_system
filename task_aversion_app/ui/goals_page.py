@@ -1,9 +1,11 @@
 """Goals page - Landing page for goal tracking features."""
 from nicegui import ui
+from fastapi import Request
 import pandas as pd
 from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 from backend.analytics import Analytics
+from backend.auth import get_current_user
 
 user_state = UserStateManager()
 DEFAULT_USER_ID = "default_user"
@@ -52,8 +54,14 @@ MILESTONES = [
 
 
 @ui.page("/goals")
-def goals_page():
+def goals_page(request: Request = None):
     """Goals landing page."""
+    
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
     
     ui.label("Goals").classes("text-3xl font-bold mb-4")
     ui.label("Track and manage your productivity and performance goals.").classes("text-gray-600 mb-6")
@@ -157,7 +165,7 @@ def goals_page():
             
             # Get all task templates
             try:
-                all_tasks = task_manager.get_all()
+                all_tasks = task_manager.get_all(user_id=current_user_id)
                 if not all_tasks.empty:
                     # Get template goals from user state
                     template_goals = user_state.get_template_goals(DEFAULT_USER_ID)

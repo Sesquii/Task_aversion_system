@@ -25,6 +25,14 @@ def register_relief_comparison_page():
 
 def build_relief_comparison_page():
     """Build the relief comparison analytics page."""
+    from backend.auth import get_current_user
+    
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
+    
     ui.page_title('Relief Comparison Analytics')
     
     with ui.header().classes("bg-blue-600 text-white"):
@@ -33,7 +41,7 @@ def build_relief_comparison_page():
     
     with ui.column().classes("w-full p-4 gap-4"):
         # Get data
-        data = get_relief_comparison_data()
+        data = get_relief_comparison_data(user_id=current_user_id)
         
         if not data or data['total_tasks'] == 0:
             with ui.card().classes("p-4"):
@@ -54,9 +62,15 @@ def build_relief_comparison_page():
         _render_task_details(data)
 
 
-def get_relief_comparison_data(days: int = 90) -> Dict:
+def get_relief_comparison_data(days: int = 90, user_id: Optional[int] = None) -> Dict:
     """Get relief comparison data from analytics service."""
-    df = analytics_service._load_instances()
+    from backend.auth import get_current_user
+    
+    # Get user_id if not provided
+    if user_id is None:
+        user_id = get_current_user()
+    
+    df = analytics_service._load_instances(user_id=user_id)
     completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
     
     if completed.empty:
@@ -120,7 +134,7 @@ def get_relief_comparison_data(days: int = 90) -> Dict:
     # Get task names if available
     from backend.task_manager import TaskManager
     task_manager = TaskManager()
-    tasks_df = task_manager.get_all()
+    tasks_df = task_manager.get_all(user_id=user_id)
     
     if not tasks_df.empty and 'task_name' in tasks_df.columns:
         relief_data = relief_data.merge(

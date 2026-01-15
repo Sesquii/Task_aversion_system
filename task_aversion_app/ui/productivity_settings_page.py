@@ -1,5 +1,6 @@
 # ui/productivity_settings_page.py
 from nicegui import ui
+from fastapi import Request
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -8,6 +9,7 @@ import os
 from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 from backend.analytics import Analytics
+from backend.auth import get_current_user
 
 user_state = UserStateManager()
 task_manager = TaskManager()
@@ -33,8 +35,14 @@ CURVE_WEIGHTS = {
 
 
 @ui.page("/settings/productivity-settings")
-def productivity_settings_page():
+def productivity_settings_page(request: Request = None):
     """Productivity score settings page with basic and advanced configuration options."""
+    
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
     
     ui.label("Productivity Score Settings").classes("text-2xl font-bold mb-2")
     ui.label("Configure how productivity scores are calculated and displayed.").classes(
@@ -115,7 +123,7 @@ def productivity_settings_page():
         )
         
         # Get all tasks for selection
-        all_tasks_df = task_manager.get_all()
+        all_tasks_df = task_manager.get_all(user_id=current_user_id)
         task_options = {}
         if not all_tasks_df.empty:
             for _, task in all_tasks_df.iterrows():

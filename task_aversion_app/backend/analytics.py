@@ -291,7 +291,8 @@ class Analytics:
         row: pd.Series,
         avg_self_care_per_day: float,
         avg_relief_score: float,
-        completed_instances: Optional[pd.DataFrame] = None
+        completed_instances: Optional[pd.DataFrame] = None,
+        user_id: Optional[int] = None
     ) -> float:
         """Calculate overall improvement ratio from a task instance row.
         
@@ -303,10 +304,15 @@ class Analytics:
             avg_self_care_per_day: Average self-care tasks per day (baseline)
             avg_relief_score: Average relief score (baseline, 0-100)
             completed_instances: Optional DataFrame of all completed instances for metric calculation
+            user_id: User ID for data isolation (required for database mode)
         
         Returns:
             Overall improvement ratio (0.0 to 1.0)
         """
+        # Get user_id if not provided
+        if user_id is None:
+            user_id = self._get_user_id(user_id)
+        
         # Get current self-care count for today
         current_self_care = 0.0
         task_type = str(row.get('task_type', '')).strip().lower()
@@ -331,7 +337,7 @@ class Analytics:
                     # Get task types for today's instances
                     from .task_manager import TaskManager
                     task_manager = TaskManager()
-                    tasks_df = task_manager.get_all()
+                    tasks_df = task_manager.get_all(user_id=user_id)
                     
                     if not tasks_df.empty and 'task_type' in tasks_df.columns:
                         today_with_type = today_instances.merge(
@@ -2198,7 +2204,9 @@ class Analytics:
             from .database import get_session, PopupTrigger
             
             task_manager = TaskManager()
-            tasks_df = task_manager.get_all()
+            # Note: user_id is string here ('default'), TaskManager expects int, so pass None
+            # This function uses string user_ids for legacy compatibility
+            tasks_df = task_manager.get_all(user_id=None)
             
             if tasks_df.empty:
                 return 1.0  # Default neutral factor if no tasks
@@ -3555,7 +3563,7 @@ class Analytics:
             # Calculate productivity score for each completed task
             from .task_manager import TaskManager
             task_manager = TaskManager()
-            tasks_df = task_manager.get_all()
+            tasks_df = task_manager.get_all(user_id=user_id)
             
             # Get self care tasks per day for productivity calculation
             self_care_tasks_per_day = {}
@@ -3699,7 +3707,7 @@ class Analytics:
         if needs_metric('daily_self_care_tasks') or needs_metric('avg_daily_self_care_tasks') or needs_metric('self_care_frequency'):
             from .task_manager import TaskManager
             task_manager = TaskManager()
-            tasks_df = task_manager.get_all()
+            tasks_df = task_manager.get_all(user_id=user_id)
             
             if not tasks_df.empty and 'task_type' in tasks_df.columns:
                 # Join completed tasks with task types
@@ -3742,7 +3750,7 @@ class Analytics:
             # If not needed, we still need tasks_df for other calculations, but skip self-care
             from .task_manager import TaskManager
             task_manager = TaskManager()
-            tasks_df = task_manager.get_all()
+            tasks_df = task_manager.get_all(user_id=user_id)
         
         # Calculate average aversion from completed tasks (expected_aversion at time of completion)
         completed_aversion = completed['predicted_dict'].apply(
@@ -4046,7 +4054,7 @@ class Analytics:
         # Load tasks to get task_type
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         if tasks_df.empty or 'task_type' not in tasks_df.columns:
             return {
@@ -6282,7 +6290,7 @@ class Analytics:
         # Get task types for productivity score calculation
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Merge task_type if needed
         if 'task_type' not in day_completions.columns and not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -6934,7 +6942,8 @@ class Analytics:
         # Load tasks to get task_type
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        user_id = self._get_user_id(user_id)
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Join to get task_type
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -7206,7 +7215,8 @@ class Analytics:
         # Load tasks to get task_type
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        user_id = self._get_user_id(user_id)
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Join instances with tasks to get task_type
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -7877,7 +7887,8 @@ class Analytics:
         # Load tasks to get task_type and filter to only Work and Self care tasks
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        user_id = self._get_user_id(user_id)
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Join instances with tasks to get task_type
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -8153,7 +8164,8 @@ class Analytics:
         # Calculate productivity score for each task
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        user_id = self._get_user_id(user_id)
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Get self-care tasks per day for productivity score calculation
         completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
@@ -10078,7 +10090,8 @@ class Analytics:
         # Load tasks to get task_type
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        user_id = self._get_user_id(user_id)
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Join instances with tasks to get task_type
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -10190,7 +10203,8 @@ class Analytics:
         # Load tasks to get task_type
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        user_id = self._get_user_id(user_id)
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Join instances with tasks to get task_type
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -10959,15 +10973,18 @@ class Analytics:
             {'key': 'categories', 'label': 'Categories'},
         ]
 
-    def recommendations(self, filters: Optional[Dict[str, float]] = None) -> List[Dict[str, str]]:
+    def recommendations(self, filters: Optional[Dict[str, float]] = None, user_id: Optional[int] = None) -> List[Dict[str, str]]:
         """Generate recommendations based on all task templates, using historical data from completed instances."""
         from .task_manager import TaskManager
         
         filters = {**self.default_filters(), **(filters or {})}
         
+        # Get user_id if not provided
+        user_id = self._get_user_id(user_id)
+        
         # Load all task templates
         task_manager = TaskManager()
-        all_tasks_df = task_manager.get_all()
+        all_tasks_df = task_manager.get_all(user_id=user_id)
         if all_tasks_df.empty:
             return []
         
@@ -11106,7 +11123,7 @@ class Analytics:
         
         return [r for r in ranked if r]
 
-    def recommendations_by_category(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3) -> List[Dict[str, str]]:
+    def recommendations_by_category(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3, user_id: Optional[int] = None) -> List[Dict[str, str]]:
         """Generate recommendations ranked by a set of metrics.
 
         metrics can be a single metric name or a list. Each metric contributes to
@@ -11135,9 +11152,12 @@ class Analytics:
             "physical_load",
         }
         
+        # Get user_id if not provided
+        user_id = self._get_user_id(user_id)
+        
         # Load all task templates
         task_manager = TaskManager()
-        all_tasks_df = task_manager.get_all()
+        all_tasks_df = task_manager.get_all(user_id=user_id)
         if all_tasks_df.empty:
             return []
         
@@ -11393,7 +11413,7 @@ class Analytics:
         
         return ranked
 
-    def recommendations_from_instances(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3) -> List[Dict[str, str]]:
+    def recommendations_from_instances(self, metrics: Union[str, List[str]], filters: Optional[Dict[str, float]] = None, limit: int = 3, user_id: Optional[int] = None) -> List[Dict[str, str]]:
         """Generate recommendations from initialized (non-completed) task instances.
         
         Similar to recommendations_by_category but works with active instances instead of templates.
@@ -11402,6 +11422,7 @@ class Analytics:
             metrics: Single metric name or list of metrics to rank by
             filters: Optional filters (min_duration, max_duration, task_type, etc.)
             limit: Maximum number of recommendations to return
+            user_id: User ID for data isolation (required)
         
         Returns:
             List of recommendation dicts with instance_id, task_name, score, and metric_values
@@ -11427,9 +11448,13 @@ class Analytics:
             "physical_load",
         }
         
+        # Get user_id if not provided
+        if user_id is None:
+            user_id = self._get_user_id(user_id)
+        
         # Get all active (non-completed) instances
         instance_manager = InstanceManager()
-        active_instances = instance_manager.list_active_instances()
+        active_instances = instance_manager.list_active_instances(user_id=user_id)
         
         if not active_instances:
             return []
@@ -11437,7 +11462,7 @@ class Analytics:
         # Load task templates to get task metadata
         from .task_manager import TaskManager
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=user_id)
         
         # Parse filters
         max_duration_filter = None
@@ -11459,7 +11484,7 @@ class Analytics:
         categories_filter = filters.get('categories')
         
         # Load historical instance data to get averages for relief_score fallback
-        instances_df = self._load_instances()
+        instances_df = self._load_instances(user_id=user_id)
         completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy() if not instances_df.empty else pd.DataFrame()
         
         # Calculate historical averages per task_id (for relief_score fallback)
@@ -12008,7 +12033,7 @@ class Analytics:
             # Calculate productivity score for trend data
             from .task_manager import TaskManager
             task_manager = TaskManager()
-            tasks_df = task_manager.get_all()
+            tasks_df = task_manager.get_all(user_id=user_id)
             
             # Merge task_type if needed
             if 'task_type' not in completed.columns and not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -12329,7 +12354,7 @@ class Analytics:
             # Calculate daily self care tasks count
             from .task_manager import TaskManager
             task_manager = TaskManager()
-            tasks_df = task_manager.get_all()
+            tasks_df = task_manager.get_all(user_id=user_id)
             
             # Merge task_type if needed
             if 'task_type' not in completed.columns and not tasks_df.empty and 'task_type' in tasks_df.columns:
@@ -12580,9 +12605,17 @@ class Analytics:
         print(f"[Analytics] get_stress_dimension_data: {duration:.2f}ms")
         return result
 
-    def calculate_correlation(self, attribute_x: str, attribute_y: str, method: str = 'pearson') -> Dict[str, any]:
-        """Calculate correlation between two attributes with metadata for tooltips."""
-        df = self._load_instances()
+    def calculate_correlation(self, attribute_x: str, attribute_y: str, method: str = 'pearson', user_id: Optional[int] = None) -> Dict[str, any]:
+        """Calculate correlation between two attributes with metadata for tooltips.
+        
+        Args:
+            attribute_x: Name of first attribute
+            attribute_y: Name of second attribute
+            method: Correlation method ('pearson', 'spearman', etc.)
+            user_id: User ID for data isolation (required for database mode)
+        """
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         if completed.empty or attribute_x not in completed.columns or attribute_y not in completed.columns:
             return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': 0}
@@ -12681,13 +12714,18 @@ class Analytics:
             'best_min': _format_best(best_min),
         }
 
-    def get_scatter_data(self, attribute_x: str, attribute_y: str) -> Dict[str, any]:
+    def get_scatter_data(self, attribute_x: str, attribute_y: str, user_id: Optional[int] = None) -> Dict[str, any]:
         """Return paired scatter values for two attributes.
         
         Supports calculated metrics like productivity_score and grit_score by computing them on-the-fly.
-        """
         
-        df = self._load_instances()
+        Args:
+            attribute_x: Name of first attribute
+            attribute_y: Name of second attribute
+            user_id: User ID for data isolation (required for database mode)
+        """
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(user_id=user_id)
         
         # Check if DataFrame is empty or missing required column
         if df.empty or 'completed_at' not in df.columns:
@@ -12848,7 +12886,7 @@ class Analytics:
             # Load tasks to get task_type
             from .task_manager import TaskManager
             task_manager = TaskManager()
-            tasks_df = task_manager.get_all()
+            tasks_df = task_manager.get_all(user_id=user_id)
             
             if not tasks_df.empty and 'task_type' in tasks_df.columns:
                 # Merge to get task_type

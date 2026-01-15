@@ -75,7 +75,7 @@ def complete_task_page(task_manager, emotion_manager):
 
         # If no instance_id provided, show selector UI
         if not instance_id:
-            active = im.list_active_instances()
+            active = im.list_active_instances(user_id=current_user_id)
             print("[complete_task] active instances:", active)
 
             inst_select = ui.select(

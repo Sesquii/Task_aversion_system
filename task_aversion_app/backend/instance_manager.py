@@ -1920,9 +1920,9 @@ class InstanceManager:
             self.use_db = False
             return self._add_prediction_to_instance_csv(instance_id, predicted)
 
-    def ensure_instance_for_task(self, task_id, task_name, predicted: dict = None):
+    def ensure_instance_for_task(self, task_id, task_name, predicted: dict = None, user_id: Optional[int] = None):
         # create an instance and return id
-        return self.create_instance(task_id, task_name, task_version=1, predicted=predicted)
+        return self.create_instance(task_id, task_name, task_version=1, predicted=predicted, user_id=user_id)
 
 
 

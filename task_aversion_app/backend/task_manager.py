@@ -290,9 +290,19 @@ class TaskManager:
         Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes).
         
         Args:
-            user_id: User ID to filter by (required for database, optional for CSV during migration)
+            user_id: User ID to filter by (REQUIRED for database mode, optional for CSV only)
+        
+        Raises:
+            ValueError: If user_id is None in database mode (data isolation requirement)
         """
         import time
+        
+        # Data isolation: require user_id in database mode
+        if self.use_db and user_id is None:
+            raise ValueError(
+                "user_id is required in database mode for data isolation. "
+                "Unauthenticated users should use CSV mode (set USE_CSV=1)."
+            )
         
         # Check cache first (cache key includes user_id for isolation)
         cache_key = f"all:{user_id}" if user_id else "all:all"
@@ -321,16 +331,18 @@ class TaskManager:
         self._reload_csv()
         return self.df.copy()
     
-    def _get_all_db(self, user_id: Optional[int] = None):
-        """Database-specific get_all. Returns DataFrame for compatibility."""
+    def _get_all_db(self, user_id: int):
+        """Database-specific get_all. Returns DataFrame for compatibility.
+        
+        Args:
+            user_id: User ID (required - data isolation enforced)
+        """
         try:
             with self.db_session() as session:
                 query = session.query(self.Task)
-                # Filter by user_id if provided (include NULL user_id during migration period)
-                if user_id is not None:
-                    # Show both user's tasks AND NULL user_id tasks (anonymous data to be migrated)
-                    from sqlalchemy import or_
-                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
+                # Strict data isolation: only return tasks for this user
+                # NULL user_id tasks remain in database for migration but are not accessible
+                query = query.filter(self.Task.user_id == user_id)
                 tasks = query.all()
                 if not tasks:
                     # Return empty DataFrame with expected columns

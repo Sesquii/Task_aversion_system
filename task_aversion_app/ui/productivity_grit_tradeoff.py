@@ -7,6 +7,7 @@ but not the other, revealing patterns in task performance.
 from nicegui import ui
 from backend.analytics import Analytics
 from backend.task_manager import TaskManager
+from backend.auth import get_current_user
 from datetime import datetime
 import pandas as pd
 import plotly.graph_objects as go
@@ -17,6 +18,12 @@ import numpy as np
 def productivity_grit_tradeoff_page():
     """Page for analyzing productivity vs grit score tradeoffs across tasks."""
     
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
+    
     analytics = Analytics()
     task_manager = TaskManager()
     
@@ -25,8 +32,8 @@ def productivity_grit_tradeoff_page():
     
     try:
         # Load data
-        instances_df = analytics._load_instances()
-        tasks_df = task_manager.get_all()
+        instances_df = analytics._load_instances(user_id=current_user_id)
+        tasks_df = task_manager.get_all(user_id=current_user_id)
         
         # Filter to completed instances
         completed = instances_df[instances_df['completed_at'].astype(str).str.len() > 0].copy()

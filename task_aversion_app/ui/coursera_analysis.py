@@ -6,6 +6,7 @@ and comparing productivity metrics on days with vs without Coursera.
 from nicegui import ui
 from backend.analytics import Analytics
 from backend.task_manager import TaskManager
+from backend.auth import get_current_user
 from datetime import datetime, timedelta
 import pandas as pd
 import plotly.graph_objects as go
@@ -17,6 +18,12 @@ import json
 def coursera_analysis_page():
     """Page for analyzing Coursera task patterns and productivity impact."""
     
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
+    
     analytics = Analytics()
     task_manager = TaskManager()
     
@@ -26,8 +33,8 @@ def coursera_analysis_page():
     # Get data
     try:
         # Load instances and tasks
-        instances_df = analytics._load_instances()
-        tasks_df = task_manager.get_all()
+        instances_df = analytics._load_instances(user_id=current_user_id)
+        tasks_df = task_manager.get_all(user_id=current_user_id)
         
         # Find Coursera task
         coursera_tasks = tasks_df[tasks_df['name'].str.contains('Coursera', case=False, na=False)]

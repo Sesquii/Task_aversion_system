@@ -7,15 +7,16 @@ from datetime import datetime, date, timedelta
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Set database URL if not already set
-if not os.getenv('DATABASE_URL'):
-    os.environ['DATABASE_URL'] = 'sqlite:///data/task_aversion.db'
+# Set to use CSV mode for standalone utility script (data isolation not required)
+os.environ['USE_CSV'] = 'true'
+os.environ.pop('DATABASE_URL', None)
 
 from backend.database import get_session, TaskInstance
 from backend.task_manager import TaskManager
 
 def check_today_hours():
     """Check hours worked today."""
+    # Use CSV mode for utility script
     session = get_session()
     today = date.today()
     seven_days_ago = datetime.now() - timedelta(days=7)
@@ -36,9 +37,9 @@ def check_today_hours():
         today_instances = [i for i in instances if i.completed_at and i.completed_at.date() == today]
         print(f"Today's completed instances: {len(today_instances)}\n")
         
-        # Get task types for filtering
+        # Get task types for filtering (CSV mode allows user_id=None)
         task_manager = TaskManager()
-        tasks_df = task_manager.get_all()
+        tasks_df = task_manager.get_all(user_id=None)
         task_type_map = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             for _, row in tasks_df.iterrows():

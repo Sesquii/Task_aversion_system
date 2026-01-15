@@ -4,6 +4,7 @@ Shows pie charts of task template completion distribution.
 Eventually will support jobs system with separate charts per job.
 """
 from nicegui import ui
+from backend.auth import get_current_user
 import pandas as pd
 import plotly.express as px
 from typing import Dict, List, Optional
@@ -15,6 +16,12 @@ from backend.task_manager import TaskManager
 @ui.page("/experimental/task-distribution")
 def task_distribution_page():
     """Task distribution analysis page with pie charts."""
+    
+    # Get current user for data isolation
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
     
     ui.label("Task Distribution").classes("text-3xl font-bold mb-4")
     ui.label(
@@ -35,7 +42,7 @@ def task_distribution_page():
     task_manager = TaskManager()
     
     # Get all instances (we'll filter by status)
-    all_instances = _get_all_instances(instance_manager)
+    all_instances = _get_all_instances(instance_manager, user_id=current_user_id)
     
     if not all_instances or len(all_instances) == 0:
         with ui.card().classes("p-6 w-full"):
@@ -102,7 +109,7 @@ def task_distribution_page():
         task_names = {}
         unique_task_ids = df['task_id'].unique()
         for task_id in unique_task_ids:
-            task = task_manager.get_task(task_id)
+            task = task_manager.get_task(task_id, user_id=current_user_id)
             if task:
                 task_names[task_id] = task.get('name', task_id)
             else:
@@ -273,28 +280,34 @@ def task_distribution_page():
     ui.button("Back to Experimental", on_click=lambda: ui.navigate.to("/experimental")).classes("mt-4")
 
 
-def _get_all_instances(instance_manager: InstanceManager) -> List[Dict]:
+def _get_all_instances(instance_manager: InstanceManager, user_id: Optional[int] = None) -> List[Dict]:
     """Get all task instances as a list of dictionaries.
-    
+
     Works with both CSV and database backends.
     """
     if instance_manager.use_db:
-        return _get_all_instances_db(instance_manager)
+        return _get_all_instances_db(instance_manager, user_id=user_id)
     else:
-        return _get_all_instances_csv(instance_manager)
+        return _get_all_instances_csv(instance_manager, user_id=user_id)
 
 
-def _get_all_instances_csv(instance_manager: InstanceManager) -> List[Dict]:
+def _get_all_instances_csv(instance_manager: InstanceManager, user_id: Optional[int] = None) -> List[Dict]:
     """Get all instances from CSV backend."""
     instance_manager._reload()
-    return instance_manager.df.to_dict(orient='records')
+    df = instance_manager.df
+    if user_id is not None and 'user_id' in df.columns:
+        df = df[df['user_id'] == user_id]
+    return df.to_dict(orient='records')
 
 
-def _get_all_instances_db(instance_manager: InstanceManager) -> List[Dict]:
+def _get_all_instances_db(instance_manager: InstanceManager, user_id: Optional[int] = None) -> List[Dict]:
     """Get all instances from database backend."""
     try:
         with instance_manager.db_session() as session:
-            all_instances = session.query(instance_manager.TaskInstance).all()
+            query = session.query(instance_manager.TaskInstance)
+            if user_id is not None:
+                query = query.filter(instance_manager.TaskInstance.user_id == user_id)
+            all_instances = query.all()
             return [instance.to_dict() for instance in all_instances]
     except Exception as e:
         print(f"[TaskDistribution] Error getting all instances: {e}")
