@@ -40,40 +40,41 @@ class Analytics:
     # This is acceptable since old 0-10 data was only used for a short time.
     
     # Cache for expensive operations
-    _relief_summary_cache = None
-    _relief_summary_cache_time = None
-    _composite_scores_cache = None
-    _composite_scores_cache_time = None
+    # User-specific caches: {user_id: cache_value}
+    _relief_summary_cache = {}  # {user_id: cache_value}
+    _relief_summary_cache_time = {}  # {user_id: timestamp}
+    _composite_scores_cache = {}  # {user_id: cache_value}
+    _composite_scores_cache_time = {}  # {user_id: timestamp}
     _cache_ttl_seconds = 300  # Cache for 5 minutes (optimized for dashboard performance)
     
-    # Cache for _load_instances() - separate caches for all vs completed_only
-    _instances_cache_all = None
-    _instances_cache_all_time = None
-    _instances_cache_completed = None
-    _instances_cache_completed_time = None
+    # Cache for _load_instances() - separate caches for all vs completed_only, keyed by user_id
+    _instances_cache_all = {}  # {user_id: cache_value}
+    _instances_cache_all_time = {}  # {user_id: timestamp}
+    _instances_cache_completed = {}  # {user_id: cache_value}
+    _instances_cache_completed_time = {}  # {user_id: timestamp}
     
-    # Cache for get_dashboard_metrics()
-    _dashboard_metrics_cache = None
-    _dashboard_metrics_cache_time = None
+    # Cache for get_dashboard_metrics(), keyed by user_id
+    _dashboard_metrics_cache = {}  # {user_id: cache_value}
+    _dashboard_metrics_cache_time = {}  # {user_id: timestamp}
     
-    # Cache for calculate_time_tracking_consistency_score()
-    _time_tracking_cache = None
-    _time_tracking_cache_time = None
-    _time_tracking_cache_params = None  # Store (days, target_sleep_hours) to invalidate on param change
+    # Cache for calculate_time_tracking_consistency_score(), keyed by user_id
+    _time_tracking_cache = {}  # {user_id: cache_value}
+    _time_tracking_cache_time = {}  # {user_id: timestamp}
+    _time_tracking_cache_params = {}  # {user_id: (days, target_sleep_hours)} - Store params to invalidate on param change
     
-    # Cache for chart data methods
-    _trend_series_cache = None
-    _trend_series_cache_time = None
-    _attribute_distribution_cache = None
-    _attribute_distribution_cache_time = None
-    _stress_dimension_cache = None
-    _stress_dimension_cache_time = None
+    # Cache for chart data methods, keyed by user_id
+    _trend_series_cache = {}  # {user_id: cache_value}
+    _trend_series_cache_time = {}  # {user_id: timestamp}
+    _attribute_distribution_cache = {}  # {user_id: cache_value}
+    _attribute_distribution_cache_time = {}  # {user_id: timestamp}
+    _stress_dimension_cache = {}  # {user_id: cache_value}
+    _stress_dimension_cache_time = {}  # {user_id: timestamp}
     
-    # Cache for rankings (keyed by metric/top_n)
-    _rankings_cache = {}  # Dict keyed by (metric, top_n) -> (result, timestamp)
-    _leaderboard_cache = None
-    _leaderboard_cache_time = None
-    _leaderboard_cache_top_n = None
+    # Cache for rankings (keyed by user_id, then metric/top_n)
+    _rankings_cache = {}  # {user_id: {(metric, top_n): (result, timestamp)}}
+    _leaderboard_cache = {}  # {user_id: cache_value}
+    _leaderboard_cache_time = {}  # {user_id: timestamp}
+    _leaderboard_cache_top_n = {}  # {user_id: top_n}
     
     @staticmethod
     def calculate_difficulty_bonus(
@@ -2608,35 +2609,68 @@ class Analytics:
         
         return df_filtered
     
-    def _invalidate_instances_cache(self):
-        """Invalidate the instances cache. Call this when instances are created/updated/deleted."""
-        self._instances_cache_all = None
-        self._instances_cache_all_time = None
-        self._instances_cache_completed = None
-        self._instances_cache_completed_time = None
-        # Also invalidate dashboard metrics since it depends on instances
-        self._dashboard_metrics_cache = None
-        self._dashboard_metrics_cache_time = None
+    def _invalidate_instances_cache(self, user_id: Optional[int] = None):
+        """Invalidate the instances cache. Call this when instances are created/updated/deleted.
+        
+        Args:
+            user_id: Optional user_id to invalidate cache for specific user. If None, clears all user caches.
+        """
+        if user_id is not None:
+            cache_key = user_id if user_id is not None else "default"
+            if cache_key in self._instances_cache_all:
+                del self._instances_cache_all[cache_key]
+            if cache_key in self._instances_cache_all_time:
+                del self._instances_cache_all_time[cache_key]
+            if cache_key in self._instances_cache_completed:
+                del self._instances_cache_completed[cache_key]
+            if cache_key in self._instances_cache_completed_time:
+                del self._instances_cache_completed_time[cache_key]
+            if cache_key in self._dashboard_metrics_cache:
+                del self._dashboard_metrics_cache[cache_key]
+            if cache_key in self._dashboard_metrics_cache_time:
+                del self._dashboard_metrics_cache_time[cache_key]
+        else:
+            # Clear all user caches
+            self._instances_cache_all.clear()
+            self._instances_cache_all_time.clear()
+            self._instances_cache_completed.clear()
+            self._instances_cache_completed_time.clear()
+            self._dashboard_metrics_cache.clear()
+            self._dashboard_metrics_cache_time.clear()
         # Invalidate chart and ranking caches too
         self._trend_series_cache = None
-        self._trend_series_cache_time = None
-        self._attribute_distribution_cache = None
-        self._attribute_distribution_cache_time = None
-        self._stress_dimension_cache = None
-        self._stress_dimension_cache_time = None
-        self._rankings_cache = {}
-        self._leaderboard_cache = None
-        self._leaderboard_cache_time = None
-        self._leaderboard_cache_top_n = None
+        # Clear all user-specific caches
+        self._trend_series_cache.clear()
+        self._trend_series_cache_time.clear()
+        self._attribute_distribution_cache.clear()
+        self._attribute_distribution_cache_time.clear()
+        self._stress_dimension_cache.clear()
+        self._stress_dimension_cache_time.clear()
+        self._rankings_cache.clear()
+        self._leaderboard_cache.clear()
+        self._leaderboard_cache_time.clear()
+        self._leaderboard_cache_top_n.clear()
         # Also invalidate relief_summary cache since it depends on instances
-        Analytics._relief_summary_cache = None
-        Analytics._relief_summary_cache_time = None
+        Analytics._relief_summary_cache.clear()
+        Analytics._relief_summary_cache_time.clear()
     
     @staticmethod
-    def _invalidate_relief_summary_cache():
-        """Invalidate the relief_summary cache. Call this when productivity/relief calculations need refresh."""
-        Analytics._relief_summary_cache = None
-        Analytics._relief_summary_cache_time = None
+    def _invalidate_relief_summary_cache(user_id: Optional[int] = None):
+        """Invalidate the relief_summary cache. Call this when productivity/relief calculations need refresh.
+        
+        Args:
+            user_id: Optional user_id to invalidate cache for specific user. If None, clears all user caches.
+        """
+        if user_id is not None:
+            cache_key = user_id if user_id is not None else "default"
+            if cache_key in Analytics._relief_summary_cache:
+                del Analytics._relief_summary_cache[cache_key]
+            if cache_key in Analytics._relief_summary_cache_time:
+                del Analytics._relief_summary_cache_time[cache_key]
+        else:
+            # Clear all user caches
+            Analytics._relief_summary_cache.clear()
+            Analytics._relief_summary_cache_time.clear()
     
     def _get_user_id(self, user_id: Optional[int] = None) -> Optional[int]:
         """Get user_id from parameter or current authenticated user.
@@ -2669,22 +2703,22 @@ class Analytics:
         """
         import time
         
-        # Check cache first (cache key includes user_id for isolation)
-        cache_key = f"{'completed' if completed_only else 'all'}:{user_id}"
+        # Check cache first - cache is now user-specific, keyed by user_id
+        cache_key = user_id if user_id is not None else "default"
         current_time = time.time()
         
         if completed_only:
-            # Check completed instances cache
-            if (self._instances_cache_completed is not None and 
-                self._instances_cache_completed_time is not None and
-                (current_time - self._instances_cache_completed_time) < self._cache_ttl_seconds):
-                return self._instances_cache_completed.copy()
+            # Check completed instances cache for this user
+            if (cache_key in self._instances_cache_completed and 
+                cache_key in self._instances_cache_completed_time and
+                (current_time - self._instances_cache_completed_time[cache_key]) < self._cache_ttl_seconds):
+                return self._instances_cache_completed[cache_key].copy()
         else:
-            # Check all instances cache
-            if (self._instances_cache_all is not None and 
-                self._instances_cache_all_time is not None and
-                (current_time - self._instances_cache_all_time) < self._cache_ttl_seconds):
-                return self._instances_cache_all.copy()
+            # Check all instances cache for this user
+            if (cache_key in self._instances_cache_all and 
+                cache_key in self._instances_cache_all_time and
+                (current_time - self._instances_cache_all_time[cache_key]) < self._cache_ttl_seconds):
+                return self._instances_cache_all[cache_key].copy()
         
         # Cache miss or expired - load from database/CSV
         # Default to database (SQLite) unless USE_CSV is explicitly set
@@ -2970,11 +3004,15 @@ class Analytics:
                     # Store in cache before returning
                     import time
                     if completed_only:
-                        self._instances_cache_completed = df.copy()
-                        self._instances_cache_completed_time = time.time()
+                        # Cache is now user-specific, keyed by user_id
+                        cache_key = user_id if user_id is not None else "default"
+                        self._instances_cache_completed[cache_key] = df.copy()
+                        self._instances_cache_completed_time[cache_key] = time.time()
                     else:
-                        self._instances_cache_all = df.copy()
-                        self._instances_cache_all_time = time.time()
+                        # Cache is now user-specific, keyed by user_id
+                        cache_key = user_id if user_id is not None else "default"
+                        self._instances_cache_all[cache_key] = df.copy()
+                        self._instances_cache_all_time[cache_key] = time.time()
                     
                     return df
                 finally:
@@ -3447,12 +3485,12 @@ class Analytics:
         start = time.perf_counter()
         
         # Check cache first (always cache full result, then filter if needed)
-        # Note: Cache is per-user, but we're using a simple cache for now
-        # TODO: Make cache user-specific if needed
+        # Cache is now user-specific, keyed by user_id
         current_time = time.time()
-        if (self._dashboard_metrics_cache is not None and 
-            self._dashboard_metrics_cache_time is not None and
-            (current_time - self._dashboard_metrics_cache_time) < self._cache_ttl_seconds):
+        cache_key = user_id if user_id is not None else "default"
+        if (cache_key in self._dashboard_metrics_cache and 
+            cache_key in self._dashboard_metrics_cache_time and
+            (current_time - self._dashboard_metrics_cache_time[cache_key]) < self._cache_ttl_seconds):
             # Cache hit - filter if specific metrics requested
             if metrics is not None:
                 # Filter cached result to requested metrics
@@ -3462,11 +3500,12 @@ class Analytics:
                 
                 # Filter the cached result
                 filtered_result = {}
-                if 'counts' in self._dashboard_metrics_cache:
+                cached_data = self._dashboard_metrics_cache[cache_key]
+                if 'counts' in cached_data:
                     filtered_result['counts'] = {}
                     for key in ['active', 'completed_7d', 'total_created', 'total_completed', 'completion_rate', 'daily_self_care_tasks', 'avg_daily_self_care_tasks']:
-                        if needs_metric(key) and key in self._dashboard_metrics_cache['counts']:
-                            filtered_result['counts'][key] = self._dashboard_metrics_cache['counts'][key]
+                        if needs_metric(key) and key in cached_data['counts']:
+                            filtered_result['counts'][key] = cached_data['counts'][key]
                 
                 # Similar filtering for other sections...
                 # For simplicity, if metrics are requested, we'll recalculate (more accurate)
@@ -3476,7 +3515,7 @@ class Analytics:
                 # No filtering needed, return cached full result
                 duration = (time.perf_counter() - start) * 1000
                 print(f"[Analytics] get_dashboard_metrics (cached): {duration:.2f}ms")
-                return self._dashboard_metrics_cache.copy()
+                return self._dashboard_metrics_cache[cache_key].copy()
         
         # Determine which metrics to calculate
         if metrics is not None:
@@ -3896,10 +3935,12 @@ class Analytics:
                 result['productivity_volume']['volumetric_potential_score'] = round(volumetric_potential, 1)
         
         # Store full result in cache (only if metrics=None, otherwise cache is less useful)
+        # Cache is now user-specific, keyed by user_id
         if metrics is None:
             import time
-            self._dashboard_metrics_cache = result.copy()
-            self._dashboard_metrics_cache_time = time.time()
+            cache_key = user_id if user_id is not None else "default"
+            self._dashboard_metrics_cache[cache_key] = result.copy()
+            self._dashboard_metrics_cache_time[cache_key] = time.time()
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_dashboard_metrics: {duration:.2f}ms")
@@ -4356,18 +4397,20 @@ class Analytics:
         import time
         start = time.perf_counter()
         
-        # Check cache (keyed by parameters)
+        user_id = self._get_user_id(user_id)
+        
+        # Check cache (keyed by user_id and parameters)
+        cache_key = user_id if user_id is not None else "default"
+        params_key = (days, target_sleep_hours)
         current_time = time.time()
-        cache_key = (days, target_sleep_hours)
-        if (self._time_tracking_cache is not None and 
-            self._time_tracking_cache_time is not None and
-            self._time_tracking_cache_params == cache_key and
-            (current_time - self._time_tracking_cache_time) < self._cache_ttl_seconds):
+        if (cache_key in self._time_tracking_cache and 
+            cache_key in self._time_tracking_cache_time and
+            cache_key in self._time_tracking_cache_params and
+            self._time_tracking_cache_params[cache_key] == params_key and
+            (current_time - self._time_tracking_cache_time[cache_key]) < self._cache_ttl_seconds):
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] calculate_time_tracking_consistency_score (cached): {duration:.2f}ms")
-            return self._time_tracking_cache.copy()
-        
-        user_id = self._get_user_id(user_id)
+            return self._time_tracking_cache[cache_key].copy()
         df = self._load_instances(user_id=user_id)
         
         if df.empty or user_id is None:
@@ -4529,9 +4572,7 @@ class Analytics:
         avg_coverage = sum(d['tracking_coverage'] for d in daily_data) / len(daily_data)
         overall_score = sum(daily_scores) / len(daily_scores) if daily_scores else 0.0
         
-        duration = (time.perf_counter() - start) * 1000
-        print(f"[Analytics] calculate_time_tracking_consistency_score: {duration:.2f}ms")
-        return {
+        result = {
             'tracking_consistency_score': round(float(overall_score), 1),
             'avg_tracked_time_minutes': round(float(avg_tracked), 1),
             'avg_untracked_time_minutes': round(float(avg_untracked), 1),
@@ -4539,6 +4580,15 @@ class Analytics:
             'tracking_coverage': round(float(avg_coverage), 3),
             'daily_scores': [round(float(s), 1) for s in daily_scores],
         }
+        
+        # Store in cache
+        self._time_tracking_cache[cache_key] = result.copy()
+        self._time_tracking_cache_time[cache_key] = time.time()
+        self._time_tracking_cache_params[cache_key] = params_key
+        
+        duration = (time.perf_counter() - start) * 1000
+        print(f"[Analytics] calculate_time_tracking_consistency_score: {duration:.2f}ms")
+        return result
 
     def calculate_composite_score(
         self,
@@ -4707,14 +4757,16 @@ class Analytics:
                 return True
         
         # Check cache (only if calculating all metrics)
+        # Cache is now user-specific, keyed by user_id
         if requested_metrics is None:
             current_time = time_module.time()
-            if (Analytics._composite_scores_cache is not None and 
-                Analytics._composite_scores_cache_time is not None and
-                (current_time - Analytics._composite_scores_cache_time) < Analytics._cache_ttl_seconds):
+            cache_key = user_id if user_id is not None else "default"
+            if (cache_key in Analytics._composite_scores_cache and 
+                cache_key in Analytics._composite_scores_cache_time and
+                (current_time - Analytics._composite_scores_cache_time[cache_key]) < Analytics._cache_ttl_seconds):
                 duration = (time_module.perf_counter() - start) * 1000
                 print(f"[Analytics] get_all_scores_for_composite (cached): {duration:.2f}ms")
-                return Analytics._composite_scores_cache.copy()  # Return copy to prevent mutation
+                return Analytics._composite_scores_cache[cache_key].copy()  # Return copy to prevent mutation
         
         scores = {}
         
@@ -4793,9 +4845,11 @@ class Analytics:
             scores['execution_score'] = 50.0  # Placeholder - will be updated by chunked calculation
         
         # Cache the result (only if calculating all metrics)
+        # Cache is now user-specific, keyed by user_id
         if requested_metrics is None:
-            Analytics._composite_scores_cache = scores.copy()
-            Analytics._composite_scores_cache_time = time_module.time()
+            cache_key = user_id if user_id is not None else "default"
+            Analytics._composite_scores_cache[cache_key] = scores.copy()
+            Analytics._composite_scores_cache_time[cache_key] = time_module.time()
         
         duration = (time_module.perf_counter() - start) * 1000
         print(f"[Analytics] get_all_scores_for_composite: {duration:.2f}ms")
@@ -7071,10 +7125,12 @@ class Analytics:
         # #endregion
         
         # Check cache first
+        # Cache is now user-specific, keyed by user_id
+        cache_key = user_id if user_id is not None else "default"
         current_time = time_module.time()
-        if (Analytics._relief_summary_cache is not None and 
-            Analytics._relief_summary_cache_time is not None and
-            (current_time - Analytics._relief_summary_cache_time) < Analytics._cache_ttl_seconds):
+        if (cache_key in Analytics._relief_summary_cache and 
+            cache_key in Analytics._relief_summary_cache_time and
+            (current_time - Analytics._relief_summary_cache_time[cache_key]) < Analytics._cache_ttl_seconds):
             # #region agent log
             try:
                 with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -7091,7 +7147,7 @@ class Analytics:
             # #endregion
             duration = (time_module.perf_counter() - total_start) * 1000
             print(f"[Analytics] get_relief_summary (cached): {duration:.2f}ms")
-            return Analytics._relief_summary_cache
+            return Analytics._relief_summary_cache[cache_key]
         
         # #region agent log
         try:
@@ -7399,7 +7455,7 @@ class Analytics:
         # Batch-load baseline aversions (OPTIMIZED: single query instead of N queries)
         baseline_start = time_module.time()
         unique_task_ids = relief_data_for_obstacles['task_id'].unique().tolist()
-        baseline_aversions = im.get_batch_baseline_aversions(unique_task_ids)
+        baseline_aversions = im.get_batch_baseline_aversions(unique_task_ids, user_id)
         baseline_time = (time_module.time() - baseline_start) * 1000
         print(f"[Analytics] get_relief_summary: batch baseline aversions ({len(unique_task_ids)} tasks): {baseline_time:.2f}ms")
         
@@ -7881,8 +7937,10 @@ class Analytics:
         }
         
         # Update cache before returning
-        Analytics._relief_summary_cache = result
-        Analytics._relief_summary_cache_time = time_module.time()
+        # Cache is now user-specific, keyed by user_id
+        cache_key = user_id if user_id is not None else "default"
+        Analytics._relief_summary_cache[cache_key] = result
+        Analytics._relief_summary_cache_time[cache_key] = time_module.time()
         
         total_time = (time_module.perf_counter() - total_start) * 1000
         print(f"[Analytics] get_relief_summary: {total_time:.2f}ms")
@@ -8641,7 +8699,17 @@ class Analytics:
         }
         
         if metric_key in metric_routes:
-            return metric_routes[metric_key](days=days)
+            # Get user_id for routing to specific methods
+            user_id = self._get_user_id(None)
+            # Route to specific method with user_id if it accepts it
+            routed_method = metric_routes[metric_key]
+            # Check if method accepts user_id parameter
+            import inspect
+            sig = inspect.signature(routed_method)
+            if 'user_id' in sig.parameters:
+                return routed_method(days=days, user_id=user_id)
+            else:
+                return routed_method(days=days)
         
         user_id = self._get_user_id(None)
         df = self._load_instances(completed_only=True, user_id=user_id)
@@ -8791,13 +8859,14 @@ class Analytics:
         
         return result
 
-    def get_execution_score_history(self, days: int = 90) -> Dict[str, any]:
+    def get_execution_score_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily execution score data for trend analysis.
         
         Calculates execution_score for each completed instance and groups by date.
         
         Args:
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation. If None, uses current authenticated user.
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of scores per day),
@@ -8806,7 +8875,7 @@ class Analytics:
         from datetime import datetime, timedelta
         from collections import Counter
         
-        user_id = self._get_user_id(None)
+        user_id = self._get_user_id(user_id)
         df = self._load_instances(completed_only=True, user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
@@ -10968,25 +11037,26 @@ class Analytics:
         
         user_id = self._get_user_id(user_id)
         
-        # Check cache (keyed by top_n and user_id)
+        # Check cache (keyed by user_id)
+        cache_key = user_id if user_id is not None else "default"
         current_time = time.time()
-        cache_key = f"{user_id}_{top_n}"
-        if (self._leaderboard_cache is not None and 
-            self._leaderboard_cache_time is not None and
-            self._leaderboard_cache_top_n == top_n and
-            (current_time - self._leaderboard_cache_time) < self._cache_ttl_seconds):
+        if (cache_key in self._leaderboard_cache and 
+            cache_key in self._leaderboard_cache_time and
+            cache_key in self._leaderboard_cache_top_n and
+            self._leaderboard_cache_top_n[cache_key] == top_n and
+            (current_time - self._leaderboard_cache_time[cache_key]) < self._cache_ttl_seconds):
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_stress_efficiency_leaderboard (cached): {duration:.2f}ms (top_n: {top_n})")
-            return copy.deepcopy(self._leaderboard_cache)
+            return copy.deepcopy(self._leaderboard_cache[cache_key])
         
         df = self._load_instances(user_id=user_id)
         
         # Check if DataFrame is empty or missing required columns
         if df.empty or 'completed_at' not in df.columns:
             result = []
-            self._leaderboard_cache = result
-            self._leaderboard_cache_time = time.time()
-            self._leaderboard_cache_top_n = top_n
+            self._leaderboard_cache[cache_key] = result
+            self._leaderboard_cache_time[cache_key] = time.time()
+            self._leaderboard_cache_top_n[cache_key] = top_n
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (no data)")
             return result
@@ -10995,9 +11065,9 @@ class Analytics:
         
         if completed.empty:
             result = []
-            self._leaderboard_cache = result
-            self._leaderboard_cache_time = time.time()
-            self._leaderboard_cache_top_n = top_n
+            self._leaderboard_cache[cache_key] = result
+            self._leaderboard_cache_time[cache_key] = time.time()
+            self._leaderboard_cache_top_n[cache_key] = top_n
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (no data)")
             return result
@@ -11007,9 +11077,9 @@ class Analytics:
         
         if valid.empty:
             result = []
-            self._leaderboard_cache = result
-            self._leaderboard_cache_time = time.time()
-            self._leaderboard_cache_top_n = top_n
+            self._leaderboard_cache[cache_key] = result
+            self._leaderboard_cache_time[cache_key] = time.time()
+            self._leaderboard_cache_top_n[cache_key] = top_n
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (no valid data)")
             return result
@@ -11046,9 +11116,9 @@ class Analytics:
             })
         
         # Store in cache
-        self._leaderboard_cache = copy.deepcopy(result)
-        self._leaderboard_cache_time = time.time()
-        self._leaderboard_cache_top_n = top_n
+        self._leaderboard_cache[cache_key] = copy.deepcopy(result)
+        self._leaderboard_cache_time[cache_key] = time.time()
+        self._leaderboard_cache_top_n[cache_key] = top_n
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_stress_efficiency_leaderboard: {duration:.2f}ms (top_n: {top_n})")
@@ -11972,20 +12042,20 @@ class Analytics:
         # Get user_id if not provided
         user_id = self._get_user_id(user_id)
         
-        # Check cache (cache key should include user_id, but for now we'll skip cache if user_id is provided)
-        # TODO: Make cache user-specific
+        # Check cache (cache is now user-specific, keyed by user_id)
+        cache_key = user_id if user_id is not None else "default"
         current_time = time.time()
-        if (user_id is None and self._trend_series_cache is not None and 
-            self._trend_series_cache_time is not None and
-            (current_time - self._trend_series_cache_time) < self._cache_ttl_seconds):
+        if (cache_key in self._trend_series_cache and 
+            cache_key in self._trend_series_cache_time and
+            (current_time - self._trend_series_cache_time[cache_key]) < self._cache_ttl_seconds):
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] trend_series (cached): {duration:.2f}ms")
-            return self._trend_series_cache.copy()
+            return self._trend_series_cache[cache_key].copy()
         df = self._load_instances(user_id=user_id)
         if df.empty:
             result = pd.DataFrame(columns=['completed_at', 'daily_relief_score', 'cumulative_relief_score'])
-            self._trend_series_cache = result.copy()
-            self._trend_series_cache_time = time.time()
+            self._trend_series_cache[cache_key] = result.copy()
+            self._trend_series_cache_time[cache_key] = time.time()
             return result
         completed = df[df['completed_at'].astype(str).str.len() > 0]
         if completed.empty:
@@ -12022,8 +12092,8 @@ class Analytics:
         result = daily[['completed_at', 'daily_relief_score', 'cumulative_relief_score']].copy()
         
         # Store in cache
-        self._trend_series_cache = result.copy()
-        self._trend_series_cache_time = time.time()
+        self._trend_series_cache[cache_key] = result.copy()
+        self._trend_series_cache_time[cache_key] = time.time()
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] trend_series: {duration:.2f}ms")
@@ -12036,19 +12106,21 @@ class Analytics:
         user_id = self._get_user_id(user_id)
         
         # Check cache
+        # Cache is now user-specific, keyed by user_id
+        cache_key = user_id if user_id is not None else "default"
         current_time = time.time()
-        if (self._attribute_distribution_cache is not None and 
-            self._attribute_distribution_cache_time is not None and
-            (current_time - self._attribute_distribution_cache_time) < self._cache_ttl_seconds):
+        if (cache_key in self._attribute_distribution_cache and 
+            cache_key in self._attribute_distribution_cache_time and
+            (current_time - self._attribute_distribution_cache_time[cache_key]) < self._cache_ttl_seconds):
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] attribute_distribution (cached): {duration:.2f}ms")
-            return self._attribute_distribution_cache.copy()
+            return self._attribute_distribution_cache[cache_key].copy()
         
         df = self._load_instances(user_id=user_id)
         if df.empty:
             result = pd.DataFrame(columns=['attribute', 'value'])
-            self._attribute_distribution_cache = result.copy()
-            self._attribute_distribution_cache_time = time.time()
+            self._attribute_distribution_cache[cache_key] = result.copy()
+            self._attribute_distribution_cache_time[cache_key] = time.time()
             return result
         melted_frames = []
         
@@ -12099,8 +12171,8 @@ class Analytics:
         
         if not melted_frames:
             result = pd.DataFrame(columns=['attribute', 'value'])
-            self._attribute_distribution_cache = result.copy()
-            self._attribute_distribution_cache_time = time.time()
+            self._attribute_distribution_cache[cache_key] = result.copy()
+            self._attribute_distribution_cache_time[cache_key] = time.time()
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] attribute_distribution: {duration:.2f}ms (no data)")
             return result
@@ -12108,8 +12180,8 @@ class Analytics:
         result = pd.concat(melted_frames, ignore_index=True).copy()
         
         # Store in cache
-        self._attribute_distribution_cache = result.copy()
-        self._attribute_distribution_cache_time = time.time()
+        self._attribute_distribution_cache[cache_key] = result.copy()
+        self._attribute_distribution_cache_time[cache_key] = time.time()
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] attribute_distribution: {duration:.2f}ms")
@@ -12608,15 +12680,16 @@ class Analytics:
         
         user_id = self._get_user_id(user_id)
         
-        # Check cache
+        # Check cache (cache is now user-specific, keyed by user_id)
+        cache_key = user_id if user_id is not None else "default"
         current_time = time.time()
-        if (self._stress_dimension_cache is not None and 
-            self._stress_dimension_cache_time is not None and
-            (current_time - self._stress_dimension_cache_time) < self._cache_ttl_seconds):
+        if (cache_key in self._stress_dimension_cache and 
+            cache_key in self._stress_dimension_cache_time and
+            (current_time - self._stress_dimension_cache_time[cache_key]) < self._cache_ttl_seconds):
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] get_stress_dimension_data (cached): {duration:.2f}ms")
             # Deep copy to prevent mutation
-            return copy.deepcopy(self._stress_dimension_cache)
+            return copy.deepcopy(self._stress_dimension_cache[cache_key])
         
         df = self._load_instances(user_id=user_id)
         
@@ -12629,8 +12702,8 @@ class Analytics:
                 'emotional': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
                 'physical': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
             }
-            self._stress_dimension_cache = copy.deepcopy(result)
-            self._stress_dimension_cache_time = time.time()
+            self._stress_dimension_cache[cache_key] = copy.deepcopy(result)
+            self._stress_dimension_cache_time[cache_key] = time.time()
             return result
         
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -12641,8 +12714,8 @@ class Analytics:
                 'emotional': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
                 'physical': {'total': 0.0, 'avg_7d': 0.0, 'daily': []},
             }
-            self._stress_dimension_cache = copy.deepcopy(result)
-            self._stress_dimension_cache_time = time.time()
+            self._stress_dimension_cache[cache_key] = copy.deepcopy(result)
+            self._stress_dimension_cache_time[cache_key] = time.time()
             return result
         
         # Convert to numeric and calculate dimensions
@@ -12716,8 +12789,8 @@ class Analytics:
         }
         
         # Store in cache (deep copy to prevent mutation)
-        self._stress_dimension_cache = copy.deepcopy(result)
-        self._stress_dimension_cache_time = time.time()
+        self._stress_dimension_cache[cache_key] = copy.deepcopy(result)
+        self._stress_dimension_cache_time[cache_key] = time.time()
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_stress_dimension_data: {duration:.2f}ms")

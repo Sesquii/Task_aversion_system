@@ -2,6 +2,7 @@
 name: Design Decisions - User-Facing Issues
 overview: Focused plan for resolving design decisions that directly impact user experience, including data quality, metric hierarchy, relief score understanding, and aversion tracking requirements.
 todos: []
+isProject: false
 ---
 
 # Design Decisions - User-Facing Issues

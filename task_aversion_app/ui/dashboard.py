@@ -2708,11 +2708,15 @@ def render_monitored_metrics_section(container):
                     
                     try:
                         if hasattr(an, 'get_execution_score_chunked'):
+                            # Get current user for data isolation
+                            from backend.auth import get_current_user
+                            current_user_id = get_current_user()
+                            user_id_str = str(current_user_id) if current_user_id is not None else "default"
                             # Process a batch of instances (5 at a time) with persistence
                             load_state['execution_score_state'] = an.get_execution_score_chunked(
                                 load_state['execution_score_state'], 
                                 batch_size=5,
-                                user_id="default",
+                                user_id=user_id_str,
                                 persist=True
                             )
                             

@@ -2,6 +2,7 @@
 name: Design Decisions - Technical Architecture
 overview: Focused plan for resolving technical design decisions including scale standardization, formula selection, recommendation system architecture, score system integration, and storage backend strategy.
 todos: []
+isProject: false
 ---
 
 # Design Decisions - Technical Architecture

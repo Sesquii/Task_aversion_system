@@ -1,43 +1,89 @@
-feat(auth): clear all cached data on user logout
+fix: Add user_id parameter to get_batch_baseline_aversions() calls for data isolation
 
-Add comprehensive cache clearing functionality to logout process to ensure
-users get fresh data when logging in and prevent data leakage between sessions.
+Fix data isolation issue where get_batch_baseline_aversions() was called without
+user_id parameter, causing security warning and returning empty results. Now properly
+passes user_id to ensure data isolation when loading baseline aversions.
 
 Changes:
-- Add clear_all_caches() function to clear all application caches
-  * Clears Analytics class-level caches (relief summary, composite scores,
-    instances, dashboard metrics, time tracking, trend series, attribute
-    distribution, stress dimension, rankings, leaderboard)
-  * Clears InstanceManager class-level caches (shared active instances,
-    recent completed instances, per-user cache)
-  * Clears TaskManager instance caches (task lists, task data) via global
-    instance from app module
-- Update logout() function to call clear_all_caches() after clearing session
-  * Ensures all cached data is cleared when user logs out
-  * Prevents stale cache data from persisting across user sessions
-  * Includes error handling for each cache clearing operation
+- backend/analytics.py:
+  * Add user_id parameter to get_batch_baseline_aversions() call in get_relief_summary()
+  * Ensures proper data isolation when batch-loading baseline aversions for obstacles calculation
 
-Files modified:
-- task_aversion_app/backend/auth.py
-  * Added clear_all_caches() function with comprehensive cache clearing
-  * Updated logout() to call clear_all_caches() after session cleanup
+- backend/instance_manager.py:
+  * Add user_id parameter to CSV fallback call in _get_batch_baseline_aversions_db()
+  * Ensures user_id is passed through to CSV backend when database operation fails
 
-Purpose:
-This change ensures that when a user logs out, all cached data is cleared
-from memory. This prevents:
-- Data leakage between user sessions
-- Stale cache data being served to new users
-- Performance issues from accumulated cache data
-- Security concerns with cached user-specific data
+This fix resolves the warning "[InstanceManager] WARNING: get_batch_baseline_aversions_db()
+called without user_id - returning empty for security" by ensuring user_id is always
+provided when loading baseline aversions.
 
-The implementation handles cases where modules may not be loaded yet and
-includes proper error handling to ensure logout always succeeds even if
-cache clearing encounters issues.
+---
 
-Note: This fix is incomplete. Browser caching may still cause old user data
-to appear temporarily when logging in/out on the same system. A user-facing
-note has been added to the analytics page and known issues page to inform
-users about this limitation. This is not an urgent issue as:
-- Data is not exposed publicly (only visible to the user on their own system)
-- The cache clears automatically after a few moments or page refresh
-- It only affects users who log in/out on the same browser/system
+fix: Add user_id parameter to execution score methods and make Analytics caches user-specific
+
+Fix data isolation issues in execution score calculation and resolve caching delay
+when logging in/out on the same system. Caches are now user-specific to prevent
+data leakage between users.
+
+Changes:
+- backend/analytics.py:
+  * Add user_id parameter to get_execution_score_history() method signature
+  * Update get_generic_metric_history() to pass user_id when routing to execution_score history
+  * Convert all Analytics class-level caches from single values to dictionaries keyed by user_id:
+    - _relief_summary_cache: {user_id: cache_value}
+    - _composite_scores_cache: {user_id: cache_value}
+    - _dashboard_metrics_cache: {user_id: cache_value}
+    - _instances_cache_all: {user_id: cache_value}
+    - _instances_cache_completed: {user_id: cache_value}
+    - _trend_series_cache: {user_id: cache_value}
+    - _attribute_distribution_cache: {user_id: cache_value}
+    - _stress_dimension_cache: {user_id: cache_value}
+    - _time_tracking_cache: {user_id: cache_value}
+    - _time_tracking_cache_params: {user_id: (days, target_sleep_hours)}
+    - _rankings_cache: {user_id: {(metric, top_n): (result, timestamp)}}
+    - _leaderboard_cache: {user_id: cache_value}
+    - _leaderboard_cache_time: {user_id: timestamp}
+    - _leaderboard_cache_top_n: {user_id: top_n}
+  * Update all cache access patterns to use user_id as dictionary key
+  * Update cache storage code to store values per user_id
+  * Update _invalidate_instances_cache() to support user-specific invalidation
+  * Update _invalidate_relief_summary_cache() to accept optional user_id parameter
+  * Update _load_instances() cache access to use user_id key
+
+- ui/dashboard.py:
+  * Fix get_execution_score_chunked() call to use actual current_user_id instead of hardcoded "default"
+  * Get current_user_id from get_current_user() before calling get_execution_score_chunked()
+  * Convert user_id to string for get_execution_score_chunked() which expects string user_id
+
+- backend/auth.py:
+  * Update clear_all_caches() to properly clear user-specific cache dictionaries
+  * Change cache clearing from setting to None to calling .clear() on dictionaries
+
+All fixes ensure proper data isolation by making caches user-specific. This resolves
+the issue where analytics and monitored metrics showed previous user's data for
+~10 minutes after logging out and logging back in on the same system.
+
+---
+
+fix: Fix cache access patterns to use user-specific dictionary keys
+
+Fix TypeError errors where cache access code was trying to subtract dictionaries
+from floats. After converting caches to user-specific dictionaries, some cache
+access patterns were not updated to use dictionary keys properly.
+
+Changes:
+- backend/analytics.py:
+  * Fixed get_relief_summary() - updated cache check to use user_id as dictionary key
+  * Fixed attribute_distribution() - updated cache check and storage to use user_id key
+  * Fixed trend_series() - updated cache check and storage to use user_id key
+  * Fixed get_stress_dimension_data() - updated cache check and storage to use user_id key
+  * Fixed get_stress_efficiency_leaderboard() - updated cache check and storage to use user_id key
+  * Fixed calculate_time_tracking_consistency_score() - updated cache check and storage to use user_id key
+  * All cache access now creates cache_key from user_id and checks/stores using that key
+
+- ui/analytics_page.py:
+  * Removed browser caching notice - analytics is now fully isolated with user-specific caches
+
+Analytics is now fully isolated with no delay when switching users. All cache
+access patterns properly use user_id as dictionary keys, preventing TypeError
+errors and ensuring proper data isolation.

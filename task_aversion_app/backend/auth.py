@@ -194,30 +194,30 @@ def clear_all_caches():
         # Clear Analytics class-level caches
         try:
             from backend.analytics import Analytics
-            # Clear all Analytics class-level cache variables
-            Analytics._relief_summary_cache = None
-            Analytics._relief_summary_cache_time = None
-            Analytics._composite_scores_cache = None
-            Analytics._composite_scores_cache_time = None
-            Analytics._instances_cache_all = None
-            Analytics._instances_cache_all_time = None
-            Analytics._instances_cache_completed = None
-            Analytics._instances_cache_completed_time = None
-            Analytics._dashboard_metrics_cache = None
-            Analytics._dashboard_metrics_cache_time = None
-            Analytics._time_tracking_cache = None
-            Analytics._time_tracking_cache_time = None
-            Analytics._time_tracking_cache_params = None
-            Analytics._trend_series_cache = None
-            Analytics._trend_series_cache_time = None
-            Analytics._attribute_distribution_cache = None
-            Analytics._attribute_distribution_cache_time = None
-            Analytics._stress_dimension_cache = None
-            Analytics._stress_dimension_cache_time = None
-            Analytics._rankings_cache = {}
-            Analytics._leaderboard_cache = None
-            Analytics._leaderboard_cache_time = None
-            Analytics._leaderboard_cache_top_n = None
+            # Clear all Analytics class-level cache variables (now user-specific dictionaries)
+            Analytics._relief_summary_cache.clear()
+            Analytics._relief_summary_cache_time.clear()
+            Analytics._composite_scores_cache.clear()
+            Analytics._composite_scores_cache_time.clear()
+            Analytics._instances_cache_all.clear()
+            Analytics._instances_cache_all_time.clear()
+            Analytics._instances_cache_completed.clear()
+            Analytics._instances_cache_completed_time.clear()
+            Analytics._dashboard_metrics_cache.clear()
+            Analytics._dashboard_metrics_cache_time.clear()
+            Analytics._time_tracking_cache.clear()
+            Analytics._time_tracking_cache_time.clear()
+            Analytics._time_tracking_cache_params.clear()
+            Analytics._trend_series_cache.clear()
+            Analytics._trend_series_cache_time.clear()
+            Analytics._attribute_distribution_cache.clear()
+            Analytics._attribute_distribution_cache_time.clear()
+            Analytics._stress_dimension_cache.clear()
+            Analytics._stress_dimension_cache_time.clear()
+            Analytics._rankings_cache.clear()
+            Analytics._leaderboard_cache.clear()
+            Analytics._leaderboard_cache_time.clear()
+            Analytics._leaderboard_cache_top_n.clear()
             print("[Auth] Cleared Analytics caches")
         except Exception as e:
             print(f"[Auth] Error clearing Analytics caches: {e}")

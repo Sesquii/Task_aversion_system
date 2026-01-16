@@ -3464,7 +3464,7 @@ class InstanceManager:
                 raise RuntimeError(f"Database error in get_batch_baseline_aversions: {e}") from e
             print(f"[InstanceManager] Database error in get_batch_baseline_aversions: {e}, falling back to CSV")
             self.use_db = False
-            return self._get_batch_baseline_aversions_csv(task_ids)
+            return self._get_batch_baseline_aversions_csv(task_ids, user_id)
         
         return result
     
