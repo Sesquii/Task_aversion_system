@@ -1,0 +1,340 @@
+fix: Add missing user_id parameters to ensure data isolation
+
+Add user_id parameter to all function calls that require user context
+for proper data isolation and security. This ensures that users can
+only access their own data in multi-user scenarios.
+
+Changes:
+- dashboard.py:
+  * Add user_id to start_instance(), resume_instance(), and pause_instance() calls
+  * Add user_id to task_manager.get_task() call in active tasks section
+  * Add user_id to analytics_instance._load_instances() call
+  * Add user_id to tm.get_recent() call
+
+- analytics.py:
+  * Add user_id parameter to get_dashboard_metrics() call
+  * Add user_id parameter to get_relief_summary() call
+  * Add user_id parameter to calculate_time_tracking_consistency_score() call
+  * Add user_id parameter to calculate_daily_scores() call
+  * Update get_productivity_goal_settings() to use actual user_id instead of "default_user"
+  * Update calculate_weekly_productivity_hours() to use actual user_id instead of "default_user"
+  * Fix get_life_balance() to pass user_id to get_all()
+  * Fix calculate_time_tracking_consistency_score() to pass user_id to get_all()
+  * Fix get_relief_summary() to pass user_id to get_all() in conditional block
+  * Fix get_recent() method to accept and pass user_id parameter
+
+- task_manager.py:
+  * Update get_recent() method to accept user_id parameter and pass it to get_all()
+
+- productivity_tracker.py:
+  * Fix get_first_day_productive_hours() to pass user_id to get_all() with proper type conversion
+  * Fix _calculate_productivity_hours_in_range() - convert string user_id to int and pass to get_all()
+  * Fix calculate_productivity_points_target() - convert string user_id to int and pass to get_all()
+  * Fix get_daily_productivity_data() - convert string user_id to int and pass to get_all()
+  * All fixes follow same pattern: convert string user_id to int when possible, then pass to get_all() for proper data isolation
+
+- routine_scheduler.py:
+  * Extract user_id from task dictionary and pass to create_instance()
+  * Add warning when task has no user_id (for CSV mode compatibility)
+
+- analyze_december_14.py:
+  * Get user_id from get_current_user() and pass to _load_instances()
+
+- debug_productivity_scores.py:
+  * Get user_id from get_current_user() and pass to _load_instances()
+
+- analyze_goal_recommendations.py:
+  * Add explicit user_id=None with comment for analysis scripts
+
+- analyze_productivity_trends.py:
+  * Add explicit user_id=None with comment for analysis scripts (2 instances)
+
+- analyze_december_14.py:
+  * Add explicit user_id=None with comment for analysis scripts
+
+- test_pause_resume_time_tracking.py:
+  * Fix all get_instance() calls to explicitly pass user_id=None
+  * Fix all create_instance() calls to explicitly pass user_id=None (4 instances)
+  * Fix all start_instance() calls to explicitly pass user_id=None (5 instances)
+  * Fix all pause_instance() calls to explicitly pass user_id=None (5 instances)
+  * All fixes ensure test file explicitly documents user_id=None for test isolation across all users
+
+- ui/productivity_settings_page.py:
+  * Add user_id=current_user_id to analytics._load_instances() call
+
+- backend/analytics.py (additional fixes):
+  * Fixed calculate_momentum_factor() - added user_id to all _load_instances() calls
+  * Fixed get_weekly_hours_history() - added user_id using _get_user_id()
+  * Fixed get_weekly_relief_history() - added user_id using _get_user_id()
+  * Fixed get_weekly_productivity_history() - added user_id using _get_user_id()
+  * Fixed get_efficiency_summary() - added user_id using _get_user_id()
+  * Fixed get_task_relief_history() - added user_id using _get_user_id()
+  * Fixed get_metric_by_key() - added user_id using _get_user_id()
+  * Fixed get_task_efficiency_history() - added user_id using _get_user_id()
+  * Fixed get_task_performance_ranking() - added user_id using _get_user_id()
+  * Fixed get_trend_series() - added user_id using _get_user_id()
+  * Fixed find_threshold_relationships() - added user_id using _get_user_id()
+  * Fixed get_emotion_analysis() - added user_id using _get_user_id()
+  * Fixed multiple internal methods that call _load_instances() without user_id
+
+- backend/popup_dispatcher.py:
+  * Fixed _evaluate_trigger_4_1() - added user_id conversion and passing to _load_instances()
+  * Fixed _evaluate_trigger_1_1() - added user_id conversion and passing to _load_instances()
+
+- backend/analytics.py (user_id parameter propagation fixes):
+  * Fixed calculate_weekly_progress_summary() - now passes user_id to calculate_daily_scores()
+  * Fixed calculate_weekly_progress_summary() - converts user_id to string for get_productivity_goal_settings() and calculate_weekly_productivity_hours()
+  * Fixed get_all_scores_for_composite() - now passes user_id to get_dashboard_metrics(), get_relief_summary(), and calculate_time_tracking_consistency_score()
+  * Fixed get_relief_summary() - converts user_id from int to str when calling get_productivity_goal_settings() and calculate_weekly_productivity_hours()
+  * Fixed get_attribute_trends() - converts user_id from int to str when calling get_productivity_goal_settings() and calculate_weekly_productivity_hours()
+  * Fixed get_scatter_data() - converts user_id from int to str when calling get_productivity_goal_settings() and calculate_weekly_productivity_hours()
+  * All fixes replace hardcoded "default_user" with proper user_id conversion: str(user_id) if user_id is not None else "default_user"
+
+- backend/analytics.py (additional _load_instances() fixes):
+  * Fixed calculate_persistence_factor() - added user_id retrieval and passed to _load_instances() in consistency score calculation
+  * Fixed calculate_perseverance_factor_v1_3() - added user_id retrieval and passed to _load_instances() in consistency score calculation
+  * Fixed get_stress_level_history() - added user_id parameter and passed to _load_instances()
+  * Fixed get_behavioral_score_history() - added user_id parameter and passed to _load_instances()
+  * Fixed get_stress_efficiency_history() - added user_id parameter and passed to _load_instances()
+  * Fixed get_expected_relief_history() - added user_id parameter and passed to _load_instances()
+  * Fixed get_stress_efficiency_leaderboard() - added user_id parameter and passed to _load_instances()
+  * Fixed recommendations() - now passes user_id to _load_instances() (was already getting user_id but not passing it)
+  * Fixed recommendations_by_metrics() - now passes user_id to _load_instances() (was already getting user_id but not passing it)
+  * Fixed attribute_distribution() - added user_id parameter and passed to _load_instances()
+  * Fixed get_stress_dimension_data() - added user_id parameter and passed to _load_instances()
+  * Fixed get_attribute_trends() - fixed safety check to pass user_id to _load_instances() when recalculating missing metrics
+  * Fixed get_net_wellbeing_history() - added user_id parameter and passed to _load_instances()
+  * Fixed get_net_wellbeing_normalized_history() - added user_id parameter and passed to _load_instances()
+
+- ui/plotly_data_charts.py:
+  * Fixed generate_volumetric_productivity_plotly() - added user_id retrieval and passed to get_dashboard_metrics()
+  * Fixed get_user_instances() - added user_id retrieval and passed to list_recent_completed()
+  * Fixed generate_work_volume_score_plotly() - added user_id retrieval and passed to get_daily_work_volume_metrics()
+
+- ui/productivity_grit_tradeoff.py:
+  * Fixed get_daily_work_volume_metrics() call - added user_id=current_user_id parameter
+
+- ui/analytics_page.py (comprehensive user_id fixes):
+  * Get current_user_id from get_current_user() at page start
+  * Pass user_id to get_all_scores_for_composite() in load_composite_score()
+  * Pass user_id to get_analytics_page_data() for batched data loading
+  * Pass user_id to get_chart_data() for batched chart data
+  * Pass user_id to get_rankings_data() for batched rankings
+  * Pass user_id to get_productivity_goal_settings() (converted to string)
+  * Updated _render_time_chart() to accept and pass user_id parameter
+  * Updated _render_attribute_box() to accept and pass user_id parameter
+  * Updated _render_trends_section() to accept and pass user_id to get_multi_attribute_trends()
+  * Updated _render_stress_metrics_section() to accept and pass user_id to get_stress_dimension_data()
+  * Updated _render_metric_comparison() to accept and pass user_id to get_dashboard_metrics(), get_scatter_data(), and calculate_correlation()
+  * Updated _render_task_rankings() to accept and pass user_id to get_rankings_data()
+  * Updated _render_stress_efficiency_leaderboard() to accept and pass user_id to get_stress_efficiency_leaderboard()
+  * Updated _render_correlation_explorer() to accept and pass user_id to get_scatter_data(), calculate_correlation(), and find_threshold_relationships()
+  * Updated build_emotional_flow_page() to get current_user_id and pass to get_emotional_flow_data()
+
+- ui/summary_page.py:
+  * Get current_user_id from get_current_user() and convert to string for UserStateManager
+  * Pass user_id to get_all_scores_for_composite() call
+  * Pass user_id_str to get_score_weights() for proper user isolation
+
+- ui/composite_score_weights_page.py:
+  * Get current_user_id from get_current_user() and convert to string for UserStateManager
+  * Pass user_id to get_all_scores_for_composite() call
+  * Pass user_id_str to get_score_weights() for proper user isolation
+  * Note: save_composite_weights() still uses DEFAULT_USER_ID - may need future fix for multi-user support
+
+- ui/dashboard.py:
+  * Added user_id=current_user_id to get_all_scores_for_composite() call in get_metrics_data() function
+  * Added user_id=current_user_id to get_all_scores_for_composite() call in lazy_load() function
+
+- backend/analytics.py (additional method signature fixes):
+  * Fixed trend_series() - added user_id parameter (Optional[int] = None) and passes to _load_instances()
+  * Fixed get_emotional_flow_data() - added user_id parameter (Optional[int] = None) and passes to _load_instances()
+  * Fixed find_threshold_relationships() - added user_id parameter (Optional[int] = None) and passes to _load_instances()
+  * Fixed get_multi_attribute_trends() - added user_id parameter and passes to get_attribute_trends()
+  * Fixed get_task_performance_ranking() - added user_id parameter (Optional[int] = None) and passes to _load_instances()
+  * Fixed get_analytics_page_data() - added user_id parameter and passes to get_dashboard_metrics(), get_relief_summary(), and calculate_time_tracking_consistency_score()
+  * Fixed get_chart_data() - added user_id parameter and passes to trend_series(), attribute_distribution(), and get_stress_dimension_data()
+  * Fixed get_rankings_data() - added user_id parameter and passes to get_task_performance_ranking() (all variants) and get_stress_efficiency_leaderboard()
+
+- backend/analytics.py (get_execution_score_chunked fixes):
+  * Fixed get_execution_score_chunked() - added user_id conversion from string to int for database operations
+  * Fixed three instances where list_recent_completed() was called without user_id
+  * Now properly converts string user_id parameter to integer and attempts to get current user if conversion fails
+  * Fixed else branch (non-persisting path) - added user_id conversion and passing to list_recent_completed()
+
+- backend/analytics.py (calculate_thoroughness_factor fix):
+  * Fixed calculate_thoroughness_factor() - added user_id conversion from string to int for TaskManager.get_all()
+  * Now properly converts string user_id parameter to integer using same pattern as get_execution_score_chunked()
+  * Replaced hardcoded user_id=None with proper user_id conversion logic
+
+- Analysis scripts (explicit user_id=None with comments):
+  * scripts/compare_grit_v1_6_variants.py - added explicit user_id=None with comment for analysis across all users
+  * scripts/analyze_disappointment_patterns.py - added explicit user_id=None with comment for analysis across all users
+  * scripts/extrapolate_ideal_exponential_cap.py - added explicit user_id=None with comment for analysis across all users
+  * scripts/graphic_aids/generate_data_driven.py - added explicit user_id=None to list_recent_completed() with comment
+  * benchmark_performance.py - added explicit user_id=None to _load_instances() calls with comment for benchmarking
+
+All fixes follow the existing pattern of getting current_user_id from
+get_current_user() before making backend calls, ensuring consistent
+authentication and data isolation throughout the application. Methods
+in analytics.py use _get_user_id(None) to automatically get the current
+user from authentication context when user_id is not explicitly provided.
+UserStateManager methods expect string user_ids, so proper conversion
+from int (database user_id) to str is performed where needed.
+Analysis scripts intentionally use user_id=None to analyze data across
+all users, with explicit comments documenting this intentional behavior.
+
+- ui/productivity_module.py (additional DEFAULT_USER_ID fixes):
+  * Added get_current_user() call at start of productivity_module_page()
+  * Replaced DEFAULT_USER_ID with user_id_str (converted from current_user_id) in:
+    - load_and_display_current_week() function - calculate_weekly_productivity_hours() and compare_to_goal() calls
+    - record_snapshot_and_notify() function - record_weekly_snapshot() call
+    - load_current_week_data() function - calculate_weekly_productivity_hours() and compare_to_goal() calls
+    - record_snapshot() function - record_weekly_snapshot() call
+
+- ui/settings_page.py (additional DEFAULT_USER_ID fixes):
+  * Updated get_all_cancellation_categories() to get current user_id from get_current_user() and convert to string
+  * Fixed productivity goal settings section - replaced DEFAULT_USER_ID with current_user_id_str derived from user_id parameter
+  * All get_productivity_goal_settings() and set_productivity_goal_settings() calls now use actual authenticated user_id
+
+- ui/plotly_data_charts.py (additional DEFAULT_USER_ID fixes):
+  * Fixed generate_goal_adjustment_plotly() - added get_current_user() call and replaced DEFAULT_USER_ID with user_id_str
+    for get_productivity_goal_settings() and get_productivity_history() calls
+  * Fixed generate_work_volume_score_plotly() - replaced DEFAULT_USER_ID with user_id_str (already had get_current_user())
+
+- ui/productivity_goals_experimental.py (comprehensive DEFAULT_USER_ID fixes):
+  * Added get_current_user() call at start of productivity_goals_page() with authentication check
+  * Replaced all DEFAULT_USER_ID instances with user_id_str throughout the page:
+    - get_productivity_goal_settings() calls (multiple instances)
+    - set_productivity_goal_settings() calls
+    - estimate_starting_hours_auto() call
+    - compare_to_goal() call
+    - get_current_week_performance() call
+    - calculate_monday_week_pace() call
+    - calculate_productivity_points_target() call
+    - get_or_record_current_week() call
+    - get_daily_productivity_data() call
+
+- ui/dashboard.py (additional DEFAULT_USER_ID fixes):
+  * Fixed render_monitored_metrics_section() - added get_current_user() call and replaced DEFAULT_USER_ID with user_id_str
+    for get_monitored_metrics_config() call
+  * Fixed open_metrics_config_dialog() - added get_current_user() call and replaced DEFAULT_USER_ID with user_id_str
+    for both get_monitored_metrics_config() and set_monitored_metrics_config() calls
+
+- ui/dashboard.py (list_recent_tasks user_id fixes):
+  * Fixed build_recently_completed_panel() - added get_current_user() call inside refresh_completed() function
+  * Fixed all 8 instances of list_recent_tasks() calls to include user_id=current_user_id parameter
+  * All refresh_completed() functions now properly get current_user_id from get_current_user() before calling list_recent_tasks()
+  * Ensures proper data isolation when displaying recently completed tasks in dashboard panels
+
+All UI page fixes follow the pattern:
+1. Call get_current_user() at the start of page functions
+2. Check for None and redirect to login if not authenticated
+3. Convert integer user_id to string for UserStateManager methods: user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+4. Replace all DEFAULT_USER_ID hardcoded values with user_id_str for proper multi-user data isolation
+
+- ui/initialize_task.py (additional user_id fixes):
+  * Fixed get_initial_aversion() call - added user_id=current_user_id parameter
+  * Fixed has_completed_task() call - added user_id=current_user_id parameter
+
+- backend/instance_manager.py (has_completed_task method signature fix):
+  * Updated has_completed_task() method signature to accept user_id: Optional[int] = None parameter
+  * Updated _has_completed_task_csv() - added user_id filtering for data isolation with security warning when None
+  * Updated _has_completed_task_db() - added user_id filtering for data isolation with security warning when None
+  * Both implementations now return False for security when user_id is None instead of checking across all users
+
+- ui/cancel_task.py (get_all_cancellation_categories fix):
+  * Updated get_all_cancellation_categories() to accept user_id: Optional[str] = None parameter
+  * Updated call to pass current_user_id_str (converted from integer user_id) for proper user isolation
+
+- ui/task_editing_manager.py (get_all_cancellation_categories fix):
+  * Updated get_all_cancellation_categories() to accept user_id: Optional[int] = None parameter
+  * Function now gets current user from get_current_user() if user_id not provided
+  * Updated all 2 calls to pass user_id=user_id from page context for proper user isolation
+
+- ui/cancellation_penalties_page.py (get_all_cancellation_categories fix):
+  * Updated get_all_cancellation_categories() to get current user_id from get_current_user()
+  * Converts integer user_id to string for UserStateManager compatibility
+
+- ui/cancelled_tasks_page.py (comprehensive get_all_cancellation_categories fixes):
+  * Updated get_all_cancellation_categories() to accept user_id: Optional[int] = None parameter
+  * Function now gets current user from get_current_user() if user_id not provided
+  * Updated all 9 calls throughout the page to pass user_id=user_id from page context
+  * Fixed get_cancellation_categories() call to use current user_id_str instead of DEFAULT_USER_ID
+
+- scripts/backfill_aversion.py (get_initial_aversion fix):
+  * Updated get_initial_aversion() call to extract user_id from instance being processed
+  * Converts string user_id to int when needed for proper type handling
+  * Includes comment noting that user_id=None is intentional for historical data processing when user_id is missing
+
+- backend/analytics.py (get_all_instances() replacement fixes):
+  * Fixed _calculate_perseverance_persistence_stats() - added user_id parameter (Optional[int] = None)
+  * Replaced non-existent get_all_instances() call with _load_instances(user_id=user_id) using _get_user_id() helper
+  * Fixed _detect_suddenly_challenging() - added user_id parameter (Optional[int] = None)
+  * Replaced non-existent get_all_instances() call with _load_instances(user_id=user_id) using _get_user_id() helper
+  * Updated all 4 callers of _detect_suddenly_challenging() to pass user_id using _get_user_id(None)
+  * Updated all 3 callers of _calculate_perseverance_persistence_stats() to pass user_id using _get_user_id(None)
+  * All fixes ensure proper data isolation by using _load_instances() instead of accessing non-existent method
+
+- ui/goals_page.py (get_all_instances() replacement fix):
+  * Fixed baseline calculation - replaced im.get_all_instances() with analytics_instance._load_instances(user_id=current_user_id)
+  * Now uses Analytics class method for proper user data isolation when calculating task template baselines
+
+- Analysis scripts (get_all_instances() replacement fixes):
+  * scripts/extract_perseverance_persistence_tasks.py - replaced get_all_instances() with Analytics._load_instances(user_id=None)
+  * scripts/analyze_grit_score_formulas.py - replaced get_all_instances() with Analytics._load_instances(user_id=None)
+  * Both scripts include explicit comments noting user_id=None is intentional for analysis across all users
+  * All fixes replace non-existent get_all_instances() method with proper _load_instances() calls
+
+- backend/routine_scheduler.py (direct DataFrame access fix):
+  * Fixed _initialize_routine_task() - added user_id filtering when checking for duplicate initializations
+  * Previously accessed self.instance_manager.df directly without user_id filtering, causing potential data leakage
+  * Now extracts user_id from task early and filters instances using _load_instances() or DataFrame filtering
+  * Includes fallback to direct DataFrame access with user_id filtering if _load_instances() is unavailable
+  * Ensures proper data isolation when checking if task was already initialized today
+
+- backend/productivity_tracker.py (CSV mode user_id filtering fix):
+  * Fixed _get_completed_instances() - added user_id filtering in CSV mode path
+  * Previously database mode filtered by user_id but CSV mode did not, creating inconsistency
+  * Now CSV mode matches database mode behavior: filters by user_id_int and returns empty DataFrame with security warning if user_id is None
+  * Ensures consistent data isolation across both database and CSV backends
+
+- backend/instance_manager.py (append_task_notes fix):
+  * Fixed append_instance_notes() - added user_id parameter to append_task_notes() call
+  * Previously called task_manager.append_task_notes() without user_id even though user_id was available in the function
+  * Now properly passes user_id=user_id to append_task_notes() for proper data isolation
+
+- benchmark_performance.py (explicit user_id=None fixes):
+  * Fixed list_tasks() calls - added explicit user_id=None with comments (2 instances)
+  * Fixed list_active_instances() call - added explicit user_id=None with comment
+  * All fixes include comments noting user_id=None is intentional for benchmarking across all users
+  * Ensures consistency with other analysis/benchmark scripts that explicitly document user_id=None usage
+
+- backend/task_manager.py (CSV method user_id filtering fixes):
+  * Fixed _find_by_name_csv() - added user_id parameter and filtering for data isolation
+  * Fixed _get_all_csv() - added user_id parameter and filtering for data isolation
+  * Fixed _get_task_csv() - added user_id parameter and filtering for data isolation
+  * Fixed _append_task_notes_csv() - added user_id parameter and ownership verification before appending notes
+  * Fixed _get_task_notes_csv() - added user_id parameter and filtering for data isolation
+  * Fixed _update_task_csv() - added user_id parameter and ownership verification before updating
+  * Fixed _delete_by_id_csv() - added user_id parameter and ownership verification before deleting
+  * Updated find_by_name() to pass user_id to _find_by_name_csv()
+  * Updated get_all() to pass user_id to _get_all_csv()
+  * Updated get_task() to pass user_id to _get_task_csv()
+  * Updated append_task_notes() to pass user_id to _append_task_notes_csv()
+  * Updated get_task_notes() to pass user_id to _get_task_notes_csv()
+  * Updated update_task() to pass user_id to _update_task_csv()
+  * Updated delete_by_id() to pass user_id to _delete_by_id_csv()
+  * Fixed all database error fallback paths to pass user_id to CSV methods
+ * All CSV methods now convert integer user_id to string for CSV comparison (CSV stores user_id as string)
+ * All CSV methods include security warnings when user_id verification is requested but 'user_id' column not found
+ * Write operations (update, delete, append notes) verify user_id ownership before allowing changes
+ * Read operations (get, find, list) filter by user_id when provided for proper data isolation
+ * If user_id is provided but CSV doesn't have user_id column, methods return empty results or deny access for security
+
+- ui/add_log.py (get_all_tasks() method fix):
+ * Fixed build_add_log_page() - replaced non-existent get_all_tasks() method with list_tasks(user_id=current_user_id)
+ * Added get_current_user() call at start of function to get current_user_id for data isolation
+ * Added authentication check with login redirect if user is not authenticated
+ * Now properly filters tasks by user_id when displaying task selection dropdown
+ * Note: This file also calls legacy methods (add_task_if_missing, save_log_entry, update_task_metadata) that don't exist in TaskManager - these may need future implementation or file may need refactoring

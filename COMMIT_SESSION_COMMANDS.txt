@@ -1,8 +1,9 @@
 # Git Commit Command Sequence for This Session
 # Execute these commands in order to commit only files changed in this session
 
-# Step 1: Stage modified files
-git add task_aversion_app/backend/auth.py
+# Step 1: Stage plan files
+git add .cursor/plans/repetitive_task_and_simultaneous_work_tracking_analysis_84141634.plan.md
+git add .cursor/plans/task_management_modes_feature_ff5510b8.plan.md
 
 # Step 2: Verify what will be committed
 git status
@@ -11,38 +12,52 @@ git status
 git diff --cached
 
 # Step 4: Commit with message
-git commit -m "feat(auth): clear all cached data on user logout
+git commit -m "docs(plans): add task management modes and repetitive task tracking analysis
 
-Add comprehensive cache clearing functionality to logout process to ensure
-users get fresh data when logging in and prevent data leakage between sessions.
+Add comprehensive planning documents for implementing configurable task tracking
+modes to support different user workflows and edge cases like repetitive tasks
+and simultaneous work.
 
-Changes:
-- Add clear_all_caches() function to clear all application caches
-  * Clears Analytics class-level caches (relief summary, composite scores,
-    instances, dashboard metrics, time tracking, trend series, attribute
-    distribution, stress dimension, rankings, leaderboard)
-  * Clears InstanceManager class-level caches (shared active instances,
-    recent completed instances, per-user cache)
-  * Clears TaskManager instance caches (task lists, task data) via global
-    instance from app module
-- Update logout() function to call clear_all_caches() after clearing session
-  * Ensures all cached data is cleared when user logs out
-  * Prevents stale cache data from persisting across user sessions
-  * Includes error handling for each cache clearing operation
+Plans added:
+1. Repetitive Task and Simultaneous Work Tracking Analysis
+   - Analyzes current tracking mechanisms (completion %, duration, over-completion)
+   - Explores 5 options (A-E) for tracking manual effort and simultaneous work
+   - Documents trade-offs and implementation considerations
+   - Addresses edge cases where simultaneous work is valid
 
-Files modified:
-- task_aversion_app/backend/auth.py
-  * Added clear_all_caches() function with comprehensive cache clearing
-  * Updated logout() to call clear_all_caches() after session cleanup
+2. Task Management Modes Feature
+   - Implements configurable tracking modes (Standard, Manual Effort, Accessibility,
+     Completionist, Delegator, Template-Specific)
+   - Phase 1: Fix over-completion cap (supports 500%+, not just 200%)
+   - Phase 1: Implement Manual Effort Mode (Option A) as initial feature
+   - Future phases: Additional modes based on user needs
+   - Maintains backward compatibility with existing 'standard' mode
+
+Key features planned:
+- Manual effort percentage tracking (0-100%) for active vs passive time
+- Effective duration calculation for analytics
+- Mode selection UI in settings
+- Template-specific pattern classification
+- Simultaneous task tracking for edge cases
+- Time breakdown tracking for completionist users
+
+Design philosophy:
+- Gradual, incremental implementation starting with simplest mode
+- Maintains emotional tracking focus while allowing workflow flexibility
+- Optional features that don't disrupt existing users
+- Backward compatible with current 'standard' mode behavior
+
+Files added:
+- .cursor/plans/repetitive_task_and_simultaneous_work_tracking_analysis_84141634.plan.md
+- .cursor/plans/task_management_modes_feature_ff5510b8.plan.md
 
 Purpose:
-This change ensures that when a user logs out, all cached data is cleared
-from memory. This prevents:
-- Data leakage between user sessions
-- Stale cache data being served to new users
-- Performance issues from accumulated cache data
-- Security concerns with cached user-specific data
+These plans address user needs for tracking:
+- Repetitive, low-effort tasks (e.g., sending same prompt every 5 minutes)
+- Simultaneous work (e.g., doing music task while waiting for AI responses)
+- Manual vs automated effort distinction
+- Edge cases where task splitting is valid (not punished by focus metrics)
 
-The implementation handles cases where modules may not be loaded yet and
-includes proper error handling to ensure logout always succeeds even if
-cache clearing encounters issues."
+The modular approach allows different users to choose tracking modes that fit
+their workflow while maintaining the core emotional tracking and aversion
+system design intent."
