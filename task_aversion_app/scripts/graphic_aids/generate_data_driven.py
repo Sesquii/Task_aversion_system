@@ -24,17 +24,32 @@ _images_dir = os.path.normpath(os.path.join(_script_dir, '..', '..', 'assets', '
 os.makedirs(_images_dir, exist_ok=True)
 
 
-def get_user_instances(limit=100):
-    """Get user's task instances for visualization."""
+def get_user_instances(limit=None):
+    """Get user's task instances for visualization.
+    
+    Args:
+        limit: Optional limit on number of instances. If None, uses a large limit (10000) to get all user's data.
+    """
     try:
         from backend.instance_manager import InstanceManager
         from backend.analytics import Analytics
+        from backend.auth import get_current_user
         
         instance_manager = InstanceManager()
         analytics = Analytics()
         
-        # Analysis script: intentionally use user_id=None to load all instances across all users
-        instances = instance_manager.list_recent_completed(limit=limit, user_id=None)
+        # Get current user for data isolation
+        current_user_id = get_current_user()
+        if current_user_id is None:
+            # If no authenticated user, return empty to prevent data leakage
+            print("[GraphicAids] WARNING: No authenticated user, returning empty instances for data isolation")
+            return [], analytics
+        
+        # Use large limit if None to get all user's data (10000 should be more than enough for any user)
+        effective_limit = limit if limit is not None else 10000
+        
+        # Get instances for the current user
+        instances = instance_manager.list_recent_completed(limit=effective_limit, user_id=current_user_id)
         return instances, analytics
     except Exception as e:
         print(f"[GraphicAids] Error loading instances: {e}")

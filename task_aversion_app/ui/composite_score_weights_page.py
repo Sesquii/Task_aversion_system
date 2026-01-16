@@ -75,7 +75,7 @@ def composite_score_weights_page():
                 ui.notify("At least one weight must be greater than 0", color='warning')
                 return
             
-            user_state.set_score_weights(DEFAULT_USER_ID, new_weights)
+            user_state.set_score_weights(user_id_str, new_weights)
             ui.notify("Composite score weights saved!", color='positive')
         
         def reset_composite_weights():

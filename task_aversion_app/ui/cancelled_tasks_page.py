@@ -51,9 +51,14 @@ def sanitize_category_key(key: str) -> str:
     return key or 'custom_category'
 
 
-def get_cancellation_penalties():
+def get_cancellation_penalties(user_id: Optional[int] = None):
     """Get cancellation penalty configuration."""
-    penalties = user_state.get_cancellation_penalties(DEFAULT_USER_ID)
+    if user_id is None:
+        from backend.auth import get_current_user
+        user_id = get_current_user()
+    user_id_str = str(user_id) if user_id is not None else DEFAULT_USER_ID
+    
+    penalties = user_state.get_cancellation_penalties(user_id_str)
     if not penalties:
         # Default penalties
         return {
@@ -74,6 +79,9 @@ def cancelled_tasks_page():
     if user_id is None:
         ui.navigate.to('/login')
         return
+    
+    user_id_str = str(user_id) if user_id is not None else DEFAULT_USER_ID
+    
     ui.label("Cancelled Tasks Analytics").classes("text-2xl font-bold mb-4")
     ui.label("View and analyze cancelled task patterns. Edit tasks and configure penalties in Settings.").classes("text-gray-600 mb-4")
     
@@ -107,7 +115,7 @@ def cancelled_tasks_page():
                             notes = actual_data.get('reason_for_canceling', '')
                             
                             # Get penalty for this category
-                            penalties = get_cancellation_penalties()
+                            penalties = get_cancellation_penalties(user_id=user_id)
                             penalty = penalties.get(category, 0.5)
                             
                             with ui.row().classes("items-center gap-2 mt-1"):
@@ -347,7 +355,7 @@ def cancelled_tasks_page():
                 by_category = defaultdict(int)
                 by_task = defaultdict(int)
                 total_penalty = 0.0
-                penalties = get_cancellation_penalties()
+                penalties = get_cancellation_penalties(user_id=user_id)
                 
                 for inst in cancelled_instances:
                     actual_data = inst.get('actual', '{}')
@@ -435,8 +443,8 @@ def cancelled_tasks_page():
                                             ui.label("Default category").classes("text-xs text-blue-600")
                                     
                                     if not is_default:
-                                        def delete_category(key=cat_key):
-                                            user_state.remove_cancellation_category(key, DEFAULT_USER_ID)
+                                        def delete_category(key=cat_key, uid=user_id_str):
+                                            user_state.remove_cancellation_category(key, uid)
                                             refresh_categories_list()
                                             # Refresh the category filter dropdown
                                             refresh_category_filter()
@@ -444,7 +452,7 @@ def cancelled_tasks_page():
                                             refresh_view()
                                             ui.notify("Category deleted", color="positive")
                                         
-                                        ui.button("Delete", on_click=delete_category, color="negative").classes("text-xs")
+                                        ui.button("Delete", on_click=lambda k=cat_key: delete_category(k, user_id_str), color="negative").classes("text-xs")
                         
                         # Add new category form
                         ui.separator().classes("my-2")
@@ -475,7 +483,7 @@ def cancelled_tasks_page():
                                             key = f"{original_key}_{counter}"
                                             counter += 1
                                     
-                                    user_state.add_cancellation_category(key, label, DEFAULT_USER_ID)
+                                    user_state.add_cancellation_category(key, label, user_id_str)
                                     new_category_label_input.set_value("")
                                     refresh_categories_list()
                                     # Refresh the category filter dropdown

@@ -1,3 +1,6 @@
+
+---
+
 fix: Add user_id parameter to get_batch_baseline_aversions() calls for data isolation
 
 Fix data isolation issue where get_batch_baseline_aversions() was called without
@@ -87,3 +90,93 @@ Changes:
 Analytics is now fully isolated with no delay when switching users. All cache
 access patterns properly use user_id as dictionary keys, preventing TypeError
 errors and ensuring proper data isolation.
+
+---
+
+fix: Complete data isolation for glossary charts and all settings pages
+
+Fix remaining data isolation issues in glossary execution score charts, volumetric
+productivity data, thoroughness popup count, and all settings pages. All user
+data is now properly isolated across the entire application.
+
+Changes:
+- ui/plotly_data_charts.py:
+  * Fixed generate_thoroughness_popup_penalty_plotly() - replaced hardcoded user_id='default' with current user_id
+  * Now gets current_user_id from get_current_user() and converts to string for database query
+  * Ensures popup count in thoroughness glossary page is properly isolated by user
+
+- scripts/graphic_aids/generate_data_driven.py:
+  * Fixed get_user_instances() - replaced user_id=None with current_user_id from get_current_user()
+  * Now properly isolates execution score data charts by user (difficulty, speed, start speed, completion factors)
+  * Removed 100-task limit - now uses limit=10000 to get all user's data for accurate visualizations
+  * Returns empty list if no authenticated user to prevent data leakage
+  * All execution score component charts in glossary "Your Data" section now show only current user's data
+
+- ui/analytics_glossary.py:
+  * Made data image paths user-specific by including user_id in filename (e.g., execution_score_difficulty_factor_data_user_123.png)
+  * Force regeneration on each page load by deleting old images before generating new ones
+  * Updated _ensure_data_graphic_image() to strip user_id suffix when looking up generators
+  * Ensures each user gets their own cached images and fresh data on every view
+
+- ui/cancellation_penalties_page.py:
+  * Fixed get_cancellation_penalties() - now gets current_user_id from get_current_user() instead of using DEFAULT_USER_ID
+  * Fixed cancellation_penalties_page() - gets current user_id at page start and passes to all user_state calls
+  * Fixed save_penalty() - now uses user_id_str instead of DEFAULT_USER_ID when saving penalties
+  * Cancellation penalties are now properly isolated by user
+
+- ui/composite_score_weights_page.py:
+  * Fixed save_composite_weights() - replaced DEFAULT_USER_ID with user_id_str (already retrieved at page start)
+  * Composite score weights are now properly isolated by user
+
+- ui/productivity_settings_page.py:
+  * Fixed all 4 occurrences of DEFAULT_USER_ID - replaced with user_id_str throughout the page
+  * Fixed get_productivity_settings() calls - now use user_id_str instead of DEFAULT_USER_ID
+  * Fixed set_productivity_settings() calls - now use user_id_str instead of DEFAULT_USER_ID
+  * Productivity settings are now properly isolated by user
+
+- ui/goals_page.py:
+  * Fixed all 4 occurrences of DEFAULT_USER_ID - replaced with user_id_str throughout the page
+  * Fixed get_milestones() call - now uses user_id_str
+  * Fixed update_milestone() call - now uses user_id_str
+  * Fixed get_template_goals() call - now uses user_id_str
+  * Fixed update_template_goal() call - now uses user_id_str
+  * Goals and milestones are now properly isolated by user
+
+- ui/cancelled_tasks_page.py:
+  * Fixed get_cancellation_penalties() - now accepts user_id parameter and uses it instead of DEFAULT_USER_ID
+  * Fixed all 4 occurrences of DEFAULT_USER_ID - replaced with user_id_str throughout the page
+  * Fixed remove_cancellation_category() call - now uses user_id_str
+  * Fixed add_cancellation_category() call - now uses user_id_str
+  * Updated all calls to get_cancellation_penalties() to pass user_id parameter
+  * Cancelled tasks page is now properly isolated by user
+
+- ui/task_editing_manager.py:
+  * Fixed list_all_completed_instances() - now accepts user_id parameter and filters by user_id
+  * Fixed _list_all_completed_instances_csv() - added user_id filtering for CSV backend
+  * Fixed _list_all_completed_instances_db() - added user_id filtering for database backend
+  * Fixed get_all_tasks_chronologically() - now accepts user_id parameter and passes it to list_all_completed_instances()
+  * Fixed edit_cancelled_task_dialog() - now accepts user_id parameter and passes it to get_all_cancellation_categories()
+  * Updated all calls to pass user_id parameter throughout the page
+  * Task editing manager now only shows tasks belonging to the current user
+  * Both completed and cancelled tasks are properly filtered by user_id
+
+All settings pages, glossary charts, and task editing manager are now fully
+isolated by user. Data isolation is complete across the entire application.
+
+minor refactor: Simplify goals page to show only productivity goals section
+
+Remove development milestones and task template goals from goals page, keeping
+only the productivity hours goal tracking section. All data isolation is maintained
+with proper user_id handling.
+
+Changes:
+- ui/goals_page.py:
+  * Removed Development Milestones section and MILESTONES constant
+  * Removed Task Template Goals section with template editing interface
+  * Kept only Productivity Hours Goal Tracking card that links to /goals/productivity-hours
+  * Removed unused imports (pandas, TaskManager, Analytics)
+  * Maintained data isolation with user_id_str for all user_state calls
+  * Updated page description to reflect productivity goals focus
+
+The goals page now focuses exclusively on productivity goals tracking, with all
+data properly isolated per user through existing user_id_str mechanisms.

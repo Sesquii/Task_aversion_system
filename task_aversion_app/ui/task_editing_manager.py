@@ -39,30 +39,63 @@ def get_all_cancellation_categories(user_id: Optional[int] = None):
     return all_categories
 
 
-def list_all_completed_instances():
-    """List all completed instances (not just recent ones)."""
+def list_all_completed_instances(user_id: Optional[int] = None):
+    """List all completed instances (not just recent ones).
+    
+    Args:
+        user_id: User ID to filter instances by. If None, gets current user.
+    """
+    if user_id is None:
+        user_id = get_current_user()
+    
     if im.use_db:
-        return _list_all_completed_instances_db()
+        return _list_all_completed_instances_db(user_id=user_id)
     else:
-        return _list_all_completed_instances_csv()
+        return _list_all_completed_instances_csv(user_id=user_id)
 
 
-def _list_all_completed_instances_csv():
-    """CSV-specific list_all_completed_instances."""
+def _list_all_completed_instances_csv(user_id: Optional[int] = None):
+    """CSV-specific list_all_completed_instances.
+    
+    Args:
+        user_id: User ID to filter instances by. If None, returns empty for security.
+    """
+    if user_id is None:
+        print("[TaskEditingManager] WARNING: _list_all_completed_instances_csv() called without user_id - returning empty for security")
+        return []
+    
     im._reload()
     df = im.df[im.df['completed_at'].astype(str).str.strip() != '']
+    
+    # Filter by user_id if column exists
+    if 'user_id' in df.columns:
+        # CSV stores user_id as string, so convert to string for comparison
+        df = df[df['user_id'].astype(str) == str(user_id)]
+    else:
+        print("[TaskEditingManager] WARNING: user_id column not found in CSV - returning empty for security")
+        return []
+    
     if df.empty:
         return []
     df = df.sort_values("completed_at", ascending=False)
     return df.to_dict(orient="records")
 
 
-def _list_all_completed_instances_db():
-    """Database-specific list_all_completed_instances."""
+def _list_all_completed_instances_db(user_id: Optional[int] = None):
+    """Database-specific list_all_completed_instances.
+    
+    Args:
+        user_id: User ID to filter instances by. If None, returns empty for security.
+    """
+    if user_id is None:
+        print("[TaskEditingManager] WARNING: _list_all_completed_instances_db() called without user_id - returning empty for security")
+        return []
+    
     try:
         with im.db_session() as session:
             instances = session.query(im.TaskInstance).filter(
-                im.TaskInstance.completed_at.isnot(None)
+                im.TaskInstance.completed_at.isnot(None),
+                im.TaskInstance.user_id == user_id
             ).order_by(
                 im.TaskInstance.completed_at.desc()
             ).all()
@@ -72,11 +105,21 @@ def _list_all_completed_instances_db():
         return []
 
 
-def get_all_tasks_chronologically():
-    """Get all completed and cancelled tasks, sorted by most recent timestamp first."""
-    user_id = get_current_user()
-    completed = list_all_completed_instances()
-    cancelled = im.list_cancelled_instances(user_id=user_id) if user_id else []
+def get_all_tasks_chronologically(user_id: Optional[int] = None):
+    """Get all completed and cancelled tasks, sorted by most recent timestamp first.
+    
+    Args:
+        user_id: User ID to filter tasks by. If None, gets current user.
+    """
+    if user_id is None:
+        user_id = get_current_user()
+    
+    if user_id is None:
+        print("[TaskEditingManager] WARNING: get_all_tasks_chronologically() called without user_id - returning empty for security")
+        return []
+    
+    completed = list_all_completed_instances(user_id=user_id)
+    cancelled = im.list_cancelled_instances(user_id=user_id)
     
     # Add status label and timestamp to each task
     all_tasks = []
@@ -171,8 +214,18 @@ def _update_actual_data_db(instance_id, actual_data):
         return False
 
 
-def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback):
-    """Open dialog to edit cancelled task category and notes (reused from cancelled_tasks_page)."""
+def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback, user_id: Optional[int] = None):
+    """Open dialog to edit cancelled task category and notes (reused from cancelled_tasks_page).
+    
+    Args:
+        instance_id: Instance ID to edit
+        inst_data: Instance data dictionary
+        refresh_callback: Callback function to refresh the view
+        user_id: User ID for data isolation. If None, gets current user.
+    """
+    if user_id is None:
+        user_id = get_current_user()
+    
     # Parse actual data
     actual_data = inst_data.get('actual', '{}')
     if isinstance(actual_data, str):
@@ -330,7 +383,7 @@ def task_editing_manager_page():
                                     ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-400")
                                 
                                 if status == 'cancelled':
-                                    ui.button("Edit", on_click=lambda inst_id=instance_id, inst_data=inst: edit_cancelled_task_dialog(inst_id, inst_data, refresh_view)).classes("text-xs bg-blue-500 text-white mt-2")
+                                    ui.button("Edit", on_click=lambda inst_id=instance_id, inst_data=inst, uid=user_id: edit_cancelled_task_dialog(inst_id, inst_data, refresh_view, uid)).classes("text-xs bg-blue-500 text-white mt-2")
                                 else:  # completed
                                     def edit_initialization(inst_id=instance_id):
                                         """Navigate to edit initialization page."""
@@ -371,7 +424,7 @@ def task_editing_manager_page():
     def get_filtered_tasks():
         """Get tasks based on current filter."""
         selected_type = task_type_filter.value
-        all_tasks = get_all_tasks_chronologically()
+        all_tasks = get_all_tasks_chronologically(user_id=user_id)
         
         if selected_type == 'all':
             return all_tasks

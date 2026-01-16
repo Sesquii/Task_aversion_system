@@ -385,6 +385,11 @@ def build_analytics_glossary():
 
 def build_module_page(module_id: str):
     """Build a detailed page for a specific analytics module."""
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else "default"
+    
     if module_id not in ANALYTICS_MODULES:
         ui.label("Module not found").classes("text-red-500")
         ui.button("Back to Glossary", on_click=lambda: ui.navigate.to('/analytics/glossary'))
@@ -478,7 +483,8 @@ def build_module_page(module_id: str):
                 if component.get('graphic_script'):
                     script_name = component['graphic_script']
                     image_name = script_name.replace('.py', '.png')
-                    data_image_name = script_name.replace('.py', '_data.png')
+                    # Make data image user-specific to ensure proper data isolation
+                    data_image_name = script_name.replace('.py', f'_data_user_{user_id_str}.png')
                     
                     theoretical_image_path = os.path.normpath(os.path.join(_images_dir, image_name))
                     data_image_path = os.path.normpath(os.path.join(_images_dir, data_image_name))
@@ -524,6 +530,13 @@ def build_module_page(module_id: str):
                                 )
                         else:
                             # Fallback to PNG if no Plotly chart available
+                            # Force regeneration by deleting old image if it exists (ensures fresh data)
+                            if os.path.exists(data_image_path):
+                                try:
+                                    os.remove(data_image_path)
+                                except Exception as e:
+                                    print(f"[AnalyticsGlossary] Could not remove old image {data_image_path}: {e}")
+                            
                             if _ensure_data_graphic_image(data_image_name, data_image_path):
                                 ui.image(data_web_path).classes("w-full max-w-4xl")
                                 ui.label(f"Your actual task data for {component['name']}").classes(
@@ -595,11 +608,11 @@ def _get_plotly_chart_key(component_name: str, script_name: str) -> Optional[str
 
 
 def _ensure_data_graphic_image(image_name: str, image_path: str) -> bool:
-    """Ensure data-driven graphic aid image exists, generating it if needed."""
-    # Check if image already exists
-    if os.path.exists(image_path):
-        return True
+    """Ensure data-driven graphic aid image exists, generating it if needed.
     
+    Note: Data images are now user-specific (include user_id in filename) to ensure
+    proper data isolation. Images are regenerated on each page load to show fresh data.
+    """
     # Try to generate the image using the data-driven generator module
     try:
         import sys
@@ -609,21 +622,40 @@ def _ensure_data_graphic_image(image_name: str, image_path: str) -> bool:
         
         from scripts.graphic_aids.generate_data_driven import DATA_DRIVEN_GENERATORS
         
+        # Extract base image name (without user_id suffix) for lookup
+        # Data images now have format: execution_score_difficulty_factor_data_user_123.png
+        # We need to find: execution_score_difficulty_factor_data.png
+        base_image_name = image_name
+        if '_user_' in image_name:
+            # Remove user_id suffix for lookup: execution_score_difficulty_factor_data_user_123.png
+            # -> execution_score_difficulty_factor_data.png
+            base_image_name = image_name.rsplit('_user_', 1)[0] + '.png'
+        
         # image_name should match the key in DATA_DRIVEN_GENERATORS
-        if image_name in DATA_DRIVEN_GENERATORS:
-            generator_func = DATA_DRIVEN_GENERATORS[image_name]
+        if base_image_name in DATA_DRIVEN_GENERATORS:
+            generator_func = DATA_DRIVEN_GENERATORS[base_image_name]
+            print(f"[AnalyticsGlossary] Generating data image: {image_name} -> {base_image_name} -> {image_path}")
             generated_path = generator_func(image_path)
             return os.path.exists(generated_path) if generated_path else False
         else:
             # Try to find by partial match (in case naming differs slightly)
             for key, func in DATA_DRIVEN_GENERATORS.items():
-                if image_name in key or key in image_name:
-                    generated_path = func(image_path)
+                # Check if base_image_name matches key (without extension)
+                base_key = key.replace('.png', '')
+                base_lookup = base_image_name.replace('.png', '')
+                if base_lookup in base_key or base_key in base_lookup:
+                    generator_func = func
+                    print(f"[AnalyticsGlossary] Generating data image (partial match): {image_name} -> {key} -> {image_path}")
+                    generated_path = generator_func(image_path)
                     return os.path.exists(generated_path) if generated_path else False
+            
+            print(f"[AnalyticsGlossary] No generator found for {image_name} (base: {base_image_name})")
     except ImportError as e:
         print(f"[AnalyticsGlossary] Import error for data graphic {image_name}: {e}")
     except Exception as e:
         print(f"[AnalyticsGlossary] Error generating data image for {image_name}: {e}")
+        import traceback
+        traceback.print_exc()
     
     return False
 

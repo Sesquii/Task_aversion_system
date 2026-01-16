@@ -30,11 +30,23 @@ def survey_page():
     controls: Dict[str, Any] = {}
 
     async def init_user():
-        uid = await ui.run_javascript(UserStateManager.js_get_or_create_user_id())
-        state["user_id"] = uid
-        user_state.ensure_user(uid)
+        try:
+            uid = await ui.run_javascript(UserStateManager.js_get_or_create_user_id())
+            state["user_id"] = uid
+            user_state.ensure_user(uid)
+        except Exception as e:
+            print(f"[WARNING] Failed to initialize user_id: {e}")
+            # Fallback: try to get user from auth
+            try:
+                from backend.auth import get_current_user
+                uid = get_current_user()
+                if uid:
+                    state["user_id"] = uid
+                    user_state.ensure_user(uid)
+            except Exception:
+                pass
 
-    ui.timer(0.1, init_user, once=True, immediate=False)
+    ui.timer(0.1, init_user, once=True, immediate=True)
 
     ui.label("Mental Health Survey").classes("text-2xl font-bold")
     ui.label("Optional data helps improve recommendations. Required fields are clearly marked.").classes(
@@ -67,16 +79,16 @@ def survey_page():
 
     def render_checkbox_group(question):
         opts = question.get("options", [])
-        rows = []
+        rows = []  # List of (checkbox, option_text) tuples
         for opt in opts:
             cb = ui.checkbox(opt)
-            rows.append(cb)
+            rows.append((cb, opt))  # Store checkbox with its option text
         other_input = None
         if question.get("allow_other"):
             other_input = ui.input(label="Other (optional)")
 
         def getter():
-            selected = [cb.label for cb in rows if cb.value]
+            selected = [opt_text for cb, opt_text in rows if cb.value]
             other = other_input.value.strip() if other_input else ""
             values = selected + ([other] if other else [])
             return values, ""
@@ -86,7 +98,7 @@ def survey_page():
         def on_change(_=None):
             update_progress()
 
-        for cb in rows:
+        for cb, _ in rows:
             cb.on("update:model-value", on_change)
         if other_input:
             other_input.on("update:model-value", on_change)
@@ -123,51 +135,83 @@ def survey_page():
                     render_text(q)
 
     def submit():
-        missing: List[str] = []
-        rows: List[Dict[str, Any]] = []
-        for cat in questions:
-            cat_id = cat.get("id", "unknown")
-            for q in cat.get("questions", []):
-                getter = controls.get(q["question_id"])
-                if not getter:
-                    continue
-                val = getter()
-                response_value = ""
-                response_text = ""
-                if isinstance(val, tuple):
-                    response_value, response_text = val
-                else:
-                    response_value = val
+        try:
+            missing: List[str] = []
+            rows: List[Dict[str, Any]] = []
+            for cat in questions:
+                cat_id = cat.get("id", "unknown")
+                for q in cat.get("questions", []):
+                    getter = controls.get(q["question_id"])
+                    if not getter:
+                        continue
+                    val = getter()
+                    response_value = ""
+                    response_text = ""
+                    if isinstance(val, tuple):
+                        response_value, response_text = val
+                    else:
+                        response_value = val
 
-                has_val = bool(response_value) or bool(response_text)
-                if q.get("required") and not has_val:
-                    missing.append(q.get("question_text", q["question_id"]))
-                    continue
+                    # Convert list responses to comma-separated strings
+                    if isinstance(response_value, list):
+                        if response_value:
+                            response_value = ", ".join(str(v) for v in response_value if v)
+                        else:
+                            response_value = ""  # Empty list becomes empty string
+                    
+                    # Ensure response_value is a string
+                    if response_value is None:
+                        response_value = ""
+                    elif not isinstance(response_value, str):
+                        response_value = str(response_value)
 
-                rows.append(
-                    {
-                        "question_id": q["question_id"],
-                        "question_category": cat_id,
-                        "response_value": response_value,
-                        "response_text": response_text,
-                    }
+                    has_val = bool(response_value) or bool(response_text)
+                    if q.get("required") and not has_val:
+                        missing.append(q.get("question_text", q["question_id"]))
+                        continue
+
+                    rows.append(
+                        {
+                            "question_id": q["question_id"],
+                            "question_category": cat_id,
+                            "response_value": response_value,
+                            "response_text": response_text,
+                        }
+                    )
+
+            if missing:
+                ui.notify(f"Please answer required: {', '.join(missing[:3])}", color="negative")
+                return
+
+            uid = state.get("user_id")
+            # Try to get user_id from auth as fallback
+            if not uid or uid == "anonymous":
+                try:
+                    from backend.auth import get_current_user
+                    uid = get_current_user()
+                    if uid:
+                        state["user_id"] = uid
+                except Exception:
+                    pass
+            
+            if not uid or uid == "anonymous":
+                ui.notify("Error: User ID not available. Please refresh the page.", color="negative")
+                return
+
+            for row in rows:
+                survey_manager.record_response(
+                    user_id=uid,
+                    question_category=row["question_category"],
+                    question_id=row["question_id"],
+                    response_value=row.get("response_value", ""),
+                    response_text=row.get("response_text", ""),
                 )
-
-        if missing:
-            ui.notify(f"Please answer required: {', '.join(missing[:3])}", color="negative")
-            return
-
-        uid = state.get("user_id") or "anonymous"
-        for row in rows:
-            survey_manager.record_response(
-                user_id=uid,
-                question_category=row["question_category"],
-                question_id=row["question_id"],
-                response_value=row.get("response_value", ""),
-                response_text=row.get("response_text", ""),
-            )
-        user_state.mark_survey_completed(uid)
-        ui.notify("Survey saved. Thank you!", color="positive")
+            user_state.mark_survey_completed(uid)
+            ui.notify("Survey saved. Thank you!", color="positive")
+        except Exception as e:
+            ui.notify(f"Error saving survey: {str(e)}", color="negative")
+            import traceback
+            print(f"[ERROR] Survey submit failed: {traceback.format_exc()}")
 
     ui.button("Submit Survey", on_click=submit).classes("mt-4 bg-blue-500 text-white")
 

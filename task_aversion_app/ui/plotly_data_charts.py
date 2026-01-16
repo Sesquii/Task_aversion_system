@@ -712,6 +712,15 @@ def generate_thoroughness_popup_penalty_plotly() -> Optional[go.Figure]:
             sys.path.insert(0, parent_dir)
         
         from backend.database import get_session, PopupResponse
+        from backend.auth import get_current_user
+        
+        # Get current user for data isolation
+        current_user_id = get_current_user()
+        if current_user_id is None:
+            # Fallback to default_user for backward compatibility
+            user_id_str = 'default'
+        else:
+            user_id_str = str(current_user_id)
         
         # Get popup data for last 30 days
         cutoff_date = datetime.utcnow() - timedelta(days=30)
@@ -719,7 +728,7 @@ def generate_thoroughness_popup_penalty_plotly() -> Optional[go.Figure]:
         with get_session() as session:
             popups = session.query(PopupResponse).filter(
                 PopupResponse.trigger_id == '7.1',
-                PopupResponse.user_id == 'default',
+                PopupResponse.user_id == user_id_str,
                 PopupResponse.created_at >= cutoff_date
             ).order_by(PopupResponse.created_at).all()
         

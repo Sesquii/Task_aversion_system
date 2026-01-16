@@ -13,16 +13,16 @@ todos:
     status: pending
   - id: task-manager-isolation
     content: "Update backend/task_manager.py: Add user_id parameter to all methods and filter all queries by user_id"
-    status: pending
+    status: completed
   - id: instance-manager-isolation
     content: "Update backend/instance_manager.py: Add user_id parameter to all methods and filter all queries by user_id"
-    status: pending
+    status: completed
   - id: analytics-isolation
     content: "Update backend/analytics.py: Add user_id filtering to all analytics queries"
-    status: pending
+    status: completed
   - id: update-pages
     content: Update all UI pages (dashboard, create_task, initialize_task, complete_task, etc.) to get user_id from session and pass to managers
-    status: pending
+    status: completed
   - id: data-migration
     content: "Create data migration: UserPreferences migration during OAuth login, user_id type migration script (String to Integer), anonymous data migration UI (NULL user_id records)"
     status: pending

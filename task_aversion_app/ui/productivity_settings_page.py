@@ -44,13 +44,15 @@ def productivity_settings_page(request: Request = None):
         ui.navigate.to('/login')
         return
     
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
     ui.label("Productivity Score Settings").classes("text-2xl font-bold mb-2")
     ui.label("Configure how productivity scores are calculated and displayed.").classes(
         "text-gray-500 mb-4"
     )
     
     # Load existing settings
-    existing_settings = user_state.get_productivity_settings(DEFAULT_USER_ID) or {}
+    existing_settings = user_state.get_productivity_settings(user_id_str) or {}
     
     # Basic Settings Section
     with ui.card().classes("w-full max-w-4xl p-6 mb-4"):
@@ -172,9 +174,9 @@ def productivity_settings_page(request: Request = None):
                 "primary_task_bonus_multiplier": float(primary_task_bonus_input.value or 1.2),
             }
             # Merge with existing settings to preserve advanced settings
-            current_settings = user_state.get_productivity_settings(DEFAULT_USER_ID) or {}
+            current_settings = user_state.get_productivity_settings(user_id_str) or {}
             current_settings.update(settings)
-            user_state.set_productivity_settings(DEFAULT_USER_ID, current_settings)
+            user_state.set_productivity_settings(user_id_str, current_settings)
             ui.notify("Productivity settings saved. Refresh analytics to apply.", color="positive")
         
         ui.button("Save Basic Settings", on_click=save_basic_settings).classes("bg-blue-500 text-white mt-2")
@@ -374,7 +376,7 @@ def productivity_settings_page(request: Request = None):
             def get_productivity_settings_with_weights(config_name: str = None, use_current_inputs: bool = False):
                 """Get productivity settings with weights applied from a configuration or current inputs."""
                 # Get base productivity settings
-                base_settings = user_state.get_productivity_settings(DEFAULT_USER_ID) or {}
+                base_settings = user_state.get_productivity_settings(user_id_str) or {}
                 
                 if use_current_inputs:
                     # Use current input values

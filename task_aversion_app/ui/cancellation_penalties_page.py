@@ -27,7 +27,11 @@ def get_all_cancellation_categories():
 
 def get_cancellation_penalties():
     """Get cancellation penalty configuration."""
-    penalties = user_state.get_cancellation_penalties(DEFAULT_USER_ID)
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
+    penalties = user_state.get_cancellation_penalties(user_id_str)
     if not penalties:
         return {
             'development_test': 0.0,
@@ -42,6 +46,15 @@ def get_cancellation_penalties():
 
 @ui.page("/settings/cancellation-penalties")
 def cancellation_penalties_page():
+    # Get current user for data isolation
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.navigate.to('/login')
+        return
+    
+    user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
+    
     ui.label("Cancellation Penalties").classes("text-2xl font-bold mb-2")
     ui.label("Configure productivity penalties for different cancellation reasons. Penalties are multipliers (0.0 = no penalty, 1.0 = full penalty).").classes("text-gray-600 mb-4")
     
@@ -73,14 +86,14 @@ def cancellation_penalties_page():
                                 precision=1
                             ).classes("w-32").props("dense outlined")
                             
-                            def save_penalty(key=cat_key, input_field=penalty_input):
+                            def save_penalty(key=cat_key, input_field=penalty_input, uid=user_id_str):
                                 new_penalty = float(input_field.value or 0.0)
                                 penalties = get_cancellation_penalties()
                                 penalties[key] = max(0.0, min(1.0, new_penalty))
-                                user_state.set_cancellation_penalties(penalties, DEFAULT_USER_ID)
+                                user_state.set_cancellation_penalties(penalties, uid)
                                 ui.notify("Penalty saved", color="positive")
                             
-                            ui.button("Save", on_click=lambda k=cat_key: save_penalty(k, penalty_input), color="positive").classes("bg-green-500 text-white text-xs")
+                            ui.button("Save", on_click=lambda k=cat_key: save_penalty(k, penalty_input, user_id_str), color="positive").classes("bg-green-500 text-white text-xs")
     
     with ui.card().classes("w-full max-w-4xl p-4 gap-3"):
         penalty_container = ui.column().classes("w-full mt-3")
