@@ -13,6 +13,8 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 
 from backend.analytics import Analytics
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 analytics_service = Analytics()
 
@@ -41,7 +43,15 @@ def build_relief_comparison_page():
     
     with ui.column().classes("w-full p-4 gap-4"):
         # Get data
-        data = get_relief_comparison_data(user_id=current_user_id)
+        try:
+            data = get_relief_comparison_data(user_id=current_user_id)
+        except Exception as e:
+            handle_error_with_ui(
+                "load relief comparison data",
+                e,
+                user_id=current_user_id
+            )
+            data = {'total_tasks': 0}
         
         if not data or data['total_tasks'] == 0:
             with ui.card().classes("p-4"):
@@ -311,7 +321,7 @@ def _render_scatter_plot(relief_data: pd.DataFrame):
             colorbar=dict(title="Net Relief"),
             line=dict(width=1, color='black')
         ),
-        text=relief_data['task_name'],
+        text=relief_data['task_name'].apply(escape_for_display),
         hovertemplate='<b>%{text}</b><br>Expected: %{x:.1f}<br>Actual: %{y:.1f}<br>Net: %{marker.color:.1f}<extra></extra>'
     ))
     
@@ -520,7 +530,7 @@ def _render_task_details(data: Dict):
         rows = []
         for task in recent_tasks:
             rows.append({
-                'task_name': task.get('task_name', 'Unknown'),
+                'task_name': escape_for_display(task.get('task_name', 'Unknown')),
                 'completed_at': task.get('completed_at', '')[:10] if task.get('completed_at') else '',
                 'expected_relief': f"{task.get('expected_relief', 0):.1f}",
                 'actual_relief': f"{task.get('actual_relief', 0):.1f}",

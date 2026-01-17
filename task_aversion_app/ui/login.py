@@ -4,6 +4,8 @@ Login page with Google OAuth authentication.
 """
 from nicegui import ui
 from backend.auth import get_current_user, login_with_google, logout
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 
 @ui.page('/login')
@@ -26,7 +28,7 @@ def login_page():
                     session_data = app.storage.general.get(f'session:{session_token}')
                     if session_data:
                         email = session_data.get('email', 'Unknown')
-                        ui.label(f'Email: {email}').classes('mb-2')
+                        ui.label(f'Email: {escape_for_display(email)}').classes('mb-2')
                 
                 with ui.row().classes('gap-2 mt-4'):
                     ui.button('Go to Dashboard', on_click=lambda: ui.navigate.to('/')).classes('flex-1')
@@ -71,17 +73,27 @@ def handle_logout():
 
 def handle_logout_and_reload():
     """Handle logout and force page reload to clear session state."""
-    # Clear session
-    success = logout()
-    if success:
-        ui.notify('Logged out successfully', color='positive')
-    else:
-        ui.notify('Error during logout', color='negative')
-    
-    # Use a small delay to ensure logout completes, then force full page reload
-    def do_redirect():
-        # Force a full page reload to clear any cached session state
+    current_user_id = get_current_user()
+    try:
+        # Clear session
+        success = logout()
+        if success:
+            ui.notify('Logged out successfully', color='positive')
+        else:
+            ui.notify('Error during logout', color='negative')
+        
+        # Use a small delay to ensure logout completes, then force full page reload
+        def do_redirect():
+            # Force a full page reload to clear any cached session state
+            ui.run_javascript('window.location.href = "/login";')
+        
+        # Small delay to ensure storage operations complete
+        ui.timer(0.1, do_redirect, once=True)
+    except Exception as e:
+        handle_error_with_ui(
+            "logout",
+            e,
+            user_id=current_user_id
+        )
+        # Still try to redirect even if logout failed
         ui.run_javascript('window.location.href = "/login";')
-    
-    # Small delay to ensure storage operations complete
-    ui.timer(0.1, do_redirect, once=True)

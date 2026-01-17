@@ -1,6 +1,7 @@
 from nicegui import ui
 from backend.user_state import UserStateManager
 from backend.analytics import Analytics
+from ui.error_reporting import handle_error_with_ui
 
 user_state = UserStateManager()
 analytics = Analytics()
@@ -65,18 +66,27 @@ def composite_score_weights_page():
                     weight_inputs[component_name] = weight_input
         
         def save_composite_weights():
-            new_weights = {
-                name: float(input.value) if input.value is not None else 1.0
-                for name, input in weight_inputs.items()
-            }
-            new_weights = {k: v for k, v in new_weights.items() if v > 0}
-            
-            if not new_weights:
-                ui.notify("At least one weight must be greater than 0", color='warning')
-                return
-            
-            user_state.set_score_weights(user_id_str, new_weights)
-            ui.notify("Composite score weights saved!", color='positive')
+            try:
+                new_weights = {
+                    name: float(input.value) if input.value is not None else 1.0
+                    for name, input in weight_inputs.items()
+                }
+                new_weights = {k: v for k, v in new_weights.items() if v > 0}
+                
+                if not new_weights:
+                    ui.notify("At least one weight must be greater than 0", color='warning')
+                    return
+                
+                user_state.set_score_weights(user_id_str, new_weights)
+                ui.notify("Composite score weights saved!", color='positive')
+            except Exception as e:
+                handle_error_with_ui(
+                    operation="save composite score weights",
+                    error=e,
+                    user_id=current_user_id,
+                    context={"page": "composite_score_weights"},
+                    user_message="Failed to save composite score weights. Please try again."
+                )
         
         def reset_composite_weights():
             for component_name, input_widget in weight_inputs.items():

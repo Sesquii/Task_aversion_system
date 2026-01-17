@@ -16,6 +16,8 @@ from backend.analytics import Analytics
 from backend.user_state import UserStateManager
 from backend.performance_logger import get_perf_logger as get_init_perf_logger
 from backend.recommendation_logger import recommendation_logger
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 # Setup performance logging for monitored metrics
 PERF_LOG_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'logs')
@@ -265,7 +267,7 @@ def open_pause_dialog(instance_id):
         im.pause_instance(instance_id, reason=None, completion_percentage=0.0, user_id=current_user_id)
         ui.notify("Task paused", color='info')
     except Exception as exc:
-        ui.notify(f"Error pausing task: {str(exc)}", color='negative')
+        handle_error_with_ui("pause_task", exc, user_id=current_user_id, context={'instance_id': instance_id})
         return
     
     # Now show dialog to collect optional notes and completion percentage
@@ -340,7 +342,7 @@ def open_pause_dialog(instance_id):
                 dialog.close()
                 ui.navigate.reload()
             except Exception as exc:
-                ui.notify(f"Error updating pause info: {str(exc)}", color='negative')
+                handle_error_with_ui("update_pause_info", exc, user_id=current_user_id, context={'instance_id': instance_id})
 
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
             ui.button("Close", color="warning", on_click=dialog.close)
@@ -678,7 +680,7 @@ def refresh_initialized_tasks(search_query=None):
         print("[Dashboard] No initialized tasks to display after filtering")
         with initialized_tasks_container:
             if search_query:
-                ui.markdown(f"_No initialized tasks match '{search_query}'_")
+                ui.markdown(f"_No initialized tasks match '{escape_for_display(search_query)}'_")
             else:
                 ui.markdown("_No initialized tasks available_")
         return
@@ -740,7 +742,7 @@ def refresh_initialized_tasks(search_query=None):
                         ui.button("", on_click=lambda iid=instance_id: add_instance_note(iid)).props(f'id="context-btn-instance-addnote-{instance_id}"').style("display: none;")
                         ui.button("", on_click=lambda iid=instance_id: go_complete(iid)).props(f'id="context-btn-instance-complete-{instance_id}"').style("display: none;")
                         with ui.row().classes("w-full items-center gap-2"):
-                            ui.label(inst.get("task_name")).classes("text-sm font-bold flex-1")
+                            ui.label(escape_for_display(inst.get("task_name"))).classes("text-sm font-bold flex-1")
                             # Small indicator icon if task has pause notes
                             if has_pause_notes:
                                 ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip("This task was paused - see notes when you start it")
@@ -757,7 +759,7 @@ def refresh_initialized_tasks(search_query=None):
                         # Show initialization description if available
                         init_description = predicted_data.get('description', '')
                         if init_description and init_description.strip():
-                            ui.label(init_description.strip()).classes("text-xs text-gray-700 mt-1 italic").style("max-width: 100%; word-wrap: break-word;")
+                            ui.label(escape_for_display(init_description.strip())).classes("text-xs text-gray-700 mt-1 italic").style("max-width: 100%; word-wrap: break-word;")
                         
                         with ui.row().classes("gap-1 mt-1"):
                             # Show "Resume" button if task is paused, otherwise "Start"
@@ -912,7 +914,7 @@ def refresh_templates(search_query=None):
                 task_id = t['task_id']
                 card_id = f"template-{task_id}"
                 with ui.card().classes("p-2 mb-2 w-full context-menu-card").props(f'id="{card_id}" data-template-id="{task_id}" data-context-menu="template"'):
-                    ui.markdown(f"**{t['name']}**").classes("text-xs")
+                    ui.markdown(f"**{escape_for_display(t['name'])}**").classes("text-xs")
                     ui.button("Initialize", on_click=lambda tid=task_id: init_quick(tid)).props("dense size=sm").classes("w-full")
                     # Hidden buttons for context menu actions
                     ui.button("", on_click=lambda task=t: edit_template(task)).props(f'id="context-btn-template-edit-{task_id}"').style("display: none;")
@@ -1216,7 +1218,7 @@ def edit_monitored_metrics_config():
                     dialog.close()
                     ui.navigate.reload()
                 except Exception as e:
-                    ui.notify(f"Error saving configuration: {e}", color='negative')
+                    handle_error_with_ui("save_monitored_metrics_config", e, user_id=current_user_id, context={'user_id_str': user_id_str})
             ui.button("Save", on_click=save_config, color='primary')
     
     dialog.open()
@@ -1241,7 +1243,7 @@ def add_instance_note(instance_id):
                     dialog.close()
                     ui.navigate.reload()
                 except Exception as e:
-                    ui.notify(f"Error adding note: {e}", color='negative')
+                    handle_error_with_ui("add_instance_note", e, user_id=current_user_id, context={'instance_id': instance_id})
             ui.button("Save", on_click=save_note, color='primary')
         
     dialog.open()
@@ -1277,14 +1279,14 @@ def view_instance_notes(instance_id):
         # Regular notes (shared across instances with same initialization description)
         if notes:
             ui.label("Notes").classes("text-md font-semibold mb-2")
-            ui.markdown(notes).classes("w-full p-4 bg-gray-50 rounded border mb-4").style("max-height: 300px; overflow-y: auto; white-space: pre-wrap;")
+            ui.markdown(escape_for_display(notes)).classes("w-full p-4 bg-gray-50 rounded border mb-4").style("max-height: 300px; overflow-y: auto; white-space: pre-wrap;")
         else:
             ui.label("No notes yet").classes("text-gray-500 p-4 mb-4")
         
         # Pause notes (instance-specific, shown separately)
         if pause_reason:
             ui.label("Pause Notes (instance-specific)").classes("text-md font-semibold mt-4 mb-2 text-orange-600")
-            ui.label(pause_reason.strip()).classes("w-full p-4 bg-orange-50 border border-orange-200 rounded").style("max-height: 200px; overflow-y: auto; white-space: pre-wrap;")
+            ui.label(escape_for_display(pause_reason.strip())).classes("w-full p-4 bg-orange-50 border border-orange-200 rounded").style("max-height: 200px; overflow-y: auto; white-space: pre-wrap;")
         
         with ui.row().classes("gap-2 mt-4 justify-end"):
             ui.button("Close", on_click=dialog.close, color='primary')
@@ -1375,7 +1377,7 @@ def view_initialized_instance(instance_id):
         
         # Task name
         task_name = instance.get('task_name', 'Unknown Task')
-        ui.label(f"Task: {task_name}").classes("text-lg font-semibold mb-2")
+        ui.label(f"Task: {escape_for_display(task_name)}").classes("text-lg font-semibold mb-2")
         
         # Initialized timestamp
         if initialized_at:
@@ -1479,7 +1481,7 @@ def view_initialized_instance(instance_id):
         # Notes section (shared across instances with same initialization description)
         ui.label("Notes").classes("text-md font-semibold mt-4 mb-2")
         if notes:
-            ui.markdown(notes).classes("w-full p-4 bg-gray-50 rounded border").style("max-height: 300px; overflow-y: auto; white-space: pre-wrap;")
+            ui.markdown(escape_for_display(notes)).classes("w-full p-4 bg-gray-50 rounded border").style("max-height: 300px; overflow-y: auto; white-space: pre-wrap;")
         else:
             ui.label("No notes yet").classes("text-gray-500 p-4")
         
@@ -1487,7 +1489,7 @@ def view_initialized_instance(instance_id):
         description = predicted_data.get('description', '')
         if description and description.strip():
             ui.label("Description").classes("text-md font-semibold mt-4 mb-2")
-            ui.label(description.strip()).classes("text-sm text-gray-700 p-3 bg-gray-50 rounded border").style("max-height: 200px; overflow-y: auto; white-space: pre-wrap;")
+            ui.label(escape_for_display(description.strip())).classes("text-sm text-gray-700 p-3 bg-gray-50 rounded border").style("max-height: 200px; overflow-y: auto; white-space: pre-wrap;")
         
         with ui.row().classes("gap-2 mt-6 justify-end"):
             ui.button("Close", on_click=dialog.close, color='primary')
@@ -5139,7 +5141,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                             # Show task name with status indicator
                                             task_name = c.get('task_name', 'Unknown')
                                             status_label = " [Cancelled]" if status == 'cancelled' else ""
-                                            ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                                            ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                                             if timestamp_str:
                                                 parts = timestamp_str.split()
                                                 if len(parts) >= 2:
@@ -5443,7 +5445,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                 with ui.row().classes("w-full gap-4"):
                                     # Left column: Main task info
                                     with ui.column().classes("flex-1 gap-2"):
-                                        ui.label(current_task.get("task_name")).classes("text-xl font-bold mb-2")
+                                        ui.label(escape_for_display(current_task.get("task_name"))).classes("text-xl font-bold mb-2")
                                         ui.label(f"Estimated: {time_estimate} min").classes("text-sm text-gray-600 mb-2")
                                         
                                         started_at = current_task.get('started_at', '')
@@ -5458,13 +5460,13 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                         # Show initialization description if available
                                         init_description = predicted_data.get('description', '')
                                         if init_description and init_description.strip():
-                                            ui.label(init_description.strip()).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
+                                            ui.label(escape_for_display(init_description.strip())).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
                                     
                                     # Right column: Pause notes
                                     with ui.column().classes("flex-1 gap-2"):
                                         if pause_reason and pause_reason.strip():
                                             ui.label("Pause Notes:").classes("text-sm font-semibold text-orange-600 mb-1")
-                                            ui.label(pause_reason.strip()).classes("text-sm text-gray-700 mb-2 p-2 bg-orange-50 border border-orange-200 rounded").style("max-width: 100%; word-wrap: break-word;")
+                                            ui.label(escape_for_display(pause_reason.strip())).classes("text-sm text-gray-700 mb-2 p-2 bg-orange-50 border border-orange-200 rounded").style("max-width: 100%; word-wrap: break-word;")
                                         else:
                                             # Empty space when no pause notes
                                             ui.label("").classes("text-sm")
@@ -5484,7 +5486,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                               )
                             else:
                                 # Full-width layout option (default)
-                                ui.label(current_task.get("task_name")).classes("text-xl font-bold mb-2")
+                                ui.label(escape_for_display(current_task.get("task_name"))).classes("text-xl font-bold mb-2")
                                 ui.label(f"Estimated: {time_estimate} min").classes("text-sm text-gray-600 mb-2")
                                 
                                 started_at = current_task.get('started_at', '')
@@ -5499,12 +5501,12 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                 # Show initialization description if available
                                 init_description = predicted_data.get('description', '')
                                 if init_description and init_description.strip():
-                                    ui.label(init_description.strip()).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
+                                    ui.label(escape_for_display(init_description.strip())).classes("text-sm text-gray-700 mb-2 italic").style("max-width: 100%; word-wrap: break-word;")
                                 
                                 # Show pause notes if available (full width)
                                 if pause_reason and pause_reason.strip():
                                     ui.label("Pause Notes:").classes("text-sm font-semibold text-orange-600 mb-1 mt-2")
-                                    ui.label(pause_reason.strip()).classes("text-sm text-gray-700 mb-2 p-2 bg-orange-50 border border-orange-200 rounded").style("max-width: 100%; word-wrap: break-word;")
+                                    ui.label(escape_for_display(pause_reason.strip())).classes("text-sm text-gray-700 mb-2 p-2 bg-orange-50 border border-orange-200 rounded").style("max-width: 100%; word-wrap: break-word;")
                                 
                                 with ui.row().classes("gap-2 mt-2"):
                                     ui.button("Complete",
@@ -5685,7 +5687,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -5958,7 +5960,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 
@@ -6131,7 +6133,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -6404,7 +6406,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 
@@ -6577,7 +6579,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -6850,7 +6852,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 
@@ -7023,7 +7025,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -7296,7 +7298,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 
@@ -7469,7 +7471,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -7742,7 +7744,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 
@@ -7915,7 +7917,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -8188,7 +8190,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 
@@ -8361,7 +8363,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -8634,7 +8636,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 
@@ -8807,7 +8809,7 @@ def build_recently_completed_panel():
                     # Show task name with status indicator
                     task_name = c.get('task_name', 'Unknown')
                     status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{task_name}{status_label}").classes("text-xs flex-1")
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
                     if timestamp_str:
                         # Extract date and time parts
                         parts = timestamp_str.split()
@@ -9080,7 +9082,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
                         ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(description).classes("text-xs text-gray-700")
+                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
                 else:
                     ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
                 

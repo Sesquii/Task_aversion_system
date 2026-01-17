@@ -10,6 +10,8 @@ from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 from backend.analytics import Analytics
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 user_state = UserStateManager()
 task_manager = TaskManager()
@@ -132,7 +134,7 @@ def productivity_settings_page(request: Request = None):
                 task_id = task.get('task_id', '')
                 task_name = task.get('name', 'Unknown')
                 if task_id:
-                    task_options[task_id] = task_name
+                    task_options[task_id] = escape_for_display(task_name)
         task_options[''] = 'None (no bonus)'
         
         primary_task_id = existing_settings.get("primary_productivity_task_id", "")
@@ -163,21 +165,30 @@ def productivity_settings_page(request: Request = None):
             ).classes("text-sm text-blue-600")
         
         def save_basic_settings():
-            settings = {
-                "weekly_curve": weekly_curve_select.value or "flattened_square",
-                "target_mode": target_mode_select.value or "weekly",
-                "target_hours": float(target_hours_input.value or 40.0),
-                "weekly_burnout_threshold_hours": float(burnout_weekly_input.value or 42.0),
-                "daily_burnout_threshold_hours": float(burnout_daily_input.value or 8.0),
-                "daily_burnout_cap_multiplier": float(burnout_daily_cap_input.value or 2.0),
-                "primary_productivity_task_id": primary_task_select.value or "",
-                "primary_task_bonus_multiplier": float(primary_task_bonus_input.value or 1.2),
-            }
-            # Merge with existing settings to preserve advanced settings
-            current_settings = user_state.get_productivity_settings(user_id_str) or {}
-            current_settings.update(settings)
-            user_state.set_productivity_settings(user_id_str, current_settings)
-            ui.notify("Productivity settings saved. Refresh analytics to apply.", color="positive")
+            try:
+                settings = {
+                    "weekly_curve": weekly_curve_select.value or "flattened_square",
+                    "target_mode": target_mode_select.value or "weekly",
+                    "target_hours": float(target_hours_input.value or 40.0),
+                    "weekly_burnout_threshold_hours": float(burnout_weekly_input.value or 42.0),
+                    "daily_burnout_threshold_hours": float(burnout_daily_input.value or 8.0),
+                    "daily_burnout_cap_multiplier": float(burnout_daily_cap_input.value or 2.0),
+                    "primary_productivity_task_id": primary_task_select.value or "",
+                    "primary_task_bonus_multiplier": float(primary_task_bonus_input.value or 1.2),
+                }
+                # Merge with existing settings to preserve advanced settings
+                current_settings = user_state.get_productivity_settings(user_id_str) or {}
+                current_settings.update(settings)
+                user_state.set_productivity_settings(user_id_str, current_settings)
+                ui.notify("Productivity settings saved. Refresh analytics to apply.", color="positive")
+            except Exception as e:
+                handle_error_with_ui(
+                    operation="save productivity basic settings",
+                    error=e,
+                    user_id=current_user_id,
+                    context={"page": "productivity_settings", "settings": settings},
+                    user_message="Failed to save productivity settings. Please try again."
+                )
         
         ui.button("Save Basic Settings", on_click=save_basic_settings).classes("bg-blue-500 text-white mt-2")
     
@@ -277,93 +288,120 @@ def productivity_settings_page(request: Request = None):
             with ui.row().classes("gap-2 mb-4"):
                 def load_config():
                     """Load Selected: Loads the selected configuration's weights into the input fields."""
-                    config_name = config_select.value
-                    if not config_name or config_name not in weight_configs:
-                        ui.notify("Please select a valid configuration", color="warning")
-                        return
-                    
-                    config = weight_configs[config_name]
-                    component_weights = config.get('component_weights', {})
-                    curve_weights = config.get('curve_weights', {})
-                    
-                    # Update inputs
-                    for key, input_widget in component_weight_inputs.items():
-                        input_widget.value = component_weights.get(key, 1.0)
-                    
-                    for key, input_widget in curve_weight_inputs.items():
-                        input_widget.value = curve_weights.get(key, 1.0)
-                    
-                    ui.notify(f"Configuration '{config_name}' loaded into inputs", color="positive")
-                    # Don't auto-update chart - let user see the loaded values first
+                    try:
+                        config_name = config_select.value
+                        if not config_name or config_name not in weight_configs:
+                            ui.notify("Please select a valid configuration", color="warning")
+                            return
+                        
+                        config = weight_configs[config_name]
+                        component_weights = config.get('component_weights', {})
+                        curve_weights = config.get('curve_weights', {})
+                        
+                        # Update inputs
+                        for key, input_widget in component_weight_inputs.items():
+                            input_widget.value = component_weights.get(key, 1.0)
+                        
+                        for key, input_widget in curve_weight_inputs.items():
+                            input_widget.value = curve_weights.get(key, 1.0)
+                        
+                        ui.notify(f"Configuration '{config_name}' loaded into inputs", color="positive")
+                        # Don't auto-update chart - let user see the loaded values first
+                    except Exception as e:
+                        handle_error_with_ui(
+                            operation="load productivity weight configuration",
+                            error=e,
+                            user_id=current_user_id,
+                            context={"page": "productivity_settings", "config_name": config_select.value},
+                            user_message="Failed to load configuration. Please try again."
+                        )
                 
                 def save_weight_config():
                     """Save Configuration: Saves the current input values to the selected configuration."""
-                    config_name = config_select.value
-                    if not config_name:
-                        ui.notify("Please select a configuration to save to", color="warning")
-                        return
-                    
-                    component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
-                    curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
-                    
-                    config = {
-                        'component_weights': component_weights,
-                        'curve_weights': curve_weights,
-                        'updated_at': datetime.now().isoformat(),
-                    }
-                    
-                    save_weight_configuration(config_name, config)
-                    # Reload configs
-                    weight_configs.clear()
-                    weight_configs.update(load_weight_configurations())
-                    # Update checkbox if it doesn't exist
-                    if config_name not in config_checkboxes:
-                        # Add new checkbox (this would need to be added to the UI, but for now just ensure it's in the dict)
-                        pass
-                    
-                    ui.notify(f"Configuration '{config_name}' saved", color="positive")
-                    update_chart()  # Update chart to reflect saved values
+                    try:
+                        config_name = config_select.value
+                        if not config_name:
+                            ui.notify("Please select a configuration to save to", color="warning")
+                            return
+                        
+                        component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
+                        curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
+                        
+                        config = {
+                            'component_weights': component_weights,
+                            'curve_weights': curve_weights,
+                            'updated_at': datetime.now().isoformat(),
+                        }
+                        
+                        save_weight_configuration(config_name, config)
+                        # Reload configs
+                        weight_configs.clear()
+                        weight_configs.update(load_weight_configurations())
+                        # Update checkbox if it doesn't exist
+                        if config_name not in config_checkboxes:
+                            # Add new checkbox (this would need to be added to the UI, but for now just ensure it's in the dict)
+                            pass
+                        
+                        ui.notify(f"Configuration '{config_name}' saved", color="positive")
+                        update_chart()  # Update chart to reflect saved values
+                    except Exception as e:
+                        handle_error_with_ui(
+                            operation="save productivity weight configuration",
+                            error=e,
+                            user_id=current_user_id,
+                            context={"page": "productivity_settings", "config_name": config_select.value},
+                            user_message="Failed to save configuration. Please try again."
+                        )
                 
                 def create_new_config():
                     """Create New: Creates a new configuration with the current input values."""
-                    new_name = new_config_name_input.value.strip()
-                    if not new_name:
-                        ui.notify("Please enter a configuration name", color="warning")
-                        return
-                    
-                    if new_name in weight_configs:
-                        ui.notify("Configuration name already exists. Use 'Save Configuration' to update it.", color="warning")
-                        return
-                    
-                    # Create new config with CURRENT input values (not defaults)
-                    component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
-                    curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
-                    
-                    new_config = {
-                        'component_weights': component_weights,
-                        'curve_weights': curve_weights,
-                        'created_at': datetime.now().isoformat(),
-                        'updated_at': datetime.now().isoformat(),
-                    }
-                    
-                    save_weight_configuration(new_name, new_config)
-                    # Reload configs
-                    weight_configs.clear()
-                    weight_configs.update(load_weight_configurations())
-                    config_names = list(weight_configs.keys())
-                    
-                    # Update select dropdown
-                    config_select.options = {name: name for name in config_names}
-                    config_select.value = new_name
-                    
-                    # Add checkbox for new config (would need to be added to UI, but for now just track it)
-                    config_checkboxes[new_name] = None  # Placeholder - would need UI update
-                    
-                    # Clear input field
-                    new_config_name_input.value = ""
-                    
-                    ui.notify(f"Configuration '{new_name}' created with current values. Refresh page to see it in comparison list.", color="positive")
-                    update_chart()  # Update chart
+                    try:
+                        new_name = new_config_name_input.value.strip()
+                        if not new_name:
+                            ui.notify("Please enter a configuration name", color="warning")
+                            return
+                        
+                        if new_name in weight_configs:
+                            ui.notify("Configuration name already exists. Use 'Save Configuration' to update it.", color="warning")
+                            return
+                        
+                        # Create new config with CURRENT input values (not defaults)
+                        component_weights = {key: float(input.value or 1.0) for key, input in component_weight_inputs.items()}
+                        curve_weights = {key: float(input.value or 1.0) for key, input in curve_weight_inputs.items()}
+                        
+                        new_config = {
+                            'component_weights': component_weights,
+                            'curve_weights': curve_weights,
+                            'created_at': datetime.now().isoformat(),
+                            'updated_at': datetime.now().isoformat(),
+                        }
+                        
+                        save_weight_configuration(new_name, new_config)
+                        # Reload configs
+                        weight_configs.clear()
+                        weight_configs.update(load_weight_configurations())
+                        config_names = list(weight_configs.keys())
+                        
+                        # Update select dropdown
+                        config_select.options = {name: name for name in config_names}
+                        config_select.value = new_name
+                        
+                        # Add checkbox for new config (would need to be added to UI, but for now just track it)
+                        config_checkboxes[new_name] = None  # Placeholder - would need UI update
+                        
+                        # Clear input field
+                        new_config_name_input.value = ""
+                        
+                        ui.notify(f"Configuration '{new_name}' created with current values. Refresh page to see it in comparison list.", color="positive")
+                        update_chart()  # Update chart
+                    except Exception as e:
+                        handle_error_with_ui(
+                            operation="create productivity weight configuration",
+                            error=e,
+                            user_id=current_user_id,
+                            context={"page": "productivity_settings", "new_name": new_config_name_input.value},
+                            user_message="Failed to create configuration. Please try again."
+                        )
                 
                 ui.button("Load Selected", on_click=load_config).classes("bg-blue-500 text-white").tooltip("Loads the selected configuration's weights into the input fields")
                 ui.button("Save Configuration", on_click=save_weight_config).classes("bg-green-500 text-white").tooltip("Saves the current input values to the selected configuration")

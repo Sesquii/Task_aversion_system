@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 
 from backend.instance_manager import InstanceManager
 from backend.task_manager import TaskManager
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 
 @ui.page("/experimental/task-distribution")
@@ -111,9 +113,9 @@ def task_distribution_page():
         for task_id in unique_task_ids:
             task = task_manager.get_task(task_id, user_id=current_user_id)
             if task:
-                task_names[task_id] = task.get('name', task_id)
+                task_names[task_id] = escape_for_display(task.get('name', task_id))
             else:
-                task_names[task_id] = task_id
+                task_names[task_id] = escape_for_display(str(task_id))
         
         # Chart 1: Number of tasks by template
         task_counts = df.groupby('task_id').size().reset_index(name='count')
@@ -253,7 +255,7 @@ def task_distribution_page():
                     time_pct = (total_time / total_time_all * 100) if total_time_all > 0 else 0
                     
                     stats_rows.append({
-                        'task_name': task_name,
+                        'task_name': escape_for_display(task_name),
                         'count': count,
                         'count_percentage': f"{count_pct:.1f}%",
                         'time_hours': f"{time_hours:.1f}",
@@ -310,5 +312,5 @@ def _get_all_instances_db(instance_manager: InstanceManager, user_id: Optional[i
             all_instances = query.all()
             return [instance.to_dict() for instance in all_instances]
     except Exception as e:
-        print(f"[TaskDistribution] Error getting all instances: {e}")
+        handle_error_with_ui("get_all_instances_db", e, user_id=user_id, context={'function': '_get_all_instances_db'})
         return []

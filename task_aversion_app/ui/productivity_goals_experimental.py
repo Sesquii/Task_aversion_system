@@ -6,6 +6,7 @@ Access at /productivity-hours-goal-tracking
 from nicegui import ui
 from backend.user_state import UserStateManager
 from backend.productivity_tracker import ProductivityTracker
+from ui.error_reporting import handle_error_with_ui
 from datetime import date, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
@@ -61,18 +62,27 @@ def productivity_goals_page():
             ).props("dense outlined").classes("flex-1")
             
             def save_goals():
-                new_goal = float(goal_input.value or 40.0)
-                new_starting = float(starting_input.value) if starting_input.value else None
-                
-                settings = {
-                    'goal_hours_per_week': new_goal,
-                    'starting_hours_per_week': new_starting,
-                    'initialization_method': init_method or 'manual'
-                }
-                user_state.set_productivity_goal_settings(user_id_str, settings)
-                ui.notify("Goals saved!", color="positive")
-                # Refresh the page to update displays
-                ui.navigate.to("/goals/productivity-hours")
+                try:
+                    new_goal = float(goal_input.value or 40.0)
+                    new_starting = float(starting_input.value) if starting_input.value else None
+                    
+                    settings = {
+                        'goal_hours_per_week': new_goal,
+                        'starting_hours_per_week': new_starting,
+                        'initialization_method': init_method or 'manual'
+                    }
+                    user_state.set_productivity_goal_settings(user_id_str, settings)
+                    ui.notify("Goals saved!", color="positive")
+                    # Refresh the page to update displays
+                    ui.navigate.to("/goals/productivity-hours")
+                except Exception as e:
+                    handle_error_with_ui(
+                        operation="save productivity goals",
+                        error=e,
+                        user_id=current_user_id,
+                        context={"page": "productivity_goals"},
+                        user_message="Failed to save productivity goals. Please try again."
+                    )
             
             ui.button("Save Goals", on_click=save_goals).classes("bg-blue-500 text-white")
         
@@ -81,12 +91,21 @@ def productivity_goals_page():
         
         # Auto-estimate button
         def estimate_starting():
-            estimated = tracker.estimate_starting_hours_auto(user_id_str, factor=10.0)
-            if estimated:
-                starting_input.set_value(estimated)
-                ui.notify(f"Auto-estimated starting hours: {estimated} hours/week", color="info")
-            else:
-                ui.notify("Not enough data for auto-estimation. Need at least one day with completed productive tasks.", color="warning")
+            try:
+                estimated = tracker.estimate_starting_hours_auto(user_id_str, factor=10.0)
+                if estimated:
+                    starting_input.set_value(estimated)
+                    ui.notify(f"Auto-estimated starting hours: {estimated} hours/week", color="info")
+                else:
+                    ui.notify("Not enough data for auto-estimation. Need at least one day with completed productive tasks.", color="warning")
+            except Exception as e:
+                handle_error_with_ui(
+                    operation="estimate starting productivity hours",
+                    error=e,
+                    user_id=current_user_id,
+                    context={"page": "productivity_goals"},
+                    user_message="Failed to estimate starting hours. Please try again."
+                )
         
         ui.button("Auto-Estimate Starting Hours (First Day × 10)", on_click=estimate_starting).classes("mt-2")
     

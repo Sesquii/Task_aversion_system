@@ -7,6 +7,8 @@ from nicegui import ui
 from backend.analytics import Analytics
 from backend.task_manager import TaskManager
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 from datetime import datetime, timedelta
 import pandas as pd
 import plotly.graph_objects as go
@@ -107,7 +109,7 @@ def coursera_analysis_page():
             with ui.row().classes("w-full gap-4"):
                 with ui.column().classes("flex-1"):
                     ui.label("Coursera Task").classes("font-semibold")
-                    ui.label(f"{coursera_task_name}").classes("text-lg")
+                    ui.label(escape_for_display(coursera_task_name)).classes("text-lg")
                 
                 with ui.column().classes("flex-1"):
                     ui.label("Total Coursera Instances").classes("font-semibold")
@@ -284,15 +286,13 @@ def coursera_analysis_page():
                                     ui.label(f"Cognitive: {cognitive:.1f}").classes("text-xs text-gray-600")
     
     except Exception as e:
-        import traceback
-        error_msg = traceback.format_exc()
-        print(f"[Coursera Analysis] Error: {error_msg}")
-        
-        with ui.card().classes("w-full max-w-4xl p-6 bg-red-50 border border-red-200"):
-            ui.label("Error Loading Data").classes("text-lg font-semibold text-red-800 mb-2")
-            ui.label(f"An error occurred: {str(e)}").classes("text-red-700")
-            with ui.expansion("Technical Details", icon="info").classes("w-full mt-2"):
-                ui.code(error_msg).classes("text-xs")
+        handle_error_with_ui(
+            operation="load coursera analysis data",
+            error=e,
+            user_id=current_user_id,
+            context={"page": "coursera_analysis"},
+            user_message="Failed to load Coursera analysis data. Please try again or contact support."
+        )
     
     ui.button("Back to Experimental", on_click=lambda: ui.navigate.to("/experimental")).classes("mt-4")
 

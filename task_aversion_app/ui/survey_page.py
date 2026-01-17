@@ -6,6 +6,9 @@ from nicegui import ui
 
 from backend.survey import SurveyManager
 from backend.user_state import UserStateManager
+from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +28,18 @@ def load_questions() -> Dict[str, Any]:
 
 @ui.page("/survey")
 def survey_page():
-    questions = load_questions().get("categories", [])
+    try:
+        questions = load_questions().get("categories", [])
+    except Exception as e:
+        handle_error_with_ui(
+            operation="load survey questions",
+            error=e,
+            user_id=get_current_user(),
+            context={"questions_file": str(QUESTIONS_FILE)},
+            user_message="Unable to load survey questions. Please try again later.",
+            show_report=True
+        )
+        questions = []
     state: Dict[str, Any] = {"user_id": None}
     controls: Dict[str, Any] = {}
 
@@ -117,15 +131,15 @@ def survey_page():
         ui.separator()
         with ui.column().classes("gap-2"):
             title = cat.get("title", "Category")
-            ui.label(title).classes("text-xl font-semibold")
+            ui.label(escape_for_display(title)).classes("text-xl font-semibold")
             if cat.get("disclaimer"):
-                ui.label(cat["disclaimer"]).classes("text-sm text-amber-600")
+                ui.label(escape_for_display(cat["disclaimer"])).classes("text-sm text-amber-600")
             for q in cat.get("questions", []):
                 required = q.get("required", False)
                 label_text = q.get("question_text", "")
                 if required:
                     label_text += " *"
-                ui.label(label_text).classes("text-sm font-medium")
+                ui.label(escape_for_display(label_text)).classes("text-sm font-medium")
                 qtype = q.get("type", "text")
                 if qtype == "checkbox":
                     render_checkbox_group(q)
@@ -167,7 +181,7 @@ def survey_page():
 
                     has_val = bool(response_value) or bool(response_text)
                     if q.get("required") and not has_val:
-                        missing.append(q.get("question_text", q["question_id"]))
+                        missing.append(escape_for_display(q.get("question_text", q["question_id"])))
                         continue
 
                     rows.append(
@@ -209,9 +223,11 @@ def survey_page():
             user_state.mark_survey_completed(uid)
             ui.notify("Survey saved. Thank you!", color="positive")
         except Exception as e:
-            ui.notify(f"Error saving survey: {str(e)}", color="negative")
-            import traceback
-            print(f"[ERROR] Survey submit failed: {traceback.format_exc()}")
+            handle_error_with_ui(
+                'save_survey_responses',
+                e,
+                user_id=get_current_user()
+            )
 
     ui.button("Submit Survey", on_click=submit).classes("mt-4 bg-blue-500 text-white")
 

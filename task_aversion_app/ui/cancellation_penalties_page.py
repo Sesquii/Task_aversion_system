@@ -1,5 +1,7 @@
 from nicegui import ui
 from backend.user_state import UserStateManager
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 user_state = UserStateManager()
 DEFAULT_USER_ID = "default_user"
@@ -72,7 +74,7 @@ def cancellation_penalties_page():
                     with ui.card().classes("w-full p-3 border border-gray-200"):
                         with ui.row().classes("w-full items-center justify-between gap-3"):
                             with ui.column().classes("flex-1 gap-1"):
-                                ui.label(cat_label).classes("text-base font-semibold")
+                                ui.label(escape_for_display(cat_label)).classes("text-base font-semibold")
                                 ui.label(f"Key: {cat_key}").classes("text-xs text-gray-500")
                                 if is_default:
                                     ui.label("Default category").classes("text-xs text-blue-600")
@@ -87,11 +89,20 @@ def cancellation_penalties_page():
                             ).classes("w-32").props("dense outlined")
                             
                             def save_penalty(key=cat_key, input_field=penalty_input, uid=user_id_str):
-                                new_penalty = float(input_field.value or 0.0)
-                                penalties = get_cancellation_penalties()
-                                penalties[key] = max(0.0, min(1.0, new_penalty))
-                                user_state.set_cancellation_penalties(penalties, uid)
-                                ui.notify("Penalty saved", color="positive")
+                                try:
+                                    new_penalty = float(input_field.value or 0.0)
+                                    penalties = get_cancellation_penalties()
+                                    penalties[key] = max(0.0, min(1.0, new_penalty))
+                                    user_state.set_cancellation_penalties(penalties, uid)
+                                    ui.notify("Penalty saved", color="positive")
+                                except Exception as e:
+                                    handle_error_with_ui(
+                                        operation="save cancellation penalty",
+                                        error=e,
+                                        user_id=current_user_id,
+                                        context={"page": "cancellation_penalties", "category_key": key},
+                                        user_message="Failed to save cancellation penalty. Please try again."
+                                    )
                             
                             ui.button("Save", on_click=lambda k=cat_key: save_penalty(k, penalty_input, user_id_str), color="positive").classes("bg-green-500 text-white text-xs")
     

@@ -2,6 +2,8 @@
 from nicegui import ui
 from backend.notes_manager import NotesManager
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 from datetime import datetime
 
 notes_manager = NotesManager()
@@ -42,10 +44,13 @@ def notes_page():
                     if not content:
                         ui.notify("Note content cannot be empty.", color="negative")
                         return
-                    notes_manager.add_note(content, user_id=user_id)
-                    note_input.value = ""
-                    ui.notify("Note saved.", color="positive")
-                    refresh_notes()
+                    try:
+                        notes_manager.add_note(content, user_id=user_id)
+                        note_input.value = ""
+                        ui.notify("Note saved.", color="positive")
+                        refresh_notes()
+                    except Exception as e:
+                        handle_error_with_ui("save_note", e, user_id=user_id)
                 
                 ui.button("Save Note", on_click=save_note, icon="save").classes("mt-2")
             
@@ -62,7 +67,7 @@ def notes_page():
                     with ui.card().classes("w-full p-4"):
                         with ui.column().classes("w-full gap-2"):
                             # Note content
-                            ui.markdown(note.get("content", "")).classes("text-base")
+                            ui.markdown(escape_for_display(note.get("content", ""))).classes("text-base")
                             
                             # Timestamp and delete button
                             with ui.row().classes("w-full justify-between items-center"):
@@ -79,11 +84,14 @@ def notes_page():
                                 ui.label(f"Created: {formatted_time}").classes("text-xs text-gray-500")
                                 
                                 def delete_note_handler(note_id=note.get("note_id")):
-                                    if notes_manager.delete_note(note_id, user_id=user_id):
-                                        ui.notify("Note deleted.", color="positive")
-                                        refresh_notes()
-                                    else:
-                                        ui.notify("Failed to delete note.", color="negative")
+                                    try:
+                                        if notes_manager.delete_note(note_id, user_id=user_id):
+                                            ui.notify("Note deleted.", color="positive")
+                                            refresh_notes()
+                                        else:
+                                            ui.notify("Failed to delete note.", color="negative")
+                                    except Exception as e:
+                                        handle_error_with_ui("delete_note", e, user_id=user_id, context={'note_id': note_id})
                                 
                                 ui.button("Delete", on_click=delete_note_handler, icon="delete").classes("text-sm").props("flat")
     

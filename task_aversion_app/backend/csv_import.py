@@ -223,10 +223,43 @@ def infer_column_type(value: str) -> str:
     return 'TEXT'
 
 
+def _quote_identifier(identifier: str, dialect_name: str) -> str:
+    """
+    Properly quote a SQL identifier to prevent SQL injection.
+    
+    SECURITY: This function ensures identifiers are properly quoted according to
+    the database dialect, preventing SQL injection attacks.
+    
+    Args:
+        identifier: The identifier to quote (table name, column name, etc.)
+        dialect_name: The database dialect ('sqlite' or 'postgresql')
+    
+    Returns:
+        Properly quoted identifier string
+    """
+    # Remove any existing quotes to prevent double-quoting
+    identifier = identifier.strip().strip('"').strip('`').strip("'")
+    
+    if dialect_name == 'sqlite':
+        # SQLite uses double quotes or backticks for identifiers
+        # Escape any double quotes in the identifier
+        escaped = identifier.replace('"', '""')
+        return f'"{escaped}"'
+    else:
+        # PostgreSQL uses double quotes for identifiers
+        # Escape any double quotes in the identifier
+        escaped = identifier.replace('"', '""')
+        return f'"{escaped}"'
+
+
 def add_column_to_table(table_name: str, column_name: str, column_type: str, session) -> bool:
     """
     Attempt to add a column to a database table.
     Returns True if successful, False otherwise.
+    
+    SECURITY: Properly quotes identifiers to prevent SQL injection attacks.
+    Table and column names are validated before this function is called via
+    validate_column_name(). Table names come from a whitelist.
     """
     try:
         # Check if column already exists
@@ -234,13 +267,26 @@ def add_column_to_table(table_name: str, column_name: str, column_type: str, ses
         if column_name in existing_columns:
             return True  # Column already exists
         
+        # SECURITY: Properly quote identifiers to prevent SQL injection
+        # Table name comes from whitelist (ALLOWED_FILES), column_name is validated
+        # Column type is validated to be one of: TEXT, INTEGER, REAL (safe values)
+        dialect_name = 'sqlite' if DATABASE_URL.startswith('sqlite') else 'postgresql'
+        quoted_table = _quote_identifier(table_name, dialect_name)
+        quoted_column = _quote_identifier(column_name, dialect_name)
+        
+        # Validate column_type to prevent injection (whitelist approach)
+        allowed_types = {'TEXT', 'INTEGER', 'REAL', 'BOOLEAN', 'NUMERIC'}
+        if column_type.upper() not in allowed_types:
+            print(f"[Import] SECURITY: Invalid column type '{column_type}' rejected")
+            return False
+        
         # SQLite and PostgreSQL use slightly different syntax
         if DATABASE_URL.startswith('sqlite'):
             # SQLite: ALTER TABLE table_name ADD COLUMN column_name type
-            sql = f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+            sql = f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_column} {column_type.upper()}"
         else:
             # PostgreSQL: ALTER TABLE table_name ADD COLUMN column_name type
-            sql = f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_type}'
+            sql = f'ALTER TABLE {quoted_table} ADD COLUMN {quoted_column} {column_type.upper()}'
         
         session.execute(text(sql))
         session.commit()

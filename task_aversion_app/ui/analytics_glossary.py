@@ -3,6 +3,8 @@ from nicegui import ui
 from typing import Dict, List, Optional
 import os
 from ui.plotly_data_charts import PLOTLY_DATA_CHARTS
+from backend.auth import get_current_user
+from ui.error_reporting import handle_error_with_ui
 
 # Module definitions for the analytics glossary
 ANALYTICS_MODULES = {
@@ -427,7 +429,12 @@ def build_module_page(module_id: str):
                             "text-sm text-gray-500 italic"
                         )
                 except Exception as e:
-                    print(f"[AnalyticsGlossary] Error generating overview chart: {e}")
+                    handle_error_with_ui(
+                        'generate_overview_chart',
+                        e,
+                        user_id=get_current_user(),
+                        context={'chart_key': chart_key}
+                    )
                     ui.label("Error generating overview chart. Please try again later.").classes(
                         "text-sm text-red-500"
                     )
@@ -524,7 +531,12 @@ def build_module_page(module_id: str):
                                         "text-sm text-gray-500 italic"
                                     )
                             except Exception as e:
-                                print(f"[AnalyticsGlossary] Error generating Plotly chart: {e}")
+                                handle_error_with_ui(
+                                    'generate_plotly_chart',
+                                    e,
+                                    user_id=get_current_user(),
+                                    context={'chart_key': chart_key, 'component': component.get('name')}
+                                )
                                 ui.label("Error generating chart. Please try again later.").classes(
                                     "text-sm text-red-500"
                                 )
@@ -653,9 +665,12 @@ def _ensure_data_graphic_image(image_name: str, image_path: str) -> bool:
     except ImportError as e:
         print(f"[AnalyticsGlossary] Import error for data graphic {image_name}: {e}")
     except Exception as e:
-        print(f"[AnalyticsGlossary] Error generating data image for {image_name}: {e}")
-        import traceback
-        traceback.print_exc()
+        handle_error_with_ui(
+            'generate_data_image',
+            e,
+            user_id=get_current_user(),
+            context={'image_name': image_name}
+        )
     
     return False
 
@@ -697,9 +712,19 @@ def _ensure_graphic_image(script_name: str, image_path: str) -> bool:
                         module.generate_image(image_path)
                         return os.path.exists(image_path)
         except Exception as e2:
-            print(f"[AnalyticsGlossary] Error generating image for {script_name}: {e2}")
+            handle_error_with_ui(
+                'generate_graphic_image_fallback',
+                e2,
+                user_id=get_current_user(),
+                context={'script_name': script_name}
+            )
     except Exception as e:
-        print(f"[AnalyticsGlossary] Error generating image for {script_name}: {e}")
+        handle_error_with_ui(
+            'generate_graphic_image',
+            e,
+            user_id=get_current_user(),
+            context={'script_name': script_name}
+        )
     
     return False
 

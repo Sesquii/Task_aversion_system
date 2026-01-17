@@ -9,13 +9,20 @@ from typing import Optional
 
 from backend.gap_detector import GapDetector
 from backend.data_archival import DataArchival
+from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 
 def gap_handling_page():
     """Create gap handling page with user options."""
     
     gap_detector = GapDetector()
-    gap_summary = gap_detector.get_gap_summary()
+    try:
+        gap_summary = gap_detector.get_gap_summary()
+    except Exception as e:
+        handle_error_with_ui("get_gap_summary", e, user_id=get_current_user())
+        return
     
     if not gap_summary['has_gaps']:
         ui.label("No Data Gaps Detected").classes("text-h4")
@@ -30,8 +37,10 @@ def gap_handling_page():
     
     with ui.card().classes("w-full"):
         ui.label("Gap Details:").classes("font-bold")
-        ui.label(f"Start: {largest_gap['gap_start_str']}")
-        ui.label(f"End: {largest_gap['gap_end_str']}")
+        gap_start_str = escape_for_display(largest_gap.get('gap_start_str', '')) if largest_gap.get('gap_start_str') else 'N/A'
+        gap_end_str = escape_for_display(largest_gap.get('gap_end_str', '')) if largest_gap.get('gap_end_str') else 'N/A'
+        ui.label(f"Start: {gap_start_str}")
+        ui.label(f"End: {gap_end_str}")
         ui.label(f"Instances before gap: {largest_gap['instances_before']}")
         ui.label(f"Instances after gap: {largest_gap['instances_after']}")
     
@@ -45,13 +54,20 @@ def gap_handling_page():
     
     def handle_continue_as_is():
         """Handle continue as-is choice."""
-        gap_detector.set_gap_handling_preference("continue_as_is")
-        ui.notify("Preference saved: Continue as-is", type="positive")
-        ui.navigate.to("/")
+        try:
+            gap_detector.set_gap_handling_preference("continue_as_is")
+            ui.notify("Preference saved: Continue as-is", type="positive")
+            ui.navigate.to("/")
+        except Exception as e:
+            handle_error_with_ui("set_gap_handling_preference", e, user_id=get_current_user(), context={'preference': 'continue_as_is'})
     
     def handle_fresh_start():
         """Handle fresh start choice."""
-        gap_detector.set_gap_handling_preference("fresh_start")
+        try:
+            gap_detector.set_gap_handling_preference("fresh_start")
+        except Exception as e:
+            handle_error_with_ui("set_gap_handling_preference", e, user_id=get_current_user(), context={'preference': 'fresh_start'})
+            return
         
         # Trigger archival
         try:
@@ -59,7 +75,11 @@ def gap_handling_page():
             archival.archive_pre_gap_data()
             ui.notify("Preference saved: Fresh start. Pre-gap data archived.", type="positive")
         except Exception as e:
-            ui.notify(f"Error during archival: {e}", type="negative")
+            handle_error_with_ui(
+                'archive_pre_gap_data',
+                e,
+                user_id=get_current_user()
+            )
         
         ui.navigate.to("/")
     
@@ -94,11 +114,14 @@ def gap_handling_page():
 
 def check_and_redirect_to_gap_handling():
     """Check if gap handling is needed and redirect if so."""
-    gap_detector = GapDetector()
-    
-    if gap_detector.needs_gap_decision():
-        ui.navigate.to("/gap-handling")
-        return True
+    try:
+        gap_detector = GapDetector()
+        
+        if gap_detector.needs_gap_decision():
+            ui.navigate.to("/gap-handling")
+            return True
+    except Exception as e:
+        handle_error_with_ui("check_gap_decision", e, user_id=get_current_user())
     
     return False
 

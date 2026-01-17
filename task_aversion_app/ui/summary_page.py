@@ -2,6 +2,7 @@
 from nicegui import ui
 from backend.analytics import Analytics
 from backend.user_state import UserStateManager
+from ui.error_reporting import handle_error_with_ui
 
 analytics = Analytics()
 user_state = UserStateManager()
@@ -48,18 +49,28 @@ def summary_page():
     current_user_id = get_current_user()
     user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
     
-    # Get current weights
-    current_weights = user_state.get_score_weights(user_id_str) or DEFAULT_WEIGHTS.copy()
-    
-    # Get all scores
-    all_scores = analytics.get_all_scores_for_composite(days=7, user_id=current_user_id)
-    
-    # Calculate composite score
-    composite_result = analytics.calculate_composite_score(
-        components=all_scores,
-        weights=current_weights,
-        normalize_components=True
-    )
+    try:
+        # Get current weights
+        current_weights = user_state.get_score_weights(user_id_str) or DEFAULT_WEIGHTS.copy()
+        
+        # Get all scores
+        all_scores = analytics.get_all_scores_for_composite(days=7, user_id=current_user_id)
+        
+        # Calculate composite score
+        composite_result = analytics.calculate_composite_score(
+            components=all_scores,
+            weights=current_weights,
+            normalize_components=True
+        )
+    except Exception as e:
+        handle_error_with_ui(
+            operation="load summary page data",
+            error=e,
+            user_id=current_user_id,
+            context={"page": "summary"},
+            user_message="Failed to load summary data. Please try again or contact support."
+        )
+        return
     
     ui.label("Summary").classes("text-2xl font-bold mb-2")
     ui.label("View your overall performance score and component contributions.").classes(

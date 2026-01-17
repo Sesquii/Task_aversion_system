@@ -1,6 +1,8 @@
 from nicegui import ui
 from datetime import datetime
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 def build_add_log_page(task_manager):
 
@@ -28,7 +30,7 @@ def build_add_log_page(task_manager):
 
         task_input = ui.select(
             label="Select task",
-            options=existing_tasks + [NEW_TASK_SENTINEL],
+            options=[escape_for_display(task) for task in existing_tasks] + [NEW_TASK_SENTINEL],
         )
         print("DEBUG: task_input created. options =", task_input.options if hasattr(task_input, 'options') else 'no options attr')
         try:
@@ -170,21 +172,29 @@ def build_add_log_page(task_manager):
                 "blocker_type": blocker.value,
             }
 
-            task_manager.save_log_entry(entry)
-            print("DEBUG: entry passed to task_manager.save_log_entry:", entry)
             try:
-                import os
-                size = os.path.getsize(task_manager.logs_path)
-                print("DEBUG: logs file size after save:", size)
+                task_manager.save_log_entry(entry)
+                print("DEBUG: entry passed to task_manager.save_log_entry:", entry)
+                try:
+                    import os
+                    size = os.path.getsize(task_manager.logs_path)
+                    print("DEBUG: logs file size after save:", size)
+                except Exception as e:
+                    print("DEBUG: failed to stat logs file:", e)
+
+                task_manager.update_task_metadata(
+                    task_name,
+                    entry["aversion_level"] or 0,
+                    entry["relief_actual"] or 0
+                )
+
+                ui.notify("Log saved!", color="positive")
             except Exception as e:
-                print("DEBUG: failed to stat logs file:", e)
-
-            task_manager.update_task_metadata(
-                task_name,
-                entry["aversion_level"] or 0,
-                entry["relief_actual"] or 0
-            )
-
-            ui.notify("Log saved!", color="positive")
+                handle_error_with_ui(
+                    'save_log_entry',
+                    e,
+                    user_id=current_user_id,
+                    context={'task_name': task_name}
+                )
 
         ui.button("Save Log Entry", on_click=save).classes("mt-4")

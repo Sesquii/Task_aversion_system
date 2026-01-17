@@ -8,6 +8,8 @@ from nicegui import ui
 from backend.analytics import Analytics
 from backend.task_manager import TaskManager
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 from datetime import datetime
 import pandas as pd
 import plotly.graph_objects as go
@@ -295,7 +297,7 @@ def productivity_grit_tradeoff_page():
                                     for _, task_row in category_tasks.iterrows():
                                         with ui.card().classes("p-3 border border-gray-200"):
                                             with ui.row().classes("w-full items-center justify-between"):
-                                                ui.label(task_row['task_name']).classes("font-semibold")
+                                                ui.label(escape_for_display(task_row['task_name'])).classes("font-semibold")
                                                 with ui.row().classes("gap-4"):
                                                     ui.label(f"Prod: {task_row['productivity']:.1f}").classes("text-sm")
                                                     ui.label(f"Grit: {task_row['grit']:.1f}").classes("text-sm")
@@ -321,7 +323,7 @@ def productivity_grit_tradeoff_page():
                         diff_class = "text-green-600" if diff > 0 else "text-red-600" if diff < 0 else ""
                         
                         with ui.row().classes("w-full border-b pb-2"):
-                            ui.label(task_row['task_name']).classes("flex-1 text-sm")
+                            ui.label(escape_for_display(task_row['task_name'])).classes("flex-1 text-sm")
                             ui.label(f"{task_row['productivity']:.1f}").classes("flex-0 w-24 text-center text-sm")
                             ui.label(f"{task_row['grit']:.1f}").classes("flex-0 w-24 text-center text-sm")
                             ui.label(f"{diff:+.1f}").classes(f"flex-0 w-24 text-center text-sm font-semibold {diff_class}")
@@ -333,15 +335,13 @@ def productivity_grit_tradeoff_page():
                 ui.label("Need at least 2 completed instances per task for reliable analysis. Complete more task instances to see analysis.").classes("text-yellow-700")
     
     except Exception as e:
-        import traceback
-        error_msg = traceback.format_exc()
-        print(f"[Productivity-Grit Tradeoff] Error: {error_msg}")
-        
-        with ui.card().classes("w-full max-w-4xl p-6 bg-red-50 border border-red-200"):
-            ui.label("Error Loading Data").classes("text-lg font-semibold text-red-800 mb-2")
-            ui.label(f"An error occurred: {str(e)}").classes("text-red-700")
-            with ui.expansion("Technical Details", icon="info").classes("w-full mt-2"):
-                ui.code(error_msg).classes("text-xs")
+        handle_error_with_ui(
+            operation="load productivity-grit tradeoff analysis",
+            error=e,
+            user_id=current_user_id,
+            context={"page": "productivity_grit_tradeoff"},
+            user_message="Failed to load productivity-grit tradeoff analysis. Please try again or contact support."
+        )
     
     ui.button("Back to Experimental", on_click=lambda: ui.navigate.to("/experimental")).classes("mt-4")
 

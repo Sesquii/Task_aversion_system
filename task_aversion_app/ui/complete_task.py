@@ -6,7 +6,9 @@ from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
 from backend.recommendation_logger import recommendation_logger
+from backend.security_utils import escape_for_display
 from ui.popup_modal import show_popup_modal
+from ui.error_reporting import handle_error_with_ui
 import json
 
 im = InstanceManager()
@@ -66,7 +68,7 @@ def complete_task_page(task_manager, emotion_manager):
         task_description = predicted_data.get('description', '')
         if task_description and task_description.strip():
             ui.label("Task Description").classes("text-lg font-semibold mt-4")
-            ui.label(task_description).classes("text-sm text-gray-700 mb-4 p-3 bg-gray-50 rounded border")
+            ui.label(escape_for_display(task_description)).classes("text-sm text-gray-700 mb-4 p-3 bg-gray-50 rounded border")
 
         inst_input = ui.input(
             label='Instance ID (or leave blank to choose)',
@@ -519,7 +521,7 @@ def complete_task_page(task_manager, emotion_manager):
         # Show shared notes if they exist (read-only)
         if shared_notes and not edit_mode:
             ui.label("Shared notes from active task:").classes("text-xs text-gray-600 mt-2 mb-1")
-            ui.markdown(shared_notes).classes("text-xs text-gray-700 p-2 bg-gray-50 rounded border mb-2").style("max-height: 150px; overflow-y: auto; white-space: pre-wrap;")
+            ui.markdown(escape_for_display(shared_notes)).classes("text-xs text-gray-700 p-2 bg-gray-50 rounded border mb-2").style("max-height: 150px; overflow-y: auto; white-space: pre-wrap;")
         
         notes_label = 'Completion Notes (optional)' + (' - Instance-specific completion notes' if not edit_mode else '')
         notes = ui.textarea(label=notes_label, value=existing_completion_notes if edit_mode else '')
@@ -819,8 +821,7 @@ def complete_task_page(task_manager, emotion_manager):
                                 pass
                 
             except Exception as e:
-                print("[complete_task] ERROR:", e)
-                ui.notify(str(e), color='negative')
+                handle_error_with_ui("complete_task", e, user_id=current_user_id, context={'instance_id': iid, 'edit_mode': edit_mode})
                 return
 
             # If editing a completed task, mark it as edited

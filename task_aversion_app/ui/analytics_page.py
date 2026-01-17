@@ -6,6 +6,9 @@ import json
 
 from backend.analytics import Analytics
 from backend.task_schema import TASK_ATTRIBUTES
+from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 analytics_service = Analytics()
 
@@ -139,7 +142,12 @@ def build_analytics_page():
             composite_row.style("display: flex;")
             score_label.text = f"{composite_result['composite_score']:.1f}"
         except Exception as e:
-            loading_label.text = f"Error loading composite score: {str(e)}"
+            handle_error_with_ui(
+                'load_composite_score',
+                e,
+                user_id=get_current_user()
+            )
+            loading_label.text = "Error loading composite score"
             loading_label.classes("text-red-500")
     
     # Load composite score asynchronously
@@ -1378,7 +1386,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
                 ui.label("No data yet").classes("text-xs text-gray-500")
             else:
                 for task in top_relief:
-                    ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
+                    ui.label(f"{escape_for_display(task['task_name'])}: {task['metric_value']} (n={task['count']})").classes("text-sm")
         
         # Top tasks by stress efficiency
         top_efficiency = rankings_data['stress_efficiency_ranking']
@@ -1388,7 +1396,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
                 ui.label("No data yet").classes("text-xs text-gray-500")
             else:
                 for task in top_efficiency:
-                    ui.label(f"{task['task_name']}: {task['metric_value']:.2f} (n={task['count']})").classes("text-sm")
+                    ui.label(f"{escape_for_display(task['task_name'])}: {task['metric_value']:.2f} (n={task['count']})").classes("text-sm")
         
         # Top tasks by behavioral score
         top_behavioral = rankings_data['behavioral_score_ranking']
@@ -1398,7 +1406,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
                 ui.label("No data yet").classes("text-xs text-gray-500")
             else:
                 for task in top_behavioral:
-                    ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
+                    ui.label(f"{escape_for_display(task['task_name'])}: {task['metric_value']} (n={task['count']})").classes("text-sm")
         
         # Lowest stress tasks
         low_stress = rankings_data['stress_level_ranking']
@@ -1408,7 +1416,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
                 ui.label("No data yet").classes("text-xs text-gray-500")
             else:
                 for task in low_stress:
-                    ui.label(f"{task['task_name']}: {task['metric_value']} (n={task['count']})").classes("text-sm")
+                    ui.label(f"{escape_for_display(task['task_name'])}: {task['metric_value']} (n={task['count']})").classes("text-sm")
 
 
 def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
@@ -1444,7 +1452,7 @@ def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
             for i, task in enumerate(leaderboard):
                 with ui.row().classes("w-full text-sm py-1 border-b border-gray-100"):
                     ui.label(str(i+1)).classes("w-8")
-                    ui.label(task['task_name']).classes("flex-1")
+                    ui.label(escape_for_display(task['task_name'])).classes("flex-1")
                     ui.label(f"{task['stress_efficiency']:.2f}").classes("w-24 text-right")
                     ui.label(f"{task['avg_relief']:.1f}").classes("w-20 text-right")
                     ui.label(f"{task['avg_stress']:.1f}").classes("w-20 text-right")
@@ -1757,7 +1765,7 @@ def _render_emotional_spikes(flow_data):
             for spike in spikes[:10]:  # Top 10
                 with ui.card().classes("p-3 border-l-4 border-red-400"):
                     with ui.row().classes("items-center gap-2"):
-                        ui.label(spike.get('task_name', 'Unknown Task')).classes("font-semibold")
+                        ui.label(escape_for_display(spike.get('task_name', 'Unknown Task'))).classes("font-semibold")
                         ui.label(f"Expected: {spike.get('expected', 0):.0f}").classes("text-xs text-gray-500")
                         ui.label(f"Actual: {spike.get('actual', 0):.0f}").classes("text-xs text-red-600 font-bold")
                         ui.label(f"Spike: +{spike.get('spike_amount', 0):.0f}").classes("text-xs text-red-700")

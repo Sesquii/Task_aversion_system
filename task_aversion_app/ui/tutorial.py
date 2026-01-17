@@ -6,6 +6,9 @@ from typing import Callable, List, Dict, Any, Optional
 from nicegui import ui
 
 from backend.user_state import UserStateManager
+from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -65,7 +68,16 @@ def load_tutorial_steps() -> List[Dict[str, Any]]:
     try:
         with open(STEPS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        user_id = get_current_user()
+        handle_error_with_ui(
+            operation="load tutorial steps",
+            error=e,
+            user_id=user_id,
+            context={"steps_file": str(STEPS_FILE)},
+            user_message="Unable to load tutorial steps. Default steps will be used.",
+            show_report=True
+        )
         return []
 
 
@@ -181,8 +193,8 @@ class TutorialWalkthrough:
             return
         self.index = max(0, min(idx, len(self.steps) - 1))
         step = self.steps[self.index]
-        self.title_lbl.set_text(step.get("title", "Step"))
-        self.desc_lbl.set_text(step.get("description", ""))
+        self.title_lbl.set_text(escape_for_display(step.get("title", "Step")))
+        self.desc_lbl.set_text(escape_for_display(step.get("description", "")))
         self.progress_lbl.set_text(f"Step {self.index + 1} of {len(self.steps)}")
         selector = step.get("highlight_selector") or step.get("target_element")
         if selector:
@@ -215,8 +227,19 @@ class TutorialWalkthrough:
         ui.run_javascript("document.body.classList.remove('tas-tour-active');")
         self.root.classes(remove="visible")
         self.root.classes(add="hidden")
-        self.user_state.mark_tutorial_completed(self.user_id, choice="guided")
-        ui.notify("Tutorial completed. You can re-open it anytime from the tutorial button.", color="positive")
+        try:
+            self.user_state.mark_tutorial_completed(self.user_id, choice="guided")
+            ui.notify("Tutorial completed. You can re-open it anytime from the tutorial button.", color="positive")
+        except Exception as e:
+            user_id = get_current_user()
+            handle_error_with_ui(
+                operation="mark tutorial completed",
+                error=e,
+                user_id=user_id,
+                context={"tutorial_user_id": self.user_id, "choice": "guided"},
+                user_message="Tutorial closed, but unable to save completion status.",
+                show_report=True
+            )
 
     def start(self):
         ui.run_javascript("document.body.classList.add('tas-tour-active');")
@@ -240,21 +263,59 @@ def show_tutorial_welcome(
         dont_show = ui.checkbox("Don't show again").classes("mb-2")
 
         def set_auto_show():
-            user_state.update_preference(user_id, "tutorial_auto_show", not dont_show.value)
+            try:
+                user_state.update_preference(user_id, "tutorial_auto_show", not dont_show.value)
+            except Exception as e:
+                current_user_id = get_current_user()
+                handle_error_with_ui(
+                    operation="update tutorial auto show preference",
+                    error=e,
+                    user_id=current_user_id,
+                    context={"tutorial_user_id": user_id, "auto_show": not dont_show.value},
+                    user_message="Unable to save tutorial preference.",
+                    show_report=True
+                )
 
         with ui.column().classes("gap-2 w-full"):
             def handle_guided():
-                user_state.update_preference(user_id, "tutorial_choice", "guided")
-                set_auto_show()
-                dialog.close()
-                if on_start_walkthrough:
-                    on_start_walkthrough()
+                try:
+                    user_state.update_preference(user_id, "tutorial_choice", "guided")
+                    set_auto_show()
+                    dialog.close()
+                    if on_start_walkthrough:
+                        on_start_walkthrough()
+                except Exception as e:
+                    current_user_id = get_current_user()
+                    handle_error_with_ui(
+                        operation="save tutorial choice (guided)",
+                        error=e,
+                        user_id=current_user_id,
+                        context={"tutorial_user_id": user_id, "choice": "guided"},
+                        user_message="Unable to save tutorial preference. The tour will still start.",
+                        show_report=True
+                    )
+                    dialog.close()
+                    if on_start_walkthrough:
+                        on_start_walkthrough()
 
             def handle_explore():
-                user_state.update_preference(user_id, "tutorial_choice", "explore")
-                set_auto_show()
-                dialog.close()
-                ui.notify("Ctrl + Click any element to see tooltips. Tutorial can be reopened anytime.", color="positive")
+                try:
+                    user_state.update_preference(user_id, "tutorial_choice", "explore")
+                    set_auto_show()
+                    dialog.close()
+                    ui.notify("Ctrl + Click any element to see tooltips. Tutorial can be reopened anytime.", color="positive")
+                except Exception as e:
+                    current_user_id = get_current_user()
+                    handle_error_with_ui(
+                        operation="save tutorial choice (explore)",
+                        error=e,
+                        user_id=current_user_id,
+                        context={"tutorial_user_id": user_id, "choice": "explore"},
+                        user_message="Unable to save tutorial preference.",
+                        show_report=True
+                    )
+                    dialog.close()
+                    ui.notify("Ctrl + Click any element to see tooltips. Tutorial can be reopened anytime.", color="positive")
 
             ui.button("Take Guided Tour", on_click=handle_guided).classes("w-full bg-blue-500 text-white")
             ui.button("Explore on My Own (Ctrl + Click for tips)", on_click=handle_explore).classes("w-full")

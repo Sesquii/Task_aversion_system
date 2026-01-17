@@ -9,7 +9,9 @@ from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
 from backend.performance_logger import get_perf_logger
+from backend.security_utils import escape_for_display
 from ui.popup_modal import show_popup_modal
+from ui.error_reporting import handle_error_with_ui
 
 im = InstanceManager()
 popup_dispatcher = PopupDispatcher()
@@ -354,7 +356,7 @@ def initialize_task_page(task_manager, emotion_manager):
                         default_value = 50
                     
                     with emotion_sliders_container:
-                        ui.label(emotion).classes("text-sm")
+                        ui.label(escape_for_display(emotion)).classes("text-sm")
                         slider = ui.slider(min=0, max=100, step=1, value=default_value)
                         emotion_sliders[emotion] = slider
                         ui.label(f"Value: {default_value}").bind_text_from(slider, 'value', lambda v: f"Value: {v}").classes("text-xs text-gray-500")
@@ -620,7 +622,7 @@ def initialize_task_page(task_manager, emotion_manager):
                         mark_instance_as_edited(instance_id)
                 except Exception as exc:
                     perf_logger.log_error("add_prediction_to_instance failed", exc, instance_id=instance_id)
-                    ui.notify(f"Failed to save instance: {exc}", color='negative')
+                    handle_error_with_ui("save_task_initialization", exc, user_id=current_user_id, context={'instance_id': instance_id, 'edit_mode': edit_mode})
                     return
 
                 # Only save initialization entry if not editing (to avoid duplicate entries)

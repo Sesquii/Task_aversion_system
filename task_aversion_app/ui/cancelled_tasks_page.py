@@ -4,6 +4,8 @@ from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 import json
 import re
 from collections import defaultdict
@@ -95,10 +97,10 @@ def cancelled_tasks_page():
             for inst in instances:
                 instance_id = inst.get('instance_id', '')
                 
-                with ui.card().classes("w-full p-3 border border-gray-200"):
+                    with ui.card().classes("w-full p-3 border border-gray-200"):
                     with ui.row().classes("w-full items-start justify-between gap-3"):
                         with ui.column().classes("flex-1 gap-1"):
-                            ui.label(inst.get('task_name', 'Unknown Task')).classes("text-base font-semibold")
+                            ui.label(escape_for_display(inst.get('task_name', 'Unknown Task'))).classes("text-base font-semibold")
                             ui.label(f"Instance ID: {instance_id}").classes("text-xs text-gray-500")
                             
                             # Parse actual data to get category and notes
@@ -126,7 +128,7 @@ def cancelled_tasks_page():
                             if notes:
                                 with ui.row().classes("items-start gap-2 mt-1"):
                                     ui.label("Notes:").classes("text-xs text-gray-600 font-semibold")
-                                    ui.label(notes).classes("text-xs text-gray-700 flex-1")
+                                    ui.label(escape_for_display(notes)).classes("text-xs text-gray-700 flex-1")
                             
                             cancelled_at = inst.get('cancelled_at', '')
                             if cancelled_at:
@@ -192,7 +194,12 @@ def cancelled_tasks_page():
                                                 ui.navigate.reload()
                                             ui.notify("Cancelled task updated", color="positive")
                                         except Exception as e:
-                                            ui.notify(f"Error updating task: {str(e)}", color="negative")
+                                            handle_error_with_ui(
+                                                'update_cancelled_task',
+                                                e,
+                                                user_id=get_current_user(),
+                                                context={'instance_id': inst_id}
+                                            )
                                     
                                     with ui.row().classes("w-full justify-end gap-2 mt-2"):
                                         ui.button("Cancel", on_click=dialog.close).classes("bg-gray-500 text-white")
@@ -323,9 +330,12 @@ def cancelled_tasks_page():
                     else:
                         render_all_tasks(cancelled_instances)
                 except Exception as e:
-                    import traceback
-                    ui.label(f"Error loading cancelled tasks: {str(e)}").classes("text-red-500 p-4")
-                    print(f"[CancelledTasks] Error: {traceback.format_exc()}")
+                    handle_error_with_ui(
+                        'load_cancelled_tasks',
+                        e,
+                        user_id=get_current_user()
+                    )
+                    ui.label("Error loading cancelled tasks. Please try refreshing.").classes("text-red-500 p-4")
         
         ui.button("Refresh", on_click=refresh_view).classes("bg-blue-500 text-white")
     
@@ -393,7 +403,7 @@ def cancelled_tasks_page():
                             cat_label = all_categories.get(cat_key, cat_key)
                             penalty = penalties.get(cat_key, 0.5)
                             with ui.row().classes("items-center justify-between w-full mb-2"):
-                                ui.label(f"{cat_label}: {count}").classes("text-sm")
+                                ui.label(f"{escape_for_display(cat_label)}: {count}").classes("text-sm")
                                 ui.label(f"Penalty: {penalty*100:.0f}%").classes("text-xs text-gray-500")
                     
                     # Task breakdown
@@ -401,7 +411,7 @@ def cancelled_tasks_page():
                     with ui.card().classes("w-full p-3"):
                         sorted_tasks = sorted(by_task.items(), key=lambda x: x[1], reverse=True)[:10]
                         for task_name, count in sorted_tasks:
-                            ui.label(f"{task_name}: {count} cancellation(s)").classes("text-sm mb-1")
+                            ui.label(f"{escape_for_display(task_name)}: {count} cancellation(s)").classes("text-sm mb-1")
                     
                     # Total penalty impact
                     ui.label("Total Penalty Impact").classes("text-base font-semibold")
@@ -409,9 +419,12 @@ def cancelled_tasks_page():
                         ui.label(f"Total Productivity Penalty: {total_penalty:.1f} points").classes("text-lg font-bold text-red-600")
                         ui.label(f"Based on {len(cancelled_instances)} cancelled task(s)").classes("text-xs text-gray-500")
             except Exception as e:
-                import traceback
-                ui.label(f"Error calculating statistics: {str(e)}").classes("text-red-500 p-4")
-                print(f"[CancelledTasks] Error: {traceback.format_exc()}")
+                handle_error_with_ui(
+                    'calculate_cancelled_tasks_statistics',
+                    e,
+                    user_id=get_current_user()
+                )
+                ui.label("Error calculating statistics. Please try refreshing.").classes("text-red-500 p-4")
         
         render_statistics()
     
@@ -437,7 +450,7 @@ def cancelled_tasks_page():
                             with ui.card().classes("w-full p-3 border border-gray-200"):
                                 with ui.row().classes("w-full items-center justify-between gap-3"):
                                     with ui.column().classes("flex-1 gap-1"):
-                                        ui.label(cat_label).classes("text-base font-semibold")
+                                        ui.label(escape_for_display(cat_label)).classes("text-base font-semibold")
                                         ui.label(f"Key: {cat_key}").classes("text-xs text-gray-500")
                                         if is_default:
                                             ui.label("Default category").classes("text-xs text-blue-600")

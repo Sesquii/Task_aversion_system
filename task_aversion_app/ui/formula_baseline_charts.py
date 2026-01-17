@@ -15,11 +15,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
 import math
+from backend.auth import get_current_user
 from ui.formula_chart_generators import (
     generate_6_charts_for_variable,
     generate_correlation_charts,
     SCORE_CALCULATORS
 )
+from ui.error_reporting import handle_error_with_ui
 
 # Score/Points system definitions
 SCORE_SYSTEMS = {
@@ -381,7 +383,17 @@ def build_formula_baseline_page(score_system: str):
                 ui.label(f"Range: {component.get('range', 'N/A')}").classes("text-sm text-gray-500 mb-4")
             
             # Generate 6 theoretical charts
-            charts = generate_theoretical_charts(score_system, var_name)
+            try:
+                charts = generate_theoretical_charts(score_system, var_name)
+            except Exception as e:
+                current_user_id = get_current_user()
+                handle_error_with_ui(
+                    f"generate charts for {score_system} variable {var_name}",
+                    e,
+                    user_id=current_user_id,
+                    context={'score_system': score_system, 'variable': var_name}
+                )
+                charts = []
             
             if charts:
                 with ui.grid(columns=2).classes("gap-4 mb-4"):
@@ -403,8 +415,17 @@ def build_formula_baseline_page(score_system: str):
             ).classes("w-full mb-2")
             
             def save_notes_callback(sys=score_system, cid=chart_id, textarea=notes_textarea):
-                save_note(sys, cid, textarea.value)
-                ui.notify("Notes saved!", color='green')
+                current_user_id = get_current_user()
+                try:
+                    save_note(sys, cid, textarea.value)
+                    ui.notify("Notes saved!", color='green')
+                except Exception as e:
+                    handle_error_with_ui(
+                        f"save notes for {sys} chart {cid}",
+                        e,
+                        user_id=current_user_id,
+                        context={'score_system': sys, 'chart_id': cid}
+                    )
             
             ui.button("Save Notes", on_click=save_notes_callback).classes("bg-blue-500 text-white")
     
@@ -432,14 +453,23 @@ def build_formula_baseline_page(score_system: str):
     
     # Generate correlation chart
     def update_correlation_chart():
+        current_user_id = get_current_user()
         comp_names = [comp if isinstance(comp, str) else comp['name'] for comp in system['components']]
         weights = {comp: weight_inputs[comp].value for comp in comp_names}
         
         correlation_area.clear()
         with correlation_area:
-            charts = generate_correlation_charts_for_system(score_system, weights)
-            for fig in charts:
-                ui.plotly(fig).classes("w-full mb-4")
+            try:
+                charts = generate_correlation_charts_for_system(score_system, weights)
+                for fig in charts:
+                    ui.plotly(fig).classes("w-full mb-4")
+            except Exception as e:
+                handle_error_with_ui(
+                    f"generate correlation charts for {score_system}",
+                    e,
+                    user_id=current_user_id,
+                    context={'score_system': score_system, 'weights': weights}
+                )
     
     correlation_area = ui.column().classes("w-full")
     ui.button("Generate Correlation Charts", on_click=update_correlation_chart).classes("bg-green-500 text-white mb-4")

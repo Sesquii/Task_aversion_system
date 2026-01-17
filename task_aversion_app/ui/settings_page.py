@@ -3,6 +3,7 @@ from backend.user_state import UserStateManager
 from backend.instance_manager import InstanceManager
 from backend.analytics import Analytics
 from backend.auth import get_current_user, logout
+from ui.error_reporting import handle_error_with_ui
 import json
 
 analytics = Analytics()
@@ -170,11 +171,12 @@ def settings_page():
                 threading.Thread(target=cleanup, daemon=True).start()
                 
             except Exception as e:
-                import traceback
-                error_msg = str(e)
-                traceback.print_exc()
-                ui.notify(f"Error creating download: {error_msg}", color="negative", timeout=10000)
-                print(f"[Settings] Download error: {traceback.format_exc()}")
+                handle_error_with_ui(
+                    'download_user_data',
+                    e,
+                    user_id=get_current_user(),
+                    context={'action': 'download_zip'}
+                )
         
         def handle_upload(e):
             """
@@ -259,10 +261,12 @@ def settings_page():
                         pass
                 
             except Exception as ex:
-                import traceback
-                error_msg = str(ex)
-                ui.notify(f"Error importing data: {error_msg}", color="negative")
-                print(f"[Settings] Import error: {traceback.format_exc()}")
+                handle_error_with_ui(
+                    'import_user_data',
+                    ex,
+                    user_id=get_current_user(),
+                    context={'action': 'import_zip'}
+                )
         
         ui.button("💾 Download My Data", on_click=download_zip).classes("bg-blue-500 text-white mt-2")
         ui.label("Download all your data as a ZIP file containing CSV files (tasks, instances, emotions, popup triggers/responses, notes, survey responses, and user preferences). Use this for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")

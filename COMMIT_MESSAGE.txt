@@ -1,182 +1,75 @@
+feat(security): add escape_for_display() to all UI pages displaying user-generated content [COMPLETE]
+
+Add comprehensive XSS protection by applying escape_for_display() to all
+user-generated content displayed in UI pages. This prevents potential
+cross-site scripting (XSS) attacks by escaping HTML entities in user input
+before rendering.
+
+Summary:
+- 23 UI pages updated with escape_for_display() for user-generated content
+- All user-facing content (task names, descriptions, notes, labels, etc.)
+  now properly escaped before display
+- Consistent security approach across all UI components
+
+See docs/content_display_escaping_fixes.md for complete list of pages and
+specific escaping fixes applied, implementation details, and security context.
+
+Security improvements:
+- Prevents XSS attacks through malicious user input
+- Safely displays HTML characters as text (e.g., <script> becomes &lt;script&gt;)
+- Maintains display of legitimate text content while preventing code execution
+- Consistent security approach across all UI pages
+
+This addresses security concerns where user-generated content (task names,
+descriptions, notes) could potentially contain malicious scripts that would
+execute when rendered in the browser. All content is now sanitized before
+display while preserving the intended user experience.
 
 ---
 
-fix: Add user_id parameter to get_batch_baseline_aversions() calls for data isolation
+feat(error-handling): add handle_error_with_ui() to remaining UI pages
 
-Fix data isolation issue where get_batch_baseline_aversions() was called without
-user_id parameter, causing security warning and returning empty results. Now properly
-passes user_id to ensure data isolation when loading baseline aversions.
+Add comprehensive error handling using handle_error_with_ui() to all UI pages
+that handle user operations. This provides consistent error reporting with
+error IDs and optional user reporting dialogs.
 
-Changes:
-- backend/analytics.py:
-  * Add user_id parameter to get_batch_baseline_aversions() call in get_relief_summary()
-  * Ensures proper data isolation when batch-loading baseline aversions for obstacles calculation
+Summary:
+- 25+ UI pages updated with handle_error_with_ui() for user-triggered operations
+- 40+ operations now have proper error handling and reporting
+- All user-facing operations (button clicks, form submissions, data loading)
+  now use consistent error reporting
+- Error report dialog allows users to provide additional context
 
-- backend/instance_manager.py:
-  * Add user_id parameter to CSV fallback call in _get_batch_baseline_aversions_db()
-  * Ensures user_id is passed through to CSV backend when database operation fails
+See docs/error_handling_implementation.md for complete list of pages and
+operations updated, implementation details, and usage patterns.
 
-This fix resolves the warning "[InstanceManager] WARNING: get_batch_baseline_aversions_db()
-called without user_id - returning empty for security" by ensuring user_id is always
-provided when loading baseline aversions.
+Error handling improvements:
+- Consistent error reporting with error IDs for tracking
+- User-friendly error messages with optional context reporting
+- All errors logged with user_id and operation context
+- Error report dialog allows users to provide additional context
+- Better debugging and support capabilities
 
----
-
-fix: Add user_id parameter to execution score methods and make Analytics caches user-specific
-
-Fix data isolation issues in execution score calculation and resolve caching delay
-when logging in/out on the same system. Caches are now user-specific to prevent
-data leakage between users.
-
-Changes:
-- backend/analytics.py:
-  * Add user_id parameter to get_execution_score_history() method signature
-  * Update get_generic_metric_history() to pass user_id when routing to execution_score history
-  * Convert all Analytics class-level caches from single values to dictionaries keyed by user_id:
-    - _relief_summary_cache: {user_id: cache_value}
-    - _composite_scores_cache: {user_id: cache_value}
-    - _dashboard_metrics_cache: {user_id: cache_value}
-    - _instances_cache_all: {user_id: cache_value}
-    - _instances_cache_completed: {user_id: cache_value}
-    - _trend_series_cache: {user_id: cache_value}
-    - _attribute_distribution_cache: {user_id: cache_value}
-    - _stress_dimension_cache: {user_id: cache_value}
-    - _time_tracking_cache: {user_id: cache_value}
-    - _time_tracking_cache_params: {user_id: (days, target_sleep_hours)}
-    - _rankings_cache: {user_id: {(metric, top_n): (result, timestamp)}}
-    - _leaderboard_cache: {user_id: cache_value}
-    - _leaderboard_cache_time: {user_id: timestamp}
-    - _leaderboard_cache_top_n: {user_id: top_n}
-  * Update all cache access patterns to use user_id as dictionary key
-  * Update cache storage code to store values per user_id
-  * Update _invalidate_instances_cache() to support user-specific invalidation
-  * Update _invalidate_relief_summary_cache() to accept optional user_id parameter
-  * Update _load_instances() cache access to use user_id key
-
-- ui/dashboard.py:
-  * Fix get_execution_score_chunked() call to use actual current_user_id instead of hardcoded "default"
-  * Get current_user_id from get_current_user() before calling get_execution_score_chunked()
-  * Convert user_id to string for get_execution_score_chunked() which expects string user_id
-
-- backend/auth.py:
-  * Update clear_all_caches() to properly clear user-specific cache dictionaries
-  * Change cache clearing from setting to None to calling .clear() on dictionaries
-
-All fixes ensure proper data isolation by making caches user-specific. This resolves
-the issue where analytics and monitored metrics showed previous user's data for
-~10 minutes after logging out and logging back in on the same system.
+Note: Some utility functions (e.g., load_formula_settings(), load_configs())
+use print() for initialization errors that occur before user interaction,
+which is appropriate as they return defaults on failure.
 
 ---
 
-fix: Fix cache access patterns to use user-specific dictionary keys
+test(security): SQL injection tests verified on local and Docker PostgreSQL
 
-Fix TypeError errors where cache access code was trying to subtract dictionaries
-from floats. After converting caches to user-specific dictionaries, some cache
-access patterns were not updated to use dictionary keys properly.
+All SQL injection security tests pass successfully on both local SQLite
+and Docker PostgreSQL (PostgreSQL 15) environments. Tests verify protection
+against SQL injection attacks in:
+- Column name validation
+- Identifier quoting
+- Task ID validation
+- User ID validation
+- ORM query safety
+- Add column operation protection
+- CSV import column name handling
 
-Changes:
-- backend/analytics.py:
-  * Fixed get_relief_summary() - updated cache check to use user_id as dictionary key
-  * Fixed attribute_distribution() - updated cache check and storage to use user_id key
-  * Fixed trend_series() - updated cache check and storage to use user_id key
-  * Fixed get_stress_dimension_data() - updated cache check and storage to use user_id key
-  * Fixed get_stress_efficiency_leaderboard() - updated cache check and storage to use user_id key
-  * Fixed calculate_time_tracking_consistency_score() - updated cache check and storage to use user_id key
-  * All cache access now creates cache_key from user_id and checks/stores using that key
-
-- ui/analytics_page.py:
-  * Removed browser caching notice - analytics is now fully isolated with user-specific caches
-
-Analytics is now fully isolated with no delay when switching users. All cache
-access patterns properly use user_id as dictionary keys, preventing TypeError
-errors and ensuring proper data isolation.
-
----
-
-fix: Complete data isolation for glossary charts and all settings pages
-
-Fix remaining data isolation issues in glossary execution score charts, volumetric
-productivity data, thoroughness popup count, and all settings pages. All user
-data is now properly isolated across the entire application.
-
-Changes:
-- ui/plotly_data_charts.py:
-  * Fixed generate_thoroughness_popup_penalty_plotly() - replaced hardcoded user_id='default' with current user_id
-  * Now gets current_user_id from get_current_user() and converts to string for database query
-  * Ensures popup count in thoroughness glossary page is properly isolated by user
-
-- scripts/graphic_aids/generate_data_driven.py:
-  * Fixed get_user_instances() - replaced user_id=None with current_user_id from get_current_user()
-  * Now properly isolates execution score data charts by user (difficulty, speed, start speed, completion factors)
-  * Removed 100-task limit - now uses limit=10000 to get all user's data for accurate visualizations
-  * Returns empty list if no authenticated user to prevent data leakage
-  * All execution score component charts in glossary "Your Data" section now show only current user's data
-
-- ui/analytics_glossary.py:
-  * Made data image paths user-specific by including user_id in filename (e.g., execution_score_difficulty_factor_data_user_123.png)
-  * Force regeneration on each page load by deleting old images before generating new ones
-  * Updated _ensure_data_graphic_image() to strip user_id suffix when looking up generators
-  * Ensures each user gets their own cached images and fresh data on every view
-
-- ui/cancellation_penalties_page.py:
-  * Fixed get_cancellation_penalties() - now gets current_user_id from get_current_user() instead of using DEFAULT_USER_ID
-  * Fixed cancellation_penalties_page() - gets current user_id at page start and passes to all user_state calls
-  * Fixed save_penalty() - now uses user_id_str instead of DEFAULT_USER_ID when saving penalties
-  * Cancellation penalties are now properly isolated by user
-
-- ui/composite_score_weights_page.py:
-  * Fixed save_composite_weights() - replaced DEFAULT_USER_ID with user_id_str (already retrieved at page start)
-  * Composite score weights are now properly isolated by user
-
-- ui/productivity_settings_page.py:
-  * Fixed all 4 occurrences of DEFAULT_USER_ID - replaced with user_id_str throughout the page
-  * Fixed get_productivity_settings() calls - now use user_id_str instead of DEFAULT_USER_ID
-  * Fixed set_productivity_settings() calls - now use user_id_str instead of DEFAULT_USER_ID
-  * Productivity settings are now properly isolated by user
-
-- ui/goals_page.py:
-  * Fixed all 4 occurrences of DEFAULT_USER_ID - replaced with user_id_str throughout the page
-  * Fixed get_milestones() call - now uses user_id_str
-  * Fixed update_milestone() call - now uses user_id_str
-  * Fixed get_template_goals() call - now uses user_id_str
-  * Fixed update_template_goal() call - now uses user_id_str
-  * Goals and milestones are now properly isolated by user
-
-- ui/cancelled_tasks_page.py:
-  * Fixed get_cancellation_penalties() - now accepts user_id parameter and uses it instead of DEFAULT_USER_ID
-  * Fixed all 4 occurrences of DEFAULT_USER_ID - replaced with user_id_str throughout the page
-  * Fixed remove_cancellation_category() call - now uses user_id_str
-  * Fixed add_cancellation_category() call - now uses user_id_str
-  * Updated all calls to get_cancellation_penalties() to pass user_id parameter
-  * Cancelled tasks page is now properly isolated by user
-
-- ui/task_editing_manager.py:
-  * Fixed list_all_completed_instances() - now accepts user_id parameter and filters by user_id
-  * Fixed _list_all_completed_instances_csv() - added user_id filtering for CSV backend
-  * Fixed _list_all_completed_instances_db() - added user_id filtering for database backend
-  * Fixed get_all_tasks_chronologically() - now accepts user_id parameter and passes it to list_all_completed_instances()
-  * Fixed edit_cancelled_task_dialog() - now accepts user_id parameter and passes it to get_all_cancellation_categories()
-  * Updated all calls to pass user_id parameter throughout the page
-  * Task editing manager now only shows tasks belonging to the current user
-  * Both completed and cancelled tasks are properly filtered by user_id
-
-All settings pages, glossary charts, and task editing manager are now fully
-isolated by user. Data isolation is complete across the entire application.
-
-minor refactor: Simplify goals page to show only productivity goals section
-
-Remove development milestones and task template goals from goals page, keeping
-only the productivity hours goal tracking section. All data isolation is maintained
-with proper user_id handling.
-
-Changes:
-- ui/goals_page.py:
-  * Removed Development Milestones section and MILESTONES constant
-  * Removed Task Template Goals section with template editing interface
-  * Kept only Productivity Hours Goal Tracking card that links to /goals/productivity-hours
-  * Removed unused imports (pandas, TaskManager, Analytics)
-  * Maintained data isolation with user_id_str for all user_state calls
-  * Updated page description to reflect productivity goals focus
-
-The goals page now focuses exclusively on productivity goals tracking, with all
-data properly isolated per user through existing user_id_str mechanisms.
+Test environment:
+- Local SQLite: Default test database (test_task_aversion.db)
+- Docker PostgreSQL: Containerized PostgreSQL 15 on port 5433
+  (to avoid conflicts with local PostgreSQL on port 5432)

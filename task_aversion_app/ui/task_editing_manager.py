@@ -4,6 +4,8 @@ from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 import json
 from datetime import datetime
 
@@ -101,7 +103,11 @@ def _list_all_completed_instances_db(user_id: Optional[int] = None):
             ).all()
             return [instance.to_dict() for instance in instances]
     except Exception as e:
-        print(f"[TaskEditingManager] Error listing completed instances: {e}")
+        handle_error_with_ui(
+            'list_completed_instances',
+            e,
+            user_id=user_id
+        )
         return []
 
 
@@ -210,7 +216,12 @@ def _update_actual_data_db(instance_id, actual_data):
             session.commit()
             return True
     except Exception as e:
-        print(f"[TaskEditingManager] Error updating actual data: {e}")
+        handle_error_with_ui(
+            'update_task_actual_data',
+            e,
+            user_id=user_id,
+            context={'instance_id': instance_id}
+        )
         return False
 
 
@@ -274,7 +285,12 @@ def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback, user_id
                     ui.navigate.reload()
                 ui.notify("Cancelled task updated", color="positive")
             except Exception as e:
-                ui.notify(f"Error updating task: {str(e)}", color="negative")
+                handle_error_with_ui(
+                    'update_cancelled_task',
+                    e,
+                    user_id=user_id,
+                    context={'instance_id': instance_id}
+                )
         
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
             ui.button("Cancel", on_click=dialog.close).classes("bg-gray-500 text-white")
@@ -336,7 +352,7 @@ def task_editing_manager_page():
                                 status_label_text = "COMPLETED" if status == 'completed' else "CANCELLED"
                                 ui.label(status_label_text).classes(f"text-xs font-bold {status_label_color} mb-1")
                                 
-                                ui.label(task_name).classes("text-base font-semibold")
+                                ui.label(escape_for_display(task_name)).classes("text-base font-semibold")
                                 ui.label(f"Instance ID: {instance_id}").classes("text-xs text-gray-500")
                                 
                                 # Show status-specific information
@@ -440,11 +456,14 @@ def task_editing_manager_page():
             all_tasks = get_filtered_tasks()
             render_task_list(all_tasks, refresh_view)
         except Exception as e:
-            import traceback
+            handle_error_with_ui(
+                'refresh_task_editing_view',
+                e,
+                user_id=get_current_user()
+            )
             view_container.clear()
             with view_container:
-                ui.label(f"Error loading tasks: {str(e)}").classes("text-red-500 p-4")
-            print(f"[TaskEditingManager] Error: {traceback.format_exc()}")
+                ui.label("Error loading tasks. Please try refreshing.").classes("text-red-500 p-4")
     
     def change_page(delta):
         """Change the current page."""

@@ -7448,115 +7448,137 @@ class Analytics:
         else:
             relief_data_for_obstacles = relief_data.copy()
         
+        # Safety check: Ensure task_id column exists
+        if 'task_id' not in relief_data_for_obstacles.columns:
+            print(f"[Analytics] WARNING: relief_data_for_obstacles missing 'task_id' column. Columns: {list(relief_data_for_obstacles.columns)}")
+            print(f"[Analytics] relief_data columns: {list(relief_data.columns) if not relief_data.empty else 'empty'}")
+            # If task_id is missing, we can't calculate obstacles scores - skip this section
+            relief_data_for_obstacles = pd.DataFrame()  # Empty DataFrame to skip obstacles calculation
+        
         # Calculate obstacles overcome scores
         from .instance_manager import InstanceManager
         im = InstanceManager()
         
         # Batch-load baseline aversions (OPTIMIZED: single query instead of N queries)
         baseline_start = time_module.time()
-        unique_task_ids = relief_data_for_obstacles['task_id'].unique().tolist()
-        baseline_aversions = im.get_batch_baseline_aversions(unique_task_ids, user_id)
+        if relief_data_for_obstacles.empty or 'task_id' not in relief_data_for_obstacles.columns:
+            unique_task_ids = []
+        else:
+            unique_task_ids = relief_data_for_obstacles['task_id'].unique().tolist()
+        baseline_aversions = im.get_batch_baseline_aversions(unique_task_ids, user_id) if unique_task_ids else {}
         baseline_time = (time_module.time() - baseline_start) * 1000
         print(f"[Analytics] get_relief_summary: batch baseline aversions ({len(unique_task_ids)} tasks): {baseline_time:.2f}ms")
         
         # Map baseline aversions to rows (OPTIMIZED: vectorized)
-        task_ids = relief_data_for_obstacles['task_id'].tolist()
-        relief_data_for_obstacles['baseline_aversion_robust'] = [
-            baseline_aversions.get(tid, {}).get('robust') if tid in baseline_aversions else None
-            for tid in task_ids
-        ]
-        relief_data_for_obstacles['baseline_aversion_sensitive'] = [
-            baseline_aversions.get(tid, {}).get('sensitive') if tid in baseline_aversions else None
-            for tid in task_ids
-        ]
-        
-        # Calculate obstacles scores using multiple formulas for comparison
-        def _calculate_obstacles_scores_robust(row):
-            baseline = row.get('baseline_aversion_robust')
-            current = row.get('expected_aversion')
-            expected_relief = row.get('expected_relief')
-            actual_relief = row.get('actual_relief')
-            # Convert to float, handling NaN
-            expected_relief = float(expected_relief) if expected_relief is not None and not pd.isna(expected_relief) else None
-            actual_relief = float(actual_relief) if actual_relief is not None and not pd.isna(actual_relief) else None
-            scores = self.calculate_obstacles_scores(baseline, current, expected_relief, actual_relief)
-            return scores
-        
-        def _calculate_obstacles_scores_sensitive(row):
-            baseline = row.get('baseline_aversion_sensitive')
-            current = row.get('expected_aversion')
-            expected_relief = row.get('expected_relief')
-            actual_relief = row.get('actual_relief')
-            # Convert to float, handling NaN
-            expected_relief = float(expected_relief) if expected_relief is not None and not pd.isna(expected_relief) else None
-            actual_relief = float(actual_relief) if actual_relief is not None and not pd.isna(actual_relief) else None
-            scores = self.calculate_obstacles_scores(baseline, current, expected_relief, actual_relief)
-            return scores
-        
-        # Calculate all score variants
-        relief_data_for_obstacles['obstacles_scores_robust'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_robust, axis=1)
-        relief_data_for_obstacles['obstacles_scores_sensitive'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_sensitive, axis=1)
-        
-        # Extract individual scores for backward compatibility and new analytics (OPTIMIZED: vectorized)
-        score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
-        robust_scores_list = relief_data_for_obstacles['obstacles_scores_robust'].tolist()
-        sensitive_scores_list = relief_data_for_obstacles['obstacles_scores_sensitive'].tolist()
-        for variant in score_variants:
-            relief_data_for_obstacles[f'obstacles_score_{variant}_robust'] = [
-                x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
-                for x in robust_scores_list
-            ]
-            relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'] = [
-                x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
-                for x in sensitive_scores_list
-            ]
-        
-        # Keep backward compatibility: use expected_only as the default
-        relief_data_for_obstacles['obstacles_score_robust'] = relief_data_for_obstacles['obstacles_score_expected_only_robust']
-        relief_data_for_obstacles['obstacles_score_sensitive'] = relief_data_for_obstacles['obstacles_score_expected_only_sensitive']
-        
-        # Calculate total obstacles scores for all variants
-        total_obstacles_robust = relief_data_for_obstacles['obstacles_score_robust'].sum()
-        total_obstacles_sensitive = relief_data_for_obstacles['obstacles_score_sensitive'].sum()
-        
-        # Calculate totals for all score variants
-        score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
-        obstacles_totals = {}
-        for variant in score_variants:
-            obstacles_totals[f'total_obstacles_{variant}_robust'] = relief_data_for_obstacles[f'obstacles_score_{variant}_robust'].sum()
-            obstacles_totals[f'total_obstacles_{variant}_sensitive'] = relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'].sum()
-        
-        # Calculate weekly obstacles (last 7 days) for bonus multiplier
-        relief_data_for_obstacles['completed_at_dt'] = pd.to_datetime(relief_data_for_obstacles['completed_at'], errors='coerce')
-        relief_data_last_7d = relief_data_for_obstacles[relief_data_for_obstacles['completed_at_dt'] >= seven_days_ago]
-        
-        # Calculate max spike amount for weekly bonus
-        def _get_max_spike_robust(row):
-            baseline = row.get('baseline_aversion_robust')
-            current = row.get('expected_aversion')
-            is_spontaneous, spike_amount = self.detect_spontaneous_aversion(baseline, current)
-            return spike_amount if is_spontaneous else 0.0
-        
-        def _get_max_spike_sensitive(row):
-            baseline = row.get('baseline_aversion_sensitive')
-            current = row.get('expected_aversion')
-            is_spontaneous, spike_amount = self.detect_spontaneous_aversion(baseline, current)
-            return spike_amount if is_spontaneous else 0.0
-        
-        if not relief_data_last_7d.empty:
-            # Use .copy() to avoid SettingWithCopyWarning
-            relief_data_last_7d = relief_data_last_7d.copy()
-            relief_data_last_7d['spike_amount_robust'] = relief_data_last_7d.apply(_get_max_spike_robust, axis=1)
-            relief_data_last_7d['spike_amount_sensitive'] = relief_data_last_7d.apply(_get_max_spike_sensitive, axis=1)
-            max_spike_robust = relief_data_last_7d['spike_amount_robust'].max() if 'spike_amount_robust' in relief_data_last_7d.columns else 0.0
-            max_spike_sensitive = relief_data_last_7d['spike_amount_sensitive'].max() if 'spike_amount_sensitive' in relief_data_last_7d.columns else 0.0
+        if relief_data_for_obstacles.empty or 'task_id' not in relief_data_for_obstacles.columns:
+            # Skip obstacles calculation if no task_id column
+            total_obstacles_robust = 0.0
+            total_obstacles_sensitive = 0.0
+            obstacles_totals = {}
+            weekly_obstacles_bonus_multiplier_robust = 1.0
+            weekly_obstacles_bonus_multiplier_sensitive = 1.0
+            max_obstacle_spike_robust = 0.0
+            max_obstacle_spike_sensitive = 0.0
         else:
-            max_spike_robust = 0.0
-            max_spike_sensitive = 0.0
-        
-        # Calculate weekly bonus multipliers
-        weekly_bonus_multiplier_robust = self.calculate_obstacles_bonus_multiplier(max_spike_robust)
-        weekly_bonus_multiplier_sensitive = self.calculate_obstacles_bonus_multiplier(max_spike_sensitive)
+            task_ids = relief_data_for_obstacles['task_id'].tolist()
+            relief_data_for_obstacles['baseline_aversion_robust'] = [
+                baseline_aversions.get(tid, {}).get('robust') if tid in baseline_aversions else None
+                for tid in task_ids
+            ]
+            relief_data_for_obstacles['baseline_aversion_sensitive'] = [
+                baseline_aversions.get(tid, {}).get('sensitive') if tid in baseline_aversions else None
+                for tid in task_ids
+            ]
+            
+            # Calculate obstacles scores using multiple formulas for comparison
+            def _calculate_obstacles_scores_robust(row):
+                baseline = row.get('baseline_aversion_robust')
+                current = row.get('expected_aversion')
+                expected_relief = row.get('expected_relief')
+                actual_relief = row.get('actual_relief')
+                # Convert to float, handling NaN
+                expected_relief = float(expected_relief) if expected_relief is not None and not pd.isna(expected_relief) else None
+                actual_relief = float(actual_relief) if actual_relief is not None and not pd.isna(actual_relief) else None
+                scores = self.calculate_obstacles_scores(baseline, current, expected_relief, actual_relief)
+                return scores
+            
+            def _calculate_obstacles_scores_sensitive(row):
+                baseline = row.get('baseline_aversion_sensitive')
+                current = row.get('expected_aversion')
+                expected_relief = row.get('expected_relief')
+                actual_relief = row.get('actual_relief')
+                # Convert to float, handling NaN
+                expected_relief = float(expected_relief) if expected_relief is not None and not pd.isna(expected_relief) else None
+                actual_relief = float(actual_relief) if actual_relief is not None and not pd.isna(actual_relief) else None
+                scores = self.calculate_obstacles_scores(baseline, current, expected_relief, actual_relief)
+                return scores
+            
+            # Calculate all score variants
+            relief_data_for_obstacles['obstacles_scores_robust'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_robust, axis=1)
+            relief_data_for_obstacles['obstacles_scores_sensitive'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_sensitive, axis=1)
+            
+            # Extract individual scores for backward compatibility and new analytics (OPTIMIZED: vectorized)
+            score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+            robust_scores_list = relief_data_for_obstacles['obstacles_scores_robust'].tolist()
+            sensitive_scores_list = relief_data_for_obstacles['obstacles_scores_sensitive'].tolist()
+            for variant in score_variants:
+                relief_data_for_obstacles[f'obstacles_score_{variant}_robust'] = [
+                    x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
+                    for x in robust_scores_list
+                ]
+                relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'] = [
+                    x.get(variant, 0.0) if isinstance(x, dict) else 0.0 
+                    for x in sensitive_scores_list
+                ]
+            
+            # Keep backward compatibility: use expected_only as the default
+            relief_data_for_obstacles['obstacles_score_robust'] = relief_data_for_obstacles['obstacles_score_expected_only_robust']
+            relief_data_for_obstacles['obstacles_score_sensitive'] = relief_data_for_obstacles['obstacles_score_expected_only_sensitive']
+            
+            # Calculate total obstacles scores for all variants
+            total_obstacles_robust = relief_data_for_obstacles['obstacles_score_robust'].sum()
+            total_obstacles_sensitive = relief_data_for_obstacles['obstacles_score_sensitive'].sum()
+            
+            # Calculate totals for all score variants
+            score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+            obstacles_totals = {}
+            for variant in score_variants:
+                obstacles_totals[f'total_obstacles_{variant}_robust'] = relief_data_for_obstacles[f'obstacles_score_{variant}_robust'].sum()
+                obstacles_totals[f'total_obstacles_{variant}_sensitive'] = relief_data_for_obstacles[f'obstacles_score_{variant}_sensitive'].sum()
+            
+            # Calculate weekly obstacles (last 7 days) for bonus multiplier
+            relief_data_for_obstacles['completed_at_dt'] = pd.to_datetime(relief_data_for_obstacles['completed_at'], errors='coerce')
+            relief_data_last_7d = relief_data_for_obstacles[relief_data_for_obstacles['completed_at_dt'] >= seven_days_ago]
+            
+            # Calculate max spike amount for weekly bonus
+            def _get_max_spike_robust(row):
+                baseline = row.get('baseline_aversion_robust')
+                current = row.get('expected_aversion')
+                is_spontaneous, spike_amount = self.detect_spontaneous_aversion(baseline, current)
+                return spike_amount if is_spontaneous else 0.0
+            
+            def _get_max_spike_sensitive(row):
+                baseline = row.get('baseline_aversion_sensitive')
+                current = row.get('expected_aversion')
+                is_spontaneous, spike_amount = self.detect_spontaneous_aversion(baseline, current)
+                return spike_amount if is_spontaneous else 0.0
+            
+            if not relief_data_last_7d.empty:
+                # Use .copy() to avoid SettingWithCopyWarning
+                relief_data_last_7d = relief_data_last_7d.copy()
+                relief_data_last_7d['spike_amount_robust'] = relief_data_last_7d.apply(_get_max_spike_robust, axis=1)
+                relief_data_last_7d['spike_amount_sensitive'] = relief_data_last_7d.apply(_get_max_spike_sensitive, axis=1)
+                max_spike_robust = relief_data_last_7d['spike_amount_robust'].max() if 'spike_amount_robust' in relief_data_last_7d.columns else 0.0
+                max_spike_sensitive = relief_data_last_7d['spike_amount_sensitive'].max() if 'spike_amount_sensitive' in relief_data_last_7d.columns else 0.0
+            else:
+                max_spike_robust = 0.0
+                max_spike_sensitive = 0.0
+            
+            # Calculate weekly bonus multipliers
+            weekly_obstacles_bonus_multiplier_robust = self.calculate_obstacles_bonus_multiplier(max_spike_robust)
+            weekly_obstacles_bonus_multiplier_sensitive = self.calculate_obstacles_bonus_multiplier(max_spike_sensitive)
+            max_obstacle_spike_robust = max_spike_robust
+            max_obstacle_spike_sensitive = max_spike_sensitive
         
         # Calculate relief × duration metrics with multipliers
         # Use actual relief_score and duration_minutes from completed tasks
@@ -7629,8 +7651,8 @@ class Analytics:
         ).fillna(0).sum() / 60.0
         
         # Apply weekly obstacles bonus multipliers to weekly relief score
-        weekly_relief_score_robust = weekly_relief_score_base * weekly_bonus_multiplier_robust
-        weekly_relief_score_sensitive = weekly_relief_score_base * weekly_bonus_multiplier_sensitive
+        weekly_relief_score_robust = weekly_relief_score_base * weekly_obstacles_bonus_multiplier_robust
+        weekly_relief_score_sensitive = weekly_relief_score_base * weekly_obstacles_bonus_multiplier_sensitive
         
         # Calculate productivity points (similar to relief points but only for Work and Self care tasks)
         # Productivity points = (actual_relief - expected_relief) × aversion_multiplier × task_type_multiplier
@@ -7683,8 +7705,8 @@ class Analytics:
             weekly_productivity_points_base = productivity_last_7d['productivity_points'].fillna(0).sum()
             
             # Apply weekly obstacles bonus multipliers
-            weekly_productivity_points_robust = weekly_productivity_points_base * weekly_bonus_multiplier_robust
-            weekly_productivity_points_sensitive = weekly_productivity_points_base * weekly_bonus_multiplier_sensitive
+            weekly_productivity_points_robust = weekly_productivity_points_base * weekly_obstacles_bonus_multiplier_robust
+            weekly_productivity_points_sensitive = weekly_productivity_points_base * weekly_obstacles_bonus_multiplier_sensitive
         else:
             total_productivity_points = 0.0
             net_productivity_points = 0.0
@@ -7928,10 +7950,10 @@ class Analytics:
             # Obstacles metrics (backward compatibility - uses expected_only)
             'total_obstacles_score_robust': round(float(total_obstacles_robust), 2),
             'total_obstacles_score_sensitive': round(float(total_obstacles_sensitive), 2),
-            'weekly_obstacles_bonus_multiplier_robust': round(float(weekly_bonus_multiplier_robust), 3),
-            'weekly_obstacles_bonus_multiplier_sensitive': round(float(weekly_bonus_multiplier_sensitive), 3),
-            'max_obstacle_spike_robust': round(float(max_spike_robust), 1),
-            'max_obstacle_spike_sensitive': round(float(max_spike_sensitive), 1),
+            'weekly_obstacles_bonus_multiplier_robust': round(float(weekly_obstacles_bonus_multiplier_robust), 3),
+            'weekly_obstacles_bonus_multiplier_sensitive': round(float(weekly_obstacles_bonus_multiplier_sensitive), 3),
+            'max_obstacle_spike_robust': round(float(max_obstacle_spike_robust), 1),
+            'max_obstacle_spike_sensitive': round(float(max_obstacle_spike_sensitive), 1),
             # Aversion analytics: all score variants for comparison
             **{k: round(float(v), 2) for k, v in obstacles_totals.items()},
         }

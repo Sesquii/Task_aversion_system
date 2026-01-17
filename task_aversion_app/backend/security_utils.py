@@ -242,6 +242,124 @@ def validate_blocker(blocker: Optional[str]) -> str:
 
 
 # ============================================================================
+# Database Identifier Validation (SQL Injection Prevention)
+# ============================================================================
+
+def validate_task_id(task_id: Optional[str]) -> str:
+    """
+    Validate task ID format to prevent SQL injection.
+    
+    Task IDs should match pattern: t{timestamp} (e.g., "t1234567890")
+    or be empty string for new tasks.
+    
+    Args:
+        task_id: Task ID to validate
+        
+    Returns:
+        Validated task ID
+        
+    Raises:
+        ValidationError: If task_id format is invalid
+    """
+    if not task_id:
+        return ''
+    
+    task_id = str(task_id).strip()
+    
+    # Allow empty string (for new tasks)
+    if not task_id:
+        return ''
+    
+    # Task ID format: t{timestamp} (e.g., "t1234567890")
+    # Must start with 't' followed by digits only
+    if not task_id.startswith('t'):
+        raise ValidationError(f"Invalid task_id format: must start with 't'")
+    
+    # Check that after 't' there are only digits
+    numeric_part = task_id[1:]
+    if not numeric_part.isdigit():
+        raise ValidationError(f"Invalid task_id format: must be 't' followed by digits only")
+    
+    # Length check (reasonable limit)
+    if len(task_id) > 50:
+        raise ValidationError(f"Task ID too long (max 50 characters)")
+    
+    return task_id
+
+
+def validate_instance_id(instance_id: Optional[str]) -> str:
+    """
+    Validate instance ID format to prevent SQL injection.
+    
+    Instance IDs should match pattern: i{timestamp} (e.g., "i1234567890")
+    or be empty string for new instances.
+    
+    Args:
+        instance_id: Instance ID to validate
+        
+    Returns:
+        Validated instance ID
+        
+    Raises:
+        ValidationError: If instance_id format is invalid
+    """
+    if not instance_id:
+        return ''
+    
+    instance_id = str(instance_id).strip()
+    
+    # Allow empty string (for new instances)
+    if not instance_id:
+        return ''
+    
+    # Instance ID format: i{timestamp} (e.g., "i1234567890")
+    # Must start with 'i' followed by digits only
+    if not instance_id.startswith('i'):
+        raise ValidationError(f"Invalid instance_id format: must start with 'i'")
+    
+    # Check that after 'i' there are only digits
+    numeric_part = instance_id[1:]
+    if not numeric_part.isdigit():
+        raise ValidationError(f"Invalid instance_id format: must be 'i' followed by digits only")
+    
+    # Length check (reasonable limit)
+    if len(instance_id) > 50:
+        raise ValidationError(f"Instance ID too long (max 50 characters)")
+    
+    return instance_id
+
+
+def validate_user_id(user_id: Optional[int]) -> int:
+    """
+    Validate user ID to prevent SQL injection.
+    
+    User IDs should be positive integers.
+    
+    Args:
+        user_id: User ID to validate
+        
+    Returns:
+        Validated user ID
+        
+    Raises:
+        ValidationError: If user_id is invalid
+    """
+    if user_id is None:
+        raise ValidationError("user_id is required")
+    
+    if not isinstance(user_id, int):
+        try:
+            user_id = int(user_id)
+        except (ValueError, TypeError):
+            raise ValidationError(f"Invalid user_id: must be an integer")
+    
+    if user_id < 1:
+        raise ValidationError(f"Invalid user_id: must be a positive integer")
+    
+    return user_id
+
+
+# ============================================================================
 # Output Escaping (Display Safety)
 # ============================================================================
 

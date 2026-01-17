@@ -2,6 +2,9 @@
 from nicegui import ui
 from pathlib import Path
 import re
+from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 
 def load_guide_content() -> str:
@@ -10,7 +13,16 @@ def load_guide_content() -> str:
     try:
         with open(guide_path, 'r', encoding='utf-8') as f:
             return f.read()
-    except FileNotFoundError:
+    except Exception as e:
+        user_id = get_current_user()
+        handle_error_with_ui(
+            operation="load data guide content",
+            error=e,
+            user_id=user_id,
+            context={"guide_path": str(guide_path)},
+            user_message="Unable to load the data guide content. Please try again later.",
+            show_report=True
+        )
         return "# Data Guide Not Found\n\nThe data troubleshooting guide file could not be loaded."
 
 
@@ -29,13 +41,13 @@ def render_markdown_section(content: str):
         # Headers
         if line.startswith('### '):
             text = line[4:].strip()
-            ui.label(text).classes("text-lg font-semibold mt-4 mb-2 text-gray-700")
+            ui.label(escape_for_display(text)).classes("text-lg font-semibold mt-4 mb-2 text-gray-700")
         elif line.startswith('## '):
             text = line[3:].strip()
-            ui.label(text).classes("text-xl font-bold mt-6 mb-3 text-gray-800")
+            ui.label(escape_for_display(text)).classes("text-xl font-bold mt-6 mb-3 text-gray-800")
         elif line.startswith('# '):
             text = line[2:].strip()
-            ui.label(text).classes("text-2xl font-bold mt-4 mb-4 text-gray-900")
+            ui.label(escape_for_display(text)).classes("text-2xl font-bold mt-4 mb-4 text-gray-900")
         
         # Horizontal rules
         elif line.startswith('---'):
@@ -79,7 +91,8 @@ def render_markdown_section(content: str):
                         table_html += '<tr>'
                     for cell in row:
                         cell_class = "border px-3 py-2 font-semibold" if idx == 0 and is_header else "border px-3 py-2"
-                        table_html += f'<td class="{cell_class}">{cell}</td>'
+                        escaped_cell = escape_for_display(cell)
+                        table_html += f'<td class="{cell_class}">{escaped_cell}</td>'
                     table_html += '</tr>'
                 table_html += '</tbody></table>'
                 ui.html(table_html, sanitize=False).classes("w-full overflow-x-auto")
@@ -138,7 +151,7 @@ def data_guide_page():
                 first_section = sections[0]
                 if first_section.startswith('#'):
                     title = first_section.split('\n')[0].replace('# ', '')
-                    ui.label(title).classes("text-2xl font-bold mb-4 text-gray-900")
+                    ui.label(escape_for_display(title)).classes("text-2xl font-bold mb-4 text-gray-900")
                     intro_content = '\n'.join(first_section.split('\n')[1:]).strip()
                     if intro_content:
                         render_markdown_section(intro_content)

@@ -16,6 +16,9 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 
 from backend.analytics import Analytics
+from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 analytics_service = Analytics()
 
@@ -641,6 +644,8 @@ def _render_factors_scatter_plot(factors_data: pd.DataFrame):
     ))
     
     # Color points by net relief
+    # Escape task names for safe display in hover template
+    escaped_task_names = factors_data['task_name'].apply(escape_for_display)
     fig.add_trace(go.Scatter(
         x=factors_data['serendipity_factor'],
         y=factors_data['disappointment_factor'],
@@ -654,7 +659,7 @@ def _render_factors_scatter_plot(factors_data: pd.DataFrame):
             colorbar=dict(title="Net Relief"),
             line=dict(width=1, color='black')
         ),
-        text=factors_data['task_name'],
+        text=escaped_task_names,
         hovertemplate='<b>%{text}</b><br>Serendipity: %{x:.1f}<br>Disappointment: %{y:.1f}<br>Net Relief: %{marker.color:.1f}<extra></extra>'
     ))
     
@@ -847,7 +852,9 @@ def _render_factors_time_series(factors_data: pd.DataFrame):
         print(f"[DEBUG _render_factors_time_series] ERROR creating chart: {e}")
         import traceback
         traceback.print_exc()
-        ui.label(f"Error rendering chart: {e}").classes("text-red-500")
+        user_id = get_current_user()
+        handle_error_with_ui("render_factors_time_series_chart", e, user_id=user_id, context={'chart_type': 'factors_time_series'})
+        ui.label("Error rendering chart. Please check error notification.").classes("text-red-500")
 
 
 def _render_factors_distribution(factors_data: pd.DataFrame):
@@ -1019,7 +1026,7 @@ def _render_factors_task_details(data: Dict):
         rows = []
         for task in recent_tasks:
             rows.append({
-                'task_name': task.get('task_name', 'Unknown'),
+                'task_name': escape_for_display(task.get('task_name', 'Unknown')),
                 'completed_at': task.get('completed_at', '')[:10] if task.get('completed_at') else '',
                 'expected_relief': f"{task.get('expected_relief', 0):.1f}",
                 'actual_relief': f"{task.get('actual_relief', 0):.1f}",

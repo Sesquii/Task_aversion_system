@@ -13,6 +13,8 @@ import math
 import plotly.graph_objects as go
 import plotly.express as px
 from backend.user_state import UserStateManager
+from backend.auth import get_current_user
+from ui.error_reporting import handle_error_with_ui
 
 # Data directory for formula settings
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
@@ -663,18 +665,27 @@ def create_formula_control_page(formula_name: str, metadata_func, visualization_
             
             # Save and reset buttons
             def save_settings():
-                save_formula_settings(formula_name, settings_state)
-                if formula_name == 'productivity-score':
-                    user_state = UserStateManager()
-                    user_id = "default_user"
-                    productivity_settings = {
-                        'weekly_curve': settings_state.get('weekly_curve', 'flattened_square'),
-                        'weekly_curve_strength': settings_state.get('weekly_curve_strength', 1.5),
-                        'weekly_burnout_threshold_hours': settings_state.get('weekly_burnout_threshold_hours', 42.0),
-                        'daily_burnout_cap_multiplier': settings_state.get('daily_burnout_cap_multiplier', 2.0),
-                    }
-                    user_state.set_productivity_settings(user_id, productivity_settings)
-                ui.notify("Settings saved!", color="positive")
+                current_user_id = get_current_user()
+                try:
+                    save_formula_settings(formula_name, settings_state)
+                    if formula_name == 'productivity-score':
+                        user_state = UserStateManager()
+                        user_id = "default_user"
+                        productivity_settings = {
+                            'weekly_curve': settings_state.get('weekly_curve', 'flattened_square'),
+                            'weekly_curve_strength': settings_state.get('weekly_curve_strength', 1.5),
+                            'weekly_burnout_threshold_hours': settings_state.get('weekly_burnout_threshold_hours', 42.0),
+                            'daily_burnout_cap_multiplier': settings_state.get('daily_burnout_cap_multiplier', 2.0),
+                        }
+                        user_state.set_productivity_settings(user_id, productivity_settings)
+                    ui.notify("Settings saved!", color="positive")
+                except Exception as e:
+                    handle_error_with_ui(
+                        f"save formula settings for {formula_name}",
+                        e,
+                        user_id=current_user_id,
+                        context={'formula_name': formula_name, 'settings': settings_state}
+                    )
             
             def reset_to_defaults():
                 defaults = get_formula_defaults(formula_name)
@@ -695,6 +706,7 @@ def create_formula_control_page(formula_name: str, metadata_func, visualization_
         visualization_container = ui.column().classes("w-full max-w-7xl")
         
         def update_visualizations():
+            current_user_id = get_current_user()
             visualization_container.clear()
             with visualization_container:
                 ui.label("Formula Visualizations").classes("text-xl font-semibold mb-4")
@@ -703,9 +715,13 @@ def create_formula_control_page(formula_name: str, metadata_func, visualization_
                     for fig in figures:
                         ui.plotly(fig).classes("w-full mb-6")
                 except Exception as e:
-                    ui.label(f"Error generating visualizations: {e}").classes("text-red-500")
-                    import traceback
-                    ui.code(traceback.format_exc()).classes("text-xs")
+                    handle_error_with_ui(
+                        f"generate visualizations for {formula_name}",
+                        e,
+                        user_id=current_user_id,
+                        context={'formula_name': formula_name}
+                    )
+                    ui.label("Visualizations could not be generated. Please check the error details above.").classes("text-gray-500 mt-2")
         
         with visualization_container:
             update_visualizations()

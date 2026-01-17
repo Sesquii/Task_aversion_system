@@ -4,6 +4,8 @@ from fastapi import Request
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.auth import get_current_user
+from backend.security_utils import escape_for_display
+from ui.error_reporting import handle_error_with_ui
 
 im = InstanceManager()
 user_state = UserStateManager()
@@ -59,7 +61,7 @@ def cancel_task_page(task_manager, emotion_manager):
                 active = im.list_active_instances(user_id=current_user_id)
                 if active:
                     inst_select = ui.select(
-                        options=[f"{r['instance_id']} | {r['task_name']}" for r in active],
+                        options=[f"{r['instance_id']} | {escape_for_display(r['task_name'])}" for r in active],
                         label='Pick active instance'
                     )
 
@@ -110,7 +112,12 @@ def cancel_task_page(task_manager, emotion_manager):
                 try:
                     im.cancel_instance(iid, actual, user_id=current_user_id)
                 except Exception as exc:
-                    ui.notify(str(exc), color='negative')
+                    handle_error_with_ui(
+                        'cancel_instance',
+                        exc,
+                        user_id=current_user_id,
+                        context={'instance_id': iid}
+                    )
                     return
 
                 ui.notify("Instance cancelled", color='warning')
