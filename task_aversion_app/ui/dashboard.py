@@ -1249,6 +1249,80 @@ def add_instance_note(instance_id):
     dialog.open()
 
 
+def submit_feedback():
+    """Open a dialog to submit feedback to the developer. Feedback is saved as anonymized numbered text files."""
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg p-4'):
+        ui.label("Submit Feedback").classes("text-xl font-bold mb-4")
+        ui.label("Your feedback is anonymous and helps improve the app.").classes("text-sm text-gray-600 mb-4")
+        feedback_input = ui.textarea(label="Feedback", placeholder="Enter your feedback here...").classes("w-full").props("rows=8")
+        
+        with ui.row().classes("gap-2 mt-4 justify-end"):
+            ui.button("Cancel", on_click=dialog.close)
+            def save_feedback():
+                feedback_text = feedback_input.value.strip()
+                if not feedback_text:
+                    ui.notify("Feedback cannot be empty", color='warning')
+                    return
+                
+                try:
+                    # Get feedback directory (data/feedback/)
+                    # Use absolute path to ensure correct location
+                    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    feedback_dir = os.path.join(base_dir, 'data', 'feedback')
+                    os.makedirs(feedback_dir, exist_ok=True)
+                    
+                    # Find the next available feedback file number
+                    feedback_files = []
+                    if os.path.exists(feedback_dir):
+                        feedback_files = [f for f in os.listdir(feedback_dir) if f.startswith('feedback_') and f.endswith('.txt')]
+                    
+                    if feedback_files:
+                        # Extract numbers from filenames like "feedback_001.txt"
+                        numbers = []
+                        for f in feedback_files:
+                            try:
+                                # Extract number between "feedback_" and ".txt"
+                                num_str = f.replace('feedback_', '').replace('.txt', '')
+                                numbers.append(int(num_str))
+                            except (ValueError, AttributeError):
+                                pass
+                        if numbers:
+                            next_num = max(numbers) + 1
+                        else:
+                            next_num = 1
+                    else:
+                        next_num = 1
+                    
+                    # Format feedback file number as 3-digit zero-padded (e.g., 001, 002, ...)
+                    feedback_filename = f'feedback_{next_num:03d}.txt'
+                    feedback_filepath = os.path.join(feedback_dir, feedback_filename)
+                    
+                    # Create anonymized feedback content with timestamp
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    feedback_content = f"Timestamp: {timestamp}\n\n{feedback_text}"
+                    
+                    # Write feedback to numbered text file
+                    with open(feedback_filepath, 'w', encoding='utf-8') as f:
+                        f.write(feedback_content)
+                    
+                    # Verify file was created
+                    if os.path.exists(feedback_filepath):
+                        print(f"[Feedback] Successfully saved feedback to: {feedback_filepath}")
+                        ui.notify(f"Feedback submitted successfully. Saved as {feedback_filename}. Thank you!", color='positive')
+                    else:
+                        print(f"[Feedback] ERROR: File was not created at: {feedback_filepath}")
+                        ui.notify("Feedback may not have been saved. Please try again.", color='warning')
+                    
+                    dialog.close()
+                except Exception as e:
+                    print(f"[Feedback] Error saving feedback: {e}")
+                    handle_error_with_ui("submit_feedback", e, user_id=current_user_id, context={'feedback_length': len(feedback_text)})
+                    ui.notify("Error submitting feedback. Please try again.", color='negative')
+            ui.button("Submit", on_click=save_feedback, color='positive')
+        
+    dialog.open()
+
+
 def view_instance_notes(instance_id):
     """View all notes for an instance (task-level notes + pause notes if any)."""
     global current_user_id
@@ -5079,6 +5153,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                 ui.button("Known Issues",
                           on_click=lambda: ui.navigate.to('/known-issues'),
                           icon="bug_report").classes("text-xl py-3 px-6").props('data-tooltip-id="known_issues_link"')
+                ui.button("Feedback",
+                          on_click=submit_feedback,
+                          icon="feedback",
+                          color="green").classes("text-xl py-3 px-6").props('data-tooltip-id="feedback_link"')
                 ui.button("Settings",
                           on_click=lambda: ui.navigate.to('/settings'),
                           icon="settings").classes("text-xl py-3 px-6").props('data-tooltip-id="settings_link"')
