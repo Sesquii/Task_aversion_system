@@ -97,7 +97,7 @@ def cancelled_tasks_page():
             for inst in instances:
                 instance_id = inst.get('instance_id', '')
                 
-                    with ui.card().classes("w-full p-3 border border-gray-200"):
+                with ui.card().classes("w-full p-3 border border-gray-200"):
                     with ui.row().classes("w-full items-start justify-between gap-3"):
                         with ui.column().classes("flex-1 gap-1"):
                             ui.label(escape_for_display(inst.get('task_name', 'Unknown Task'))).classes("text-base font-semibold")

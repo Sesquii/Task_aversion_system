@@ -479,42 +479,42 @@ def productivity_module_page():
                 data_display.clear()
                 weekly_data = tracker.calculate_weekly_productivity_hours(user_id_str)
                 comparison = tracker.compare_to_goal(user_id_str)
-            
-            with data_display:
-                ui.label("Current Week Data").classes("text-lg font-semibold mb-2")
-                with ui.row().classes("w-full gap-4 mb-2"):
-                    with ui.column().classes("flex-1"):
-                        ui.label("Total Hours").classes("text-sm text-gray-600")
-                        ui.label(f"{weekly_data.get('total_hours', 0):.1f}").classes("text-xl font-bold")
-                    with ui.column().classes("flex-1"):
-                        ui.label("Goal Hours").classes("text-sm text-gray-600")
-                        ui.label(f"{comparison.get('goal_hours', 0):.1f}").classes("text-xl font-bold")
-                    with ui.column().classes("flex-1"):
-                        ui.label("Percentage").classes("text-sm text-gray-600")
-                        pct = comparison.get('percentage_of_goal', 0)
-                        color = "text-green-600" if pct >= 100 else "text-yellow-600" if pct >= 85 else "text-red-600"
-                        ui.label(f"{pct:.1f}%").classes(f"text-xl font-bold {color}")
                 
-                # Update enhancement parameters with loaded data
-                if comparison.get('goal_hours', 0) > 0 and 'goal_hours_input' in input_refs:
-                    input_refs['goal_hours_input'].set_value(comparison.get('goal_hours', 40.0))
-                    current_params['enhancements']['goal_adjustment']['goal_hours_per_week'] = comparison.get('goal_hours', 40.0)
-                
-                if weekly_data.get('total_hours', 0) > 0 and 'weekly_hours_input' in input_refs:
-                    input_refs['weekly_hours_input'].set_value(weekly_data.get('total_hours', 0.0))
-                    current_params['enhancements']['goal_adjustment']['weekly_productive_hours'] = weekly_data.get('total_hours', 0.0)
-                
-                # Calculate weekly average if we have daily data
-                if weekly_data.get('daily_averages') and 'weekly_avg_time_input' in input_refs:
-                    total_minutes = sum(day['minutes'] for day in weekly_data['daily_averages'])
-                    count = len(weekly_data['daily_averages'])
-                    if count > 0:
-                        avg_minutes = total_minutes / count
-                        input_refs['weekly_avg_time_input'].set_value(avg_minutes)
-                        current_params['enhancements']['weekly_avg_bonus']['weekly_avg_time'] = avg_minutes
-                
-                calculate_and_display()
-                ui.notify("Current week data loaded!", color="positive")
+                with data_display:
+                    ui.label("Current Week Data").classes("text-lg font-semibold mb-2")
+                    with ui.row().classes("w-full gap-4 mb-2"):
+                        with ui.column().classes("flex-1"):
+                            ui.label("Total Hours").classes("text-sm text-gray-600")
+                            ui.label(f"{weekly_data.get('total_hours', 0):.1f}").classes("text-xl font-bold")
+                        with ui.column().classes("flex-1"):
+                            ui.label("Goal Hours").classes("text-sm text-gray-600")
+                            ui.label(f"{comparison.get('goal_hours', 0):.1f}").classes("text-xl font-bold")
+                        with ui.column().classes("flex-1"):
+                            ui.label("Percentage").classes("text-sm text-gray-600")
+                            pct = comparison.get('percentage_of_goal', 0)
+                            color = "text-green-600" if pct >= 100 else "text-yellow-600" if pct >= 85 else "text-red-600"
+                            ui.label(f"{pct:.1f}%").classes(f"text-xl font-bold {color}")
+                    
+                    # Update enhancement parameters with loaded data
+                    if comparison.get('goal_hours', 0) > 0 and 'goal_hours_input' in input_refs:
+                        input_refs['goal_hours_input'].set_value(comparison.get('goal_hours', 40.0))
+                        current_params['enhancements']['goal_adjustment']['goal_hours_per_week'] = comparison.get('goal_hours', 40.0)
+                    
+                    if weekly_data.get('total_hours', 0) > 0 and 'weekly_hours_input' in input_refs:
+                        input_refs['weekly_hours_input'].set_value(weekly_data.get('total_hours', 0.0))
+                        current_params['enhancements']['goal_adjustment']['weekly_productive_hours'] = weekly_data.get('total_hours', 0.0)
+                    
+                    # Calculate weekly average if we have daily data
+                    if weekly_data.get('daily_averages') and 'weekly_avg_time_input' in input_refs:
+                        total_minutes = sum(day['minutes'] for day in weekly_data['daily_averages'])
+                        count = len(weekly_data['daily_averages'])
+                        if count > 0:
+                            avg_minutes = total_minutes / count
+                            input_refs['weekly_avg_time_input'].set_value(avg_minutes)
+                            current_params['enhancements']['weekly_avg_bonus']['weekly_avg_time'] = avg_minutes
+                    
+                    calculate_and_display()
+                    ui.notify("Current week data loaded!", color="positive")
             except Exception as e:
                 handle_error_with_ui(
                     "load current week productivity data",

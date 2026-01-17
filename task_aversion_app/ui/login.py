@@ -62,6 +62,38 @@ def login_page():
                         '• Sync your preferences across sessions\n'
                         '• Migrate your existing anonymous data'
                     ).classes('text-sm text-gray-600 whitespace-pre-line p-4')
+            
+            # Onboarding message
+            with ui.card().classes('w-full p-8 mt-6'):
+                ui.label('Welcome to the Task Aversion System').classes('text-2xl font-bold mb-4')
+                
+                ui.html('''
+                    <div style="line-height: 1.6; color: #374151;">
+                        <p style="margin-bottom: 1rem;">
+                            The Task Aversion System is a productivity application designed to help you overcome task avoidance and increase your daily functioning through comprehensive tracking of emotions, cognitive load, motivation, and task performance metrics. Unlike simple to-do lists, this system incorporates psychological and behavioral tracking to help you understand and overcome task avoidance patterns.
+                        </p>
+                        
+                        <p style="margin-bottom: 1rem;">
+                            <strong>What is Task Aversion?</strong> Task aversion is the feeling of resistance or avoidance you experience when facing certain tasks. This system helps you quantify and understand these feelings by tracking how you feel about tasks before, during, and after completion. By measuring aversion, stress, relief, and other psychological factors alongside task completion, you can identify patterns and make data-driven decisions about which tasks to tackle and when.
+                        </p>
+                        
+                        <p style="margin-bottom: 1rem;">
+                            <strong>What Does It Track?</strong> The system tracks a comprehensive set of psychological and performance metrics. Before starting a task, you record your initial emotions, stress levels (cognitive, emotional, and physical load), and your level of aversion. During task completion, the system tracks time spent, pauses, and completion percentage. After finishing, you record the actual relief you felt, final emotions, and any factors that affected your experience. The system then calculates over a dozen performance metrics including Execution Score, Productivity Score, Grit Score, Stress Efficiency, Net Wellbeing, and more.
+                        </p>
+                        
+                        <p style="margin-bottom: 1rem;">
+                            <strong>What Insights Does It Provide?</strong> The analytics dashboard provides interactive visualizations showing trends in relief scores, stress levels, and performance metrics over time. You can explore correlations between different factors, see which tasks provide the most relief relative to stress, and identify patterns in your task completion behavior. The system also provides intelligent task recommendations based on your historical data, helping you choose tasks that are likely to be manageable and rewarding.
+                        </p>
+                        
+                        <p style="margin-bottom: 1rem;">
+                            <strong>How Does It Work?</strong> You start by creating task templates for recurring activities. When you're ready to work on a task, you initialize an instance and record your initial state. As you work, you can pause and resume tasks with time tracking that persists. When you complete a task, you record your final metrics. The system automatically calculates performance scores and stores this data for analysis. Over time, as you complete more tasks, the system builds a comprehensive picture of your patterns and preferences.
+                        </p>
+                        
+                        <p style="margin-bottom: 0;">
+                            <strong>Getting Started:</strong> After signing in, you'll be taken to the dashboard where you can create your first task template. Start with a few common tasks you do regularly. When you're ready to work on one, click "Initialize" to begin tracking. The more you use the system, the more valuable the insights become. Regular daily use provides the most meaningful data for understanding your patterns and improving your productivity.
+                        </p>
+                    </div>
+                ''', sanitize=False).classes('text-gray-700')
 
 
 def handle_logout():

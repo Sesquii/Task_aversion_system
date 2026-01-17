@@ -228,7 +228,27 @@ other_field = sanitize_for_storage(other_field) if other_field else ''
 
 ## Testing
 
+### Automated Testing
+
+**Status**: ✅ **Complete** - Error handling system has been automatically verified
+
+**Test Results**: ✅ **100% pass rate (35/35 tests)**
+
+**Test Command**: `python test_error_handling.py`
+
+**What's Verified**:
+- ✅ Error ID system generates unique 8-character IDs
+- ✅ Error log file created (`data/logs/errors.jsonl`)
+- ✅ Error messages don't expose sensitive info
+- ✅ Error reporting system works
+- ✅ Full error details logged server-side
+- ✅ Context handling works correctly
+
+**Note**: Automated verification confirms the error handling system is functioning correctly. Manual UI testing is still pending to verify user-facing error handling behavior.
+
 ### Manual Testing
+
+**Status**: ⏳ **Pending** - Manual UI testing recommended
 
 1. **Input Validation:**
    - Try creating a task with a name > 200 characters
@@ -240,19 +260,14 @@ other_field = sanitize_for_storage(other_field) if other_field else ''
    - Verify it's escaped when displayed
    - Check that script doesn't execute
 
-3. **Error Handling:**
+3. **Error Handling (Manual UI Testing):**
    - Trigger an error (e.g., database connection failure)
    - Verify error ID is shown
    - Test error reporting dialog
    - Check error log file for full details
+   - Verify error notifications appear correctly across all pages
 
-### Automated Testing (Future)
-
-Consider adding unit tests for:
-- Input validation functions
-- HTML escaping functions
-- Error ID generation and logging
-- Error report recording
+**Testing Guide**: See `docs/error_handling_testing_guide.md` for detailed manual testing procedures.
 
 ## Notes
 
