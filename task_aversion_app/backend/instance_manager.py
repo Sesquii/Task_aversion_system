@@ -54,7 +54,10 @@ class InstanceManager:
                         f"Database initialization failed and CSV fallback is disabled: {e}\n"
                         "Set DISABLE_CSV_FALLBACK=false or unset DATABASE_URL to allow CSV fallback."
                     ) from e
-                print(f"[InstanceManager] Database initialization failed: {e}, falling back to CSV")
+                print(f"[InstanceManager] WARNING: Database initialization failed: {e}, falling back to CSV")
+                print(f"[InstanceManager] This should not happen in production! Check database connection.")
+                import traceback
+                traceback.print_exc()
                 self.use_db = False
                 self._init_csv()
         else:
@@ -398,7 +401,14 @@ class InstanceManager:
         
         Args:
             user_id: User ID (required for data isolation)
+        
+        Raises:
+            ValueError: If user_id is None (authentication required)
         """
+        # SECURITY: Require user_id for database operations
+        if user_id is None:
+            raise ValueError("user_id is required for database operations. User must be authenticated.")
+        
         try:
             instance_id = f"i{int(datetime.now().timestamp())}"
             created_at = datetime.now()

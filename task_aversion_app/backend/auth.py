@@ -273,6 +273,10 @@ def logout():
     - Legacy anonymous user IDs (tas_user_id, user_id)
     - All application caches (Analytics, InstanceManager, TaskManager)
     - UI refresh flags (refresh_templates)
+    
+    Note: This function clears browser storage, but browser localStorage may persist
+    across sessions. For a complete logout, the browser should be closed or
+    localStorage should be manually cleared.
     """
     try:
         # Get session token before clearing
@@ -285,7 +289,10 @@ def logout():
             print(f"[Auth] Cleared server-side session: {session_key}")
         
         # Clear browser-side session token (CRITICAL: must clear this too)
-        app.storage.browser.pop('session_token', None)
+        try:
+            app.storage.browser.pop('session_token', None)
+        except Exception as e:
+            print(f"[Auth] Warning: Error clearing session_token from browser storage: {e}")
         
         # Clear login redirect state
         app.storage.browser.pop('login_redirect', None)

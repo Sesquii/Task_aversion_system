@@ -8,6 +8,12 @@ def create_task_page(task_manager, emotion_manager):
 
     @ui.page('/create_task')
     def page():
+        # Check authentication first
+        user_id = get_current_user()
+        if user_id is None:
+            ui.notify("You must be logged in to create tasks", color='negative')
+            ui.navigate.to('/login')
+            return
 
         ui.label("Create Task Template").classes("text-xl font-bold")
 
@@ -117,7 +123,13 @@ def create_task_page(task_manager, emotion_manager):
                     completion_window_days_val = int(completion_window_days.value)
 
                 try:
+                    # Re-check authentication (in case session expired)
                     user_id = get_current_user()
+                    if user_id is None:
+                        ui.notify("Session expired. Please log in again.", color='negative')
+                        ui.navigate.to('/login')
+                        return
+                    
                     tid = task_manager.create_task(
                         name.value.strip(),
                         description=desc.value or '',

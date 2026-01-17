@@ -113,6 +113,70 @@ def register_pages():
     register_relief_comparison_page()
     register_formula_baseline_charts()
     register_known_issues_page()
+    
+    
+    # Diagnostic endpoint to check backend mode
+    @ui.page('/diagnostic/backend')
+    def backend_diagnostic():
+        """Diagnostic page to check which backend is being used."""
+        from backend.task_manager import TaskManager
+        from backend.instance_manager import InstanceManager
+        
+        tm = TaskManager()
+        im = InstanceManager()
+        
+        ui.label("Backend Diagnostic").classes("text-2xl font-bold mb-4")
+        
+        with ui.card().classes("w-full max-w-2xl p-4"):
+            ui.label("TaskManager:").classes("text-lg font-semibold mb-2")
+            ui.label(f"Using Database: {tm.use_db}").classes("mb-1")
+            ui.label(f"Strict Mode: {tm.strict_mode}").classes("mb-1")
+            
+            if tm.use_db:
+                try:
+                    from backend.database import get_session, Task
+                    with get_session() as session:
+                        count = session.query(Task).count()
+                        ui.label(f"Database tasks: {count}").classes("text-green-600 mb-1")
+                except Exception as e:
+                    ui.label(f"Database error: {e}").classes("text-red-600 mb-1")
+            else:
+                if hasattr(tm, 'tasks_file') and os.path.exists(tm.tasks_file):
+                    import pandas as pd
+                    try:
+                        df = pd.read_csv(tm.tasks_file, dtype=str).fillna('')
+                        ui.label(f"CSV tasks: {len(df)}").classes("text-yellow-600 mb-1")
+                    except Exception as e:
+                        ui.label(f"CSV error: {e}").classes("text-red-600 mb-1")
+        
+        with ui.card().classes("w-full max-w-2xl p-4 mt-4"):
+            ui.label("InstanceManager:").classes("text-lg font-semibold mb-2")
+            ui.label(f"Using Database: {im.use_db}").classes("mb-1")
+            
+            if im.use_db:
+                try:
+                    from backend.database import get_session, TaskInstance
+                    with get_session() as session:
+                        count = session.query(TaskInstance).count()
+                        ui.label(f"Database instances: {count}").classes("text-green-600 mb-1")
+                except Exception as e:
+                    ui.label(f"Database error: {e}").classes("text-red-600 mb-1")
+            else:
+                if hasattr(im, 'file') and os.path.exists(im.file):
+                    import pandas as pd
+                    try:
+                        df = pd.read_csv(im.file, dtype=str).fillna('')
+                        ui.label(f"CSV instances: {len(df)}").classes("text-yellow-600 mb-1")
+                    except Exception as e:
+                        ui.label(f"CSV error: {e}").classes("text-red-600 mb-1")
+        
+        with ui.card().classes("w-full max-w-2xl p-4 mt-4"):
+            ui.label("Environment:").classes("text-lg font-semibold mb-2")
+            ui.label(f"USE_CSV: {os.getenv('USE_CSV', '(not set)')}").classes("mb-1")
+            ui.label(f"DATABASE_URL: {os.getenv('DATABASE_URL', '(not set)')}").classes("mb-1")
+            ui.label(f"DISABLE_CSV_FALLBACK: {os.getenv('DISABLE_CSV_FALLBACK', '(not set)')}").classes("mb-1")
+        
+        ui.button("Refresh", on_click=lambda: ui.navigate.reload()).classes("mt-4")
 
 
 if __name__ in {"__main__", "__mp_main__"}:
@@ -130,11 +194,71 @@ if __name__ in {"__main__", "__mp_main__"}:
     # Mount static files directory using FastAPI
     app.mount('/static/graphic_aids', StaticFiles(directory=graphic_aids_dir), name='graphic_aids')
     
+    # Simple version check endpoint (no UI, just returns version info)
+    @app.get('/api/version')
+    async def version_check():
+        """Simple endpoint to check if server is running latest code."""
+        import time
+        return {
+            "version": "1.0.0",
+            "timestamp": time.time(),
+            "message": "Server is running. If you see this, the server has the latest code."
+        }
+    
+    # Add query logging middleware (lightweight, can be disabled via env var)
+    if os.getenv('ENABLE_QUERY_LOGGING', '1').lower() in ('1', 'true', 'yes'):
+        try:
+            from backend.query_middleware import QueryLoggingMiddleware
+            app.add_middleware(QueryLoggingMiddleware)
+            print("[App] Query logging middleware enabled")
+        except Exception as e:
+            print(f"[App] Warning: Failed to set up query logging middleware: {e}")
+    
     # Start routine scheduler
     start_scheduler()
     host = os.getenv('NICEGUI_HOST', '127.0.0.1')  # Default to localhost, use env var in Docker
     # Storage secret for browser storage (required for OAuth session management)
     # Use environment variable or generate a default (not secure for production)
     storage_secret = os.getenv('STORAGE_SECRET', 'dev-secret-change-in-production')
+    
+    # Add cache-busting headers to prevent browser caching issues
+    # NOTE: Temporarily disabled if causing Chrome/Edge loading issues
+    # Set ENABLE_CACHE_BUSTING=1 to enable
+    if os.getenv('ENABLE_CACHE_BUSTING', '0').lower() in ('1', 'true', 'yes'):
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.requests import Request
+        
+        class NoCacheMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):
+                response = await call_next(request)
+                # Only add no-cache headers to specific routes, not WebSocket or NiceGUI internal routes
+                path = request.url.path
+                upgrade_header = request.headers.get('upgrade', '').lower()
+                
+                # Skip WebSocket connections and NiceGUI internal routes completely
+                if (path.startswith('/_nicegui') or 
+                    path.startswith('/ws') or
+                    'websocket' in upgrade_header):
+                    return response
+                
+                # Only apply cache-busting to specific HTML pages and API endpoints
+                if (path == '/' or 
+                    path.startswith('/diagnostic') or
+                    path.startswith('/api/')):
+                    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                    response.headers["Pragma"] = "no-cache"
+                    response.headers["Expires"] = "0"
+                
+                return response
+        
+        # Add middleware AFTER all routes are registered but BEFORE ui.run()
+        try:
+            app.add_middleware(NoCacheMiddleware)
+            print("[App] Cache-busting middleware enabled")
+        except Exception as e:
+            print(f"[App] Warning: Could not add cache-busting middleware: {e}")
+    else:
+        print("[App] Cache-busting middleware disabled (set ENABLE_CACHE_BUSTING=1 to enable)")
+    
     ui.run(title='Task Aversion System', port=8080, host=host, reload=False, storage_secret=storage_secret)
 

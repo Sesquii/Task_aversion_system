@@ -54,13 +54,20 @@ def settings_page():
         else:
             ui.notify("Error during logout", color="negative")
         
-        # Use a small delay to ensure logout completes, then force full page reload
-        def do_redirect():
-            # Force a full page reload to clear any cached session state
-            ui.run_javascript('window.location.href = "/login";')
-        
-        # Small delay to ensure storage operations complete
-        ui.timer(0.1, do_redirect, once=True)
+        # Clear localStorage via JavaScript and force full page reload
+        ui.run_javascript('''
+            try {
+                if (window.localStorage) {
+                    localStorage.removeItem('session_token');
+                    localStorage.removeItem('tas_user_id');
+                    localStorage.removeItem('user_id');
+                    localStorage.removeItem('login_redirect');
+                }
+            } catch(e) {
+                console.log('Error clearing localStorage:', e);
+            }
+            window.location.href = "/login";
+        ''')
     
     # def go_data_guide():
     #     ui.navigate.to("/data-guide")

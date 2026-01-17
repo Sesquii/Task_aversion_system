@@ -64,6 +64,14 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 # Track if database has been initialized (to avoid duplicate print messages)
 _db_initialized = False
 
+# Set up query logging (lightweight, can be disabled via env var)
+if os.getenv('ENABLE_QUERY_LOGGING', '1').lower() in ('1', 'true', 'yes'):
+    try:
+        from backend.query_logger import setup_query_logging
+        setup_query_logging(engine)
+    except Exception as e:
+        print(f"[Database] Warning: Failed to set up query logging: {e}")
+
 
 def get_session():
     """Get a database session. Use as context manager or call close() manually."""

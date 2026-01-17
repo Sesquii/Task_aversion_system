@@ -58,7 +58,10 @@ class TaskManager:
                         f"Database initialization failed and CSV fallback is disabled: {e}\n"
                         "Set DISABLE_CSV_FALLBACK=false or unset DATABASE_URL to allow CSV fallback."
                     ) from e
-                print(f"[TaskManager] Database initialization failed: {e}, falling back to CSV")
+                print(f"[TaskManager] WARNING: Database initialization failed: {e}, falling back to CSV")
+                print(f"[TaskManager] This should not happen in production! Check database connection.")
+                import traceback
+                traceback.print_exc()
                 self.use_db = False
                 self._init_csv()
         else:
@@ -453,6 +456,10 @@ class TaskManager:
     
     def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None):
         """Database-specific create_task."""
+        # SECURITY: Require user_id for database operations
+        if user_id is None:
+            raise ValueError("user_id is required for database operations. User must be authenticated.")
+        
         try:
             # Parse categories JSON string
             try:

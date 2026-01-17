@@ -4293,6 +4293,16 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     current_user_id = session_user_id
     print(f"[Dashboard] build_dashboard: Set current_user_id={current_user_id} (session_user_id={session_user_id})")
     
+    # Debug: Check if user has any data
+    try:
+        task_count = len(tm.get_all(user_id=current_user_id)) if hasattr(tm, 'get_all') else 0
+        instance_count = len(im.list_active_instances(user_id=current_user_id)) if hasattr(im, 'list_active_instances') else 0
+        print(f"[Dashboard] User {current_user_id} data check: {task_count} tasks, {instance_count} active instances")
+        if task_count == 0 and instance_count == 0:
+            print(f"[Dashboard] WARNING: User {current_user_id} appears to have no data. This may be a new user or data migration issue.")
+    except Exception as e:
+        print(f"[Dashboard] Error checking user data: {e}")
+    
     # Invalidate cache when dashboard is built (in case user switched)
     tm._invalidate_task_caches()
     im._invalidate_instance_caches()  # Also invalidate instance cache
@@ -5072,6 +5082,33 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                 ui.button("Settings",
                           on_click=lambda: ui.navigate.to('/settings'),
                           icon="settings").classes("text-xl py-3 px-6").props('data-tooltip-id="settings_link"')
+                # Logout button
+                from backend.auth import logout
+                def handle_dashboard_logout():
+                    """Handle logout from dashboard header."""
+                    success = logout()
+                    if success:
+                        ui.notify("Logged out successfully", color="positive")
+                    else:
+                        ui.notify("Error during logout", color="negative")
+                    # Clear localStorage via JavaScript and force full page reload
+                    ui.run_javascript('''
+                        try {
+                            if (window.localStorage) {
+                                localStorage.removeItem('session_token');
+                                localStorage.removeItem('tas_user_id');
+                                localStorage.removeItem('user_id');
+                                localStorage.removeItem('login_redirect');
+                            }
+                        } catch(e) {
+                            console.log('Error clearing localStorage:', e);
+                        }
+                        window.location.href = "/login";
+                    ''')
+                ui.button("Logout",
+                          on_click=handle_dashboard_logout,
+                          icon="logout",
+                          color="red").classes("text-xl py-3 px-6").props('data-tooltip-id="logout_link"')
         
         # ====================================================================
         # MAIN THREE-COLUMN LAYOUT
@@ -5103,7 +5140,13 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                             recent = tm.get_recent(limit=5, user_id=current_user_id) if hasattr(tm, "get_recent") else []
                             
                             if not recent:
-                                ui.label("No recent tasks").classes("text-xs text-gray-500")
+                                # Check if user has any tasks at all
+                                all_tasks = tm.get_all(user_id=current_user_id) if hasattr(tm, "get_all") else None
+                                if all_tasks is not None and len(all_tasks) == 0:
+                                    ui.label("No tasks yet").classes("text-xs text-gray-500")
+                                    ui.label("Create your first task using the + CREATE TASK button above").classes("text-xs text-blue-600 mt-1")
+                                else:
+                                    ui.label("No recent tasks").classes("text-xs text-gray-500")
                             else:
                                 for r in recent:
                                     with ui.row().classes("justify-between items-center mb-1"):
@@ -5127,7 +5170,13 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                 recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) if hasattr(im, "list_recent_tasks") else []
                                 
                                 if not recent_tasks:
-                                    ui.label("No recent tasks").classes("text-xs text-gray-500")
+                                    # Check if this is a new user with no data
+                                    all_tasks = tm.get_all(user_id=current_user_id) if hasattr(tm, "get_all") else None
+                                    if all_tasks is not None and len(all_tasks) == 0:
+                                        ui.label("Welcome! You're logged in.").classes("text-xs font-semibold text-blue-600 mb-1")
+                                        ui.label("Create your first task to get started.").classes("text-xs text-gray-600")
+                                    else:
+                                        ui.label("No recent tasks").classes("text-xs text-gray-500")
                                 else:
                                     for c in recent_tasks:
                                         # Get timestamp from either completed_at or cancelled_at
