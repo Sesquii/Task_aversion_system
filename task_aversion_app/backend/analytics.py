@@ -11872,6 +11872,7 @@ class Analytics:
                 'task_id': task_id,
                 'task_name': task_name,
                 'description': description,
+                'actual': instance.get('actual') or '',
                 'relief_score': relief_score,
                 'cognitive_load': cognitive_load,
                 'emotional_load': emotional_load,
@@ -11947,6 +11948,7 @@ class Analytics:
                 'task_id': row.get('task_id'),
                 'task_name': row.get('task_name'),
                 'description': row.get('description', ''),
+                'actual': row.get('actual') or '',
                 'score': round(float(row.get('score_normalized', 0.0)), 1),
                 'metric_values': metric_values,
                 # Include all sub-scores for tooltip

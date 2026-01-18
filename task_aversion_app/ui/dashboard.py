@@ -623,7 +623,16 @@ def refresh_initialized_tasks(search_query=None):
     if search_query:
         search_query = str(search_query).strip().lower()
         print(f"[Dashboard] Applying search filter: '{search_query}'")
-        
+
+        # Bulk-fetch task notes (1 query) instead of get_task_notes per instance (N+1)
+        task_ids = [inst.get('task_id') for inst in active_not_current if inst.get('task_id')]
+        notes_map: dict = {}
+        if task_ids:
+            try:
+                notes_map = tm.get_task_notes_bulk(task_ids, user_id=session_user_id)
+            except Exception:
+                pass
+
         filtered_instances = []
         for inst in active_not_current:
             # Parse predicted data for description
@@ -632,42 +641,37 @@ def refresh_initialized_tasks(search_query=None):
                 predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
             except (json.JSONDecodeError, TypeError):
                 predicted_data = {}
-            
+
             # Parse actual data for pause notes
             actual_str = inst.get("actual") or "{}"
             try:
                 actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
             except (json.JSONDecodeError, TypeError):
                 actual_data = {}
-            
+
             # Get task name from instance
             task_name = str(inst.get("task_name", "")).lower()
-            
+
             # Get description from predicted data
             description = str(predicted_data.get('description', '')).lower()
-            
+
             # Get pause notes from actual data
             pause_reason = str(actual_data.get('pause_reason', '')).lower()
-            
-            # Get task-level notes
+
+            # Get task-level notes from pre-fetched map
             task_id = inst.get('task_id')
-            task_notes = ''
-            if task_id:
-                try:
-                    task_notes = str(tm.get_task_notes(task_id, user_id=session_user_id) or '').lower()
-                except Exception:
-                    pass
-            
+            task_notes = str(notes_map.get(task_id, '') or '').lower()
+
             # Check if search query matches any field
             matches_name = search_query in task_name
             matches_description = search_query in description
             matches_pause_notes = search_query in pause_reason
             matches_task_notes = search_query in task_notes
-            
+
             if matches_name or matches_description or matches_pause_notes or matches_task_notes:
                 filtered_instances.append(inst)
                 print(f"[Dashboard] Instance '{inst.get('task_name')}' matched search (name={matches_name}, desc={matches_description}, pause={matches_pause_notes}, notes={matches_task_notes})")
-        
+
         active_not_current = filtered_instances
         print(f"[Dashboard] Initialized tasks after filtering: {len(active_not_current)}")
     else:
@@ -686,14 +690,18 @@ def refresh_initialized_tasks(search_query=None):
         return
     
     print(f"[Dashboard] Rendering {len(active_not_current)} initialized tasks in 2-column layout")
-    
+
+    # Bulk-fetch previous-task averages and avg_time_estimate to avoid N+1 in format_colored_tooltip
+    task_ids = list({i.get('task_id') for i in active_not_current if i.get('task_id')})
+    bulk = im.get_previous_task_averages_bulk(task_ids, user_id=session_user_id) if task_ids else {}
+
     # Render initialized tasks in 2 columns
     with initialized_tasks_container:
         # Split into 2 columns
         with ui.row().classes("w-full gap-2"):
             col1 = ui.column().classes("w-1/2")
             col2 = ui.column().classes("w-1/2")
-            
+
             for idx, inst in enumerate(active_not_current):
                 col = col1 if idx % 2 == 0 else col2
                 with col:
@@ -711,7 +719,9 @@ def refresh_initialized_tasks(search_query=None):
                         time_estimate = 0
                     
                     task_id = inst.get('task_id')
-                    formatted_tooltip = format_colored_tooltip(predicted_data, task_id)
+                    formatted_tooltip = format_colored_tooltip(
+                        predicted_data, task_id, averages_and_time=bulk.get(task_id)
+                    )
                     tooltip_id = f"tooltip-{inst['instance_id']}"
                     instance_id = inst['instance_id']
                     
@@ -2002,40 +2012,42 @@ def delete_template(task_id):
 # Tooltip Formatting Helper
 # ----------------------------------------------------------
 
-def format_colored_tooltip(predicted_data, task_id):
-    """Format predicted data as HTML with color-coded values based on thresholds and averages."""
-    # Get averages for this task
-    global current_user_id
-    averages = im.get_previous_task_averages(task_id, user_id=current_user_id) if task_id else {}
-    
-    # Calculate average time estimate from previous instances
-    avg_time_estimate = None
-    if task_id:
-        # Get all instances for this task (including completed)
-        all_instances = im.get_instances_by_task_id(task_id, include_completed=True, user_id=current_user_id)
-        # Filter to only initialized instances
-        initialized = [
-            inst for inst in all_instances
-            if inst.get('initialized_at') and str(inst.get('initialized_at', '')).strip() != ''
-        ]
-        if initialized:
-            time_values = []
-            for inst in initialized:
-                predicted_str = str(inst.get('predicted', '{}') or '{}').strip()
-                if predicted_str and predicted_str != '{}':
-                    try:
-                        pred_dict = json.loads(predicted_str)
-                        time_val = pred_dict.get('time_estimate_minutes') or pred_dict.get('estimate')
-                        if time_val is not None:
-                            try:
-                                time_values.append(float(time_val))
-                            except (ValueError, TypeError):
-                                pass
-                    except (json.JSONDecodeError, Exception):
-                        pass
-            if time_values:
-                avg_time_estimate = sum(time_values) / len(time_values)
-    
+def format_colored_tooltip(predicted_data, task_id, averages_and_time=None):
+    """Format predicted data as HTML with color-coded values based on thresholds and averages.
+    If averages_and_time is provided (from get_previous_task_averages_bulk), uses it to avoid
+    per-call get_previous_task_averages and get_instances_by_task_id (N+1)."""
+    if averages_and_time is not None:
+        averages = {k: v for k, v in averages_and_time.items() if k != 'avg_time_estimate'}
+        avg_time_estimate = averages_and_time.get('avg_time_estimate')
+    else:
+        # Fallback: one-off calls when not using bulk (e.g. current task card)
+        global current_user_id
+        averages = im.get_previous_task_averages(task_id, user_id=current_user_id) if task_id else {}
+        avg_time_estimate = None
+        if task_id:
+            all_instances = im.get_instances_by_task_id(task_id, include_completed=True, user_id=current_user_id)
+            initialized = [
+                inst for inst in all_instances
+                if inst.get('initialized_at') and str(inst.get('initialized_at', '')).strip() != ''
+            ]
+            if initialized:
+                time_values = []
+                for inst in initialized:
+                    predicted_str = str(inst.get('predicted', '{}') or '{}').strip()
+                    if predicted_str and predicted_str != '{}':
+                        try:
+                            pred_dict = json.loads(predicted_str)
+                            time_val = pred_dict.get('time_estimate_minutes') or pred_dict.get('estimate')
+                            if time_val is not None:
+                                try:
+                                    time_values.append(float(time_val))
+                                except (ValueError, TypeError):
+                                    pass
+                        except (json.JSONDecodeError, Exception):
+                            pass
+                if time_values:
+                    avg_time_estimate = sum(time_values) / len(time_values)
+
     def get_load_color(value):
         """Get color for load values (0-100): green 0-30, yellow 30-70, red 70-100"""
         if value <= 30:
@@ -2715,30 +2727,15 @@ def render_monitored_metrics_section(container):
                             f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'TARGETED', 'location': 'dashboard.py:process_next_step', 'message': 'step 0: calling get_targeted_metric_values', 'data': {'selected_metrics': selected_metrics, 'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
                     except: pass
                     # #endregion
-                    
-                    # Force cache refresh for productivity_score to ensure fresh data
-                    # This addresses the issue where productivity_score was stale until analytics page was visited
-                    if 'productivity_score' in selected_metrics:
-                        from backend.analytics import Analytics
-                        Analytics._invalidate_relief_summary_cache()
-                    
+
+                    # Use get_targeted_metric_values (relief_summary uses 5-min TTL cache;
+                    # avoid _invalidate_relief_summary_cache here to prevent 5x slowdown on every load)
                     try:
                         with init_perf_logger.operation("get_targeted_metric_values"):
                             targeted_data = get_targeted_metric_values(selected_metrics, an)
                             load_state['relief_summary'] = targeted_data.get('relief_summary', {})
                             load_state['quality_metrics'] = targeted_data.get('quality_metrics', {})
                             load_state['composite_scores'] = targeted_data.get('composite_scores', {})
-                            
-                            # Validate that productivity_score is not zero if we have data
-                            if 'productivity_score' in selected_metrics:
-                                weekly_score = load_state['relief_summary'].get('weekly_productivity_score', 0.0)
-                                if weekly_score == 0.0:
-                                    # Force recalculation - cache might have been stale
-                                    Analytics._invalidate_relief_summary_cache()
-                                    relief = an.get_relief_summary()
-                                    load_state['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
-                                    if 'productivity_time_minutes' not in load_state['relief_summary']:
-                                        load_state['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
                     except Exception as e:
                         print(f"[Dashboard] Error getting targeted metric values: {e}")
                         import traceback
@@ -2841,16 +2838,8 @@ def render_monitored_metrics_section(container):
                     # Cancel timer
                     if load_state['timer']:
                         load_state['timer'].cancel()
-                    
-                    # Force cache refresh for productivity_score to ensure fresh data
-                    # This addresses the issue where productivity_score was stale until analytics page was visited
-                    if 'productivity_score' in selected_metrics:
-                        from backend.analytics import Analytics
-                        Analytics._invalidate_relief_summary_cache()
-                        # Recalculate relief_summary with fresh cache
-                        load_state['relief_summary'] = an.get_relief_summary()
-                    
-                    # Final update of all metric cards with loaded data
+
+                    # Final update of all metric cards (relief_summary already from step 0)
                     try:
                         _update_metric_cards_incremental(
                             metric_cards,
@@ -5390,9 +5379,16 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
                     
                     # Calculate total time estimate by task type
+                    # Build task_id -> task map once (avoids N+1: N get_task calls in loop)
+                    try:
+                        tasks_df = task_manager.get_all(user_id=current_user_id)
+                        task_map = {r['task_id']: r for r in tasks_df.to_dict('records')} if tasks_df is not None and not tasks_df.empty else {}
+                    except Exception:
+                        task_map = {}
+
                     total_time_by_type = {'Work': 0, 'Play': 0, 'Self care': 0}
                     total_time = 0
-                    
+
                     for inst in active_not_current:
                         # Parse predicted data to get time estimate
                         predicted_str = inst.get("predicted") or "{}"
@@ -5407,10 +5403,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         except (TypeError, ValueError):
                             time_estimate = 0
                         
-                        # Get task type from task
+                        # Get task type from task (use pre-fetched map, not get_task per instance)
                         task_id = inst.get('task_id')
                         if task_id:
-                            task = task_manager.get_task(task_id, user_id=current_user_id)
+                            task = task_map.get(task_id)
                             if task:
                                 task_type = task.get('task_type', 'Work')
                                 # Normalize task type (handle variations like 'self care', 'selfcare', 'self-care')
@@ -5833,394 +5829,340 @@ def build_recently_completed_panel():
     refresh_completed()
 
 
-# Analytics panel is now just a header - removed compact panel
-
-
-def build_recommendations_section():
-    """Build the recommendations section with search-based metric filtering."""
-    global dash_filters
-    if not dash_filters:
-        dash_filters = {}
-    with ui.column().classes("scrollable-section"):
-        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
-        ui.separator()
-        
-        # Recommendation mode toggle
-        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
-        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
-        with mode_toggle_row:
-            ui.label("Recommendation Type:").classes("text-sm")
-            mode_select = ui.select(
-                options={
-                    'templates': 'Task Templates',
-                    'instances': 'Initialized Tasks'
-                },
-                value='templates'
-            ).classes("w-40")
-        
-        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
-        
-        # Metric search input (replaces multi-select)
-        metric_search_input = ui.input(
-            label="Search metrics",
-            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
-        ).classes("w-full mb-2")
-        
-        # Store selected metrics based on search
-        selected_metrics_state = default_metrics.copy()
-        
-        # Debounce timer for search input
-        search_debounce_timer = None
-        
-        def handle_metric_search(e):
-            """Handle metric search input changes with debouncing."""
-            nonlocal search_debounce_timer
-            
-            # Cancel existing timer if any
-            if search_debounce_timer is not None:
-                search_debounce_timer.deactivate()
-            
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
-            
-            # Create a debounced function that will execute after user stops typing
-            def apply_search():
-                """Apply the search filter after debounce delay."""
-                try:
-                    current_value = metric_search_input.value
-                    search_query = str(current_value).strip().lower() if current_value else None
-                    if search_query == '':
-                        search_query = None
-                    
-                    # Filter metrics based on search
-                    if search_query:
-                        filtered_metrics = [
-                            label for label in metric_labels
-                            if search_query in label.lower()
-                        ]
-                        # If search matches nothing, show all metrics (better UX than showing nothing)
-                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-                    else:
-                        # Empty search shows default metrics
-                        selected_metrics_state[:] = default_metrics
-                    
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
-                    pass
-            
-            # Create a timer that will execute after 300ms of no typing
-            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
-        
-        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-        metric_search_input.on('update:model-value', handle_metric_search)
-        
-        # Filters row
-        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
-        
-        with filter_row:
-            # Duration filters
-            min_duration = ui.number(
-                label="Min duration (min)",
-                value=dash_filters.get('min_duration'),
-            ).classes("w-32")
-            
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            
-            # Task type filter
-            task_type_select = ui.select(
-                options={
-                    '': 'All Types',
-                    'Work': 'Work',
-                    'Play': 'Play',
-                    'Self care': 'Self care',
-                },
-                label="Task Type",
-                value=dash_filters.get('task_type', ''),
-            ).classes("w-32")
-            
-            # Recurring filter
-            is_recurring_select = ui.select(
-                options={
-                    '': 'All',
-                    'true': 'Recurring',
-                    'false': 'One-time',
-                },
-                label="Recurring",
-                value=dash_filters.get('is_recurring', ''),
-            ).classes("w-32")
-            
-            # Categories search filter
-            categories_search = ui.input(
-                label="Categories",
-                placeholder="Search categories...",
-                value=dash_filters.get('categories', ''),
-            ).classes("w-40")
-            
-            def apply_filters():
-                # Min duration
-                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
-                if min_val is not None:
-                    try:
-                        min_val = float(min_val)
-                    except (TypeError, ValueError):
-                        min_val = None
-                dash_filters['min_duration'] = min_val
-                
-                # Max duration
-                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if max_val is not None:
-                    try:
-                        max_val = float(max_val)
-                    except (TypeError, ValueError):
-                        max_val = None
-                dash_filters['max_duration'] = max_val
-                
-                # Task type
-                task_type_val = task_type_select.value if task_type_select.value else None
-                dash_filters['task_type'] = task_type_val
-                
-                # Is recurring
-                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
-                dash_filters['is_recurring'] = is_recurring_val
-                
-                # Categories
-                categories_val = categories_search.value.strip() if categories_search.value else None
-                dash_filters['categories'] = categories_val
-                
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-            
-            ui.button("APPLY", on_click=apply_filters).props("dense")
-        
-        # Handle mode change
-        def on_mode_change(e):
-            recommendation_mode['value'] = mode_select.value
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-        
-        mode_select.on('update:model-value', on_mode_change)
-        
-        # Recommendations container
-        rec_container = ui.column().classes("w-full")
-        
-        # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-
-
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
-    """Refresh the recommendations display based on selected metrics.
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
     
-    Args:
-        target_container: UI container to render recommendations in
-        selected_metrics: List of metric labels to display
-        metric_key_map: Mapping from metric labels to keys
-        mode: 'templates' for task templates or 'instances' for initialized tasks
-    """
-    target_container.clear()
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
     
-    # Normalize selected metrics (list of labels)
-    if selected_metrics is None:
-        selected_metrics = []
-    if isinstance(selected_metrics, str):
-        selected_metrics = [selected_metrics]
-    if metric_key_map is None:
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-    
-    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
-    if not metric_keys:
-        metric_keys = ["relief_score"]
-    
-    # Get recommendations for the selected metrics (top 10)
-    # Use module-level dash_filters if available, otherwise empty dict
-    filters = globals().get('dash_filters', {})
-    
-    if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
-    else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
-    
-    if not recs:
-        with target_container:
-            ui.label("No recommendations available").classes("text-xs text-gray-500")
-        return
-    
-    with target_container:
-        for idx, rec in enumerate(recs):
-            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            description = rec.get('description', '').strip()
-            score_val = rec.get('score')
-            sub_scores = rec.get('sub_scores', {})
-            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
-            
-            # Format the recommendation card with hover tooltip
-            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
-            card_element.props(f'data-rec-id="{rec_id}"')
-            with card_element:
-                # Task name
-                ui.label(task_label).classes("font-bold text-sm mb-1")
-                
-                # Show normalized score prominently
-                if score_val is not None:
-                    score_text = f"Recommendation Score: {score_val:.1f}/100"
-                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
-                else:
-                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
-                # Show initialization notes if available
-                if description:
-                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
-                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
-                else:
-                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
-                
-                # Button action depends on mode
-                if mode == 'instances':
-                    instance_id = rec.get('instance_id')
-                    if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
-                        is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
-                        # Show "Resume" if paused, otherwise "Start"
-                        if is_paused:
-                            def log_and_resume(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='resume',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                resume_instance(iid)
-                            
-                            ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: log_and_resume(iid)
-                                      ).props("dense size=sm").classes("w-full bg-blue-500")
+    def refresh_completed():
+        completed_container.clear()
+        
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            def log_and_start(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='start',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                start_instance(iid)
-                            
-                            ui.button("START",
-                                      on_click=lambda iid=instance_id: log_and_start(iid)
-                                      ).props("dense size=sm").classes("w-full bg-green-500")
-                    else:
-                        ui.label("No instance ID").classes("text-xs text-gray-400")
-                else:
-                    # Template mode - initialize button
-                    task_id = rec.get('task_id')
-                    if task_id:
-                        # Capture task_id in lambda closure
-                        def log_and_init(tid):
-                            try:
-                                recommendation_logger.log_recommendation_selected(
-                                    task_id=tid,
-                                    instance_id=None,
-                                    task_name=task_label,
-                                    recommendation_score=score_val,
-                                    action='initialize',
-                                    context={
-                                        'mode': mode,
-                                        'metrics': metric_keys,
-                                        'filters': filters,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            init_quick(tid)
-                        
-                        ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: log_and_init(tid)
-                                  ).props("dense size=sm").classes("w-full")
-                    else:
-                        ui.label("No task ID").classes("text-xs text-gray-400")
-            
-            # Create tooltip with sub-scores using the same pattern as task tooltips
-            # Build tooltip content similar to format_colored_tooltip
-            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
-            
-            # Add sub-scores to tooltip
-            score_labels = {
-                'relief_score': 'Relief Score',
-                'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
-                'physical_load': 'Physical Load',
-                'stress_level': 'Stress Level',
-                'behavioral_score': 'Behavioral Score',
-                'net_wellbeing_normalized': 'Net Wellbeing',
-                'net_load': 'Net Load',
-                'net_relief_proxy': 'Net Relief',
-                'mental_energy_needed': 'Mental Energy',
-                'task_difficulty': 'Task Difficulty',
-                'historical_efficiency': 'Historical Efficiency',
-                'duration_minutes': 'Duration (min)',
-            }
-            
-            for key, label in score_labels.items():
-                val = sub_scores.get(key)
-                if val is not None:
-                    try:
-                        display_val = f"{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        display_val = str(val)
-                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
-            
-            formatted_tooltip = ''.join(tooltip_parts)
-            tooltip_id = f'tooltip-{rec_id}'
-            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
-            
-            # Add tooltip to body using the same method as task tooltips
-            ui.add_body_html(tooltip_html)
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
     
-    # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+    # Initial render
+    refresh_completed()
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
+
+
+def build_recently_completed_panel():
+    """Build the recently completed tasks panel."""
+    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
+    ui.separator()
+    
+    # Container for recent tasks
+    completed_container = ui.column().classes("w-full")
+    
+    def refresh_completed():
+        completed_container.clear()
+        
+        # Get current user for data isolation
+        from backend.auth import get_current_user
+        current_user_id = get_current_user()
+        
+        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
+            if hasattr(im, "list_recent_tasks") else []
+        
+        if not recent_tasks:
+            with completed_container:
+                ui.label("No recent tasks").classes("text-xs text-gray-500")
+            return
+        
+        # Show flat list with date and time
+        with completed_container:
+            for c in recent_tasks:
+                # Get timestamp from either completed_at or cancelled_at
+                completed_at = str(c.get('completed_at', ''))
+                cancelled_at = str(c.get('cancelled_at', ''))
+                status = c.get('status', 'completed')
+                timestamp_str = completed_at if status == 'completed' else cancelled_at
+                instance_id_completed = c.get('instance_id', '')
+                # Format: "Task Name YYYY-MM-DD HH:MM"
+                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
+                    # Show task name with status indicator
+                    task_name = c.get('task_name', 'Unknown')
+                    status_label = " [Cancelled]" if status == 'cancelled' else ""
+                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
+                    if timestamp_str:
+                        # Extract date and time parts
+                        parts = timestamp_str.split()
+                        if len(parts) >= 2:
+                            date_part = parts[0]
+                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
+                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
+                        else:
+                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                    # Hidden buttons for context menu actions (Edit, Delete only)
+                    if instance_id_completed:
+                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
+                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
+    
+    # Initial render
+    refresh_completed()
 
 
 def build_recently_completed_panel():
@@ -6541,2693 +6483,15 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 if mode == 'instances':
                     instance_id = rec.get('instance_id')
                     if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
+                        # Check if instance is paused (actual from rec, enriched by recommendations_from_instances)
+                        actual_str = rec.get('actual') or '{}'
                         is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
-                        # Show "Resume" if paused, otherwise "Start"
-                        if is_paused:
-                            def log_and_resume(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='resume',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                resume_instance(iid)
-                            
-                            ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: log_and_resume(iid)
-                                      ).props("dense size=sm").classes("w-full bg-blue-500")
-                        else:
-                            def log_and_start(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='start',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                start_instance(iid)
-                            
-                            ui.button("START",
-                                      on_click=lambda iid=instance_id: log_and_start(iid)
-                                      ).props("dense size=sm").classes("w-full bg-green-500")
-                    else:
-                        ui.label("No instance ID").classes("text-xs text-gray-400")
-                else:
-                    # Template mode - initialize button
-                    task_id = rec.get('task_id')
-                    if task_id:
-                        # Capture task_id in lambda closure
-                        def log_and_init(tid):
-                            try:
-                                recommendation_logger.log_recommendation_selected(
-                                    task_id=tid,
-                                    instance_id=None,
-                                    task_name=task_label,
-                                    recommendation_score=score_val,
-                                    action='initialize',
-                                    context={
-                                        'mode': mode,
-                                        'metrics': metric_keys,
-                                        'filters': filters,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            init_quick(tid)
-                        
-                        ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: log_and_init(tid)
-                                  ).props("dense size=sm").classes("w-full")
-                    else:
-                        ui.label("No task ID").classes("text-xs text-gray-400")
-            
-            # Create tooltip with sub-scores using the same pattern as task tooltips
-            # Build tooltip content similar to format_colored_tooltip
-            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
-            
-            # Add sub-scores to tooltip
-            score_labels = {
-                'relief_score': 'Relief Score',
-                'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
-                'physical_load': 'Physical Load',
-                'stress_level': 'Stress Level',
-                'behavioral_score': 'Behavioral Score',
-                'net_wellbeing_normalized': 'Net Wellbeing',
-                'net_load': 'Net Load',
-                'net_relief_proxy': 'Net Relief',
-                'mental_energy_needed': 'Mental Energy',
-                'task_difficulty': 'Task Difficulty',
-                'historical_efficiency': 'Historical Efficiency',
-                'duration_minutes': 'Duration (min)',
-            }
-            
-            for key, label in score_labels.items():
-                val = sub_scores.get(key)
-                if val is not None:
-                    try:
-                        display_val = f"{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        display_val = str(val)
-                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
-            
-            formatted_tooltip = ''.join(tooltip_parts)
-            tooltip_id = f'tooltip-{rec_id}'
-            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
-            
-            # Add tooltip to body using the same method as task tooltips
-            ui.add_body_html(tooltip_html)
-    
-    # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
+                        try:
+                            actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                            is_paused = actual_data.get('paused', False)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
 
-
-def build_recently_completed_panel():
-    """Build the recently completed tasks panel."""
-    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
-    ui.separator()
-    
-    # Container for recent tasks
-    completed_container = ui.column().classes("w-full")
-    
-    def refresh_completed():
-        completed_container.clear()
-        
-        # Get current user for data isolation
-        from backend.auth import get_current_user
-        current_user_id = get_current_user()
-        
-        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
-            if hasattr(im, "list_recent_tasks") else []
-        
-        if not recent_tasks:
-            with completed_container:
-                ui.label("No recent tasks").classes("text-xs text-gray-500")
-            return
-        
-        # Show flat list with date and time
-        with completed_container:
-            for c in recent_tasks:
-                # Get timestamp from either completed_at or cancelled_at
-                completed_at = str(c.get('completed_at', ''))
-                cancelled_at = str(c.get('cancelled_at', ''))
-                status = c.get('status', 'completed')
-                timestamp_str = completed_at if status == 'completed' else cancelled_at
-                instance_id_completed = c.get('instance_id', '')
-                # Format: "Task Name YYYY-MM-DD HH:MM"
-                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
-                    # Show task name with status indicator
-                    task_name = c.get('task_name', 'Unknown')
-                    status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
-                    if timestamp_str:
-                        # Extract date and time parts
-                        parts = timestamp_str.split()
-                        if len(parts) >= 2:
-                            date_part = parts[0]
-                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
-                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
-                        else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
-                    # Hidden buttons for context menu actions (Edit, Delete only)
-                    if instance_id_completed:
-                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
-                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
-    
-    # Initial render
-    refresh_completed()
-
-
-# Analytics panel is now just a header - removed compact panel
-
-
-def build_recommendations_section():
-    """Build the recommendations section with search-based metric filtering."""
-    global dash_filters
-    if not dash_filters:
-        dash_filters = {}
-    with ui.column().classes("scrollable-section"):
-        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
-        ui.separator()
-        
-        # Recommendation mode toggle
-        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
-        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
-        with mode_toggle_row:
-            ui.label("Recommendation Type:").classes("text-sm")
-            mode_select = ui.select(
-                options={
-                    'templates': 'Task Templates',
-                    'instances': 'Initialized Tasks'
-                },
-                value='templates'
-            ).classes("w-40")
-        
-        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
-        
-        # Metric search input (replaces multi-select)
-        metric_search_input = ui.input(
-            label="Search metrics",
-            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
-        ).classes("w-full mb-2")
-        
-        # Store selected metrics based on search
-        selected_metrics_state = default_metrics.copy()
-        
-        # Debounce timer for search input
-        search_debounce_timer = None
-        
-        def handle_metric_search(e):
-            """Handle metric search input changes with debouncing."""
-            nonlocal search_debounce_timer
-            
-            # Cancel existing timer if any
-            if search_debounce_timer is not None:
-                search_debounce_timer.deactivate()
-            
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
-            
-            # Create a debounced function that will execute after user stops typing
-            def apply_search():
-                """Apply the search filter after debounce delay."""
-                try:
-                    current_value = metric_search_input.value
-                    search_query = str(current_value).strip().lower() if current_value else None
-                    if search_query == '':
-                        search_query = None
-                    
-                    # Filter metrics based on search
-                    if search_query:
-                        filtered_metrics = [
-                            label for label in metric_labels
-                            if search_query in label.lower()
-                        ]
-                        # If search matches nothing, show all metrics (better UX than showing nothing)
-                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-                    else:
-                        # Empty search shows default metrics
-                        selected_metrics_state[:] = default_metrics
-                    
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
-                    pass
-            
-            # Create a timer that will execute after 300ms of no typing
-            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
-        
-        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-        metric_search_input.on('update:model-value', handle_metric_search)
-        
-        # Filters row
-        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
-        
-        with filter_row:
-            # Duration filters
-            min_duration = ui.number(
-                label="Min duration (min)",
-                value=dash_filters.get('min_duration'),
-            ).classes("w-32")
-            
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            
-            # Task type filter
-            task_type_select = ui.select(
-                options={
-                    '': 'All Types',
-                    'Work': 'Work',
-                    'Play': 'Play',
-                    'Self care': 'Self care',
-                },
-                label="Task Type",
-                value=dash_filters.get('task_type', ''),
-            ).classes("w-32")
-            
-            # Recurring filter
-            is_recurring_select = ui.select(
-                options={
-                    '': 'All',
-                    'true': 'Recurring',
-                    'false': 'One-time',
-                },
-                label="Recurring",
-                value=dash_filters.get('is_recurring', ''),
-            ).classes("w-32")
-            
-            # Categories search filter
-            categories_search = ui.input(
-                label="Categories",
-                placeholder="Search categories...",
-                value=dash_filters.get('categories', ''),
-            ).classes("w-40")
-            
-            def apply_filters():
-                # Min duration
-                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
-                if min_val is not None:
-                    try:
-                        min_val = float(min_val)
-                    except (TypeError, ValueError):
-                        min_val = None
-                dash_filters['min_duration'] = min_val
-                
-                # Max duration
-                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if max_val is not None:
-                    try:
-                        max_val = float(max_val)
-                    except (TypeError, ValueError):
-                        max_val = None
-                dash_filters['max_duration'] = max_val
-                
-                # Task type
-                task_type_val = task_type_select.value if task_type_select.value else None
-                dash_filters['task_type'] = task_type_val
-                
-                # Is recurring
-                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
-                dash_filters['is_recurring'] = is_recurring_val
-                
-                # Categories
-                categories_val = categories_search.value.strip() if categories_search.value else None
-                dash_filters['categories'] = categories_val
-                
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-            
-            ui.button("APPLY", on_click=apply_filters).props("dense")
-        
-        # Handle mode change
-        def on_mode_change(e):
-            recommendation_mode['value'] = mode_select.value
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-        
-        mode_select.on('update:model-value', on_mode_change)
-        
-        # Recommendations container
-        rec_container = ui.column().classes("w-full")
-        
-        # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-
-
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
-    """Refresh the recommendations display based on selected metrics.
-    
-    Args:
-        target_container: UI container to render recommendations in
-        selected_metrics: List of metric labels to display
-        metric_key_map: Mapping from metric labels to keys
-        mode: 'templates' for task templates or 'instances' for initialized tasks
-    """
-    target_container.clear()
-    
-    # Normalize selected metrics (list of labels)
-    if selected_metrics is None:
-        selected_metrics = []
-    if isinstance(selected_metrics, str):
-        selected_metrics = [selected_metrics]
-    if metric_key_map is None:
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-    
-    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
-    if not metric_keys:
-        metric_keys = ["relief_score"]
-    
-    # Get recommendations for the selected metrics (top 10)
-    # Use module-level dash_filters if available, otherwise empty dict
-    filters = globals().get('dash_filters', {})
-    
-    if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
-    else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
-    
-    if not recs:
-        with target_container:
-            ui.label("No recommendations available").classes("text-xs text-gray-500")
-        return
-    
-    with target_container:
-        for idx, rec in enumerate(recs):
-            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            description = rec.get('description', '').strip()
-            score_val = rec.get('score')
-            sub_scores = rec.get('sub_scores', {})
-            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
-            
-            # Format the recommendation card with hover tooltip
-            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
-            card_element.props(f'data-rec-id="{rec_id}"')
-            with card_element:
-                # Task name
-                ui.label(task_label).classes("font-bold text-sm mb-1")
-                
-                # Show normalized score prominently
-                if score_val is not None:
-                    score_text = f"Recommendation Score: {score_val:.1f}/100"
-                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
-                else:
-                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
-                # Show initialization notes if available
-                if description:
-                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
-                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
-                else:
-                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
-                
-                # Button action depends on mode
-                if mode == 'instances':
-                    instance_id = rec.get('instance_id')
-                    if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
-                        is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
-                        # Show "Resume" if paused, otherwise "Start"
-                        if is_paused:
-                            def log_and_resume(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='resume',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                resume_instance(iid)
-                            
-                            ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: log_and_resume(iid)
-                                      ).props("dense size=sm").classes("w-full bg-blue-500")
-                        else:
-                            def log_and_start(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='start',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                start_instance(iid)
-                            
-                            ui.button("START",
-                                      on_click=lambda iid=instance_id: log_and_start(iid)
-                                      ).props("dense size=sm").classes("w-full bg-green-500")
-                    else:
-                        ui.label("No instance ID").classes("text-xs text-gray-400")
-                else:
-                    # Template mode - initialize button
-                    task_id = rec.get('task_id')
-                    if task_id:
-                        # Capture task_id in lambda closure
-                        def log_and_init(tid):
-                            try:
-                                recommendation_logger.log_recommendation_selected(
-                                    task_id=tid,
-                                    instance_id=None,
-                                    task_name=task_label,
-                                    recommendation_score=score_val,
-                                    action='initialize',
-                                    context={
-                                        'mode': mode,
-                                        'metrics': metric_keys,
-                                        'filters': filters,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            init_quick(tid)
-                        
-                        ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: log_and_init(tid)
-                                  ).props("dense size=sm").classes("w-full")
-                    else:
-                        ui.label("No task ID").classes("text-xs text-gray-400")
-            
-            # Create tooltip with sub-scores using the same pattern as task tooltips
-            # Build tooltip content similar to format_colored_tooltip
-            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
-            
-            # Add sub-scores to tooltip
-            score_labels = {
-                'relief_score': 'Relief Score',
-                'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
-                'physical_load': 'Physical Load',
-                'stress_level': 'Stress Level',
-                'behavioral_score': 'Behavioral Score',
-                'net_wellbeing_normalized': 'Net Wellbeing',
-                'net_load': 'Net Load',
-                'net_relief_proxy': 'Net Relief',
-                'mental_energy_needed': 'Mental Energy',
-                'task_difficulty': 'Task Difficulty',
-                'historical_efficiency': 'Historical Efficiency',
-                'duration_minutes': 'Duration (min)',
-            }
-            
-            for key, label in score_labels.items():
-                val = sub_scores.get(key)
-                if val is not None:
-                    try:
-                        display_val = f"{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        display_val = str(val)
-                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
-            
-            formatted_tooltip = ''.join(tooltip_parts)
-            tooltip_id = f'tooltip-{rec_id}'
-            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
-            
-            # Add tooltip to body using the same method as task tooltips
-            ui.add_body_html(tooltip_html)
-    
-    # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
-
-
-def build_recently_completed_panel():
-    """Build the recently completed tasks panel."""
-    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
-    ui.separator()
-    
-    # Container for recent tasks
-    completed_container = ui.column().classes("w-full")
-    
-    def refresh_completed():
-        completed_container.clear()
-        
-        # Get current user for data isolation
-        from backend.auth import get_current_user
-        current_user_id = get_current_user()
-        
-        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
-            if hasattr(im, "list_recent_tasks") else []
-        
-        if not recent_tasks:
-            with completed_container:
-                ui.label("No recent tasks").classes("text-xs text-gray-500")
-            return
-        
-        # Show flat list with date and time
-        with completed_container:
-            for c in recent_tasks:
-                # Get timestamp from either completed_at or cancelled_at
-                completed_at = str(c.get('completed_at', ''))
-                cancelled_at = str(c.get('cancelled_at', ''))
-                status = c.get('status', 'completed')
-                timestamp_str = completed_at if status == 'completed' else cancelled_at
-                instance_id_completed = c.get('instance_id', '')
-                # Format: "Task Name YYYY-MM-DD HH:MM"
-                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
-                    # Show task name with status indicator
-                    task_name = c.get('task_name', 'Unknown')
-                    status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
-                    if timestamp_str:
-                        # Extract date and time parts
-                        parts = timestamp_str.split()
-                        if len(parts) >= 2:
-                            date_part = parts[0]
-                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
-                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
-                        else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
-                    # Hidden buttons for context menu actions (Edit, Delete only)
-                    if instance_id_completed:
-                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
-                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
-    
-    # Initial render
-    refresh_completed()
-
-
-# Analytics panel is now just a header - removed compact panel
-
-
-def build_recommendations_section():
-    """Build the recommendations section with search-based metric filtering."""
-    global dash_filters
-    if not dash_filters:
-        dash_filters = {}
-    with ui.column().classes("scrollable-section"):
-        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
-        ui.separator()
-        
-        # Recommendation mode toggle
-        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
-        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
-        with mode_toggle_row:
-            ui.label("Recommendation Type:").classes("text-sm")
-            mode_select = ui.select(
-                options={
-                    'templates': 'Task Templates',
-                    'instances': 'Initialized Tasks'
-                },
-                value='templates'
-            ).classes("w-40")
-        
-        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
-        
-        # Metric search input (replaces multi-select)
-        metric_search_input = ui.input(
-            label="Search metrics",
-            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
-        ).classes("w-full mb-2")
-        
-        # Store selected metrics based on search
-        selected_metrics_state = default_metrics.copy()
-        
-        # Debounce timer for search input
-        search_debounce_timer = None
-        
-        def handle_metric_search(e):
-            """Handle metric search input changes with debouncing."""
-            nonlocal search_debounce_timer
-            
-            # Cancel existing timer if any
-            if search_debounce_timer is not None:
-                search_debounce_timer.deactivate()
-            
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
-            
-            # Create a debounced function that will execute after user stops typing
-            def apply_search():
-                """Apply the search filter after debounce delay."""
-                try:
-                    current_value = metric_search_input.value
-                    search_query = str(current_value).strip().lower() if current_value else None
-                    if search_query == '':
-                        search_query = None
-                    
-                    # Filter metrics based on search
-                    if search_query:
-                        filtered_metrics = [
-                            label for label in metric_labels
-                            if search_query in label.lower()
-                        ]
-                        # If search matches nothing, show all metrics (better UX than showing nothing)
-                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-                    else:
-                        # Empty search shows default metrics
-                        selected_metrics_state[:] = default_metrics
-                    
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
-                    pass
-            
-            # Create a timer that will execute after 300ms of no typing
-            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
-        
-        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-        metric_search_input.on('update:model-value', handle_metric_search)
-        
-        # Filters row
-        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
-        
-        with filter_row:
-            # Duration filters
-            min_duration = ui.number(
-                label="Min duration (min)",
-                value=dash_filters.get('min_duration'),
-            ).classes("w-32")
-            
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            
-            # Task type filter
-            task_type_select = ui.select(
-                options={
-                    '': 'All Types',
-                    'Work': 'Work',
-                    'Play': 'Play',
-                    'Self care': 'Self care',
-                },
-                label="Task Type",
-                value=dash_filters.get('task_type', ''),
-            ).classes("w-32")
-            
-            # Recurring filter
-            is_recurring_select = ui.select(
-                options={
-                    '': 'All',
-                    'true': 'Recurring',
-                    'false': 'One-time',
-                },
-                label="Recurring",
-                value=dash_filters.get('is_recurring', ''),
-            ).classes("w-32")
-            
-            # Categories search filter
-            categories_search = ui.input(
-                label="Categories",
-                placeholder="Search categories...",
-                value=dash_filters.get('categories', ''),
-            ).classes("w-40")
-            
-            def apply_filters():
-                # Min duration
-                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
-                if min_val is not None:
-                    try:
-                        min_val = float(min_val)
-                    except (TypeError, ValueError):
-                        min_val = None
-                dash_filters['min_duration'] = min_val
-                
-                # Max duration
-                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if max_val is not None:
-                    try:
-                        max_val = float(max_val)
-                    except (TypeError, ValueError):
-                        max_val = None
-                dash_filters['max_duration'] = max_val
-                
-                # Task type
-                task_type_val = task_type_select.value if task_type_select.value else None
-                dash_filters['task_type'] = task_type_val
-                
-                # Is recurring
-                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
-                dash_filters['is_recurring'] = is_recurring_val
-                
-                # Categories
-                categories_val = categories_search.value.strip() if categories_search.value else None
-                dash_filters['categories'] = categories_val
-                
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-            
-            ui.button("APPLY", on_click=apply_filters).props("dense")
-        
-        # Handle mode change
-        def on_mode_change(e):
-            recommendation_mode['value'] = mode_select.value
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-        
-        mode_select.on('update:model-value', on_mode_change)
-        
-        # Recommendations container
-        rec_container = ui.column().classes("w-full")
-        
-        # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-
-
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
-    """Refresh the recommendations display based on selected metrics.
-    
-    Args:
-        target_container: UI container to render recommendations in
-        selected_metrics: List of metric labels to display
-        metric_key_map: Mapping from metric labels to keys
-        mode: 'templates' for task templates or 'instances' for initialized tasks
-    """
-    target_container.clear()
-    
-    # Normalize selected metrics (list of labels)
-    if selected_metrics is None:
-        selected_metrics = []
-    if isinstance(selected_metrics, str):
-        selected_metrics = [selected_metrics]
-    if metric_key_map is None:
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-    
-    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
-    if not metric_keys:
-        metric_keys = ["relief_score"]
-    
-    # Get recommendations for the selected metrics (top 10)
-    # Use module-level dash_filters if available, otherwise empty dict
-    filters = globals().get('dash_filters', {})
-    
-    if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
-    else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
-    
-    if not recs:
-        with target_container:
-            ui.label("No recommendations available").classes("text-xs text-gray-500")
-        return
-    
-    with target_container:
-        for idx, rec in enumerate(recs):
-            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            description = rec.get('description', '').strip()
-            score_val = rec.get('score')
-            sub_scores = rec.get('sub_scores', {})
-            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
-            
-            # Format the recommendation card with hover tooltip
-            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
-            card_element.props(f'data-rec-id="{rec_id}"')
-            with card_element:
-                # Task name
-                ui.label(task_label).classes("font-bold text-sm mb-1")
-                
-                # Show normalized score prominently
-                if score_val is not None:
-                    score_text = f"Recommendation Score: {score_val:.1f}/100"
-                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
-                else:
-                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
-                # Show initialization notes if available
-                if description:
-                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
-                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
-                else:
-                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
-                
-                # Button action depends on mode
-                if mode == 'instances':
-                    instance_id = rec.get('instance_id')
-                    if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
-                        is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
-                        # Show "Resume" if paused, otherwise "Start"
-                        if is_paused:
-                            def log_and_resume(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='resume',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                resume_instance(iid)
-                            
-                            ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: log_and_resume(iid)
-                                      ).props("dense size=sm").classes("w-full bg-blue-500")
-                        else:
-                            def log_and_start(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='start',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                start_instance(iid)
-                            
-                            ui.button("START",
-                                      on_click=lambda iid=instance_id: log_and_start(iid)
-                                      ).props("dense size=sm").classes("w-full bg-green-500")
-                    else:
-                        ui.label("No instance ID").classes("text-xs text-gray-400")
-                else:
-                    # Template mode - initialize button
-                    task_id = rec.get('task_id')
-                    if task_id:
-                        # Capture task_id in lambda closure
-                        def log_and_init(tid):
-                            try:
-                                recommendation_logger.log_recommendation_selected(
-                                    task_id=tid,
-                                    instance_id=None,
-                                    task_name=task_label,
-                                    recommendation_score=score_val,
-                                    action='initialize',
-                                    context={
-                                        'mode': mode,
-                                        'metrics': metric_keys,
-                                        'filters': filters,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            init_quick(tid)
-                        
-                        ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: log_and_init(tid)
-                                  ).props("dense size=sm").classes("w-full")
-                    else:
-                        ui.label("No task ID").classes("text-xs text-gray-400")
-            
-            # Create tooltip with sub-scores using the same pattern as task tooltips
-            # Build tooltip content similar to format_colored_tooltip
-            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
-            
-            # Add sub-scores to tooltip
-            score_labels = {
-                'relief_score': 'Relief Score',
-                'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
-                'physical_load': 'Physical Load',
-                'stress_level': 'Stress Level',
-                'behavioral_score': 'Behavioral Score',
-                'net_wellbeing_normalized': 'Net Wellbeing',
-                'net_load': 'Net Load',
-                'net_relief_proxy': 'Net Relief',
-                'mental_energy_needed': 'Mental Energy',
-                'task_difficulty': 'Task Difficulty',
-                'historical_efficiency': 'Historical Efficiency',
-                'duration_minutes': 'Duration (min)',
-            }
-            
-            for key, label in score_labels.items():
-                val = sub_scores.get(key)
-                if val is not None:
-                    try:
-                        display_val = f"{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        display_val = str(val)
-                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
-            
-            formatted_tooltip = ''.join(tooltip_parts)
-            tooltip_id = f'tooltip-{rec_id}'
-            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
-            
-            # Add tooltip to body using the same method as task tooltips
-            ui.add_body_html(tooltip_html)
-    
-    # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
-
-
-def build_recently_completed_panel():
-    """Build the recently completed tasks panel."""
-    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
-    ui.separator()
-    
-    # Container for recent tasks
-    completed_container = ui.column().classes("w-full")
-    
-    def refresh_completed():
-        completed_container.clear()
-        
-        # Get current user for data isolation
-        from backend.auth import get_current_user
-        current_user_id = get_current_user()
-        
-        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
-            if hasattr(im, "list_recent_tasks") else []
-        
-        if not recent_tasks:
-            with completed_container:
-                ui.label("No recent tasks").classes("text-xs text-gray-500")
-            return
-        
-        # Show flat list with date and time
-        with completed_container:
-            for c in recent_tasks:
-                # Get timestamp from either completed_at or cancelled_at
-                completed_at = str(c.get('completed_at', ''))
-                cancelled_at = str(c.get('cancelled_at', ''))
-                status = c.get('status', 'completed')
-                timestamp_str = completed_at if status == 'completed' else cancelled_at
-                instance_id_completed = c.get('instance_id', '')
-                # Format: "Task Name YYYY-MM-DD HH:MM"
-                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
-                    # Show task name with status indicator
-                    task_name = c.get('task_name', 'Unknown')
-                    status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
-                    if timestamp_str:
-                        # Extract date and time parts
-                        parts = timestamp_str.split()
-                        if len(parts) >= 2:
-                            date_part = parts[0]
-                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
-                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
-                        else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
-                    # Hidden buttons for context menu actions (Edit, Delete only)
-                    if instance_id_completed:
-                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
-                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
-    
-    # Initial render
-    refresh_completed()
-
-
-# Analytics panel is now just a header - removed compact panel
-
-
-def build_recommendations_section():
-    """Build the recommendations section with search-based metric filtering."""
-    global dash_filters
-    if not dash_filters:
-        dash_filters = {}
-    with ui.column().classes("scrollable-section"):
-        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
-        ui.separator()
-        
-        # Recommendation mode toggle
-        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
-        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
-        with mode_toggle_row:
-            ui.label("Recommendation Type:").classes("text-sm")
-            mode_select = ui.select(
-                options={
-                    'templates': 'Task Templates',
-                    'instances': 'Initialized Tasks'
-                },
-                value='templates'
-            ).classes("w-40")
-        
-        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
-        
-        # Metric search input (replaces multi-select)
-        metric_search_input = ui.input(
-            label="Search metrics",
-            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
-        ).classes("w-full mb-2")
-        
-        # Store selected metrics based on search
-        selected_metrics_state = default_metrics.copy()
-        
-        # Debounce timer for search input
-        search_debounce_timer = None
-        
-        def handle_metric_search(e):
-            """Handle metric search input changes with debouncing."""
-            nonlocal search_debounce_timer
-            
-            # Cancel existing timer if any
-            if search_debounce_timer is not None:
-                search_debounce_timer.deactivate()
-            
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
-            
-            # Create a debounced function that will execute after user stops typing
-            def apply_search():
-                """Apply the search filter after debounce delay."""
-                try:
-                    current_value = metric_search_input.value
-                    search_query = str(current_value).strip().lower() if current_value else None
-                    if search_query == '':
-                        search_query = None
-                    
-                    # Filter metrics based on search
-                    if search_query:
-                        filtered_metrics = [
-                            label for label in metric_labels
-                            if search_query in label.lower()
-                        ]
-                        # If search matches nothing, show all metrics (better UX than showing nothing)
-                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-                    else:
-                        # Empty search shows default metrics
-                        selected_metrics_state[:] = default_metrics
-                    
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
-                    pass
-            
-            # Create a timer that will execute after 300ms of no typing
-            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
-        
-        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-        metric_search_input.on('update:model-value', handle_metric_search)
-        
-        # Filters row
-        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
-        
-        with filter_row:
-            # Duration filters
-            min_duration = ui.number(
-                label="Min duration (min)",
-                value=dash_filters.get('min_duration'),
-            ).classes("w-32")
-            
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            
-            # Task type filter
-            task_type_select = ui.select(
-                options={
-                    '': 'All Types',
-                    'Work': 'Work',
-                    'Play': 'Play',
-                    'Self care': 'Self care',
-                },
-                label="Task Type",
-                value=dash_filters.get('task_type', ''),
-            ).classes("w-32")
-            
-            # Recurring filter
-            is_recurring_select = ui.select(
-                options={
-                    '': 'All',
-                    'true': 'Recurring',
-                    'false': 'One-time',
-                },
-                label="Recurring",
-                value=dash_filters.get('is_recurring', ''),
-            ).classes("w-32")
-            
-            # Categories search filter
-            categories_search = ui.input(
-                label="Categories",
-                placeholder="Search categories...",
-                value=dash_filters.get('categories', ''),
-            ).classes("w-40")
-            
-            def apply_filters():
-                # Min duration
-                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
-                if min_val is not None:
-                    try:
-                        min_val = float(min_val)
-                    except (TypeError, ValueError):
-                        min_val = None
-                dash_filters['min_duration'] = min_val
-                
-                # Max duration
-                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if max_val is not None:
-                    try:
-                        max_val = float(max_val)
-                    except (TypeError, ValueError):
-                        max_val = None
-                dash_filters['max_duration'] = max_val
-                
-                # Task type
-                task_type_val = task_type_select.value if task_type_select.value else None
-                dash_filters['task_type'] = task_type_val
-                
-                # Is recurring
-                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
-                dash_filters['is_recurring'] = is_recurring_val
-                
-                # Categories
-                categories_val = categories_search.value.strip() if categories_search.value else None
-                dash_filters['categories'] = categories_val
-                
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-            
-            ui.button("APPLY", on_click=apply_filters).props("dense")
-        
-        # Handle mode change
-        def on_mode_change(e):
-            recommendation_mode['value'] = mode_select.value
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-        
-        mode_select.on('update:model-value', on_mode_change)
-        
-        # Recommendations container
-        rec_container = ui.column().classes("w-full")
-        
-        # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-
-
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
-    """Refresh the recommendations display based on selected metrics.
-    
-    Args:
-        target_container: UI container to render recommendations in
-        selected_metrics: List of metric labels to display
-        metric_key_map: Mapping from metric labels to keys
-        mode: 'templates' for task templates or 'instances' for initialized tasks
-    """
-    target_container.clear()
-    
-    # Normalize selected metrics (list of labels)
-    if selected_metrics is None:
-        selected_metrics = []
-    if isinstance(selected_metrics, str):
-        selected_metrics = [selected_metrics]
-    if metric_key_map is None:
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-    
-    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
-    if not metric_keys:
-        metric_keys = ["relief_score"]
-    
-    # Get recommendations for the selected metrics (top 10)
-    # Use module-level dash_filters if available, otherwise empty dict
-    filters = globals().get('dash_filters', {})
-    
-    if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
-    else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
-    
-    if not recs:
-        with target_container:
-            ui.label("No recommendations available").classes("text-xs text-gray-500")
-        return
-    
-    with target_container:
-        for idx, rec in enumerate(recs):
-            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            description = rec.get('description', '').strip()
-            score_val = rec.get('score')
-            sub_scores = rec.get('sub_scores', {})
-            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
-            
-            # Format the recommendation card with hover tooltip
-            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
-            card_element.props(f'data-rec-id="{rec_id}"')
-            with card_element:
-                # Task name
-                ui.label(task_label).classes("font-bold text-sm mb-1")
-                
-                # Show normalized score prominently
-                if score_val is not None:
-                    score_text = f"Recommendation Score: {score_val:.1f}/100"
-                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
-                else:
-                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
-                # Show initialization notes if available
-                if description:
-                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
-                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
-                else:
-                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
-                
-                # Button action depends on mode
-                if mode == 'instances':
-                    instance_id = rec.get('instance_id')
-                    if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
-                        is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
-                        # Show "Resume" if paused, otherwise "Start"
-                        if is_paused:
-                            def log_and_resume(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='resume',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                resume_instance(iid)
-                            
-                            ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: log_and_resume(iid)
-                                      ).props("dense size=sm").classes("w-full bg-blue-500")
-                        else:
-                            def log_and_start(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='start',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                start_instance(iid)
-                            
-                            ui.button("START",
-                                      on_click=lambda iid=instance_id: log_and_start(iid)
-                                      ).props("dense size=sm").classes("w-full bg-green-500")
-                    else:
-                        ui.label("No instance ID").classes("text-xs text-gray-400")
-                else:
-                    # Template mode - initialize button
-                    task_id = rec.get('task_id')
-                    if task_id:
-                        # Capture task_id in lambda closure
-                        def log_and_init(tid):
-                            try:
-                                recommendation_logger.log_recommendation_selected(
-                                    task_id=tid,
-                                    instance_id=None,
-                                    task_name=task_label,
-                                    recommendation_score=score_val,
-                                    action='initialize',
-                                    context={
-                                        'mode': mode,
-                                        'metrics': metric_keys,
-                                        'filters': filters,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            init_quick(tid)
-                        
-                        ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: log_and_init(tid)
-                                  ).props("dense size=sm").classes("w-full")
-                    else:
-                        ui.label("No task ID").classes("text-xs text-gray-400")
-            
-            # Create tooltip with sub-scores using the same pattern as task tooltips
-            # Build tooltip content similar to format_colored_tooltip
-            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
-            
-            # Add sub-scores to tooltip
-            score_labels = {
-                'relief_score': 'Relief Score',
-                'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
-                'physical_load': 'Physical Load',
-                'stress_level': 'Stress Level',
-                'behavioral_score': 'Behavioral Score',
-                'net_wellbeing_normalized': 'Net Wellbeing',
-                'net_load': 'Net Load',
-                'net_relief_proxy': 'Net Relief',
-                'mental_energy_needed': 'Mental Energy',
-                'task_difficulty': 'Task Difficulty',
-                'historical_efficiency': 'Historical Efficiency',
-                'duration_minutes': 'Duration (min)',
-            }
-            
-            for key, label in score_labels.items():
-                val = sub_scores.get(key)
-                if val is not None:
-                    try:
-                        display_val = f"{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        display_val = str(val)
-                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
-            
-            formatted_tooltip = ''.join(tooltip_parts)
-            tooltip_id = f'tooltip-{rec_id}'
-            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
-            
-            # Add tooltip to body using the same method as task tooltips
-            ui.add_body_html(tooltip_html)
-    
-    # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
-
-
-def build_recently_completed_panel():
-    """Build the recently completed tasks panel."""
-    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
-    ui.separator()
-    
-    # Container for recent tasks
-    completed_container = ui.column().classes("w-full")
-    
-    def refresh_completed():
-        completed_container.clear()
-        
-        # Get current user for data isolation
-        from backend.auth import get_current_user
-        current_user_id = get_current_user()
-        
-        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
-            if hasattr(im, "list_recent_tasks") else []
-        
-        if not recent_tasks:
-            with completed_container:
-                ui.label("No recent tasks").classes("text-xs text-gray-500")
-            return
-        
-        # Show flat list with date and time
-        with completed_container:
-            for c in recent_tasks:
-                # Get timestamp from either completed_at or cancelled_at
-                completed_at = str(c.get('completed_at', ''))
-                cancelled_at = str(c.get('cancelled_at', ''))
-                status = c.get('status', 'completed')
-                timestamp_str = completed_at if status == 'completed' else cancelled_at
-                instance_id_completed = c.get('instance_id', '')
-                # Format: "Task Name YYYY-MM-DD HH:MM"
-                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
-                    # Show task name with status indicator
-                    task_name = c.get('task_name', 'Unknown')
-                    status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
-                    if timestamp_str:
-                        # Extract date and time parts
-                        parts = timestamp_str.split()
-                        if len(parts) >= 2:
-                            date_part = parts[0]
-                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
-                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
-                        else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
-                    # Hidden buttons for context menu actions (Edit, Delete only)
-                    if instance_id_completed:
-                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
-                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
-    
-    # Initial render
-    refresh_completed()
-
-
-# Analytics panel is now just a header - removed compact panel
-
-
-def build_recommendations_section():
-    """Build the recommendations section with search-based metric filtering."""
-    global dash_filters
-    if not dash_filters:
-        dash_filters = {}
-    with ui.column().classes("scrollable-section"):
-        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
-        ui.separator()
-        
-        # Recommendation mode toggle
-        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
-        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
-        with mode_toggle_row:
-            ui.label("Recommendation Type:").classes("text-sm")
-            mode_select = ui.select(
-                options={
-                    'templates': 'Task Templates',
-                    'instances': 'Initialized Tasks'
-                },
-                value='templates'
-            ).classes("w-40")
-        
-        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
-        
-        # Metric search input (replaces multi-select)
-        metric_search_input = ui.input(
-            label="Search metrics",
-            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
-        ).classes("w-full mb-2")
-        
-        # Store selected metrics based on search
-        selected_metrics_state = default_metrics.copy()
-        
-        # Debounce timer for search input
-        search_debounce_timer = None
-        
-        def handle_metric_search(e):
-            """Handle metric search input changes with debouncing."""
-            nonlocal search_debounce_timer
-            
-            # Cancel existing timer if any
-            if search_debounce_timer is not None:
-                search_debounce_timer.deactivate()
-            
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
-            
-            # Create a debounced function that will execute after user stops typing
-            def apply_search():
-                """Apply the search filter after debounce delay."""
-                try:
-                    current_value = metric_search_input.value
-                    search_query = str(current_value).strip().lower() if current_value else None
-                    if search_query == '':
-                        search_query = None
-                    
-                    # Filter metrics based on search
-                    if search_query:
-                        filtered_metrics = [
-                            label for label in metric_labels
-                            if search_query in label.lower()
-                        ]
-                        # If search matches nothing, show all metrics (better UX than showing nothing)
-                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-                    else:
-                        # Empty search shows default metrics
-                        selected_metrics_state[:] = default_metrics
-                    
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
-                    pass
-            
-            # Create a timer that will execute after 300ms of no typing
-            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
-        
-        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-        metric_search_input.on('update:model-value', handle_metric_search)
-        
-        # Filters row
-        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
-        
-        with filter_row:
-            # Duration filters
-            min_duration = ui.number(
-                label="Min duration (min)",
-                value=dash_filters.get('min_duration'),
-            ).classes("w-32")
-            
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            
-            # Task type filter
-            task_type_select = ui.select(
-                options={
-                    '': 'All Types',
-                    'Work': 'Work',
-                    'Play': 'Play',
-                    'Self care': 'Self care',
-                },
-                label="Task Type",
-                value=dash_filters.get('task_type', ''),
-            ).classes("w-32")
-            
-            # Recurring filter
-            is_recurring_select = ui.select(
-                options={
-                    '': 'All',
-                    'true': 'Recurring',
-                    'false': 'One-time',
-                },
-                label="Recurring",
-                value=dash_filters.get('is_recurring', ''),
-            ).classes("w-32")
-            
-            # Categories search filter
-            categories_search = ui.input(
-                label="Categories",
-                placeholder="Search categories...",
-                value=dash_filters.get('categories', ''),
-            ).classes("w-40")
-            
-            def apply_filters():
-                # Min duration
-                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
-                if min_val is not None:
-                    try:
-                        min_val = float(min_val)
-                    except (TypeError, ValueError):
-                        min_val = None
-                dash_filters['min_duration'] = min_val
-                
-                # Max duration
-                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if max_val is not None:
-                    try:
-                        max_val = float(max_val)
-                    except (TypeError, ValueError):
-                        max_val = None
-                dash_filters['max_duration'] = max_val
-                
-                # Task type
-                task_type_val = task_type_select.value if task_type_select.value else None
-                dash_filters['task_type'] = task_type_val
-                
-                # Is recurring
-                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
-                dash_filters['is_recurring'] = is_recurring_val
-                
-                # Categories
-                categories_val = categories_search.value.strip() if categories_search.value else None
-                dash_filters['categories'] = categories_val
-                
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-            
-            ui.button("APPLY", on_click=apply_filters).props("dense")
-        
-        # Handle mode change
-        def on_mode_change(e):
-            recommendation_mode['value'] = mode_select.value
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-        
-        mode_select.on('update:model-value', on_mode_change)
-        
-        # Recommendations container
-        rec_container = ui.column().classes("w-full")
-        
-        # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-
-
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
-    """Refresh the recommendations display based on selected metrics.
-    
-    Args:
-        target_container: UI container to render recommendations in
-        selected_metrics: List of metric labels to display
-        metric_key_map: Mapping from metric labels to keys
-        mode: 'templates' for task templates or 'instances' for initialized tasks
-    """
-    target_container.clear()
-    
-    # Normalize selected metrics (list of labels)
-    if selected_metrics is None:
-        selected_metrics = []
-    if isinstance(selected_metrics, str):
-        selected_metrics = [selected_metrics]
-    if metric_key_map is None:
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-    
-    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
-    if not metric_keys:
-        metric_keys = ["relief_score"]
-    
-    # Get recommendations for the selected metrics (top 10)
-    # Use module-level dash_filters if available, otherwise empty dict
-    filters = globals().get('dash_filters', {})
-    
-    if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
-    else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
-    
-    if not recs:
-        with target_container:
-            ui.label("No recommendations available").classes("text-xs text-gray-500")
-        return
-    
-    with target_container:
-        for idx, rec in enumerate(recs):
-            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            description = rec.get('description', '').strip()
-            score_val = rec.get('score')
-            sub_scores = rec.get('sub_scores', {})
-            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
-            
-            # Format the recommendation card with hover tooltip
-            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
-            card_element.props(f'data-rec-id="{rec_id}"')
-            with card_element:
-                # Task name
-                ui.label(task_label).classes("font-bold text-sm mb-1")
-                
-                # Show normalized score prominently
-                if score_val is not None:
-                    score_text = f"Recommendation Score: {score_val:.1f}/100"
-                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
-                else:
-                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
-                # Show initialization notes if available
-                if description:
-                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
-                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
-                else:
-                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
-                
-                # Button action depends on mode
-                if mode == 'instances':
-                    instance_id = rec.get('instance_id')
-                    if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
-                        is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
-                        # Show "Resume" if paused, otherwise "Start"
-                        if is_paused:
-                            def log_and_resume(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='resume',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                resume_instance(iid)
-                            
-                            ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: log_and_resume(iid)
-                                      ).props("dense size=sm").classes("w-full bg-blue-500")
-                        else:
-                            def log_and_start(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='start',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                start_instance(iid)
-                            
-                            ui.button("START",
-                                      on_click=lambda iid=instance_id: log_and_start(iid)
-                                      ).props("dense size=sm").classes("w-full bg-green-500")
-                    else:
-                        ui.label("No instance ID").classes("text-xs text-gray-400")
-                else:
-                    # Template mode - initialize button
-                    task_id = rec.get('task_id')
-                    if task_id:
-                        # Capture task_id in lambda closure
-                        def log_and_init(tid):
-                            try:
-                                recommendation_logger.log_recommendation_selected(
-                                    task_id=tid,
-                                    instance_id=None,
-                                    task_name=task_label,
-                                    recommendation_score=score_val,
-                                    action='initialize',
-                                    context={
-                                        'mode': mode,
-                                        'metrics': metric_keys,
-                                        'filters': filters,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            init_quick(tid)
-                        
-                        ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: log_and_init(tid)
-                                  ).props("dense size=sm").classes("w-full")
-                    else:
-                        ui.label("No task ID").classes("text-xs text-gray-400")
-            
-            # Create tooltip with sub-scores using the same pattern as task tooltips
-            # Build tooltip content similar to format_colored_tooltip
-            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
-            
-            # Add sub-scores to tooltip
-            score_labels = {
-                'relief_score': 'Relief Score',
-                'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
-                'physical_load': 'Physical Load',
-                'stress_level': 'Stress Level',
-                'behavioral_score': 'Behavioral Score',
-                'net_wellbeing_normalized': 'Net Wellbeing',
-                'net_load': 'Net Load',
-                'net_relief_proxy': 'Net Relief',
-                'mental_energy_needed': 'Mental Energy',
-                'task_difficulty': 'Task Difficulty',
-                'historical_efficiency': 'Historical Efficiency',
-                'duration_minutes': 'Duration (min)',
-            }
-            
-            for key, label in score_labels.items():
-                val = sub_scores.get(key)
-                if val is not None:
-                    try:
-                        display_val = f"{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        display_val = str(val)
-                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
-            
-            formatted_tooltip = ''.join(tooltip_parts)
-            tooltip_id = f'tooltip-{rec_id}'
-            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
-            
-            # Add tooltip to body using the same method as task tooltips
-            ui.add_body_html(tooltip_html)
-    
-    # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
-
-
-def build_recently_completed_panel():
-    """Build the recently completed tasks panel."""
-    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
-    ui.separator()
-    
-    # Container for recent tasks
-    completed_container = ui.column().classes("w-full")
-    
-    def refresh_completed():
-        completed_container.clear()
-        
-        # Get current user for data isolation
-        from backend.auth import get_current_user
-        current_user_id = get_current_user()
-        
-        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
-            if hasattr(im, "list_recent_tasks") else []
-        
-        if not recent_tasks:
-            with completed_container:
-                ui.label("No recent tasks").classes("text-xs text-gray-500")
-            return
-        
-        # Show flat list with date and time
-        with completed_container:
-            for c in recent_tasks:
-                # Get timestamp from either completed_at or cancelled_at
-                completed_at = str(c.get('completed_at', ''))
-                cancelled_at = str(c.get('cancelled_at', ''))
-                status = c.get('status', 'completed')
-                timestamp_str = completed_at if status == 'completed' else cancelled_at
-                instance_id_completed = c.get('instance_id', '')
-                # Format: "Task Name YYYY-MM-DD HH:MM"
-                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
-                    # Show task name with status indicator
-                    task_name = c.get('task_name', 'Unknown')
-                    status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
-                    if timestamp_str:
-                        # Extract date and time parts
-                        parts = timestamp_str.split()
-                        if len(parts) >= 2:
-                            date_part = parts[0]
-                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
-                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
-                        else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
-                    # Hidden buttons for context menu actions (Edit, Delete only)
-                    if instance_id_completed:
-                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
-                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
-    
-    # Initial render
-    refresh_completed()
-
-
-# Analytics panel is now just a header - removed compact panel
-
-
-def build_recommendations_section():
-    """Build the recommendations section with search-based metric filtering."""
-    global dash_filters
-    if not dash_filters:
-        dash_filters = {}
-    with ui.column().classes("scrollable-section"):
-        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
-        ui.separator()
-        
-        # Recommendation mode toggle
-        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
-        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
-        with mode_toggle_row:
-            ui.label("Recommendation Type:").classes("text-sm")
-            mode_select = ui.select(
-                options={
-                    'templates': 'Task Templates',
-                    'instances': 'Initialized Tasks'
-                },
-                value='templates'
-            ).classes("w-40")
-        
-        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
-        
-        # Metric search input (replaces multi-select)
-        metric_search_input = ui.input(
-            label="Search metrics",
-            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
-        ).classes("w-full mb-2")
-        
-        # Store selected metrics based on search
-        selected_metrics_state = default_metrics.copy()
-        
-        # Debounce timer for search input
-        search_debounce_timer = None
-        
-        def handle_metric_search(e):
-            """Handle metric search input changes with debouncing."""
-            nonlocal search_debounce_timer
-            
-            # Cancel existing timer if any
-            if search_debounce_timer is not None:
-                search_debounce_timer.deactivate()
-            
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
-            
-            # Create a debounced function that will execute after user stops typing
-            def apply_search():
-                """Apply the search filter after debounce delay."""
-                try:
-                    current_value = metric_search_input.value
-                    search_query = str(current_value).strip().lower() if current_value else None
-                    if search_query == '':
-                        search_query = None
-                    
-                    # Filter metrics based on search
-                    if search_query:
-                        filtered_metrics = [
-                            label for label in metric_labels
-                            if search_query in label.lower()
-                        ]
-                        # If search matches nothing, show all metrics (better UX than showing nothing)
-                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-                    else:
-                        # Empty search shows default metrics
-                        selected_metrics_state[:] = default_metrics
-                    
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
-                    pass
-            
-            # Create a timer that will execute after 300ms of no typing
-            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
-        
-        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-        metric_search_input.on('update:model-value', handle_metric_search)
-        
-        # Filters row
-        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
-        
-        with filter_row:
-            # Duration filters
-            min_duration = ui.number(
-                label="Min duration (min)",
-                value=dash_filters.get('min_duration'),
-            ).classes("w-32")
-            
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            
-            # Task type filter
-            task_type_select = ui.select(
-                options={
-                    '': 'All Types',
-                    'Work': 'Work',
-                    'Play': 'Play',
-                    'Self care': 'Self care',
-                },
-                label="Task Type",
-                value=dash_filters.get('task_type', ''),
-            ).classes("w-32")
-            
-            # Recurring filter
-            is_recurring_select = ui.select(
-                options={
-                    '': 'All',
-                    'true': 'Recurring',
-                    'false': 'One-time',
-                },
-                label="Recurring",
-                value=dash_filters.get('is_recurring', ''),
-            ).classes("w-32")
-            
-            # Categories search filter
-            categories_search = ui.input(
-                label="Categories",
-                placeholder="Search categories...",
-                value=dash_filters.get('categories', ''),
-            ).classes("w-40")
-            
-            def apply_filters():
-                # Min duration
-                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
-                if min_val is not None:
-                    try:
-                        min_val = float(min_val)
-                    except (TypeError, ValueError):
-                        min_val = None
-                dash_filters['min_duration'] = min_val
-                
-                # Max duration
-                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if max_val is not None:
-                    try:
-                        max_val = float(max_val)
-                    except (TypeError, ValueError):
-                        max_val = None
-                dash_filters['max_duration'] = max_val
-                
-                # Task type
-                task_type_val = task_type_select.value if task_type_select.value else None
-                dash_filters['task_type'] = task_type_val
-                
-                # Is recurring
-                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
-                dash_filters['is_recurring'] = is_recurring_val
-                
-                # Categories
-                categories_val = categories_search.value.strip() if categories_search.value else None
-                dash_filters['categories'] = categories_val
-                
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-            
-            ui.button("APPLY", on_click=apply_filters).props("dense")
-        
-        # Handle mode change
-        def on_mode_change(e):
-            recommendation_mode['value'] = mode_select.value
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-        
-        mode_select.on('update:model-value', on_mode_change)
-        
-        # Recommendations container
-        rec_container = ui.column().classes("w-full")
-        
-        # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-
-
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
-    """Refresh the recommendations display based on selected metrics.
-    
-    Args:
-        target_container: UI container to render recommendations in
-        selected_metrics: List of metric labels to display
-        metric_key_map: Mapping from metric labels to keys
-        mode: 'templates' for task templates or 'instances' for initialized tasks
-    """
-    target_container.clear()
-    
-    # Normalize selected metrics (list of labels)
-    if selected_metrics is None:
-        selected_metrics = []
-    if isinstance(selected_metrics, str):
-        selected_metrics = [selected_metrics]
-    if metric_key_map is None:
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-    
-    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
-    if not metric_keys:
-        metric_keys = ["relief_score"]
-    
-    # Get recommendations for the selected metrics (top 10)
-    # Use module-level dash_filters if available, otherwise empty dict
-    filters = globals().get('dash_filters', {})
-    
-    if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
-    else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
-    
-    if not recs:
-        with target_container:
-            ui.label("No recommendations available").classes("text-xs text-gray-500")
-        return
-    
-    with target_container:
-        for idx, rec in enumerate(recs):
-            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            description = rec.get('description', '').strip()
-            score_val = rec.get('score')
-            sub_scores = rec.get('sub_scores', {})
-            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
-            
-            # Format the recommendation card with hover tooltip
-            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
-            card_element.props(f'data-rec-id="{rec_id}"')
-            with card_element:
-                # Task name
-                ui.label(task_label).classes("font-bold text-sm mb-1")
-                
-                # Show normalized score prominently
-                if score_val is not None:
-                    score_text = f"Recommendation Score: {score_val:.1f}/100"
-                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
-                else:
-                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
-                # Show initialization notes if available
-                if description:
-                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
-                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
-                else:
-                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
-                
-                # Button action depends on mode
-                if mode == 'instances':
-                    instance_id = rec.get('instance_id')
-                    if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
-                        is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
-                        # Show "Resume" if paused, otherwise "Start"
-                        if is_paused:
-                            def log_and_resume(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='resume',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                resume_instance(iid)
-                            
-                            ui.button("RESUME",
-                                      on_click=lambda iid=instance_id: log_and_resume(iid)
-                                      ).props("dense size=sm").classes("w-full bg-blue-500")
-                        else:
-                            def log_and_start(iid):
-                                try:
-                                    recommendation_logger.log_recommendation_selected(
-                                        task_id=rec.get('task_id'),
-                                        instance_id=iid,
-                                        task_name=task_label,
-                                        recommendation_score=score_val,
-                                        action='start',
-                                        context={
-                                            'mode': mode,
-                                            'metrics': metric_keys,
-                                            'filters': filters,
-                                        }
-                                    )
-                                except Exception:
-                                    pass
-                                start_instance(iid)
-                            
-                            ui.button("START",
-                                      on_click=lambda iid=instance_id: log_and_start(iid)
-                                      ).props("dense size=sm").classes("w-full bg-green-500")
-                    else:
-                        ui.label("No instance ID").classes("text-xs text-gray-400")
-                else:
-                    # Template mode - initialize button
-                    task_id = rec.get('task_id')
-                    if task_id:
-                        # Capture task_id in lambda closure
-                        def log_and_init(tid):
-                            try:
-                                recommendation_logger.log_recommendation_selected(
-                                    task_id=tid,
-                                    instance_id=None,
-                                    task_name=task_label,
-                                    recommendation_score=score_val,
-                                    action='initialize',
-                                    context={
-                                        'mode': mode,
-                                        'metrics': metric_keys,
-                                        'filters': filters,
-                                    }
-                                )
-                            except Exception:
-                                pass
-                            init_quick(tid)
-                        
-                        ui.button("INITIALIZE",
-                                  on_click=lambda tid=task_id: log_and_init(tid)
-                                  ).props("dense size=sm").classes("w-full")
-                    else:
-                        ui.label("No task ID").classes("text-xs text-gray-400")
-            
-            # Create tooltip with sub-scores using the same pattern as task tooltips
-            # Build tooltip content similar to format_colored_tooltip
-            tooltip_parts = ['<div style="font-weight: bold; margin-bottom: 8px; color: #e5e7eb;">Detailed Metrics</div>']
-            
-            # Add sub-scores to tooltip
-            score_labels = {
-                'relief_score': 'Relief Score',
-                'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
-                'physical_load': 'Physical Load',
-                'stress_level': 'Stress Level',
-                'behavioral_score': 'Behavioral Score',
-                'net_wellbeing_normalized': 'Net Wellbeing',
-                'net_load': 'Net Load',
-                'net_relief_proxy': 'Net Relief',
-                'mental_energy_needed': 'Mental Energy',
-                'task_difficulty': 'Task Difficulty',
-                'historical_efficiency': 'Historical Efficiency',
-                'duration_minutes': 'Duration (min)',
-            }
-            
-            for key, label in score_labels.items():
-                val = sub_scores.get(key)
-                if val is not None:
-                    try:
-                        display_val = f"{float(val):.1f}"
-                    except (ValueError, TypeError):
-                        display_val = str(val)
-                    tooltip_parts.append(f'<div><strong>{label}:</strong> {display_val}</div>')
-            
-            formatted_tooltip = ''.join(tooltip_parts)
-            tooltip_id = f'tooltip-{rec_id}'
-            tooltip_html = f'<div id="{tooltip_id}" class="recommendation-tooltip">{formatted_tooltip}</div>'
-            
-            # Add tooltip to body using the same method as task tooltips
-            ui.add_body_html(tooltip_html)
-    
-    # Initialize tooltips after all cards are created (same pattern as task tooltips)
-    ui.run_javascript('setTimeout(initRecommendationTooltips, 200);')
-
-
-def build_recently_completed_panel():
-    """Build the recently completed tasks panel."""
-    ui.label("Recent Tasks").classes("font-bold text-sm mb-2")
-    ui.separator()
-    
-    # Container for recent tasks
-    completed_container = ui.column().classes("w-full")
-    
-    def refresh_completed():
-        completed_container.clear()
-        
-        # Get current user for data isolation
-        from backend.auth import get_current_user
-        current_user_id = get_current_user()
-        
-        recent_tasks = im.list_recent_tasks(limit=20, user_id=current_user_id) \
-            if hasattr(im, "list_recent_tasks") else []
-        
-        if not recent_tasks:
-            with completed_container:
-                ui.label("No recent tasks").classes("text-xs text-gray-500")
-            return
-        
-        # Show flat list with date and time
-        with completed_container:
-            for c in recent_tasks:
-                # Get timestamp from either completed_at or cancelled_at
-                completed_at = str(c.get('completed_at', ''))
-                cancelled_at = str(c.get('cancelled_at', ''))
-                status = c.get('status', 'completed')
-                timestamp_str = completed_at if status == 'completed' else cancelled_at
-                instance_id_completed = c.get('instance_id', '')
-                # Format: "Task Name YYYY-MM-DD HH:MM"
-                with ui.row().classes("justify-between items-center mb-1 context-menu-card").props(f'data-instance-id="{instance_id_completed}" data-context-menu="completed"').style("cursor: default; padding: 2px 4px; border-radius: 4px;"):
-                    # Show task name with status indicator
-                    task_name = c.get('task_name', 'Unknown')
-                    status_label = " [Cancelled]" if status == 'cancelled' else ""
-                    ui.label(f"{escape_for_display(task_name)}{status_label}").classes("text-xs flex-1")
-                    if timestamp_str:
-                        # Extract date and time parts
-                        parts = timestamp_str.split()
-                        if len(parts) >= 2:
-                            date_part = parts[0]
-                            time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
-                            ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
-                        else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
-                    # Hidden buttons for context menu actions (Edit, Delete only)
-                    if instance_id_completed:
-                        ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
-                        ui.button("", on_click=lambda iid=instance_id_completed: delete_instance(iid)).props(f'id="context-btn-completed-delete-{instance_id_completed}"').style("display: none;")
-    
-    # Initial render
-    refresh_completed()
-
-
-# Analytics panel is now just a header - removed compact panel
-
-
-def build_recommendations_section():
-    """Build the recommendations section with search-based metric filtering."""
-    global dash_filters
-    if not dash_filters:
-        dash_filters = {}
-    with ui.column().classes("scrollable-section"):
-        ui.label("Smart Recommendations").classes("font-bold text-lg mb-2")
-        ui.separator()
-        
-        # Recommendation mode toggle
-        recommendation_mode = {'value': 'templates'}  # 'templates' or 'instances'
-        mode_toggle_row = ui.row().classes("gap-2 mb-2 items-center")
-        with mode_toggle_row:
-            ui.label("Recommendation Type:").classes("text-sm")
-            mode_select = ui.select(
-                options={
-                    'templates': 'Task Templates',
-                    'instances': 'Initialized Tasks'
-                },
-                value='templates'
-            ).classes("w-40")
-        
-        metric_labels = [m["label"] for m in RECOMMENDATION_METRICS]
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-        default_metrics = metric_labels[:2] if len(metric_labels) >= 2 else metric_labels
-        
-        # Metric search input (replaces multi-select)
-        metric_search_input = ui.input(
-            label="Search metrics",
-            placeholder="Search by metric name (e.g., 'relief', 'energy', 'difficulty')..."
-        ).classes("w-full mb-2")
-        
-        # Store selected metrics based on search
-        selected_metrics_state = default_metrics.copy()
-        
-        # Debounce timer for search input
-        search_debounce_timer = None
-        
-        def handle_metric_search(e):
-            """Handle metric search input changes with debouncing."""
-            nonlocal search_debounce_timer
-            
-            # Cancel existing timer if any
-            if search_debounce_timer is not None:
-                search_debounce_timer.deactivate()
-            
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
-            
-            # Create a debounced function that will execute after user stops typing
-            def apply_search():
-                """Apply the search filter after debounce delay."""
-                try:
-                    current_value = metric_search_input.value
-                    search_query = str(current_value).strip().lower() if current_value else None
-                    if search_query == '':
-                        search_query = None
-                    
-                    # Filter metrics based on search
-                    if search_query:
-                        filtered_metrics = [
-                            label for label in metric_labels
-                            if search_query in label.lower()
-                        ]
-                        # If search matches nothing, show all metrics (better UX than showing nothing)
-                        selected_metrics_state[:] = filtered_metrics if filtered_metrics else metric_labels
-                    else:
-                        # Empty search shows default metrics
-                        selected_metrics_state[:] = default_metrics
-                    
-                    refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
-                    pass
-            
-            # Create a timer that will execute after 300ms of no typing
-            search_debounce_timer = ui.timer(0.3, apply_search, once=True)
-        
-        # Use debounced 'update:model-value' event to prevent refresh on every keystroke
-        metric_search_input.on('update:model-value', handle_metric_search)
-        
-        # Filters row
-        filter_row = ui.row().classes("gap-2 flex-wrap mb-2 items-end")
-        
-        with filter_row:
-            # Duration filters
-            min_duration = ui.number(
-                label="Min duration (min)",
-                value=dash_filters.get('min_duration'),
-            ).classes("w-32")
-            
-            max_duration = ui.number(
-                label="Max duration (min)",
-                value=dash_filters.get('max_duration'),
-            ).classes("w-32")
-            
-            # Task type filter
-            task_type_select = ui.select(
-                options={
-                    '': 'All Types',
-                    'Work': 'Work',
-                    'Play': 'Play',
-                    'Self care': 'Self care',
-                },
-                label="Task Type",
-                value=dash_filters.get('task_type', ''),
-            ).classes("w-32")
-            
-            # Recurring filter
-            is_recurring_select = ui.select(
-                options={
-                    '': 'All',
-                    'true': 'Recurring',
-                    'false': 'One-time',
-                },
-                label="Recurring",
-                value=dash_filters.get('is_recurring', ''),
-            ).classes("w-32")
-            
-            # Categories search filter
-            categories_search = ui.input(
-                label="Categories",
-                placeholder="Search categories...",
-                value=dash_filters.get('categories', ''),
-            ).classes("w-40")
-            
-            def apply_filters():
-                # Min duration
-                min_val = min_duration.value if min_duration.value not in (None, '', 'None') else None
-                if min_val is not None:
-                    try:
-                        min_val = float(min_val)
-                    except (TypeError, ValueError):
-                        min_val = None
-                dash_filters['min_duration'] = min_val
-                
-                # Max duration
-                max_val = max_duration.value if max_duration.value not in (None, '', 'None') else None
-                if max_val is not None:
-                    try:
-                        max_val = float(max_val)
-                    except (TypeError, ValueError):
-                        max_val = None
-                dash_filters['max_duration'] = max_val
-                
-                # Task type
-                task_type_val = task_type_select.value if task_type_select.value else None
-                dash_filters['task_type'] = task_type_val
-                
-                # Is recurring
-                is_recurring_val = is_recurring_select.value if is_recurring_select.value else None
-                dash_filters['is_recurring'] = is_recurring_val
-                
-                # Categories
-                categories_val = categories_search.value.strip() if categories_search.value else None
-                dash_filters['categories'] = categories_val
-                
-                refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-            
-            ui.button("APPLY", on_click=apply_filters).props("dense")
-        
-        # Handle mode change
-        def on_mode_change(e):
-            recommendation_mode['value'] = mode_select.value
-            refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-        
-        mode_select.on('update:model-value', on_mode_change)
-        
-        # Recommendations container
-        rec_container = ui.column().classes("w-full")
-        
-        # Initial render
-        refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-
-
-def refresh_recommendations(target_container, selected_metrics=None, metric_key_map=None, mode='templates'):
-    """Refresh the recommendations display based on selected metrics.
-    
-    Args:
-        target_container: UI container to render recommendations in
-        selected_metrics: List of metric labels to display
-        metric_key_map: Mapping from metric labels to keys
-        mode: 'templates' for task templates or 'instances' for initialized tasks
-    """
-    target_container.clear()
-    
-    # Normalize selected metrics (list of labels)
-    if selected_metrics is None:
-        selected_metrics = []
-    if isinstance(selected_metrics, str):
-        selected_metrics = [selected_metrics]
-    if metric_key_map is None:
-        metric_key_map = {m["label"]: m["key"] for m in RECOMMENDATION_METRICS}
-    
-    metric_keys = [metric_key_map.get(label, label) for label in selected_metrics if label]
-    if not metric_keys:
-        metric_keys = ["relief_score"]
-    
-    # Get recommendations for the selected metrics (top 10)
-    # Use module-level dash_filters if available, otherwise empty dict
-    filters = globals().get('dash_filters', {})
-    
-    if mode == 'instances':
-        recs = an.recommendations_from_instances(metric_keys, filters, limit=10)
-    else:
-        recs = an.recommendations_by_category(metric_keys, filters, limit=10)
-    
-    if not recs:
-        with target_container:
-            ui.label("No recommendations available").classes("text-xs text-gray-500")
-        return
-    
-    with target_container:
-        for idx, rec in enumerate(recs):
-            task_label = rec.get('task_name') or rec.get('title') or "Recommendation"
-            description = rec.get('description', '').strip()
-            score_val = rec.get('score')
-            sub_scores = rec.get('sub_scores', {})
-            rec_id = f"rec-{idx}-{rec.get('instance_id') or rec.get('task_id') or idx}"
-            
-            # Format the recommendation card with hover tooltip
-            card_element = ui.card().classes("recommendation-card recommendation-card-hover").style("position: relative;")
-            card_element.props(f'data-rec-id="{rec_id}"')
-            with card_element:
-                # Task name
-                ui.label(task_label).classes("font-bold text-sm mb-1")
-                
-                # Show normalized score prominently
-                if score_val is not None:
-                    score_text = f"Recommendation Score: {score_val:.1f}/100"
-                    ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
-                else:
-                    ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
-                # Show initialization notes if available
-                if description:
-                    with ui.card().classes("bg-gray-50 p-2 mb-2"):
-                        ui.label("Notes:").classes("text-xs font-semibold text-gray-600 mb-1")
-                        ui.label(escape_for_display(description)).classes("text-xs text-gray-700")
-                else:
-                    ui.label("No notes").classes("text-xs text-gray-400 italic mb-2")
-                
-                # Button action depends on mode
-                if mode == 'instances':
-                    instance_id = rec.get('instance_id')
-                    if instance_id:
-                        # Check if instance is paused
-                        instance = im.get_instance(instance_id, user_id=current_user_id)
-                        is_paused = False
-                        if instance:
-                            actual_str = instance.get("actual") or "{}"
-                            try:
-                                actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                                is_paused = actual_data.get('paused', False)
-                            except (json.JSONDecodeError, TypeError):
-                                pass
-                        
                         # Show "Resume" if paused, otherwise "Start"
                         if is_paused:
                             def log_and_resume(iid):

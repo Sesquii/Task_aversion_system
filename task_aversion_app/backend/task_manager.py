@@ -3,7 +3,7 @@ import os
 import json
 import pandas as pd
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from backend.performance_logger import get_perf_logger
 from backend.security_utils import (
@@ -16,6 +16,11 @@ TASKS_FILE = 'data/tasks.csv'
 perf_logger = get_perf_logger()
 
 class TaskManager:
+    # Class-level cache for get_all shared across instances (recommendations create new
+    # TaskManager per call; this avoids 8x get_all on dashboard load).
+    _get_all_shared: dict = {}
+    _get_all_shared_time: dict = {}
+
     def __init__(self):
         # Default to database (SQLite) unless USE_CSV is explicitly set
         # Check if CSV is explicitly requested
@@ -84,7 +89,9 @@ class TaskManager:
         self._tasks_all_cache = None
         self._tasks_all_cache_time = None
         self._task_cache.clear()
-        
+        TaskManager._get_all_shared.clear()
+        TaskManager._get_all_shared_time.clear()
+
         # Clear dynamic cache keys (used by get_all() and list_tasks() with user_id)
         # These are stored as attributes like: _tasks_all_cache_all:1, _tasks_all_cache_time_all:1, etc.
         # We need to iterate through all attributes and remove cache-related ones
@@ -196,7 +203,36 @@ class TaskManager:
             self._task_cache[cache_key] = (result.copy() if isinstance(result, dict) else result, time.time())
         
         return result
-    
+
+    def get_tasks_bulk(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, dict]:
+        """Fetch multiple tasks by id in one query. Returns {task_id: task_dict}."""
+        if not task_ids or (self.use_db and user_id is None):
+            return {}
+        if self.use_db:
+            return self._get_tasks_bulk_db(task_ids, user_id)
+        return self._get_tasks_bulk_csv(task_ids, user_id)
+
+    def _get_tasks_bulk_db(self, task_ids: List[str], user_id: int) -> Dict[str, dict]:
+        try:
+            from sqlalchemy import or_
+            with self.db_session() as session:
+                query = session.query(self.Task).filter(self.Task.task_id.in_(task_ids))
+                query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
+                tasks = query.all()
+                return {t.task_id: t.to_dict() for t in tasks}
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_tasks_bulk: {e}") from e
+            self.use_db = False
+            return self._get_tasks_bulk_csv(task_ids, user_id)
+
+    def _get_tasks_bulk_csv(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, dict]:
+        self._reload_csv()
+        df = self.df[self.df['task_id'].isin(task_ids)]
+        if user_id is not None and 'user_id' in df.columns:
+            df = df[df['user_id'].astype(str) == str(user_id)]
+        return {r['task_id']: r for r in df.to_dict(orient='records')}
+
     def _get_task_csv(self, task_id, user_id: Optional[int] = None):
         """CSV-specific get_task."""
         with perf_logger.operation("_get_task_csv", task_id=task_id, user_id=user_id):
@@ -319,25 +355,32 @@ class TaskManager:
         # Check cache first (cache key includes user_id for isolation)
         cache_key = f"all:{user_id}" if user_id else "all:all"
         current_time = time.time()
-        if (hasattr(self, f'_tasks_all_cache_{cache_key}') and 
+        # Class-level shared cache (shared across TaskManager instances, e.g. 8x recommendations on dashboard)
+        if (cache_key in getattr(TaskManager, '_get_all_shared', {}) and
+            cache_key in getattr(TaskManager, '_get_all_shared_time', {}) and
+            (current_time - TaskManager._get_all_shared_time[cache_key]) < self._cache_ttl_seconds):
+            return TaskManager._get_all_shared[cache_key].copy()
+        if (hasattr(self, f'_tasks_all_cache_{cache_key}') and
             hasattr(self, f'_tasks_all_cache_time_{cache_key}')):
             cache = getattr(self, f'_tasks_all_cache_{cache_key}')
             cache_time = getattr(self, f'_tasks_all_cache_time_{cache_key}')
             if cache is not None and cache_time is not None and (current_time - cache_time) < self._cache_ttl_seconds:
                 return cache.copy()
-        
+
         # Cache miss - load from database/CSV
         if self.use_db:
             result = self._get_all_db(user_id)
         else:
             result = self._get_all_csv(user_id)
         
-        # Store in cache
+        # Store in instance and class-level cache
         setattr(self, f'_tasks_all_cache_{cache_key}', result.copy())
         setattr(self, f'_tasks_all_cache_time_{cache_key}', time.time())
-        
+        TaskManager._get_all_shared[cache_key] = result.copy()
+        TaskManager._get_all_shared_time[cache_key] = time.time()
+
         return result
-    
+
     def _get_all_csv(self, user_id: Optional[int] = None):
         """CSV-specific get_all."""
         self._reload_csv()
@@ -856,7 +899,59 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._get_task_notes_csv(task_id, user_id)
 
+    def get_task_notes_bulk(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, str]:
+        """Get notes for multiple tasks in one query. Use to avoid N+1 when filtering by notes.
 
+        Args:
+            task_ids: List of task IDs
+            user_id: User ID to filter by (required for database, optional for CSV)
+
+        Returns:
+            Dict mapping task_id -> notes string (empty string if no notes or not found)
+        """
+        if not task_ids:
+            return {}
+        if self.use_db:
+            return self._get_task_notes_bulk_db(task_ids, user_id)
+        return self._get_task_notes_bulk_csv(task_ids, user_id)
+
+    def _get_task_notes_bulk_csv(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, str]:
+        """CSV-specific get_task_notes_bulk."""
+        self._reload_csv()
+        result: Dict[str, str] = {tid: '' for tid in task_ids}
+        for task_id in task_ids:
+            mask = self.df['task_id'] == task_id
+            if user_id is not None and 'user_id' in self.df.columns:
+                mask = mask & (self.df['user_id'].astype(str) == str(user_id))
+            elif user_id is not None and 'user_id' not in self.df.columns:
+                continue
+            rows = self.df.loc[mask]
+            if not rows.empty:
+                notes = rows.iloc[0].get('notes', '')
+                result[task_id] = notes if not pd.isna(notes) else ''
+        return result
+
+    def _get_task_notes_bulk_db(self, task_ids: List[str], user_id: Optional[int] = None) -> Dict[str, str]:
+        """Database-specific get_task_notes_bulk. One query with IN clause."""
+        from sqlalchemy import or_
+        result: Dict[str, str] = {tid: '' for tid in task_ids}
+        try:
+            with self.db_session() as session:
+                query = session.query(self.Task.task_id, self.Task.notes).filter(
+                    self.Task.task_id.in_(task_ids)
+                )
+                if user_id is not None:
+                    query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
+                for row in query.all():
+                    result[row.task_id] = (row.notes or '') if row.notes else ''
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_task_notes_bulk: {e}") from e
+            print(f"[TaskManager] Database error in get_task_notes_bulk: {e}, falling back to CSV")
+            self.use_db = False
+            self._ensure_csv_initialized()
+            return self._get_task_notes_bulk_csv(task_ids, user_id)
+        return result
 
     def delete_by_id(self, task_id, user_id: Optional[int] = None):
         """Remove a task template by id. Works with both CSV and database.

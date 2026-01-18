@@ -8,9 +8,10 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text, Float, ForeignKey, Index
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text, Float, ForeignKey, Index, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.pool import StaticPool
 
 # Import JSONB for PostgreSQL (used when DATABASE_URL is PostgreSQL)
 # JSONB provides better performance and supports GIN indexes
@@ -42,11 +43,13 @@ DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///data/task_aversion.db')
 
 # Create engine with appropriate settings
 if DATABASE_URL.startswith('sqlite'):
-    # SQLite-specific settings
+    # SQLite-specific settings. StaticPool reuses a single connection so PRAGMA
+    # table_info runs once per table per process instead of per connection.
     engine = create_engine(
         DATABASE_URL,
         echo=False,  # Set to True for SQL query logging
-        connect_args={'check_same_thread': False}  # Allow multi-threaded access
+        connect_args={'check_same_thread': False},  # Allow multi-threaded access
+        poolclass=StaticPool,
     )
 else:
     # PostgreSQL settings
@@ -89,7 +92,20 @@ def init_db():
     
     # Create tables (idempotent operation)
     Base.metadata.create_all(engine)
-    
+
+    # Warm SQLite schema on the single StaticPool connection so PRAGMA table_info
+    # runs at startup instead of on first user request.
+    if DATABASE_URL.startswith('sqlite') and Base.metadata.tables:
+        try:
+            with engine.connect() as conn:
+                for tbl in Base.metadata.tables.values():
+                    try:
+                        list(conn.execute(text(f'PRAGMA table_info("{tbl.name}")')))
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[Database] Schema pre-warm skipped: {e}")
+
     # Only print message once to avoid console spam
     if not _db_initialized:
         print(f"[Database] Initialized database at {DATABASE_URL}")

@@ -27,7 +27,11 @@ Each request generates a log entry like:
 [2024-01-15 14:30:45.123] GET /
 Request ID: a1b2c3d4
 Queries in this request: 8
+Total DB time: 12.34 ms
 Running total - Requests: 42, Queries: 156
+
+Top repeated query patterns:
+  5x: SELECT task_instances.instance_id AS ... WHERE task_instances.instance_id = ?
 
 Query Details (8 queries):
   1. SELECT * FROM tasks WHERE user_id = ? | Params: (1,)
@@ -36,6 +40,9 @@ Query Details (8 queries):
 
 [INFO] Moderate query count (8) - review for optimization
 ```
+
+- **Total DB time**: Sum of all query execution times in the request (ms). Use to compare before/after refactors.
+- **Top repeated query patterns**: When the same normalized query runs multiple times, it is listed (e.g. `90x: SELECT ...`). This makes N+1 patterns easy to spot.
 
 ## Configuration
 
@@ -89,6 +96,19 @@ Query Details (25 queries):
 ```
 
 This suggests loading task instances one-by-one instead of using a JOIN or IN clause.
+
+## Baseline Analysis Script
+
+To summarize metrics from the log (per-path query counts, DB time, and most repeated patterns):
+
+```bash
+python scripts/analyze_query_baseline.py [path/to/query_log.txt]
+```
+
+Default path: `task_aversion_app/logs/query_log.txt`. Use the output to:
+- Establish a baseline before refactors (query count and DB time per path).
+- Identify N+1 patterns (same SELECT repeated many times).
+- Compare after refactors to confirm improvement.
 
 ## Clearing the Log
 

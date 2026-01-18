@@ -1056,6 +1056,54 @@ class InstanceManager:
             self.use_db = False
             return self._get_instance_csv(instance_id)
 
+    def get_instances_bulk(self, instance_ids: List[str], user_id: Optional[int] = None) -> Dict[str, dict]:
+        """Fetch multiple instances by ID in one query. Use to avoid N+1 in recommendation cards etc.
+
+        Args:
+            instance_ids: List of instance IDs
+            user_id: User ID for data isolation (required for DB)
+
+        Returns:
+            Dict mapping instance_id -> instance dict (missing/forbidden IDs are omitted)
+        """
+        if not instance_ids:
+            return {}
+        if self.use_db:
+            return self._get_instances_bulk_db(instance_ids, user_id)
+        return self._get_instances_bulk_csv(instance_ids, user_id)
+
+    def _get_instances_bulk_csv(self, instance_ids: List[str], user_id: Optional[int] = None) -> Dict[str, dict]:
+        """CSV bulk fetch. Returns {} if user_id is None (data isolation)."""
+        if user_id is None:
+            return {}
+        self._reload()
+        result: Dict[str, dict] = {}
+        df = self.df[self.df['instance_id'].isin(instance_ids)]
+        if 'user_id' in df.columns:
+            df = df[df['user_id'].astype(str) == str(user_id)]
+        for _, row in df.iterrows():
+            result[str(row['instance_id'])] = row.to_dict()
+        return result
+
+    def _get_instances_bulk_db(self, instance_ids: List[str], user_id: Optional[int] = None) -> Dict[str, dict]:
+        """DB bulk fetch. One query with IN clause."""
+        if user_id is None:
+            return {}
+        try:
+            with self.db_session() as session:
+                query = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id.in_(instance_ids),
+                    self.TaskInstance.user_id == user_id
+                )
+                instances = query.all()
+                return {i.instance_id: i.to_dict() for i in instances}
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_instances_bulk: {e}") from e
+            print(f"[InstanceManager] Database error in get_instances_bulk: {e}, falling back to CSV")
+            self.use_db = False
+            return self._get_instances_bulk_csv(instance_ids, user_id)
+
     def start_instance(self, instance_id, user_id: Optional[int] = None):
         """Start a task instance (first time, not resuming). Works with both CSV and database.
         
@@ -2795,6 +2843,152 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in get_previous_task_averages: {e}, falling back to CSV")
             self.use_db = False
             return self._get_previous_task_averages_csv(task_id, user_id=user_id)
+
+    def get_previous_task_averages_bulk(
+        self, task_ids: List[str], user_id: Optional[int] = None
+    ) -> Dict[str, dict]:
+        """Bulk fetch previous-task averages and avg_time_estimate for many task_ids in one query.
+        Returns {task_id: {**averages, 'avg_time_estimate': float or None}}.
+        Used by format_colored_tooltip in refresh_initialized_tasks to avoid N+1."""
+        if not task_ids or user_id is None:
+            return {}
+        if self.use_db:
+            return self._get_previous_task_averages_bulk_db(task_ids, user_id)
+        return self._get_previous_task_averages_bulk_csv(task_ids, user_id)
+
+    def _get_previous_task_averages_from_instances(
+        self, instances: list
+    ) -> tuple:
+        """From a list of instances (ORM or dict with 'predicted'), compute averages dict and
+        avg_time_estimate. Returns (result_dict, avg_time_estimate)."""
+        import json as _json
+        relief_values = []
+        mental_energy_values = []
+        difficulty_values = []
+        cognitive_values = []
+        physical_values = []
+        emotional_values = []
+        motivation_values = []
+        aversion_values = []
+        time_values = []
+        for inst in instances:
+            if isinstance(inst, dict):
+                raw = inst.get('predicted') or '{}'
+                try:
+                    pred = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+                except (_json.JSONDecodeError, TypeError):
+                    pred = {}
+            else:
+                pred = getattr(inst, 'predicted', None) or {}
+            if not isinstance(pred, dict):
+                pred = {}
+            # scales and value lists (same as _get_previous_task_averages_db)
+            for key, value_list in [
+                ('expected_relief', relief_values),
+                ('expected_mental_energy', mental_energy_values),
+                ('expected_difficulty', difficulty_values),
+                ('expected_cognitive_load', cognitive_values),
+                ('expected_physical_load', physical_values),
+                ('expected_emotional_load', emotional_values),
+                ('motivation', motivation_values),
+                ('expected_aversion', aversion_values),
+            ]:
+                val = pred.get(key)
+                if val is not None:
+                    try:
+                        num_val = float(val)
+                        if num_val <= 10 and num_val >= 0:
+                            num_val = num_val * 10
+                        value_list.append(num_val)
+                    except (ValueError, TypeError):
+                        pass
+            if 'expected_mental_energy' not in pred and 'expected_difficulty' not in pred:
+                old_cog = pred.get('expected_cognitive_load')
+                if old_cog is not None:
+                    try:
+                        num_val = float(old_cog)
+                        if num_val <= 10 and num_val >= 0:
+                            num_val = num_val * 10
+                        mental_energy_values.append(num_val)
+                        difficulty_values.append(num_val)
+                    except (ValueError, TypeError):
+                        pass
+            # time
+            t = pred.get('time_estimate_minutes') or pred.get('estimate')
+            if t is not None:
+                try:
+                    time_values.append(float(t))
+                except (ValueError, TypeError):
+                    pass
+        result = {}
+        if relief_values:
+            result['expected_relief'] = round(sum(relief_values) / len(relief_values))
+        if mental_energy_values:
+            result['expected_mental_energy'] = round(sum(mental_energy_values) / len(mental_energy_values))
+        if difficulty_values:
+            result['expected_difficulty'] = round(sum(difficulty_values) / len(difficulty_values))
+        if cognitive_values:
+            result['expected_cognitive_load'] = round(sum(cognitive_values) / len(cognitive_values))
+        if physical_values:
+            result['expected_physical_load'] = round(sum(physical_values) / len(physical_values))
+        if emotional_values:
+            result['expected_emotional_load'] = round(sum(emotional_values) / len(emotional_values))
+        if motivation_values:
+            result['motivation'] = round(sum(motivation_values) / len(motivation_values))
+        if aversion_values:
+            result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
+        avg_time = (sum(time_values) / len(time_values)) if time_values else None
+        return result, avg_time
+
+    def _get_previous_task_averages_bulk_db(
+        self, task_ids: List[str], user_id: int
+    ) -> Dict[str, dict]:
+        try:
+            with self.db_session() as session:
+                q = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.task_id.in_(task_ids),
+                    self.TaskInstance.user_id == user_id,
+                    self.TaskInstance.initialized_at.isnot(None),
+                )
+                instances = q.all()
+            groups = {}
+            for i in instances:
+                groups.setdefault(i.task_id, []).append(i)
+            out = {}
+            for tid in task_ids:
+                lst = groups.get(tid, [])
+                res, avg_time = self._get_previous_task_averages_from_instances(lst)
+                res['avg_time_estimate'] = avg_time
+                out[tid] = res
+            return out
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in get_previous_task_averages_bulk: {e}") from e
+            self.use_db = False
+            return self._get_previous_task_averages_bulk_csv(task_ids, user_id)
+
+    def _get_previous_task_averages_bulk_csv(
+        self, task_ids: List[str], user_id: int
+    ) -> Dict[str, dict]:
+        import json as _json
+        self._reload()
+        mask = (
+            (self.df['task_id'].isin(task_ids))
+            & (self.df['initialized_at'].astype(str).str.strip() != '')
+            & (self.df['user_id'].astype(str) == str(user_id))
+        )
+        df = self.df.loc[mask]
+        groups = {}
+        for _, row in df.iterrows():
+            tid = str(row['task_id'])
+            groups.setdefault(tid, []).append(row.to_dict())
+        out = {}
+        for tid in task_ids:
+            lst = groups.get(tid, [])
+            res, avg_time = self._get_previous_task_averages_from_instances(lst)
+            res['avg_time_estimate'] = avg_time
+            out[tid] = res
+        return out
 
     def get_previous_actual_averages(self, task_id: str, user_id: Optional[int] = None) -> dict:
         """Get average values from previous completed instances of the same task.

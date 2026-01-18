@@ -2,11 +2,19 @@
 """
 Lightweight query logging system to track database queries per request.
 Helps identify N+1 query issues by logging query counts for each page load.
+Tracks total DB time per request and repeated-query patterns for baseline analysis.
+
+Note: DB time reflects only SQL execute duration (Engine before/after_cursor_execute).
+Connection setup, PRAGMA table_info, and ORM/connection overhead are not included;
+cold loads with many new connections can show low DB time despite high wall-clock.
 """
 import os
+import re
 import threading
+import time
+from collections import Counter
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from contextvars import ContextVar
 
 # Thread-local storage for request context (works with both async and sync code)
@@ -45,6 +53,7 @@ def set_request_id(request_id: str):
     _thread_local.request_id = request_id
     _thread_local.query_count = 0
     _thread_local.queries = []
+    _thread_local.db_time = 0.0
 
 
 def increment_query_count(query: Optional[str] = None):
@@ -80,6 +89,18 @@ def get_queries() -> List[str]:
     return []
 
 
+def add_db_time(seconds: float) -> None:
+    """Accumulate DB time for the current request (called from after_cursor_execute)."""
+    if not hasattr(_thread_local, 'db_time'):
+        _thread_local.db_time = 0.0
+    _thread_local.db_time += seconds
+
+
+def get_db_time() -> float:
+    """Get total DB time in seconds for the current request."""
+    return getattr(_thread_local, 'db_time', 0.0)
+
+
 def log_request_summary(path: str, method: str = "GET"):
     """Log summary of queries for a request."""
     request_id = get_request_id()
@@ -100,15 +121,33 @@ def log_request_summary(path: str, method: str = "GET"):
         total_queries = _total_queries
         total_requests = _total_requests
     
+    db_time_ms = get_db_time() * 1000.0
+
     # Format log entry
     log_lines = [
         f"\n{'='*80}",
         f"[{timestamp}] {method} {path}",
         f"Request ID: {request_id}",
         f"Queries in this request: {query_count}",
+        f"Total DB time: {db_time_ms:.2f} ms",
         f"Running total - Requests: {total_requests}, Queries: {total_queries}",
     ]
-    
+
+    # Top repeated query patterns (normalize: strip Params, collapse whitespace, truncate)
+    def _normalize(q: str) -> str:
+        s = re.sub(r"\s*\|\s*Params:.*$", "", q, flags=re.IGNORECASE)
+        s = re.sub(r"\s+", " ", s).strip()
+        return (s[:120] + "...") if len(s) > 120 else s
+
+    if queries:
+        patterns = Counter(_normalize(q) for q in queries)
+        top = patterns.most_common(5)
+        if top and (len(top) > 1 or top[0][1] > 1):
+            log_lines.append("\nTop repeated query patterns:")
+            for pattern, cnt in top:
+                if cnt > 1:
+                    log_lines.append(f"  {cnt}x: {pattern[:100]}{'...' if len(pattern) > 100 else ''}")
+
     # Add query details if there are queries
     if queries:
         log_lines.append(f"\nQuery Details ({len(queries)} queries):")
@@ -116,7 +155,7 @@ def log_request_summary(path: str, method: str = "GET"):
             # Truncate very long queries
             query_preview = query[:200] + "..." if len(query) > 200 else query
             log_lines.append(f"  {i}. {query_preview}")
-    
+
     # Add N+1 warning if query count is high
     if query_count > 10:
         log_lines.append(f"\n[WARNING] High query count ({query_count}) - possible N+1 issue!")
@@ -137,31 +176,39 @@ def log_request_summary(path: str, method: str = "GET"):
 
 def setup_query_logging(engine):
     """
-    Set up SQLAlchemy event listeners to track queries.
-    
+    Set up SQLAlchemy event listeners to track queries and DB time.
+
     Args:
         engine: SQLAlchemy engine instance
     """
     from sqlalchemy import event
     from sqlalchemy.engine import Engine
-    
+
     @event.listens_for(Engine, "before_cursor_execute")
     def receive_before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
-        """Intercept SQL queries before execution."""
-        # Format the query for logging
+        """Intercept SQL queries before execution; record start time for DB timing."""
         query = str(statement)
-        
-        # Add parameters if present (truncated for readability)
         if parameters:
             params_str = str(parameters)
             if len(params_str) > 100:
                 params_str = params_str[:100] + "..."
             query = f"{query} | Params: {params_str}"
-        
         increment_query_count(query)
-        return None  # Don't modify the query
-    
-    print("[QueryLogger] Query logging enabled")
+        conn.info.setdefault("_query_start", []).append(time.time())
+        return None
+
+    @event.listens_for(Engine, "after_cursor_execute")
+    def receive_after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        """Record DB time after each query."""
+        try:
+            stack = conn.info.get("_query_start")
+            if stack:
+                start = stack.pop()
+                add_db_time(time.time() - start)
+        except (IndexError, KeyError, TypeError):
+            pass
+
+    print("[QueryLogger] Query logging enabled (count, DB time, repeated-pattern summary)")
 
 
 def get_query_stats() -> Dict[str, int]:

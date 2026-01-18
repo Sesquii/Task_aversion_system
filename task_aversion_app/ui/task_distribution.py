@@ -107,11 +107,12 @@ def task_distribution_page():
         # Convert to DataFrame
         df = pd.DataFrame(filtered_instances)
         
-        # Get task names for labels
+        # Get task names for labels (bulk to avoid N+1)
         task_names = {}
         unique_task_ids = df['task_id'].unique()
+        tasks_map = task_manager.get_tasks_bulk(list(unique_task_ids), user_id=current_user_id) if len(unique_task_ids) else {}
         for task_id in unique_task_ids:
-            task = task_manager.get_task(task_id, user_id=current_user_id)
+            task = tasks_map.get(task_id)
             if task:
                 task_names[task_id] = escape_for_display(task.get('name', task_id))
             else:

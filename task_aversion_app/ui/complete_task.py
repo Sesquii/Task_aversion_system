@@ -760,9 +760,11 @@ def complete_task_page(task_manager, emotion_manager):
                     result = im.complete_instance(iid, actual, user_id=current_user_id)
                     print("[complete_task] complete_instance result:", result)
 
+                    # Fetch instance once for recommendation logging and aversion update (avoids 2x get_instance)
+                    instance = im.get_instance(iid, user_id=current_user_id)
+
                     # Log recommendation outcome if this was a recommended task
                     try:
-                        instance = im.get_instance(iid, user_id=current_user_id)
                         if instance:
                             task_id = instance.get('task_id')
                             task_name = instance.get('task_name', '')
@@ -795,30 +797,22 @@ def complete_task_page(task_manager, emotion_manager):
                     except Exception as log_error:
                         # Don't fail if logging fails
                         print(f"[complete_task] Failed to log recommendation outcome: {log_error}")
-                    
-                    # If aversion slider exists, update the predicted aversion
+
+                    # If aversion slider exists, update the predicted aversion (reuse instance from above)
                     # Note: We preserve initialization_expected_aversion so it always shows the original initialization value
-                    if aversion_slider is not None:
+                    if aversion_slider is not None and instance:
                         updated_aversion = int(aversion_slider.value)
-                        # Get current predicted data and update expected_aversion
-                        instance = im.get_instance(iid, user_id=current_user_id)
-                        if instance:
-                            predicted_raw = instance.get('predicted') or '{}'
-                            try:
-                                predicted_dict = json.loads(predicted_raw) if predicted_raw else {}
-                                # Update expected_aversion but preserve initialization_expected_aversion
-                                predicted_dict['expected_aversion'] = updated_aversion
-                                # Preserve initialization_expected_aversion if it exists (don't overwrite it)
-                                if 'initialization_expected_aversion' not in predicted_dict:
-                                    # If it doesn't exist, create it from current expected_aversion before update
-                                    # This handles cases where the instance was initialized before this change
-                                    original_aversion = predicted_dict.get('expected_aversion', updated_aversion)
-                                    predicted_dict['initialization_expected_aversion'] = original_aversion
-                                # Update the instance with new predicted data
-                                im.add_prediction_to_instance(iid, predicted_dict)
-                                print(f"[complete_task] Updated expected_aversion to {updated_aversion}")
-                            except json.JSONDecodeError:
-                                pass
+                        predicted_raw = instance.get('predicted') or '{}'
+                        try:
+                            predicted_dict = json.loads(predicted_raw) if predicted_raw else {}
+                            predicted_dict['expected_aversion'] = updated_aversion
+                            if 'initialization_expected_aversion' not in predicted_dict:
+                                original_aversion = predicted_dict.get('expected_aversion', updated_aversion)
+                                predicted_dict['initialization_expected_aversion'] = original_aversion
+                            im.add_prediction_to_instance(iid, predicted_dict, user_id=current_user_id)
+                            print(f"[complete_task] Updated expected_aversion to {updated_aversion}")
+                        except json.JSONDecodeError:
+                            pass
                 
             except Exception as e:
                 handle_error_with_ui("complete_task", e, user_id=current_user_id, context={'instance_id': iid, 'edit_mode': edit_mode})
