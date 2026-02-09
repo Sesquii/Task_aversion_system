@@ -51,3 +51,4 @@ build/
 
 task_aversion_app/data/task_instances.csv
 task_aversion_app/.nicegui/storage-general.json
+task_aversion_app/logs/
