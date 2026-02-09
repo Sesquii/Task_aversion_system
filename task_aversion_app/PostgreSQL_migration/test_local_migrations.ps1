@@ -2,7 +2,7 @@
 #
 # This script:
 # 1. Starts Docker PostgreSQL container
-# 2. Tests all PostgreSQL migrations (001-010)
+# 2. Tests all PostgreSQL migrations (001-011)
 # 3. Verifies schema is correct
 # 4. Optionally cleans up Docker container
 #
@@ -93,7 +93,8 @@ $migrations = @(
     "007_create_user_preferences_table.py",
     "008_create_survey_responses_table.py",
     "009_create_users_table.py",
-    "010_add_user_id_foreign_keys.py"
+    "010_add_user_id_foreign_keys.py",
+    "011_add_user_id_to_emotions.py"
 )
 
 $failed = 0

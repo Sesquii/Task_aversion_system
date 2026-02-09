@@ -62,14 +62,10 @@ def migrate():
     
     print("[OK] Tasks table exists (prerequisite check passed)")
     
-    # Check if users table already exists
+    # Check if users table already exists (idempotent: skip if already done)
     if table_exists('users'):
-        print("[NOTE] Users table already exists.")
-        print("If you've already run this migration, this is expected.")
-        response = input("Continue anyway (will skip if table exists)? (y/N): ")
-        if response.lower() != 'y':
-            print("[SKIP] Migration cancelled.")
-            return True
+        print("[NOTE] Users table already exists. Skipping (idempotent).")
+        return True
     
     try:
         print("\nCreating users table for PostgreSQL...")

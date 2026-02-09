@@ -40,7 +40,9 @@ class NotesManager:
                 self.db_session = get_session
                 self.Note = Note
                 init_db()
-                print("[NotesManager] Using database backend")
+                if not getattr(NotesManager, '_printed_backend', False):
+                    print("[NotesManager] Using database backend")
+                    NotesManager._printed_backend = True
             except Exception as e:
                 if self.strict_mode:
                     raise RuntimeError(

@@ -276,9 +276,10 @@ def migrate():
             print("\nCreating indexes...")
             for idx_def in indexes_to_create:
                 idx_name = idx_def['name']
-                
+                idx_table = idx_def.get('table', 'task_instances')
+
                 # Check if index already exists (PostgreSQL's IF NOT EXISTS handles this, but we check anyway)
-                if index_exists(idx_name):
+                if index_exists(idx_name, idx_table):
                     print(f"   [SKIP] Index '{idx_name}' already exists")
                     skipped_count += 1
                 else:
@@ -405,7 +406,8 @@ def migrate():
             
             for idx_def in indexes_to_create:
                 is_optional = idx_def.get('optional', False)
-                exists = index_exists(idx_def['name'])
+                idx_table = idx_def.get('table', 'task_instances')
+                exists = index_exists(idx_def['name'], idx_table)
                 
                 if is_optional:
                     # Optional indexes - just track for info, don't fail on these

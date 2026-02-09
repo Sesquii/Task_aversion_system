@@ -37,7 +37,7 @@ from backend.database import (
 )
 from backend.user_state import UserStateManager, PREFS_FILE
 from sqlalchemy import inspect, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError
 
 # ============================================================================
 # Abuse Prevention Limits
@@ -763,6 +763,20 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                   f"Only processing first {MAX_ROWS_PER_CSV} rows.")
             df = df.head(MAX_ROWS_PER_CSV)
         
+        # Pre-validate task_ids for PostgreSQL FK constraint (task_instances.task_id -> tasks.task_id)
+        # Skip instances whose task_id does not exist in tasks table to avoid IntegrityError on commit
+        existing_task_ids = set()
+        if DATABASE_URL.startswith('postgresql') and 'task_id' in df.columns:
+            unique_task_ids = {str(t).strip() for t in df['task_id'].dropna().unique() if str(t).strip()}
+            if unique_task_ids:
+                existing_tasks = session.query(Task.task_id).filter(Task.task_id.in_(unique_task_ids)).all()
+                existing_task_ids = {t[0] for t in existing_tasks}
+                missing_task_ids = unique_task_ids - existing_task_ids
+                if missing_task_ids:
+                    print(f"[Import] WARNING: {len(missing_task_ids)} task_id(s) in instances CSV not found in tasks table: "
+                          f"{list(missing_task_ids)[:5]}{'...' if len(missing_task_ids) > 5 else ''}")
+                    print(f"[Import] These instances will be SKIPPED (PostgreSQL FK requires task_id to exist in tasks)")
+        
         # Get existing instance IDs for this user only
         existing_instance_ids = set()
         if skip_existing:
@@ -799,6 +813,12 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                 task_id = str(safe_get(row, 'task_id', '')).strip()
                 task_name = str(safe_get(row, 'task_name', '')).strip()
                 if not task_id or not task_name:  # Required fields
+                    errors += 1
+                    continue
+                
+                # Skip if task_id does not exist in tasks (PostgreSQL FK constraint)
+                if DATABASE_URL.startswith('postgresql') and existing_task_ids and task_id not in existing_task_ids:
+                    print(f"[Import] Skipping instance {instance_id}: task_id '{task_id}' not found in tasks table")
                     errors += 1
                     continue
                 
@@ -975,22 +995,39 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
         
         session.commit()
         
+    except IntegrityError as e:
+        session.rollback()
+        print(f"[Import] IntegrityError committing task instances (likely FK violation): {e}")
+        import traceback
+        print(f"[Import] Traceback: {traceback.format_exc()}")
+        # Re-raise so caller can surface the real error (data was NOT persisted)
+        raise ValueError(
+            f"Task instance import failed: database constraint violation. "
+            f"Ensure all task_ids in task_instances.csv exist in tasks (run tasks import first). "
+            f"Details: {e}"
+        ) from e
     except Exception as e:
         session.rollback()
         print(f"[Import] Error reading task instances CSV: {e}")
         import traceback
         print(f"[Import] Traceback: {traceback.format_exc()}")
-        # Don't raise - return what we have so far
+        # Don't raise - return what we have so far (IntegrityError handled above)
         pass
     
     return imported, skipped, errors
 
 
-def import_emotions_from_csv(csv_path: str, session, skip_existing: bool = True, backup_dir: Optional[str] = None) -> Tuple[int, int, int]:
+def import_emotions_from_csv(
+    csv_path: str,
+    session,
+    skip_existing: bool = True,
+    backup_dir: Optional[str] = None,
+    user_id: Optional[int] = None
+) -> Tuple[int, int, int]:
     """
     Import emotions from CSV file into database.
     Handles missing columns gracefully.
-    Attempts to add extra CSV columns to database, falls back to backup CSV if needed.
+    All imported emotions are assigned to user_id for data isolation.
     """
     imported = 0
     skipped = 0
@@ -1017,11 +1054,9 @@ def import_emotions_from_csv(csv_path: str, session, skip_existing: bool = True,
                   f"Only processing first {MAX_ROWS_PER_CSV} rows.")
             df = df.head(MAX_ROWS_PER_CSV)
         
-        existing_emotions = set()
-        if skip_existing:
-            # NOTE: Emotion table doesn't have user_id (shared reference table)
-            # Querying all emotions is intentional and correct for import functionality
-            existing = session.query(Emotion).all()
+        existing_emotions: set = set()
+        if skip_existing and user_id is not None:
+            existing = session.query(Emotion).filter(Emotion.user_id == user_id).all()
             existing_emotions = {e.emotion.lower() for e in existing}
         
         for idx, row in df.iterrows():
@@ -1035,9 +1070,12 @@ def import_emotions_from_csv(csv_path: str, session, skip_existing: bool = True,
                 continue
             
             try:
-                existing_emotion = session.query(Emotion).filter(Emotion.emotion == emotion_name).first()
+                existing_emotion = session.query(Emotion).filter(
+                    Emotion.user_id == user_id,
+                    Emotion.emotion == emotion_name
+                ).first()
                 if not existing_emotion:
-                    emotion = Emotion(emotion=emotion_name)
+                    emotion = Emotion(emotion=emotion_name, user_id=user_id)
                     
                     # Set extra columns that were added to database
                     if extra_columns:

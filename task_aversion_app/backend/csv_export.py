@@ -102,9 +102,8 @@ def export_all_data_to_csv(
         exported_files.append(instances_file)
         
         # Export Emotions (always create file, even if empty)
-        # NOTE: Emotion table is a shared reference table (no user_id column)
-        # All users share the same emotion list, so we export all emotions
-        emotions = session.query(Emotion).all()
+        # CRITICAL: Filter by user_id for data isolation - each user has their own emotion vocabulary
+        emotions = session.query(Emotion).filter(Emotion.user_id == user_id).all()
         emotions_file = os.path.join(data_dir, 'emotions.csv')
         if emotions:
             emotions_data = [emotion.to_dict() for emotion in emotions]
@@ -113,7 +112,7 @@ def export_all_data_to_csv(
             export_counts['emotions'] = len(emotions)
         else:
             # Create empty CSV with header from Emotion model
-            emotions_df = pd.DataFrame(columns=['emotion'])
+            emotions_df = pd.DataFrame(columns=['emotion', 'user_id'])
             emotions_df.to_csv(emotions_file, index=False, encoding='utf-8')
             export_counts['emotions'] = 0
         exported_files.append(emotions_file)

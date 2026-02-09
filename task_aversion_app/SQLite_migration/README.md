@@ -18,6 +18,7 @@ This folder contains migration scripts to update your SQLite database schema as 
 8. **008_create_survey_responses_table.py** - Creates the survey_responses table for storing survey question responses
 9. **009_create_users_table.py** - Creates the users table for OAuth authentication (Google, etc.)
 10. **010_add_user_id_foreign_keys.py** - Adds user_id foreign keys to existing tables for user data isolation
+11. **011_add_user_id_to_emotions.py** - Adds user_id to emotions table for per-user data isolation
 
 ### Utility Scripts
 

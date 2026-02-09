@@ -44,10 +44,12 @@ class InstanceManager:
                 self.TaskInstance = TaskInstance
                 # Initialize database if tables don't exist
                 init_db()
-                print("[InstanceManager] Using database backend")
+                if not getattr(InstanceManager, '_printed_backend', False):
+                    print("[InstanceManager] Using database backend")
+                    print("[InstanceManager] CSV backend also initialized (for backward compatibility)")
+                    InstanceManager._printed_backend = True
                 # Also initialize CSV for backward compatibility and fallback
                 self._init_csv()
-                print("[InstanceManager] CSV backend also initialized (for backward compatibility)")
             except Exception as e:
                 if self.strict_mode:
                     raise RuntimeError(

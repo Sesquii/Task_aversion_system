@@ -8,7 +8,6 @@ and links them to the users table for OAuth authentication and data isolation.
 Tables updated:
 - tasks: Add user_id INTEGER REFERENCES users(user_id) (nullable initially for migration)
 - task_instances: Add user_id INTEGER REFERENCES users(user_id) (nullable initially)
-- emotions: Add user_id INTEGER REFERENCES users(user_id) (nullable, if user-specific)
 - user_preferences: Migrate user_id from VARCHAR to INTEGER (nullable initially)
 - survey_responses: Migrate user_id from VARCHAR to INTEGER (nullable initially)
 - popup_triggers: Migrate user_id from VARCHAR to INTEGER (nullable initially)
@@ -240,7 +239,7 @@ def migrate():
                 
                 # Check column type
                 col_type = get_column_type(table_name, 'user_id')
-                if col_type and 'VARCHAR' in col_type.upper() or 'TEXT' in col_type.upper():
+                if col_type and ('VARCHAR' in col_type.upper() or 'TEXT' in col_type.upper()):
                     print(f"   [INFO] '{table_name}' has VARCHAR user_id (type: {col_type})")
                     
                     if table_def.get('is_primary_key', False):
@@ -303,7 +302,7 @@ def migrate():
             print("Migration Summary")
             print("=" * 70)
             print(f"Columns added (new): {added_count}")
-            print(f"Columns converted (VARCHAR → INTEGER): {converted_count}")
+            print(f"Columns converted (VARCHAR -> INTEGER): {converted_count}")
             print(f"Columns skipped (already exist/correct type): {skipped_count}")
             
             # Separate warnings from actual errors

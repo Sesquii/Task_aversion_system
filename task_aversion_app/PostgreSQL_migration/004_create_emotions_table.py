@@ -22,8 +22,8 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.database import get_session, engine, Emotion
-from sqlalchemy import inspect
+from backend.database import engine
+from sqlalchemy import inspect, text
 
 def table_exists(table_name):
     """Check if a table exists."""
@@ -64,22 +64,25 @@ def migrate():
     
     print("[OK] Tasks table exists (prerequisite check passed)")
     
-    # Check if emotions table already exists
+    # Check if emotions table already exists (idempotent: skip if already done)
     if table_exists('emotions'):
-        print("[NOTE] Emotions table already exists.")
-        print("If you've already run this migration, this is expected.")
-        response = input("Continue anyway (will skip if table exists)? (y/N): ")
-        if response.lower() != 'y':
-            print("[SKIP] Migration cancelled.")
-            return True
+        print("[NOTE] Emotions table already exists. Skipping (idempotent).")
+        return True
     
     try:
         print("\nCreating emotions table for PostgreSQL...")
         print("This will use SERIAL for auto-incrementing primary key.")
+        print("NOTE: Uses raw SQL to create base schema. Migration 011 adds user_id for data isolation.")
         
-        # Use SQLAlchemy to create the table (this will only create if it doesn't exist)
-        # SQLAlchemy will automatically use PostgreSQL-compatible types
-        Emotion.__table__.create(engine, checkfirst=True)
+        # Use raw SQL so migration is independent of Emotion model (which may reference users table)
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS emotions (
+                    emotion_id SERIAL PRIMARY KEY,
+                    emotion VARCHAR NOT NULL UNIQUE
+                )
+            """))
+            conn.commit()
         
         print("[OK] Emotions table created successfully")
         

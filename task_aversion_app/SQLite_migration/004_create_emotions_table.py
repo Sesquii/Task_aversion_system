@@ -17,8 +17,8 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.database import get_session, engine, Emotion
-from sqlalchemy import inspect
+from backend.database import engine
+from sqlalchemy import inspect, text
 
 def table_exists(table_name):
     """Check if a table exists."""
@@ -72,9 +72,17 @@ def migrate():
     
     try:
         print("\nCreating emotions table...")
+        print("NOTE: Uses raw SQL for base schema. Migration 011 adds user_id for data isolation.")
         
-        # Use SQLAlchemy to create the table (this will only create if it doesn't exist)
-        Emotion.__table__.create(engine, checkfirst=True)
+        # Use raw SQL so migration is independent of Emotion model (which references users table)
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS emotions (
+                    emotion_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    emotion VARCHAR NOT NULL UNIQUE
+                )
+            """))
+            conn.commit()
         
         print("[OK] Emotions table created successfully")
         

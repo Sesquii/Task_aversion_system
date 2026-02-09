@@ -60,8 +60,19 @@ if os.path.exists(emotions_csv):
         print(f"   Found {len(csv_df)} emotion(s) in CSV")
         
         with get_session() as session:
-            # Get existing emotions (case-insensitive comparison)
-            existing_emotions_db = {e.emotion.lower() for e in session.query(Emotion).all()}
+            # Get first user for assigning emotions (migration assigns to first user)
+            from backend.database import User
+            first_user = session.query(User).order_by(User.user_id).first()
+            default_user_id = first_user.user_id if first_user else None
+            # Get existing emotions for that user (case-insensitive comparison)
+            if default_user_id is not None:
+                existing_emotions_db = {
+                    e.emotion.lower() for e in session.query(Emotion).filter(
+                        Emotion.user_id == default_user_id
+                    ).all()
+                }
+            else:
+                existing_emotions_db = {e.emotion.lower() for e in session.query(Emotion).all()}
             
             migrated = 0
             skipped = 0
@@ -78,17 +89,20 @@ if os.path.exists(emotions_csv):
                     continue
                 
                 try:
-                    # Check for duplicate in database (case-sensitive check)
-                    existing = session.query(Emotion).filter(
-                        Emotion.emotion == emotion_name
-                    ).first()
+                    # Check for duplicate in database (per user)
+                    existing_query = session.query(Emotion).filter(Emotion.emotion == emotion_name)
+                    if default_user_id is not None:
+                        existing_query = existing_query.filter(Emotion.user_id == default_user_id)
+                    else:
+                        existing_query = existing_query.filter(Emotion.user_id.is_(None))
+                    existing = existing_query.first()
                     
                     if existing:
                         skipped += 1
                         continue
                     
-                    # Create new emotion
-                    emotion = Emotion(emotion=emotion_name)
+                    # Create new emotion (assign to first user if available)
+                    emotion = Emotion(emotion=emotion_name, user_id=default_user_id)
                     session.add(emotion)
                     session.commit()
                     

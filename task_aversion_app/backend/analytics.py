@@ -2748,7 +2748,7 @@ class Analytics:
             
             if user_id is None:
                 print("[Analytics] WARNING: _load_instances() called without user_id - returning empty for security")
-                return pd.DataFrame()
+                return pd.DataFrame(columns=['completed_at'])
             
             try:
                 from backend.database import get_session, TaskInstance
@@ -2759,11 +2759,11 @@ class Analytics:
                     # CRITICAL: Always include user_id filter in initial query for security and performance
                     if completed_only:
                         # Filter to only completed instances at database level (much faster)
-                        # Uses index on completed_at for fast filtering
+                        # Uses index on completed_at for fast filtering.
+                        # Note: Do not use completed_at != '' - invalid for PostgreSQL timestamp.
                         query = session.query(TaskInstance).filter(
                             TaskInstance.user_id == user_id,
-                            TaskInstance.completed_at.isnot(None),
-                            TaskInstance.completed_at != ''
+                            TaskInstance.completed_at.isnot(None)
                         )
                     else:
                         query = session.query(TaskInstance).filter(
@@ -2772,7 +2772,7 @@ class Analytics:
                     
                     instances = query.all()
                     if not instances:
-                        return pd.DataFrame()
+                        return pd.DataFrame(columns=['completed_at'])
                     
                     # Convert to list of dicts
                     data = [instance.to_dict() for instance in instances]
@@ -2789,6 +2789,7 @@ class Analytics:
                     for attr, default in attr_defaults.items():
                         _ensure_column(attr, default)
                     _ensure_column('status', 'active')
+                    _ensure_column('completed_at', '')
                     
                     # Apply gap filtering
                     df = self._apply_gap_filtering(df)
@@ -3023,7 +3024,7 @@ class Analytics:
         
         # CSV fallback
         if not os.path.exists(self.instances_file):
-            return pd.DataFrame()
+            return pd.DataFrame(columns=['completed_at'])
 
         df = pd.read_csv(self.instances_file).fillna('')
         attr_defaults = attribute_defaults()
@@ -3035,6 +3036,7 @@ class Analytics:
         for attr, default in attr_defaults.items():
             _ensure_column(attr, default)
         _ensure_column('status', 'active')
+        _ensure_column('completed_at', '')
         
         # Apply gap filtering based on user preference
         df = self._apply_gap_filtering(df)
@@ -3758,8 +3760,9 @@ class Analytics:
         thoroughness_score = 50.0
         thoroughness_factor = 1.0
         if needs_metric('thoroughness_score') or needs_metric('thoroughness_factor'):
-            thoroughness_score = self.calculate_thoroughness_score(user_id='default', days=30)
-            thoroughness_factor = self.calculate_thoroughness_factor(user_id='default', days=30)
+            user_id_str = str(user_id) if user_id is not None else 'default'
+            thoroughness_score = self.calculate_thoroughness_score(user_id=user_id_str, days=30)
+            thoroughness_factor = self.calculate_thoroughness_factor(user_id=user_id_str, days=30)
         
         # Calculate daily self care tasks metrics (only if needed)
         daily_self_care_tasks = 0
@@ -4858,6 +4861,9 @@ class Analytics:
     def get_execution_score_chunked(self, state: Dict[str, any], batch_size: int = 5, user_id: str = "default", persist: bool = True) -> Dict[str, any]:
         """Calculate execution score in chunks to allow UI to remain responsive.
         
+        Normalizes user_id: "default" and "default_user" are treated as the same for
+        persistence and instance loading (both mean unauthenticated/current user).
+        
         This method processes instances in small batches, allowing the UI to respond
         between batches. State is preserved between calls and can persist across page refreshes.
         
@@ -4879,11 +4885,14 @@ class Analytics:
         import time as time_module
         from .user_state import UserStateManager
         
+        # Normalize default/default_user for persistence and instance loading
+        persist_key = "default" if user_id in ("default", "default_user") else user_id
+        
         # Try to load persisted state if state is empty
         if not state or 'instances' not in state or state.get('instances') is None:
             if persist:
                 user_state = UserStateManager()
-                persisted = user_state.get_execution_score_chunk_state(user_id)
+                persisted = user_state.get_execution_score_chunk_state(persist_key)
                 if persisted:
                     # Restore progress from persistence
                     state['current_index'] = persisted.get('current_index', 0)
@@ -4902,13 +4911,10 @@ class Analytics:
                     instance_manager = InstanceManager()
                     # Convert string user_id to int for database queries
                     user_id_int = None
-                    if isinstance(user_id, str) and user_id.isdigit():
-                        user_id_int = int(user_id)
-                    elif user_id != "default":
-                        # Try to get current user if user_id is not "default"
-                        user_id_int = self._get_user_id(None)
+                    if isinstance(persist_key, str) and persist_key.isdigit():
+                        user_id_int = int(persist_key)
                     else:
-                        # For "default", try to get current authenticated user
+                        # For "default"/"default_user" or other strings, use auth context
                         user_id_int = self._get_user_id(None)
                     state['instances'] = instance_manager.list_recent_completed(limit=50, user_id=user_id_int)
                     # #region agent log
@@ -4948,13 +4954,10 @@ class Analytics:
                     instance_manager = InstanceManager()
                     # Convert string user_id to int for database queries
                     user_id_int = None
-                    if isinstance(user_id, str) and user_id.isdigit():
-                        user_id_int = int(user_id)
-                    elif user_id != "default":
-                        # Try to get current user if user_id is not "default"
-                        user_id_int = self._get_user_id(None)
+                    if isinstance(persist_key, str) and persist_key.isdigit():
+                        user_id_int = int(persist_key)
                     else:
-                        # For "default", try to get current authenticated user
+                        # For "default"/"default_user" or other strings, use auth context
                         user_id_int = self._get_user_id(None)
                     state['instances'] = instance_manager.list_recent_completed(limit=50, user_id=user_id_int)
                     # #region agent log
@@ -4982,13 +4985,10 @@ class Analytics:
                 instance_manager = InstanceManager()
                 # Convert string user_id to int for list_recent_completed()
                 user_id_int = None
-                if isinstance(user_id, str) and user_id.isdigit():
-                    user_id_int = int(user_id)
-                elif user_id != "default":
-                    # Try to get current user if user_id is not "default"
-                    user_id_int = self._get_user_id(None)
+                if isinstance(persist_key, str) and persist_key.isdigit():
+                    user_id_int = int(persist_key)
                 else:
-                    # For "default", try to get current authenticated user
+                    # For "default"/"default_user" or other strings, use auth context
                     user_id_int = self._get_user_id(None)
                 state['instances'] = instance_manager.list_recent_completed(limit=50, user_id=user_id_int)
                 # #region agent log
@@ -5081,7 +5081,7 @@ class Analytics:
             if persist:
                 try:
                     user_state = UserStateManager()
-                    user_state.update_preference(user_id, "execution_score_chunk_state", "")  # Clear it
+                    user_state.update_preference(persist_key, "execution_score_chunk_state", "")  # Clear it
                 except Exception as e:
                     print(f"[Analytics] Error clearing persisted chunk state: {e}")
             
@@ -5100,7 +5100,7 @@ class Analytics:
             if persist:
                 try:
                     user_state = UserStateManager()
-                    user_state.set_execution_score_chunk_state(state, user_id)
+                    user_state.set_execution_score_chunk_state(state, persist_key)
                 except Exception as e:
                     print(f"[Analytics] Error persisting chunk state: {e}")
         
@@ -7047,6 +7047,8 @@ class Analytics:
         user_id = self._get_user_id(user_id)
         from datetime import timedelta
         df = self._load_instances(user_id=user_id)
+        if df.empty or 'completed_at' not in df.columns:
+            return 0.0
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -8662,7 +8664,7 @@ class Analytics:
         
         return result
 
-    def get_generic_metric_history(self, metric_key: str, days: int = 90) -> Dict[str, any]:
+    def get_generic_metric_history(self, metric_key: str, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get historical daily data for a generic metric (e.g., stress_level, net_wellbeing).
         
         Extracts metric values from completed task instances and groups by date.
@@ -8674,6 +8676,7 @@ class Analytics:
         Args:
             metric_key: The metric key to extract (e.g., 'stress_level', 'net_wellbeing')
             days: Number of days to look back (default 90)
+            user_id: Optional user ID for data isolation; uses auth context if None
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of values per day),
@@ -8721,20 +8724,20 @@ class Analytics:
         }
         
         if metric_key in metric_routes:
-            # Get user_id for routing to specific methods
-            user_id = self._get_user_id(None)
+            # Use provided user_id or fall back to auth context
+            uid = user_id if user_id is not None else self._get_user_id(None)
             # Route to specific method with user_id if it accepts it
             routed_method = metric_routes[metric_key]
             # Check if method accepts user_id parameter
             import inspect
             sig = inspect.signature(routed_method)
             if 'user_id' in sig.parameters:
-                return routed_method(days=days, user_id=user_id)
+                return routed_method(days=days, user_id=uid)
             else:
                 return routed_method(days=days)
         
-        user_id = self._get_user_id(None)
-        df = self._load_instances(completed_only=True, user_id=user_id)
+        uid = user_id if user_id is not None else self._get_user_id(None)
+        df = self._load_instances(completed_only=True, user_id=uid)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9140,7 +9143,12 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_thoroughness_factor_history(self, days: int = 90, window_days: int = 30) -> Dict[str, any]:
+    def get_thoroughness_factor_history(
+        self,
+        days: int = 90,
+        window_days: int = 30,
+        user_id: Optional[int] = None
+    ) -> Dict[str, any]:
         """Get historical weekly thoroughness factor data for trend analysis.
         
         Since thoroughness is a user-level metric (not per-instance), we calculate it
@@ -9149,6 +9157,7 @@ class Analytics:
         Args:
             days: Number of days to look back for history (default 90)
             window_days: Rolling window size for thoroughness calculation (default 30)
+            user_id: Optional user ID. If None, gets from authenticated session.
             
         Returns:
             Dict with 'dates' (list of date strings), 'values' (list of factors per week),
@@ -9156,8 +9165,11 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         
+        uid = self._get_user_id(user_id)
+        user_id_str = str(uid) if uid is not None else 'default'
+        
         # Calculate current thoroughness_factor
-        current_factor = self.calculate_thoroughness_factor(user_id='default', days=window_days)
+        current_factor = self.calculate_thoroughness_factor(user_id=user_id_str, days=window_days)
         
         # For user-level metrics, we return the current value for all dates
         # This shows the trend (the metric changes slowly over time)
@@ -12831,6 +12843,8 @@ class Analytics:
         """
         user_id = self._get_user_id(user_id)
         df = self._load_instances(user_id=user_id)
+        if df.empty or 'completed_at' not in df.columns:
+            return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': 0}
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         if completed.empty or attribute_x not in completed.columns or attribute_y not in completed.columns:
             return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': 0}
@@ -12881,6 +12895,8 @@ class Analytics:
         """Bin independent variable and summarize dependent averages to surface threshold ranges."""
         user_id = self._get_user_id(user_id)
         df = self._load_instances(user_id=user_id)
+        if df.empty or 'completed_at' not in df.columns:
+            return {'bins': [], 'best_max': None, 'best_min': None}
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         if completed.empty or dependent_var not in completed.columns or independent_var not in completed.columns:
             return {'bins': [], 'best_max': None, 'best_min': None}

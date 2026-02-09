@@ -179,11 +179,109 @@ def register_pages():
         ui.button("Refresh", on_click=lambda: ui.navigate.reload()).classes("mt-4")
 
 
+def _backend_label() -> str:
+    """Return which storage backend is active (ASCII-safe for Windows console)."""
+    use_csv = os.getenv('USE_CSV', '').strip().lower() in ('1', 'true', 'yes')
+    if use_csv:
+        return 'CSV (USE_CSV overrides DATABASE_URL)'
+    url = os.getenv('DATABASE_URL', '').strip()
+    if not url:
+        return 'CSV (no DATABASE_URL set)'
+    if url.lower().startswith('postgresql'):
+        return 'PostgreSQL'
+    if url.lower().startswith('sqlite'):
+        return 'SQLite'
+    return 'Database'
+
+
 if __name__ in {"__main__", "__mp_main__"}:
+    import os
+    import sys
+
+    # Optional: redirect stdout/stderr to a log file to avoid flooding the terminal
+    _log_file = None
+    _log_path = os.getenv("APP_LOG_FILE", "").strip() or (os.path.join(
+        os.path.dirname(__file__), "logs", "app.log"
+    ) if os.getenv("LOG_TO_FILE", "").lower() in ("1", "true", "yes") else "")
+    if _log_path:
+        try:
+            _log_dir = os.path.dirname(_log_path)
+            if _log_dir:
+                os.makedirs(_log_dir, exist_ok=True)
+            _log_file = open(_log_path, "a", encoding="utf-8")
+            _tee = os.getenv("LOG_TEE", "").lower() in ("1", "true", "yes")
+            _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+
+            class _LogStream:
+                def __init__(self, file, original, tee_mode):
+                    self._file = file
+                    self._orig = original
+                    self._tee = tee_mode
+                def write(self, data):
+                    try:
+                        self._file.write(data)
+                        self._file.flush()
+                    except OSError:
+                        pass
+                    if self._tee and self._orig:
+                        try:
+                            self._orig.write(data)
+                            self._orig.flush()
+                        except OSError:
+                            pass
+                def flush(self):
+                    try:
+                        self._file.flush()
+                    except OSError:
+                        pass
+                    if self._orig:
+                        try:
+                            self._orig.flush()
+                        except OSError:
+                            pass
+                def fileno(self):
+                    return self._orig.fileno() if self._orig else -1
+                def isatty(self):
+                    return self._orig.isatty() if self._orig else False
+                def writable(self):
+                    return True
+
+            sys.stdout = _LogStream(_log_file, _orig_stdout if _tee else None, _tee)
+            sys.stderr = _LogStream(_log_file, _orig_stderr if _tee else None, _tee)
+
+            # Log uncaught exceptions to app.log (e.g. KeyError in analytics)
+            _log_path_final = _log_path
+            def _excepthook(exc_type, exc_value, exc_tb):
+                import traceback
+                try:
+                    with open(_log_path_final, "a", encoding="utf-8") as f:
+                        f.write("[Uncaught] ")
+                        f.write("".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+                        f.write("\n")
+                except OSError:
+                    pass
+                # Chain to default so process still exits / shows in console
+                sys.__excepthook__(exc_type, exc_value, exc_tb)
+            sys.excepthook = _excepthook
+
+            # So user always sees this in the terminal even when not teeing
+            try:
+                _orig_stdout.write(f"[App] Stdout/stderr logging to: {_log_path}\n")
+                _orig_stdout.write("[App] Server will start below; open http://127.0.0.1:8080\n")
+                _orig_stdout.flush()
+            except OSError:
+                pass
+            print(f"[App] Logging to file: {_log_path}")
+        except OSError as e:
+            print(f"[App] Could not open log file {_log_path}: {e}", file=sys.__stderr__)
+
+    # Terminal notification: which database is in use (separate line, ASCII-safe)
+    print("")
+    print("[Backend] Storage: " + _backend_label())
+    print("")
     register_pages()
     
     # Set up static file serving for graphic aids
-    import os
     from fastapi.staticfiles import StaticFiles
     from nicegui import app
     
@@ -260,5 +358,11 @@ if __name__ in {"__main__", "__mp_main__"}:
     else:
         print("[App] Cache-busting middleware disabled (set ENABLE_CACHE_BUSTING=1 to enable)")
     
+    # Show backend again right before server starts (restart app after changing .env)
+    print("")
+    print("---")
+    print("[Backend] Storage: " + _backend_label())
+    print("---")
+    print("")
     ui.run(title='Task Aversion System', port=8080, host=host, reload=False, storage_secret=storage_secret)
 

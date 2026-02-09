@@ -828,11 +828,13 @@ def generate_thoroughness_factor_overview_plotly(user_id: Optional[int] = None) 
         if user_id is None:
             user_id = get_current_user()
         
+        user_id_str = str(user_id) if user_id is not None else 'default'
+        
         analytics = Analytics()
         
         # Calculate current thoroughness factor and components
-        thoroughness_factor = analytics.calculate_thoroughness_factor(user_id='default', days=30)
-        thoroughness_score = analytics.calculate_thoroughness_score(user_id='default', days=30)
+        thoroughness_factor = analytics.calculate_thoroughness_factor(user_id=user_id_str, days=30)
+        thoroughness_score = analytics.calculate_thoroughness_score(user_id=user_id_str, days=30)
         
         # Get component breakdown (we'll need to extract this from the calculation)
         # For now, create a visual representation

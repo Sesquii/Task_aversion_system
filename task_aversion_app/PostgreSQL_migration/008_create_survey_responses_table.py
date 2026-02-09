@@ -64,14 +64,10 @@ def migrate():
     
     print("[OK] Tasks table exists (prerequisite check passed)")
     
-    # Check if survey_responses table already exists
+    # Check if survey_responses table already exists (idempotent: skip if already done)
     if table_exists('survey_responses'):
-        print("[NOTE] Survey responses table already exists.")
-        print("If you've already run this migration, this is expected.")
-        response = input("Continue anyway (will skip if table exists)? (y/N): ")
-        if response.lower() != 'y':
-            print("[SKIP] Migration cancelled.")
-            return True
+        print("[NOTE] Survey responses table already exists. Skipping (idempotent).")
+        return True
     
     try:
         print("\nCreating survey_responses table for PostgreSQL...")

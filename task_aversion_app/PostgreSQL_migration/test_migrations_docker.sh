@@ -153,7 +153,7 @@ fi
 
 # Step 6: Run migrations in order
 echo ""
-echo "[6/7] Running migrations in order (001-010)..."
+echo "[6/7] Running migrations in order (001-011)..."
 echo ""
 
 migrations=(
@@ -167,6 +167,7 @@ migrations=(
     "008_create_survey_responses_table.py"
     "009_create_users_table.py"
     "010_add_user_id_foreign_keys.py"
+    "011_add_user_id_to_emotions.py"
 )
 
 migration_errors=0

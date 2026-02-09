@@ -2529,8 +2529,9 @@ def render_monitored_metrics_section(container):
         # Create placeholder cards for all selected metrics immediately
         metric_cards = {}  # Store card references: metric_key -> {card, value_label, baseline_label, tooltip_id}
         for metric_key in selected_metrics:
+            tooltip_id = f'monitored-{metric_key}'
             with metrics_grid:
-                card = ui.card().classes("p-2 metric-card-hover bg-gray-100 context-menu-card").style("min-width: 0;").props(f'data-context-menu="metric" data-metric-key="{metric_key}"')
+                card = ui.card().classes("p-2 metric-card-hover bg-gray-100 context-menu-card").style("min-width: 0;").props(f'data-context-menu="metric" data-metric-key="{metric_key}" data-tooltip-id="{tooltip_id}"')
                 with card:
                     label_widget = ui.label("Loading...").classes("text-xs text-gray-500 mb-0.5")
                     value_label = ui.label("...").classes("text-lg font-bold")
@@ -2541,8 +2542,7 @@ def render_monitored_metrics_section(container):
                         reset_button_id = f'context-btn-metric-reset-{metric_key}'
                         ui.button("", on_click=lambda key=metric_key: reset_metric_score(key)).props(f'id="{reset_button_id}"').style("display: none;")
                 
-                # Create tooltip container
-                tooltip_id = f'monitored-{metric_key}'
+                # Create tooltip container (tooltip_id set at start of loop)
                 ui.add_body_html(f'<div id="tooltip-{tooltip_id}" class="metric-tooltip" style="min-width: 400px; max-width: 500px;"><div style="padding: 10px; text-align: center; color: #666;">Loading...</div></div>')
                 
                 metric_cards[metric_key] = {
@@ -2556,11 +2556,16 @@ def render_monitored_metrics_section(container):
                     'manually_reset': False  # Flag to prevent auto-updates after manual reset
                 }
     
-    def get_targeted_metric_values(metrics_list, an):
+    def get_targeted_metric_values(metrics_list, an, uid):
         """Get only the specific metric values needed, without calculating all metrics.
         
         This is much faster than calling get_relief_summary(), get_dashboard_metrics(), etc.
         which calculate everything. Only calls the full functions if absolutely necessary.
+        
+        Args:
+            metrics_list: List of metric keys to load
+            an: Analytics instance
+            uid: Current user ID (int or None) for data isolation
         
         Returns:
             dict with keys: 'relief_summary', 'quality_metrics', 'composite_scores'
@@ -2581,17 +2586,17 @@ def render_monitored_metrics_section(container):
             # Use lightweight function for productivity_time
             if needs_productivity_time:
                 if hasattr(an, 'get_productivity_time_minutes'):
-                    result['relief_summary']['productivity_time_minutes'] = an.get_productivity_time_minutes()
+                    result['relief_summary']['productivity_time_minutes'] = an.get_productivity_time_minutes(user_id=uid)
                 else:
                     # Fallback: get from relief_summary (cached, so not too expensive)
-                    relief = an.get_relief_summary()
+                    relief = an.get_relief_summary(user_id=uid)
                     result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
             
             if needs_productivity_score:
                 # For productivity_score, always call get_relief_summary() to ensure fresh calculation
                 # Don't rely on cache - force recalculation to ensure accuracy
                 # The cache might be stale, especially if data was just updated
-                relief = an.get_relief_summary()
+                relief = an.get_relief_summary(user_id=uid)
                 result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
                 # Also get productivity_time_minutes if we didn't already
                 if needs_productivity_time and 'productivity_time_minutes' not in result['relief_summary']:
@@ -2625,7 +2630,7 @@ def render_monitored_metrics_section(container):
                     dashboard_metric_keys.append('quality.avg_expected_relief')
             
             # Call get_dashboard_metrics() with selective calculation
-            metrics_data = an.get_dashboard_metrics(metrics=dashboard_metric_keys) if hasattr(an, 'get_dashboard_metrics') else {}
+            metrics_data = an.get_dashboard_metrics(metrics=dashboard_metric_keys, user_id=uid) if hasattr(an, 'get_dashboard_metrics') else {}
             quality = metrics_data.get('quality', {})
             aversion = metrics_data.get('aversion', {})
             
@@ -2649,7 +2654,7 @@ def render_monitored_metrics_section(container):
         if composite_metric_keys:
             # Call get_all_scores_for_composite() with selective calculation
             # (execution_score is handled separately in chunks)
-            all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys), user_id=current_user_id) if hasattr(an, 'get_all_scores_for_composite') else {}
+            all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys), user_id=uid) if hasattr(an, 'get_all_scores_for_composite') else {}
             
             # Extract only the metrics we need
             for key in composite_metric_keys:
@@ -2704,13 +2709,16 @@ def render_monitored_metrics_section(container):
         
         Uses targeted loading to only calculate the specific metrics displayed, not all available metrics.
         """
-        # State for incremental loading - persists between timer calls
+        # State for incremental loading - persists between timer calls.
+        # Capture user_id once (from request context) so timer callbacks don't rely on get_current_user().
         load_state = {
             'step': 0,  # 0=targeted_load, 1=execution_score (if needed), 2=render
             'relief_summary': None,
             'quality_metrics': None,
             'composite_scores': None,
-            'timer': None
+            'timer': None,
+            'current_user_id': current_user_id,
+            'user_id_str': user_id_str,
         }
         
         def process_next_step():
@@ -2732,7 +2740,7 @@ def render_monitored_metrics_section(container):
                     # avoid _invalidate_relief_summary_cache here to prevent 5x slowdown on every load)
                     try:
                         with init_perf_logger.operation("get_targeted_metric_values"):
-                            targeted_data = get_targeted_metric_values(selected_metrics, an)
+                            targeted_data = get_targeted_metric_values(selected_metrics, an, current_user_id)
                             load_state['relief_summary'] = targeted_data.get('relief_summary', {})
                             load_state['quality_metrics'] = targeted_data.get('quality_metrics', {})
                             load_state['composite_scores'] = targeted_data.get('composite_scores', {})
@@ -2764,7 +2772,8 @@ def render_monitored_metrics_section(container):
                         load_state['composite_scores'],
                         coloration_baseline,
                         an,
-                        init_perf_logger
+                        init_perf_logger,
+                        current_user_id
                     )
                     
                     # Schedule next step
@@ -2772,6 +2781,9 @@ def render_monitored_metrics_section(container):
                     
                 elif load_state['step'] == 1:
                     # Step 2: Calculate execution score in chunks (only if needed)
+                    # Use user_id from load_state (captured in request context), not get_current_user() in timer.
+                    step_user_id = load_state.get('current_user_id')
+                    step_user_id_str = load_state.get('user_id_str') or (str(step_user_id) if step_user_id is not None else DEFAULT_USER_ID)
                     # #region agent log
                     try:
                         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -2781,15 +2793,11 @@ def render_monitored_metrics_section(container):
                     
                     try:
                         if hasattr(an, 'get_execution_score_chunked'):
-                            # Get current user for data isolation
-                            from backend.auth import get_current_user
-                            current_user_id = get_current_user()
-                            user_id_str = str(current_user_id) if current_user_id is not None else "default"
                             # Process a batch of instances (5 at a time) with persistence
                             load_state['execution_score_state'] = an.get_execution_score_chunked(
-                                load_state['execution_score_state'], 
+                                load_state['execution_score_state'],
                                 batch_size=5,
-                                user_id=user_id_str,
+                                user_id=step_user_id_str,
                                 persist=True
                             )
                             
@@ -2806,7 +2814,8 @@ def render_monitored_metrics_section(container):
                                     load_state['composite_scores'],
                                     coloration_baseline,
                                     an,
-                                    init_perf_logger
+                                    init_perf_logger,
+                                    step_user_id
                                 )
                                 load_state['step'] = 2
                             else:
@@ -2840,6 +2849,7 @@ def render_monitored_metrics_section(container):
                         load_state['timer'].cancel()
 
                     # Final update of all metric cards (relief_summary already from step 0)
+                    final_user_id = load_state.get('current_user_id')
                     try:
                         _update_metric_cards_incremental(
                             metric_cards,
@@ -2849,7 +2859,8 @@ def render_monitored_metrics_section(container):
                             load_state['composite_scores'],
                             coloration_baseline,
                             an,
-                            init_perf_logger
+                            init_perf_logger,
+                            final_user_id
                         )
                         
                         # Store state for periodic refresh
@@ -3047,7 +3058,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
     _monitored_metrics_state['refresh_timer'] = refresh_timer
 
 
-def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger):
+def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger, current_user_id=None):
     """Update metric cards incrementally as data becomes available.
     
     Args:
@@ -3059,6 +3070,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
         coloration_baseline: Baseline type for coloration
         an: Analytics instance
         init_perf_logger: Performance logger
+        current_user_id: Current user ID (int or None) for data isolation in analytics calls
     """
     import json
     import time
@@ -3100,7 +3112,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
         if metric_key not in available_metrics:
             label = ATTRIBUTE_LABELS.get(metric_key, metric_key.replace('_', ' ').title())
             
-            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary, analytics_instance=an):
+            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary, analytics_instance=an, cuid=current_user_id):
                 def get_generic_value():
                     # ====================================================================
                     # SPECIAL HANDLING FOR CALCULATED METRICS
@@ -3134,13 +3146,13 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     if key == 'expected_relief':
                         try:
                             # Try to get from dashboard_metrics first
-                            dashboard_metrics = analytics_instance.get_dashboard_metrics()
+                            dashboard_metrics = analytics_instance.get_dashboard_metrics(user_id=cuid)
                             if dashboard_metrics and 'quality' in dashboard_metrics:
                                 val = dashboard_metrics['quality'].get('avg_expected_relief')
                                 if val is not None:
                                     return float(val)
                             # Fallback: calculate from instances
-                            df = analytics_instance._load_instances(user_id=current_user_id)
+                            df = analytics_instance._load_instances(user_id=cuid)
                             if not df.empty:
                                 completed = df[df['completed_at'].astype(str).str.len() > 0]
                                 if not completed.empty:
@@ -3177,10 +3189,10 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     return 0.0
                 return get_generic_value
             
-            def make_get_history(key):
+            def make_get_history(key, uid=current_user_id):
                 def get_history():
                     if hasattr(an, 'get_generic_metric_history'):
-                        return an.get_generic_metric_history(key, days=90)
+                        return an.get_generic_metric_history(key, days=90, user_id=uid)
                     return None
                 return get_history
             
@@ -3486,15 +3498,19 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
     """
     from datetime import datetime, timedelta
     import json
+    from backend.auth import get_current_user
     from ui.analytics_page import CALCULATED_METRICS, ATTRIBUTE_LABELS
-    
+
+    # Resolve user for data isolation (history/tooltips)
+    loaded_user_id = get_current_user()
+
     # #region agent log
     try:
         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
             f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H2', 'location': 'dashboard.py:render_monitored_metrics_section_loaded', 'message': 'render_monitored_metrics_section_loaded entry', 'data': {'selected_metrics': selected_metrics, 'has_quality_metrics': quality_metrics is not None, 'has_composite_scores': composite_scores is not None, 'quality_keys': list(quality_metrics.keys()) if quality_metrics else [], 'composite_keys': list(composite_scores.keys()) if composite_scores else []}, 'timestamp': int(time.time() * 1000)}) + '\n')
     except: pass
     # #endregion
-    
+
     # Use provided metrics or empty dicts (will be populated in lazy load)
     if quality_metrics is None:
         quality_metrics = {}
@@ -3710,8 +3726,8 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     return 0.0
                 return get_generic_value
             
-            # Create closure-safe history function
-            def make_get_history(key):
+            # Create closure-safe history function (with user_id for data isolation)
+            def make_get_history(key, uid=loaded_user_id):
                 def get_history():
                     # ====================================================================
                     # SPECIAL HANDLING FOR METRIC HISTORY
@@ -3742,10 +3758,10 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     
                     # Standard history retrieval for other metrics
                     if hasattr(an, 'get_generic_metric_history'):
-                        return an.get_generic_metric_history(key, days=90)
+                        return an.get_generic_metric_history(key, days=90, user_id=uid)
                     return None
                 return get_history
-            
+
             available_metrics[metric_key] = {
                 'label': label,
                 'get_value': make_get_value(metric_key),
@@ -4196,13 +4212,10 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                                             tooltip.innerHTML = '';
                                             tooltip.appendChild(plotlyDiv);
                                             temp.remove();
-                                            fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{location:'dashboard.js:moveChart',message:'chart moved successfully',data:{{tooltip_id:'{tooltip_id}'}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'}})}}).catch(()=>{{}});
                                             return true;
                                         }} else {{
-                                            fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{location:'dashboard.js:moveChart',message:'plotlyDiv not found or no height',data:{{tooltip_id:'{tooltip_id}',has_plotly:!!plotlyDiv,height:plotlyDiv?plotlyDiv.offsetHeight:0}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'}})}}).catch(()=>{{}});
                                         }}
                                     }} else {{
-                                        fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{location:'dashboard.js:moveChart',message:'temp or tooltip not found',data:{{tooltip_id:'{tooltip_id}',has_temp:!!temp,has_tooltip:!!tooltip}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'}})}}).catch(()=>{{}});
                                     }}
                                     return false;
                                 }}
@@ -4772,24 +4785,15 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     <script>
         function initMetricTooltips() {
             const cards = document.querySelectorAll('.metric-card-hover');
-            console.log('[DEBUG] initMetricTooltips: found', cards.length, 'metric cards');
-            fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboard.js:initMetricTooltips',message:'initMetricTooltips called',data:{card_count:cards.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'})}).catch(()=>{});
-            
             cards.forEach(function(card) {
                 const tooltipId = card.getAttribute('data-tooltip-id');
                 if (!tooltipId) {
-                    console.log('[DEBUG] initMetricTooltips: card missing data-tooltip-id');
                     return;
                 }
-                
                 const tooltip = document.getElementById('tooltip-' + tooltipId);
                 if (!tooltip) {
-                    console.log('[DEBUG] initMetricTooltips: tooltip not found for', tooltipId, 'looking for tooltip-' + tooltipId);
-                    fetch('http://127.0.0.1:7242/ingest/b5ede3c8-fe20-4a9a-a62f-6abc4b864467',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'dashboard.js:initMetricTooltips',message:'tooltip element not found',data:{tooltip_id:tooltipId,expected_id:'tooltip-' + tooltipId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H7'})}).catch(()=>{});
                     return;
                 }
-                
-                console.log('[DEBUG] initMetricTooltips: setting up tooltip for', tooltipId);
                 
                 let hoverTimeout;
                 

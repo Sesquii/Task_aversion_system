@@ -12,6 +12,10 @@ These scripts convert the SQLite migrations to PostgreSQL-compatible SQL for ser
 2. **Sequential Execution**: Run migrations in order (001, 002, 003, etc.)
 3. **Idempotent**: All migrations should be safe to run multiple times
 
+## Option A: PostgreSQL Locally First (recommended path)
+
+To use PostgreSQL locally while keeping CSV and SQLite as backup, see **[OPTION_A_LOCAL_POSTGRES.md](OPTION_A_LOCAL_POSTGRES.md)**. It uses one script to start Postgres and run all migrations, then you set `DATABASE_URL` in `.env` to point the app at Postgres.
+
 ## Local Testing with Docker
 
 ### Automated Testing Scripts (Recommended)
@@ -37,7 +41,7 @@ These scripts will:
 3. Wait for PostgreSQL to be ready
 4. Set DATABASE_URL environment variable automatically
 5. Check current migration status
-6. Run all 10 migrations in order (001-010)
+6. Run all 11 migrations in order (001-011)
 7. Perform final status check
 8. Keep container running for further testing
 
@@ -109,6 +113,26 @@ cd task_aversion_app
 docker stop test-postgres
 docker rm test-postgres
 ```
+
+## Schema Parity with SQLite
+
+PostgreSQL migrations are aligned with `SQLite_migration/` so that the same schema is produced:
+
+| SQLite migration | PostgreSQL migration | Covers |
+|------------------|----------------------|--------|
+| 001 | 001 | tasks, task_instances, emotions, popup_triggers, popup_responses, notes, user_preferences, survey_responses, users (via init_db) |
+| 002 | 002 | routine_frequency, routine_days_of_week, routine_time, completion_window_* on tasks |
+| 003 | 003 | task_instances table |
+| 004 | 004 | emotions table |
+| 005 | 005 | indexes on task_instances, optional GIN on tasks; FK task_instances.task_id -> tasks.task_id |
+| 006 | 006 | notes column on tasks |
+| 007 | 007 | user_preferences table |
+| 008 | 008 | survey_responses table |
+| 009 | 009 | users table |
+| 010 | 010 | user_id on tasks, task_instances, notes; VARCHAR->INTEGER user_id for user_preferences, survey_responses, popup_triggers, popup_responses |
+| 011 | 011 | user_id on emotions for per-user data isolation |
+
+All tables and columns from the canonical models in `backend/database.py` are created by these migrations (or by init_db in 001). The `emotions` table gains `user_id` in migration 011 for data isolation.
 
 ## Key Differences from SQLite
 
@@ -190,6 +214,7 @@ if __name__ == '__main__':
 8. **008_create_survey_responses_table.py** - Creates the survey_responses table for storing survey question responses
 9. **009_create_users_table.py** - Creates the users table for OAuth authentication (Google, etc.)
 10. **010_add_user_id_foreign_keys.py** - Adds user_id foreign keys to existing tables for user data isolation
+11. **011_add_user_id_to_emotions.py** - Adds user_id to emotions table for per-user data isolation
 
 ### Utility Scripts
 
@@ -237,6 +262,7 @@ python PostgreSQL_migration/007_create_user_preferences_table.py
 python PostgreSQL_migration/008_create_survey_responses_table.py
 python PostgreSQL_migration/009_create_users_table.py
 python PostgreSQL_migration/010_add_user_id_foreign_keys.py
+python PostgreSQL_migration/011_add_user_id_to_emotions.py
 ```
 
 **Bash/Linux:**
@@ -253,6 +279,7 @@ python PostgreSQL_migration/007_create_user_preferences_table.py
 python PostgreSQL_migration/008_create_survey_responses_table.py
 python PostgreSQL_migration/009_create_users_table.py
 python PostgreSQL_migration/010_add_user_id_foreign_keys.py
+python PostgreSQL_migration/011_add_user_id_to_emotions.py
 ```
 
 ## Important Notes

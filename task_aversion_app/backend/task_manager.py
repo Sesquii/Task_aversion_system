@@ -21,13 +21,14 @@ class TaskManager:
     _get_all_shared: dict = {}
     _get_all_shared_time: dict = {}
 
-    def __init__(self):
-        # Default to database (SQLite) unless USE_CSV is explicitly set
-        # Check if CSV is explicitly requested
-        use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
+    def __init__(self, use_csv: Optional[bool] = None):
+        # use_csv=None: read from env. use_csv=True: explicit e.g. scheduler (no startup message)
+        _explicit_csv = use_csv is True
+        if use_csv is None:
+            use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
         
         if use_csv:
-            # CSV backend (explicitly requested)
+            # CSV backend (explicitly requested or USE_CSV env)
             self.use_db = False
         else:
             # Database backend (default)
@@ -56,7 +57,9 @@ class TaskManager:
                 self.Task = Task
                 # Initialize database if tables don't exist
                 init_db()
-                print("[TaskManager] Using database backend")
+                if not getattr(TaskManager, '_printed_backend', False):
+                    print("[TaskManager] Using database backend")
+                    TaskManager._printed_backend = True
             except Exception as e:
                 if self.strict_mode:
                     raise RuntimeError(
@@ -70,14 +73,15 @@ class TaskManager:
                 self.use_db = False
                 self._init_csv()
         else:
-            # CSV backend (explicitly requested via USE_CSV)
-            if self.strict_mode:
+            # CSV backend (explicitly requested via USE_CSV or use_csv=True)
+            if not _explicit_csv and self.strict_mode:
                 raise RuntimeError(
                     "CSV backend is disabled (DISABLE_CSV_FALLBACK is set) but USE_CSV is set.\n"
                     "Please unset USE_CSV to use the database backend, or unset DISABLE_CSV_FALLBACK."
                 )
             self._init_csv()
-            print("[TaskManager] Using CSV backend")
+            if not _explicit_csv:
+                print("[TaskManager] Using CSV backend")
         
         self.initialization_entries = []
     

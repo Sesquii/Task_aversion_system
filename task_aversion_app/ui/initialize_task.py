@@ -330,8 +330,8 @@ def initialize_task_page(task_manager, emotion_manager):
                     if p.lower() not in seen:
                         seen.add(p.lower())
                         ordered.append(p)
-                        # Persist to emotion store for future sessions
-                        emotion_manager.add_emotion(p)
+                        # Persist to emotion store for future sessions (user-scoped)
+                        emotion_manager.add_emotion(p, user_id=current_user_id)
                 return ordered
 
             def update_emotion_sliders():
@@ -481,7 +481,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 
                 popup = popup_dispatcher.evaluate_triggers(
                     completion_context=initialization_context,
-                    user_id='default'
+                    user_id=str(current_user_id) if current_user_id is not None else 'default'
                 )
                 
                 popup_eval_duration = (time.perf_counter() - popup_eval_start) * 1000
@@ -501,7 +501,7 @@ def initialize_task_page(task_manager, emotion_manager):
                             helpful=helpful,
                             comment=comment,
                             task_id=task_id,
-                            user_id='default'
+                            user_id=str(current_user_id) if current_user_id is not None else 'default'
                         )
                         
                         if response_value == 'edit':

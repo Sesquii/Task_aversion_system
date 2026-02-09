@@ -249,8 +249,23 @@ def main():
         print("  NOTE: Some tables may have 'user_id_new' columns that need data migration")
     
     print()
+    
+    # Check for emotions.user_id (Migration 011)
+    print("Migration 011: Emotions User ID (Data Isolation)")
+    print("-" * 70)
+    
+    if check_table_exists('emotions'):
+        has_user_id = check_column_exists('emotions', 'user_id')
+        status = "[OK]" if has_user_id else "[MISSING]"
+        print(f"  {status} emotions.user_id: {'exists' if has_user_id else 'MISSING'}")
+        if not has_user_id:
+            print("  -> Run: python SQLite_migration/011_add_user_id_to_emotions.py")
+    else:
+        print("  [SKIP] emotions table does not exist (run migration 004 first)")
+    
+    print()
     print("=" * 70)
-    print("\nSummary: Run migrations in order (001, 002, 003, 004, 005, 006, 007, 008, 009, 010)")
+    print("\nSummary: Run migrations in order (001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011)")
     print("All migrations are idempotent - safe to run multiple times.")
     print("=" * 70)
 

@@ -64,14 +64,10 @@ def migrate():
     
     print("[OK] Tasks table exists (prerequisite check passed)")
     
-    # Check if user_preferences table already exists
+    # Check if user_preferences table already exists (idempotent: skip if already done)
     if table_exists('user_preferences'):
-        print("[NOTE] User preferences table already exists.")
-        print("If you've already run this migration, this is expected.")
-        response = input("Continue anyway (will skip if table exists)? (y/N): ")
-        if response.lower() != 'y':
-            print("[SKIP] Migration cancelled.")
-            return True
+        print("[NOTE] User preferences table already exists. Skipping (idempotent).")
+        return True
     
     try:
         print("\nCreating user_preferences table for PostgreSQL...")

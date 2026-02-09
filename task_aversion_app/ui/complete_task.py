@@ -372,7 +372,7 @@ def complete_task_page(task_manager, emotion_manager):
                     continue
                 seen.add(key)
                 ordered.append(p)
-                emotion_manager.add_emotion(p)
+                emotion_manager.add_emotion(p, user_id=current_user_id)
             return ordered
 
         def update_emotion_sliders():
@@ -599,7 +599,7 @@ def complete_task_page(task_manager, emotion_manager):
             
             popup = popup_dispatcher.evaluate_triggers(
                 completion_context=completion_context,
-                user_id='default'
+                user_id=str(current_user_id) if current_user_id is not None else 'default'
             )
             
             # If popup should show, display it and handle response
@@ -612,7 +612,7 @@ def complete_task_page(task_manager, emotion_manager):
                         helpful=helpful,
                         comment=comment,
                         task_id=task_id,
-                        user_id='default'
+                        user_id=str(current_user_id) if current_user_id is not None else 'default'
                     )
                     
                     if response_value == 'edit':

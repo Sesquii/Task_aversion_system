@@ -11,6 +11,13 @@ from typing import Optional, Dict, Any
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
+
+# Load .env BEFORE importing backend.database so DATABASE_URL is set when engine is created
+_app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_env_path = os.path.join(_app_dir, '.env')
+load_dotenv(dotenv_path=_env_path)
+load_dotenv()  # cwd .env if present
+
 from nicegui import app, ui
 from fastapi import Request
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -18,9 +25,6 @@ import httpx
 
 from backend.database import get_session, User, UserPreferences, init_db
 from backend.user_state import UserStateManager
-
-# Load environment variables from .env file
-load_dotenv()
 
 # Initialize database
 init_db()

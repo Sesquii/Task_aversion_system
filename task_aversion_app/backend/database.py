@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text, Float, ForeignKey, Index, text
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, DateTime, JSON, Text, Float, ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.pool import StaticPool
@@ -342,23 +342,32 @@ class Emotion(Base):
     """
     Emotion model (migrated from emotions.csv).
     Stores a list of emotions that users can select from.
+    Each user has their own emotion vocabulary for data isolation.
     """
     __tablename__ = 'emotions'
     
     # Primary key
     emotion_id = Column(Integer, primary_key=True, autoincrement=True)
     
-    # Emotion name (unique, case-insensitive matching handled in application logic)
-    emotion = Column(String, nullable=False, unique=True, index=True)
+    # User isolation - links emotion to user (nullable for migration compatibility)
+    user_id = Column(Integer, ForeignKey('users.user_id', ondelete='CASCADE'), nullable=True, index=True)
+    
+    # Emotion name (unique per user, case-insensitive matching handled in application logic)
+    emotion = Column(String, nullable=False, index=True)
+    
+    __table_args__ = (
+        UniqueConstraint('user_id', 'emotion', name='uq_emotions_user_emotion'),
+    )
     
     def to_dict(self) -> dict:
         """Convert model instance to dictionary (compatible with CSV format)."""
         return {
-            'emotion': self.emotion
+            'emotion': self.emotion,
+            'user_id': self.user_id,
         }
     
     def __repr__(self):
-        return f"<Emotion(emotion='{self.emotion}')>"
+        return f"<Emotion(emotion='{self.emotion}', user_id={self.user_id})>"
 
 
 class PopupTrigger(Base):

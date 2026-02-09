@@ -58,14 +58,10 @@ def migrate():
         print("For SQLite migrations, use the scripts in SQLite_migration/ folder.")
         return False
     
-    # Check if tasks table already exists
+    # Check if tasks table already exists (idempotent: skip if already done)
     if table_exists('tasks'):
-        print("[NOTE] Tasks table already exists.")
-        print("If you've already migrated from CSV, this migration is not needed.")
-        response = input("Continue anyway? (y/N): ")
-        if response.lower() != 'y':
-            print("[SKIP] Migration cancelled.")
-            return True
+        print("[NOTE] Tasks table already exists. Skipping (idempotent).")
+        return True
     
     try:
         print("Initializing database schema for PostgreSQL...")
@@ -77,8 +73,10 @@ def migrate():
         
         # Verify
         print("\nVerifying created tables...")
-        expected_tables = ['tasks', 'task_instances', 'emotions', 'popup_triggers', 
-                          'popup_responses', 'notes']
+        expected_tables = [
+            'tasks', 'task_instances', 'emotions', 'popup_triggers',
+            'popup_responses', 'notes', 'user_preferences', 'survey_responses', 'users'
+        ]
         
         all_exist = True
         for table in expected_tables:

@@ -386,6 +386,16 @@ ERROR_LOG_DIR = Path(__file__).parent.parent / 'data' / 'logs'
 ERROR_LOG_FILE = ERROR_LOG_DIR / 'errors.jsonl'
 ERROR_REPORTS_FILE = ERROR_LOG_DIR / 'error_reports.jsonl'
 
+# App log path (same as app.py when LOG_TO_FILE=1 or APP_LOG_FILE set) for explicit traceback logging
+def _get_app_log_path() -> Optional[Path]:
+    """Return path to app.log when app stdout/stderr logging is enabled; else None."""
+    path_str = os.getenv("APP_LOG_FILE", "").strip()
+    if path_str:
+        return Path(path_str)
+    if os.getenv("LOG_TO_FILE", "").lower() in ("1", "true", "yes"):
+        return Path(__file__).parent.parent / "logs" / "app.log"
+    return None
+
 # Ensure log directory exists
 ERROR_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -431,12 +441,24 @@ def handle_error(
     except Exception as log_error:
         # If logging fails, at least print to console
         print(f"[Security] Failed to write error log: {log_error}")
-    
+
+    # Also write to app.log when enabled (so tracebacks appear even if sys.stderr was replaced)
+    app_log = _get_app_log_path()
+    if app_log is not None:
+        try:
+            app_log.parent.mkdir(parents=True, exist_ok=True)
+            with open(app_log, 'a', encoding='utf-8') as f:
+                f.write(f"[ERROR {error_id}] {operation}: {error}\n")
+                f.write(traceback.format_exc())
+                f.write("\n")
+        except OSError:
+            pass
+
     # Also print to console for development
     print(f"[ERROR {error_id}] {operation}: {error}")
     if os.getenv('ENVIRONMENT', 'development') != 'production':
         print(traceback.format_exc())
-    
+
     return error_id
 
 

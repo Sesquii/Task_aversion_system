@@ -41,10 +41,24 @@ def settings_page():
     if user_id is None:
         ui.navigate.to('/login')
         return
-    
+
+    try:
+        _build_settings_content(user_id)
+    except Exception as ex:
+        import traceback
+        traceback.print_exc()
+        ui.label("Settings").classes("text-2xl font-bold mb-2")
+        with ui.card().classes("w-full max-w-xl p-4 border-2 border-red-300 bg-red-50"):
+            ui.label("Error loading Settings page").classes("text-lg font-semibold text-red-700 mb-2")
+            ui.label(str(ex)).classes("text-sm text-red-800 mb-2")
+            ui.button("Back to Dashboard", on_click=lambda: ui.navigate.to("/")).classes("mt-2")
+
+
+def _build_settings_content(user_id):
+    """Build the main settings page content (separate so we can wrap in try/except)."""
     def go_survey():
         ui.navigate.to("/survey")
-    
+
     def handle_logout():
         """Logout and redirect to login page."""
         # Clear session
@@ -185,43 +199,36 @@ def settings_page():
                     context={'action': 'download_zip'}
                 )
         
-        def handle_upload(e):
-            """
-            Handle ZIP file upload and import data.
-            
-            NOTE: This function is currently disabled for security testing.
-            The code is preserved but the upload component is disabled in the UI.
-            To re-enable: Remove the disabled prop and set_enabled(False) call.
-            """
-            # SECURITY: Feature disabled pending security audit
-            ui.notify(
-                "Import feature is currently disabled for security testing. "
-                "Please contact administrator for data import assistance.",
-                color="negative",
-                timeout=8000
-            )
-            return
-            
-            # Code below is preserved for future security testing and re-enablement
-            # DO NOT DELETE - This will be tested and re-enabled after security audit
+        async def handle_upload(e):
+            """Handle ZIP file upload and import data into the current database."""
             try:
                 from backend.csv_import import import_from_zip
                 from nicegui import events
                 import tempfile
                 import os
                 
-                # Read uploaded file content
-                if isinstance(e, events.UploadEventArguments):
-                    file_content = e.content.read()
-                else:
-                    # Fallback for different event structures
-                    file_content = e.content.read() if hasattr(e.content, 'read') else e.content
-                
-                # Save uploaded file to temp location
+                # NiceGUI 3.x: UploadEventArguments has .file (FileUpload), not .content
+                if not isinstance(e, events.UploadEventArguments) or e.file is None:
+                    ui.notify("Invalid upload event.", color="negative")
+                    return
+                # Save uploaded file to temp location (FileUpload has async save/read)
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-                temp_file.write(file_content)
                 temp_file.close()
-                
+                try:
+                    await e.file.save(temp_file.name)
+                except Exception as save_ex:
+                    try:
+                        if os.path.exists(temp_file.name):
+                            os.remove(temp_file.name)
+                    except Exception:
+                        pass
+                    handle_error_with_ui(
+                        'import_user_data',
+                        save_ex,
+                        user_id=get_current_user(),
+                        context={'action': 'import_zip', 'step': 'save_upload'}
+                    )
+                    return
                 try:
                     # CRITICAL: Get current logged-in user_id for data isolation
                     current_user_id = get_current_user()
@@ -239,6 +246,8 @@ def settings_page():
                     total_errors = 0
                     
                     for table_name, stats in results.items():
+                        if table_name.startswith('_'):  # Skip internal keys like _error, _backup_info
+                            continue
                         imported = stats.get('imported', 0)
                         skipped = stats.get('skipped', 0)
                         errors = stats.get('errors', 0)
@@ -246,7 +255,9 @@ def settings_page():
                         total_skipped += skipped
                         total_errors += errors
                         
-                        if imported > 0 or skipped > 0 or errors > 0:
+                        if 'error' in stats:
+                            summary_lines.append(f"  {table_name}: FAILED - {stats['error']}")
+                        elif imported > 0 or skipped > 0 or errors > 0:
                             summary_lines.append(f"  {table_name}: {imported} imported, {skipped} skipped, {errors} errors")
                         elif 'note' in stats:
                             summary_lines.append(f"  {table_name}: {stats['note']}")
@@ -254,8 +265,19 @@ def settings_page():
                     summary_lines.append(f"\nTotal: {total_imported} imported, {total_skipped} skipped, {total_errors} errors")
                     
                     message = "\n".join(summary_lines)
-                    ui.notify(message, color="positive", timeout=10000)
+                    has_failures = any(
+                        isinstance(s, dict) and s.get('error')
+                        for k, s in results.items() if not k.startswith('_')
+                    )
+                    ui.notify(message, color="negative" if has_failures else "positive", timeout=10000)
                     
+                    # Invalidate caches so dashboard/analytics show newly imported data (including initialized/active instances)
+                    try:
+                        im._invalidate_instance_caches()
+                        from backend.analytics import Analytics
+                        Analytics()._invalidate_instances_cache(user_id=current_user_id)
+                    except Exception:
+                        pass
                     # Reload page to show updated data
                     ui.navigate.reload()
                     
@@ -276,32 +298,25 @@ def settings_page():
                 )
         
         ui.button("💾 Download My Data", on_click=download_zip).classes("bg-blue-500 text-white mt-2")
-        ui.label("Download all your data as a ZIP file containing CSV files (tasks, instances, emotions, popup triggers/responses, notes, survey responses, and user preferences). Use this for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")
+        ui.label("Download all your data as a ZIP file containing CSV files (tasks, instances, emotions, popup triggers/responses, notes, survey responses, and user preferences). Export includes all task statuses: initialized, active, and completed. Use for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")
         
-        # Security warning and disabled import feature
-        with ui.card().classes("p-4 mt-2 bg-red-50 border-2 border-red-300"):
-            ui.label("⚠️ IMPORT FEATURE TEMPORARILY DISABLED").classes("text-base font-bold text-red-700 mb-2")
-            ui.markdown(
-                "**Security Notice**: The data import feature has been temporarily disabled pending security testing.\n\n"
-                "This feature allows importing CSV data and automatically adding database columns, which requires "
-                "thorough security review to prevent exploitation before being enabled in production.\n\n"
-                "**Status**: Code is preserved but functionality is disabled until security audit is complete."
-            ).classes("text-sm text-red-800 mb-3")
-            
-            # Disabled upload component
-            upload_component = ui.upload(
-                on_upload=lambda e: ui.notify("Import feature is currently disabled for security testing.", color="negative"),
+        # Import from ZIP (writes to current database; user_id used for data isolation)
+        with ui.card().classes("p-4 mt-2 bg-gray-50 border border-gray-200"):
+            ui.label("Import Data from ZIP").classes("text-base font-semibold mb-2")
+            ui.label(
+                "Upload a ZIP file containing CSV exports (e.g. from Download My Data). "
+                "All data (initialized, active, and completed tasks) is imported and associated with your account."
+            ).classes("text-sm text-gray-600 mb-3")
+            ui.upload(
+                on_upload=handle_upload,
                 max_file_size=50 * 1024 * 1024,  # 50 MB limit
-                label="📤 Import Data from ZIP (DISABLED)",
-                auto_upload=False
-            ).classes("mt-2 opacity-50").props("accept=.zip disabled")
-            upload_component.set_enabled(False)
-            
-            ui.label("Upload functionality is disabled. The underlying import code is preserved for future security testing.").classes("text-xs text-red-700 mt-2 italic")
+                label="Choose ZIP file to import",
+                auto_upload=True
+            ).classes("mt-2").props("accept=.zip")
         
-        # Abuse prevention limits info (for reference when feature is re-enabled)
+        # Import limits
         with ui.card().classes("p-3 mt-2 bg-gray-50 border border-gray-200"):
-            ui.label("Planned Import Limits (When Re-enabled)").classes("text-sm font-semibold mb-2 text-gray-600")
+            ui.label("Import Limits").classes("text-sm font-semibold mb-2 text-gray-600")
             ui.markdown(
                 "• **File size**: Maximum 50 MB per file\n"
                 "• **Rows per CSV**: Maximum 10,000 rows (excess truncated)\n"
