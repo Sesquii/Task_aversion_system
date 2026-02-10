@@ -1,6 +1,6 @@
 ---
 name: Server Deployment with SQLite
-overview: Deploy application to server using SQLite database (simpler setup). Includes updating Dockerfile for SQL migration, server setup, nginx configuration, SSL certificates, and production deployment. PostgreSQL migration will be handled in a separate plan when scaling is needed.
+overview: Deploy application to production server with PostgreSQL database. Production MUST use PostgreSQL. Includes Dockerfile, server setup, nginx, SSL. Choose systemd+venv or Docker (see docs/deployment_systemd_vs_docker.md). SQLite is for local dev only.
 todos:
   - id: day1_server_prep
     content: "Day 1: Server preparation - SSH access, user setup, Python 3.11 installation, directory structure"
@@ -27,13 +27,14 @@ todos:
       - day4_nginx_ssl
 ---
 
-# Se
+# Server Deployment Plan (PostgreSQL Production)
 
-rver Deployment with SQLite Plan**Created:** 2025-01-XX**Status:** Planning**Priority:** Medium (enables server hosting)**Timeline:** 4-5 days**Database:** SQLite (PostgreSQL migration in separate plan)
+**Created:** 2025-01-XX | **Status:** Planning | **Priority:** Medium  
+**Timeline:** 4-5 days | **Production Database:** PostgreSQL (required)
 
 ## Overview
 
-Deploy the Task Aversion System to a production server with SQLite database. The application has completed SQLite migration locally, so we can deploy the existing SQLite database directly to the server. This is simpler and faster than PostgreSQL setup, perfect for single-user or low-traffic scenarios.
+Deploy the Task Aversion System to a production server. **Production MUST use PostgreSQL.** The app supports both systemd+venv and Docker deployment; see `docs/deployment_systemd_vs_docker.md` for comparison. SQLite is for local development only.
 
 ## Current State
 

@@ -1,5 +1,9 @@
 # Server Migration Checklist
 
+## Production Database: PostgreSQL
+
+**Production uses PostgreSQL.** The app connects via `DATABASE_URL`. SQLite is for local development only. Do not deploy production with SQLite.
+
 ## Current Status
 
 - ✅ SSH access to VPS (Ubuntu 22.04)
@@ -10,6 +14,7 @@
 - ✅ **Phase 1 Complete**: Backup script configured
 - ✅ **Phase 2 Complete**: PostgreSQL migration scripts created
 - ⏳ **Phase 2B**: User Authentication & Authorization (CRITICAL before publishing)
+- ✅ **Phase 3 Complete**: Deployment configuration templates (env, systemd, nginx)
 - ⏳ Code deployment to server
 - ⏳ Nginx + TLS setup
 - ⏳ Systemd service configuration
@@ -696,60 +701,41 @@ CREATE INDEX idx_users_oauth ON users(oauth_provider, oauth_id);
 4. Get Client ID and Client Secret
 5. Add to environment variables: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
 
-## Phase 3: Deployment Configuration (Documentation)
+## Deployment Method: systemd vs Docker
 
-### 3.1 Environment Variables
+See **`docs/deployment_systemd_vs_docker.md`** for comparison. Both support PostgreSQL production. Docker must be installed **on the server** if using Docker Compose.
 
-Create `.env.production` template:
+## Phase 3: Deployment Configuration (Documentation) ✅ COMPLETE
+
+Configuration templates are in the `deploy/` folder. See `deploy/README.md` for quick setup.
+
+### 3.1 Environment Variables ✅
+
+Use `deploy/env.production.example` as template. Copy to `task_aversion_app/.env.production` and fill in values:
 
 ```bash
 DATABASE_URL=postgresql://task_aversion_user:password@localhost:5432/task_aversion_system
 NICEGUI_HOST=0.0.0.0
 NICEGUI_PORT=8080
-# Add other environment variables as needed
+STORAGE_SECRET=<generate-strong-random-string>
+ENVIRONMENT=production
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+OAUTH_REDIRECT_URI=https://TaskAversionSystem.com/auth/callback
+# See deploy/env.production.example for full list
 ```
 
-### 3.2 Systemd Service File
+### 3.2 Systemd Service File ✅
 
-Create `/etc/systemd/system/task-aversion-app.service`:
+Copy `deploy/systemd/task-aversion-app.service` to `/etc/systemd/system/`, edit `APP_DIR` and `YOUR_USER`, then:
 
-```ini
-[Unit]
-Description=Task Aversion System
-After=network.target postgresql.service
+See `deploy/systemd/task-aversion-app.service` for the full file. Uses venv Python and `.env.production`.
 
-[Service]
-Type=simple
-User=your-user
-WorkingDirectory=/home/your-user/task_aversion_app
-Environment="PATH=/home/your-user/.local/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/home/your-user/task_aversion_app/.env.production
-ExecStart=/usr/bin/python3 /home/your-user/task_aversion_app/app.py
-Restart=always
-RestartSec=10
+### 3.3 Nginx Configuration ✅
 
-[Install]
-WantedBy=multi-user.target
-```
+Copy `deploy/nginx/task-aversion-system.conf` to `/etc/nginx/sites-available/`:
 
-### 3.3 Nginx Configuration
-
-Create `/etc/nginx/sites-available/task-aversion-system`:
-
-```nginx
-server {
-    listen 80;
-    server_name TaskAversionSystem.com www.TaskAversionSystem.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
+See `deploy/nginx/task-aversion-system.conf` for full config (includes WebSocket upgrade headers and timeouts).
 
 Enable site:
 
@@ -820,12 +806,54 @@ sudo journalctl -u task-aversion-app -f
 
 ### 5.1 Smoke Tests
 
+After deploying, log in with your usual Google account and verify:
 - Access via domain name
-- Test login/authentication
-- Create a test task
-- Verify data persistence
+- Login/authentication works
+- Dashboard loads
+- Create a test task, initialize, complete
+- Analytics page loads
+- Data persists
 
-### 5.2 Monitoring
+To restrict access to only your IP until you have verified (e.g. during smoke test), see Phase 5.3 below.
+
+### 5.3 Restricting Access (e.g. During Smoke Test)
+
+**How the app opens to others:** Once the server is online and your firewall/nginx allows traffic, anyone can reach the login page. To actually use the app, they must log in with Google OAuth (they get their own data). There is no built-in "maintenance mode" or user allowlist in the app itself.
+
+**To allow only you during smoke test:** Restrict at the network level so only your IP can connect. Then do your verification, and open the firewall when ready.
+
+**Option A: nginx allow/deny (if nginx is in front)**
+
+Add to your nginx server block (before the `location /` block):
+
+```nginx
+# Allow only your IP (replace with your actual IP)
+allow 203.0.113.50;
+deny all;
+```
+
+Remove these lines (or comment them out) when you are ready to open access.
+
+**Option B: Firewall (ufw)**
+
+```bash
+# During smoke test: allow only your IP
+sudo ufw delete allow 80/tcp   # remove general HTTP allow if present
+sudo ufw delete allow 443/tcp  # remove general HTTPS allow if present
+sudo ufw allow from 203.0.113.50 to any port 80
+sudo ufw allow from 203.0.113.50 to any port 443
+sudo ufw allow 22/tcp   # keep SSH
+sudo ufw reload
+
+# When ready to open to all:
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw reload
+```
+
+**Find your IP:** Visit https://whatismyip.com or run `curl ifconfig.me` from your machine.
+
+### 5.4 Monitoring
 
 - Set up log rotation
 - Monitor disk space
