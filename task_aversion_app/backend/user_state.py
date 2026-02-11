@@ -1,8 +1,9 @@
 import os
+import threading
 import pandas as pd
 from datetime import datetime
-from typing import Optional, Dict, Any, List
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
 DATA_DIR = os.path.join(Path(__file__).resolve().parent.parent, "data")
@@ -20,6 +21,11 @@ DEFAULT_PREFS = {
     "created_at": "",
     "last_active": "",
 }
+
+# In-process cache for get_productivity_goal_settings (shared by Analytics + Settings).
+# Invalidated on set_productivity_goal_settings for the same user_id.
+_productivity_goal_cache: Dict[str, Dict[str, Any]] = {}
+_productivity_goal_cache_lock = threading.Lock()
 
 
 class UserStateManager:
@@ -167,6 +173,9 @@ class UserStateManager:
     def get_productivity_goal_settings(self, user_id: str) -> Dict[str, Any]:
         """Get productivity goal tracking settings.
         
+        Uses an in-process cache (shared by Analytics and Settings); cache is
+        invalidated when set_productivity_goal_settings is called for the same user.
+        
         Returns:
             Dict with:
             - goal_hours_per_week (float, default 40.0)
@@ -178,14 +187,15 @@ class UserStateManager:
             - user_override_flag (bool, default False)
             - week_calculation_mode (str, default 'rolling'): 'rolling' or 'monday_based'
         """
+        with _productivity_goal_cache_lock:
+            if user_id in _productivity_goal_cache:
+                return _productivity_goal_cache[user_id].copy()
         prefs = self.get_user_preferences(user_id)
         if not prefs:
             return {}
-        
         goal_settings_json = prefs.get("productivity_goal_settings", "")
         if not goal_settings_json:
             return {}
-        
         try:
             import json
             settings = json.loads(goal_settings_json)
@@ -200,6 +210,8 @@ class UserStateManager:
                 settings['user_override_flag'] = False
             if 'week_calculation_mode' not in settings:
                 settings['week_calculation_mode'] = 'rolling'  # Default to rolling 7-day
+            with _productivity_goal_cache_lock:
+                _productivity_goal_cache[user_id] = settings.copy()
             return settings
         except (json.JSONDecodeError, TypeError):
             return {}
@@ -238,7 +250,10 @@ class UserStateManager:
                 normalized['week_calculation_mode'] = mode
         
         settings_json = json.dumps(normalized)
-        return self.update_preference(user_id, "productivity_goal_settings", settings_json)
+        result = self.update_preference(user_id, "productivity_goal_settings", settings_json)
+        with _productivity_goal_cache_lock:
+            _productivity_goal_cache.pop(user_id, None)
+        return result
     
     def get_productivity_history(self, user_id: str) -> List[Dict[str, Any]]:
         """Get historical productivity tracking data (weekly snapshots).

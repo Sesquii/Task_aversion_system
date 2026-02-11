@@ -2871,7 +2871,7 @@ def render_monitored_metrics_section(container):
                         _monitored_metrics_state['analytics_instance'] = an
                         
                         # Set up periodic refresh for daily productivity score (resets at midnight)
-                        _setup_periodic_metric_refresh(metric_cards, selected_metrics, an)
+                        _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, final_user_id)
                     except Exception as e:
                         print(f"[Dashboard] Error updating metric cards: {e}")
                         import traceback
@@ -2898,13 +2898,21 @@ def render_monitored_metrics_section(container):
     return
 
 
-def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
+def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_user_id=None):
     """Set up periodic refresh for time-sensitive metrics like daily_productivity_score_idle_refresh.
     
     This function creates a timer that periodically refreshes metrics that depend on current time,
     such as the daily productivity score which resets at midnight each day.
+    
+    Args:
+        metric_cards: Dict of metric cards
+        selected_metrics: List of selected metric keys
+        an: Analytics instance
+        current_user_id: Current user ID (required for database mode data isolation)
     """
     global _monitored_metrics_state
+    
+    _monitored_metrics_state['current_user_id'] = current_user_id
     
     # Cancel any existing refresh timer
     if _monitored_metrics_state.get('refresh_timer'):
@@ -2981,10 +2989,12 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an):
         # #endregion
         
         try:
+            uid = _monitored_metrics_state.get('current_user_id')
             # Recalculate the metric (resets at midnight)
             score_data = an_ref.calculate_daily_productivity_score_with_idle_refresh(
                 target_date=None,  # None = current day with rolling calculation
-                idle_refresh_hours=8.0  # Deprecated parameter, kept for compatibility
+                idle_refresh_hours=8.0,  # Deprecated parameter, kept for compatibility
+                user_id=uid
             )
             new_value = score_data.get('daily_score', 0.0)
             
@@ -3134,7 +3144,8 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                         try:
                             score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
                                 target_date=None,  # None = current day with rolling calculation
-                                idle_refresh_hours=8.0  # Deprecated parameter, kept for compatibility
+                                idle_refresh_hours=8.0,  # Deprecated parameter, kept for compatibility
+                                user_id=cuid
                             )
                             result = score_data.get('daily_score', 0.0)
                             return float(result)
@@ -3546,7 +3557,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             label = ATTRIBUTE_LABELS.get(metric_key, metric_key.replace('_', ' ').title())
             
             # Create closure-safe function for getting value (capture all needed data)
-            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary, analytics_instance=an):
+            def make_get_value(key, qual_metrics=quality_metrics, comp_scores=composite_scores, relief=relief_summary, analytics_instance=an, uid=loaded_user_id):
                 def get_generic_value():
                     # ====================================================================
                     # SPECIAL HANDLING FOR CALCULATED METRICS
@@ -3593,7 +3604,8 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                         try:
                             score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
                                 target_date=None,  # None = current day with rolling calculation
-                                idle_refresh_hours=8.0  # Deprecated parameter, kept for compatibility
+                                idle_refresh_hours=8.0,  # Deprecated parameter, kept for compatibility
+                                user_id=uid
                             )
                             result = score_data.get('daily_score', 0.0)
                             # #region agent log
@@ -3750,7 +3762,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # as the current value, providing consistent trend visualization.
                     if key == 'daily_productivity_score_idle_refresh':
                         try:
-                            trends = an.get_attribute_trends(key, aggregation='sum', days=90)
+                            trends = an.get_attribute_trends(key, aggregation='sum', days=90, user_id=uid)
                             return trends
                         except Exception as e:
                             print(f"[Dashboard] Error getting history for {key}: {e}")

@@ -24,32 +24,42 @@ from pathlib import Path
 
 
 def count_in_file(path: Path) -> dict[str, int]:
-    """Count query-related patterns. Returns dict of pattern -> count."""
+    """Count query-related patterns. Returns dict of pattern -> count.
+
+    Uses line-by-line regex for SQL-in-strings to avoid ReDoS (catastrophic
+    backtracking) from patterns like .*?...*? on large files.
+    """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {}
+    lines = text.splitlines()
     counts = {
         "session.query": len(re.findall(r"session\.query\s*\(", text)),
         "execute": len(re.findall(r"\.execute\s*\(\s*", text))
         + len(re.findall(r"execute\s*\(\s*text\s*\(|conn\.execute\s*\(", text)),
         "SELECT": 0,
-        "INSERT": len(re.findall(r"[\'\"].*?INSERT\s+", text, re.IGNORECASE | re.DOTALL))
-        + len(re.findall(r"text\s*\(\s*[\'\"].*?INSERT\s+", text, re.IGNORECASE | re.DOTALL)),
-        "UPDATE": len(re.findall(r"[\'\"].*?UPDATE\s+", text, re.IGNORECASE | re.DOTALL))
-        + len(re.findall(r"text\s*\(\s*[\'\"].*?UPDATE\s+", text, re.IGNORECASE | re.DOTALL)),
-        "DELETE": len(re.findall(r"[\'\"].*?DELETE\s+", text, re.IGNORECASE | re.DOTALL))
-        + len(re.findall(r"text\s*\(\s*[\'\"].*?DELETE\s+", text, re.IGNORECASE | re.DOTALL)),
+        "INSERT": 0,
+        "UPDATE": 0,
+        "DELETE": 0,
         "PRAGMA": len(re.findall(r"PRAGMA\s+", text, re.IGNORECASE)),
     }
-    for _ in re.findall(r"[\'\"].*?SELECT\s+.*?[\'\"]", text, re.IGNORECASE | re.DOTALL):
-        counts["SELECT"] += 1
-    if counts["SELECT"] == 0:
-        for line in text.splitlines():
-            if re.search(r"[\'\"].*SELECT\s+", line, re.IGNORECASE) or re.search(
-                r"SELECT\s+.*[\'\"].*\)", line, re.IGNORECASE
-            ):
-                counts["SELECT"] += 1
+    # Count SQL keywords inside string-like contexts line-by-line to avoid
+    # catastrophic backtracking (ReDoS) from .*? with re.DOTALL on whole file.
+    for line in lines:
+        if re.search(r"[\'\"].*SELECT\s+", line, re.IGNORECASE) or re.search(
+            r"SELECT\s+.*[\'\"].*\)", line, re.IGNORECASE
+        ):
+            counts["SELECT"] += 1
+        counts["INSERT"] += len(re.findall(r"[\'\"].*?INSERT\s+", line, re.IGNORECASE)) + len(
+            re.findall(r"text\s*\(\s*[\'\"].*?INSERT\s+", line, re.IGNORECASE)
+        )
+        counts["UPDATE"] += len(re.findall(r"[\'\"].*?UPDATE\s+", line, re.IGNORECASE)) + len(
+            re.findall(r"text\s*\(\s*[\'\"].*?UPDATE\s+", line, re.IGNORECASE)
+        )
+        counts["DELETE"] += len(re.findall(r"[\'\"].*?DELETE\s+", line, re.IGNORECASE)) + len(
+            re.findall(r"text\s*\(\s*[\'\"].*?DELETE\s+", line, re.IGNORECASE)
+        )
     return counts
 
 

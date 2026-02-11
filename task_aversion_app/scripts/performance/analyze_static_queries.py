@@ -23,30 +23,34 @@ import sys
 from pathlib import Path
 from collections import defaultdict
 
+# Skip files larger than this to avoid timeouts (regex cost scales with file size)
+MAX_FILE_BYTES = 1_500_000  # 1.5 MB
+
 
 def count_in_file(path: Path) -> dict[str, int]:
     """Count query-related patterns in a single file. Returns dict of pattern -> count."""
     try:
+        size = path.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return {}
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {}
     counts = {
         "session.query": len(re.findall(r"session\.query\s*\(", text)),
-        "execute(": len(re.findall(r"\.execute\s*\(\s*", text)) + len(re.findall(r"execute\s*\(\s*text\s*\(|conn\.execute\s*\(", text)),
+        "execute(": len(re.findall(r"\.execute\s*\(\s*", text))
+        + len(re.findall(r"execute\s*\(\s*text\s*\(|conn\.execute\s*\(", text)),
         "text(sql": len(re.findall(r"text\s*\(\s*[\'\"]", text)),  # text("SELECT...") style
         "SELECT (string)": 0,
         "PRAGMA": len(re.findall(r"PRAGMA\s+", text, re.IGNORECASE)),
     }
-    # Heuristic: SELECT inside a string (fragment)
-    for _ in re.findall(r"[\'\"].*?SELECT\s+.*?[\'\"]", text, re.IGNORECASE | re.DOTALL):
-        counts["SELECT (string)"] += 1
-    # Simpler: line contains "SELECT " in a string context (single/double quote before it on same line)
-    if counts["SELECT (string)"] == 0:
-        for line in text.splitlines():
-            if re.search(r"[\'\"].*SELECT\s+", line, re.IGNORECASE) or re.search(
-                r"SELECT\s+.*[\'\"].*\)", line, re.IGNORECASE
-            ):
-                counts["SELECT (string)"] += 1
+    # Heuristic: SELECT inside a string — line-by-line only to avoid catastrophic backtracking
+    # on large files (full-file regex with DOTALL was causing timeouts)
+    for line in text.splitlines():
+        if re.search(r"[\'\"].*SELECT\s+", line, re.IGNORECASE) or re.search(
+            r"SELECT\s+.*[\'\"].*\)", line, re.IGNORECASE
+        ):
+            counts["SELECT (string)"] += 1
     return counts
 
 

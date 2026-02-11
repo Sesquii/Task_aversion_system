@@ -77,6 +77,8 @@ MAX_TOTAL_COLUMNS_PER_TABLE = 100  # Maximum total columns allowed per table
 MAX_COLUMN_NAME_LENGTH = 64  # Maximum column name length (SQL standard)
 MIN_COLUMN_NAME_LENGTH = 1  # Minimum column name length
 MAX_FILES_PER_ZIP = 20  # Maximum number of files allowed in ZIP archive
+# Batch size for add_all() during import; reduces session overhead and can improve insert throughput
+IMPORT_BATCH_SIZE = 500
 
 
 def parse_datetime(dt_str: str) -> Optional[datetime]:
@@ -504,6 +506,7 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
             existing_tasks = session.query(Task).filter(Task.user_id == user_id).all()
             existing_task_ids = {task.task_id for task in existing_tasks}
         
+        batch: List[Task] = []
         for idx, row in df.iterrows():
             # Critical field - must exist
             task_id = str(safe_get(row, 'task_id', '')).strip()
@@ -678,8 +681,11 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                                     except Exception as e:
                                         print(f"[Import] Could not set extra column {col_name} on task {task_id}: {e}")
                     
-                    session.add(task)
+                    batch.append(task)
                     imported += 1
+                    if len(batch) >= IMPORT_BATCH_SIZE:
+                        session.add_all(batch)
+                        batch.clear()
                 else:
                     skipped += 1
                 
@@ -690,6 +696,8 @@ def import_tasks_from_csv(csv_path: str, session, skip_existing: bool = True, ba
                 errors += 1
                 # Continue processing other rows
         
+        if batch:
+            session.add_all(batch)
         session.commit()
         
     except Exception as e:
@@ -784,6 +792,7 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
             existing_instances = session.query(TaskInstance).filter(TaskInstance.user_id == user_id).all()
             existing_instance_ids = {instance.instance_id for instance in existing_instances}
         
+        batch: List[TaskInstance] = []
         for idx, row in df.iterrows():
             # Critical field - must exist
             instance_id = str(safe_get(row, 'instance_id', '')).strip()
@@ -981,8 +990,11 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                                     except Exception as e:
                                         print(f"[Import] Could not set extra column {col_name} on instance {instance_id}: {e}")
                     
-                    session.add(instance)
+                    batch.append(instance)
                     imported += 1
+                    if len(batch) >= IMPORT_BATCH_SIZE:
+                        session.add_all(batch)
+                        batch.clear()
                 else:
                     skipped += 1
                 
@@ -993,6 +1005,8 @@ def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool =
                 errors += 1
                 # Continue processing other rows
         
+        if batch:
+            session.add_all(batch)
         session.commit()
         
     except IntegrityError as e:
@@ -1059,6 +1073,7 @@ def import_emotions_from_csv(
             existing = session.query(Emotion).filter(Emotion.user_id == user_id).all()
             existing_emotions = {e.emotion.lower() for e in existing}
         
+        batch: List[Emotion] = []
         for idx, row in df.iterrows():
             emotion_name = str(safe_get(row, 'emotion', '')).strip()
             if not emotion_name:
@@ -1095,8 +1110,11 @@ def import_emotions_from_csv(
                                     except Exception as e:
                                         print(f"[Import] Could not set extra column {col_name} on emotion {emotion_name}: {e}")
                     
-                    session.add(emotion)
+                    batch.append(emotion)
                     imported += 1
+                    if len(batch) >= IMPORT_BATCH_SIZE:
+                        session.add_all(batch)
+                        batch.clear()
                 else:
                     skipped += 1
             except Exception as e:
@@ -1106,6 +1124,8 @@ def import_emotions_from_csv(
                 errors += 1
                 # Continue processing other rows
         
+        if batch:
+            session.add_all(batch)
         session.commit()
         
     except Exception as e:
@@ -1167,6 +1187,7 @@ def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True, us
             existing_notes = session.query(Note).filter(Note.user_id == user_id).all()
             existing_note_ids = {note.note_id for note in existing_notes}
         
+        batch: List[Note] = []
         for idx, row in df.iterrows():
             note_id = str(safe_get(row, 'note_id', '')).strip()
             if not note_id:
@@ -1207,8 +1228,11 @@ def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True, us
                         timestamp=timestamp,
                         user_id=user_id  # CRITICAL: Always use provided user_id (override CSV value)
                     )
-                    session.add(note)
+                    batch.append(note)
                     imported += 1
+                    if len(batch) >= IMPORT_BATCH_SIZE:
+                        session.add_all(batch)
+                        batch.clear()
                 else:
                     skipped += 1
                 
@@ -1219,6 +1243,8 @@ def import_notes_from_csv(csv_path: str, session, skip_existing: bool = True, us
                 errors += 1
                 # Continue processing other rows
         
+        if batch:
+            session.add_all(batch)
         session.commit()
         
     except Exception as e:
@@ -1274,6 +1300,7 @@ def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool =
                   f"Only processing first {MAX_ROWS_PER_CSV} rows.")
             df = df.head(MAX_ROWS_PER_CSV)
         
+        batch: List[PopupTrigger] = []
         for idx, row in df.iterrows():
             trigger_id = str(safe_get(row, 'trigger_id', '')).strip()
             
@@ -1346,8 +1373,11 @@ def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool =
                         created_at=created_at,
                         updated_at=updated_at
                     )
-                    session.add(trigger)
+                    batch.append(trigger)
                     imported += 1
+                    if len(batch) >= IMPORT_BATCH_SIZE:
+                        session.add_all(batch)
+                        batch.clear()
                 else:
                     skipped += 1
                 
@@ -1358,6 +1388,8 @@ def import_popup_triggers_from_csv(csv_path: str, session, skip_existing: bool =
                 errors += 1
                 # Continue processing other rows
         
+        if batch:
+            session.add_all(batch)
         session.commit()
         
     except Exception as e:
@@ -1413,6 +1445,7 @@ def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool 
                   f"Only processing first {MAX_ROWS_PER_CSV} rows.")
             df = df.head(MAX_ROWS_PER_CSV)
         
+        batch: List[PopupResponse] = []
         for idx, row in df.iterrows():
             try:
                 # CRITICAL SECURITY CHECK: Validate CSV user_id matches logged-in user_id
@@ -1460,8 +1493,11 @@ def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool 
                     context=context,
                     created_at=created_at
                 )
-                session.add(response)
+                batch.append(response)
                 imported += 1
+                if len(batch) >= IMPORT_BATCH_SIZE:
+                    session.add_all(batch)
+                    batch.clear()
                 
             except Exception as e:
                 print(f"[Import] Error importing popup response: {e}")
@@ -1470,6 +1506,8 @@ def import_popup_responses_from_csv(csv_path: str, session, skip_existing: bool 
                 errors += 1
                 # Continue processing other rows
         
+        if batch:
+            session.add_all(batch)
         session.commit()
         
     except Exception as e:
@@ -1532,6 +1570,7 @@ def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool
             existing_responses = session.query(SurveyResponse).filter(SurveyResponse.user_id == str(user_id)).all()
             existing_response_ids = {response.response_id for response in existing_responses}
         
+        batch: List[SurveyResponse] = []
         for idx, row in df.iterrows():
             response_id = str(safe_get(row, 'response_id', '')).strip()
             if not response_id:
@@ -1580,8 +1619,11 @@ def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool
                         response_text=response_text,
                         timestamp=timestamp
                     )
-                    session.add(response)
+                    batch.append(response)
                     imported += 1
+                    if len(batch) >= IMPORT_BATCH_SIZE:
+                        session.add_all(batch)
+                        batch.clear()
                 else:
                     skipped += 1
                 
@@ -1592,6 +1634,8 @@ def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool
                 errors += 1
                 # Continue processing other rows
         
+        if batch:
+            session.add_all(batch)
         session.commit()
         
     except Exception as e:
