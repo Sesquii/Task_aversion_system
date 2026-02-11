@@ -115,7 +115,7 @@ Write-Host "  DATABASE_URL=$env:DATABASE_URL" -ForegroundColor Gray
 Write-Host ""
 
 # 4. Run migrations from task_aversion_app
-Write-Host "[4/5] Running migrations 001-011..." -ForegroundColor Cyan
+Write-Host "[4/5] Running migrations 001-013..." -ForegroundColor Cyan
 Push-Location $AppDir
 $migrations = @(
     "001_initial_schema.py",
@@ -128,7 +128,9 @@ $migrations = @(
     "008_create_survey_responses_table.py",
     "009_create_users_table.py",
     "010_add_user_id_foreign_keys.py",
-    "011_add_user_id_to_emotions.py"
+    "011_add_user_id_to_emotions.py",
+    "012_add_performance_indexes.py",
+    "013_add_factor_columns.py"
 )
 $migrationErrors = 0
 foreach ($migration in $migrations) {

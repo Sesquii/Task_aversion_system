@@ -6,6 +6,16 @@ Scripts to **find** potential bottlenecks and **optimize** the database. Run fro
 
 **PostgreSQL is the production database.** PRAGMA is SQLite-only and does not run in production. See [PERFORMANCE_POSTGRESQL_SCOPE.md](PERFORMANCE_POSTGRESQL_SCOPE.md) for scope and a one-off PostgreSQL query-site analysis.
 
+## Batches
+
+Scripts are grouped into **batches** for run order. See **[BATCHES.md](BATCHES.md)** for the full plan.
+
+- **Batch 1** — Static analysis (no DB, no app).
+- **Batch 2** — Query log analysis (need `logs/query_log.txt`).
+- **Batch 3** — Optimization prioritization (checklist from log).
+- **Batch 4** — PostgreSQL / live DB (EXPLAIN, VACUUM, indexes).
+- **Batch 5** — Run-time and educational (wall-clock, primers).
+
 ## Scripts
 
 ### Analysis (no DB required for static scripts)
@@ -25,6 +35,17 @@ Scripts to **find** potential bottlenecks and **optimize** the database. Run fro
 | `analytics_load_call_tree.py` | **Backend call tree for Analytics:** list backend methods called from Analytics UI (analytics_page, relief/factors comparison, summary) and how many query sites each method contains. Same hot-path view as dashboard. No DB. |
 | `settings_load_call_tree.py` | **Backend call tree for Settings:** list backend methods called from Settings UI (settings, composite-score-weights, productivity-settings, cancellation-penalties) and how many query sites each method contains. Same hot-path view as dashboard. No DB. |
 | `analyze_query_log_bottlenecks.py` | Parse `logs/query_log.txt` and report paths by query count/DB time, PRAGMA vs SELECT breakdown, and top repeated patterns. |
+| `query_log_n_plus_one_candidates.py` | **N+1 identification:** Find query patterns that repeat many times in the same request (per path). Use to target which code paths to fix. Needs query log. Use `--min-repeat 5` and `--top 20`. |
+| `query_log_n_plus_one_trace.py` | **N+1 trace:** After running query_log_n_plus_one_candidates.py, run this to get suggested code-search hints for the top repeated pattern per path (e.g. _load_instances vs get_instance). Needs query log. |
+| `query_log_top_patterns_by_count.py` | **Query log:** Top normalized query patterns by total count across all requests. Complements N+1 (per-request). Needs query log. Use `--top 25`. |
+| `optimization_priority_from_log.py` | **Batch 3:** One-page prioritized optimization checklist from query log (N+1 candidates + suggested next steps). Needs query log. Use `--min-repeat 5`. |
+| `n_plus_one_call_sites.py` | **N+1 call sites:** List all get_instance and _load_instances call sites with file:line; marks likely loop sites (consider get_instances_bulk). No DB. |
+| `get_instance_loop_candidates.py` | **get_instance in loops:** Find get_instance() calls that are inside a same-block for/while (indentation-aware). Candidates to switch to get_instances_bulk. Scans backend + ui. Use `--all` to list all get_instance sites, `--context N` to tune look-back. No DB. |
+| `get_instances_bulk_refactor_hints.py` | **get_instances_bulk refactor:** List every get_instance(instance_id) call site with refactor hint (use bulk_map.get(id) after get_instances_bulk). Use when callers invoke the path many times with different instance_ids. Default UI only; use `--include-backend` for backend. No DB. |
+| `call_site_context.py` | **N+1 per-site context:** For each call site show code context (lines before/after) and IN_LOOP flag. Use `--file <path>` to filter, `--lines N` for context size. No DB. |
+| `call_site_by_route.py` | **N+1 by route:** Map call sites to routes that can trigger them (GET /, GET /analytics, etc.). Use `--route <substring>` to filter. No DB. |
+| `call_site_impact_rank.py` | **N+1 impact rank:** Rank call sites by (in_loop + hot_path). Fix high-impact first. Use `--top N`. No DB. |
+| `n1_debug_summary.py` | **N+1 debug summary:** After ENABLE_N1_DEBUG=1 and one page load, run on `logs/n1_debug.log` to see which caller issued how many get_instance/_load_instances. |
 | `dashboard_full_page_metrics.py` | **Dashboard full-page load:** parse query log for GET / only; report per-load query count and DB time, then min/mean/max/p95. Targets page / (build_dashboard). Needs query log. |
 | `dashboard_request_query_sequence.py` | **Dashboard full-page load:** from query log, print ordered sequence of queries for each GET / request to trace full request path. Targets page / (build_dashboard). Needs query log. |
 | `dashboard_load_wall_clock.py` | **Dashboard full-page load:** HTTP GET to / and measure response time (wall-clock). Targets page / (build_dashboard). Needs running app. |
@@ -83,7 +104,17 @@ python scripts/performance/settings_load_call_tree.py
 
 # Query log (requires at least one dashboard load with ENABLE_QUERY_LOGGING=1)
 python scripts/performance/analyze_query_log_bottlenecks.py
+python scripts/performance/query_log_n_plus_one_candidates.py --min-repeat 5 --top 20
+python scripts/performance/query_log_n_plus_one_trace.py
+python scripts/performance/n_plus_one_call_sites.py
+python scripts/performance/get_instance_loop_candidates.py [--all] [--context 25]
+python scripts/performance/get_instances_bulk_refactor_hints.py [--include-backend]
+python scripts/performance/call_site_context.py [--file dashboard] [--lines 5]
+python scripts/performance/call_site_by_route.py [--route /]
+python scripts/performance/call_site_impact_rank.py [--top 30]
 python scripts/performance/query_log_sql_type_by_path.py
+python scripts/performance/query_log_top_patterns_by_count.py --top 25
+python scripts/performance/optimization_priority_from_log.py --min-repeat 5
 # Or: python scripts/performance/analyze_query_log_bottlenecks.py path/to/query_log.txt
 
 # Dashboard full-page load (page /, build_dashboard): query log
@@ -148,3 +179,14 @@ python scripts/performance/pg_planner_index_locking_primer.py
 4. Run `analyze_query_log_bottlenecks.py` to see per-path stats and N+1-style patterns.
 
 Existing baseline script: `scripts/analyze_query_baseline.py` (same log format, per-path stats and repeated patterns).
+
+## N+1 debug (request-scoped caller logging)
+
+To see **which code path** issues many get_instance or _load_instances calls in one request:
+
+1. Set `ENABLE_N1_DEBUG=1` and restart the app.
+2. Load the page once (e.g. GET /).
+3. Inspect `task_aversion_app/logs/n1_debug.log` or run:
+   `python scripts/performance/n1_debug_summary.py [logs/n1_debug.log]`
+4. The summary shows callers (file:line function) and counts; the top line is the path to fix.
+5. Turn off `ENABLE_N1_DEBUG` when done (logging has a small overhead).

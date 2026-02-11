@@ -341,8 +341,55 @@ def main():
         print("  [SKIP] emotions table does not exist (run migration 004 first)")
     
     print()
+    
+    # Check for performance indexes (Migration 012)
+    print("Migration 012: Performance Indexes (dashboard/analytics)")
+    print("-" * 70)
+    
+    if check_table_exists('task_instances'):
+        perf_indexes = [
+            'idx_task_instances_user_active',
+            'idx_task_instances_user_completed_at',
+            'idx_taskinstance_status_completed',
+            'idx_taskinstance_task_completed',
+        ]
+        all_perf = True
+        for idx_name in perf_indexes:
+            exists = check_index_exists('task_instances', idx_name)
+            status = "[OK]" if exists else "[MISSING]"
+            print(f"  {status} {idx_name}: {'exists' if exists else 'MISSING'}")
+            if not exists:
+                all_perf = False
+        if not all_perf:
+            print("  -> Run: python PostgreSQL_migration/012_add_performance_indexes.py")
+        else:
+            print("  [OK] Migration 012 appears to be complete")
+    else:
+        print("  [SKIP] task_instances table does not exist (run migration 003 first)")
+    
+    print()
+    
+    # Check for factor columns (Migration 013)
+    print("Migration 013: Factor Columns (task_instances)")
+    print("-" * 70)
+    
+    if check_table_exists('task_instances'):
+        has_serendipity = check_column_exists('task_instances', 'serendipity_factor')
+        has_disappointment = check_column_exists('task_instances', 'disappointment_factor')
+        status_s = "[OK]" if has_serendipity else "[MISSING]"
+        status_d = "[OK]" if has_disappointment else "[MISSING]"
+        print(f"  {status_s} serendipity_factor: {'exists' if has_serendipity else 'MISSING'}")
+        print(f"  {status_d} disappointment_factor: {'exists' if has_disappointment else 'MISSING'}")
+        if not has_serendipity or not has_disappointment:
+            print("  -> Run: python PostgreSQL_migration/013_add_factor_columns.py")
+        else:
+            print("  [OK] Migration 013 appears to be complete")
+    else:
+        print("  [SKIP] task_instances table does not exist (run migration 003 first)")
+    
+    print()
     print("=" * 70)
-    print("\nSummary: Run migrations in order (001, 002, 003, 004, 005, 006, 007, 008, 009, 010, 011)")
+    print("\nSummary: Run migrations in order (001 through 013)")
     print("All migrations are idempotent - safe to run multiple times.")
     print("=" * 70)
 

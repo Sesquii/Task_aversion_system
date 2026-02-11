@@ -1003,6 +1003,11 @@ class InstanceManager:
         Returns:
             Instance dict if found and belongs to user, None otherwise
         """
+        try:
+            from backend.n1_debug import log_get_instance
+            log_get_instance(instance_id, user_id)
+        except Exception:
+            pass
         if self.use_db:
             instance = self._get_instance_db(instance_id, user_id)
         else:

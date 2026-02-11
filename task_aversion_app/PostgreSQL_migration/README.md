@@ -41,7 +41,7 @@ These scripts will:
 3. Wait for PostgreSQL to be ready
 4. Set DATABASE_URL environment variable automatically
 5. Check current migration status
-6. Run all 11 migrations in order (001-011)
+6. Run all 13 migrations in order (001-013)
 7. Perform final status check
 8. Keep container running for further testing
 
@@ -132,7 +132,7 @@ PostgreSQL migrations are aligned with `SQLite_migration/` so that the same sche
 | 010 | 010 | user_id on tasks, task_instances, notes; VARCHAR->INTEGER user_id for user_preferences, survey_responses, popup_triggers, popup_responses |
 | 011 | 011 | user_id on emotions for per-user data isolation |
 
-All tables and columns from the canonical models in `backend/database.py` are created by these migrations (or by init_db in 001). The `emotions` table gains `user_id` in migration 011 for data isolation.
+All tables and columns from the canonical models in `backend/database.py` are created by these migrations (or by init_db in 001). The `emotions` table gains `user_id` in migration 011 for data isolation. Migration 012 adds performance indexes (dashboard/analytics hot paths); migration 013 adds `serendipity_factor` and `disappointment_factor` to `task_instances` if missing.
 
 ## Key Differences from SQLite
 

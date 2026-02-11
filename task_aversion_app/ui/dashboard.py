@@ -361,19 +361,109 @@ def format_elapsed_time(minutes):
         return f"{hours}:{mins:02d}"
 
 
-def update_ongoing_timer(instance_id, timer_element):
+# Batched timer refresh: one get_instances_bulk per tick instead of N get_instance (N+1 fix)
+_timer_registry = {}  # client_key -> list of (instance_id, timer_element, user_id)
+_batch_timer_handle = {}  # client_key -> timer handle (so we don't create duplicate timers)
+
+
+def _get_client_key():
+    """Key for the current request's client (for per-client timer registry)."""
+    try:
+        client = getattr(ui.context, 'client', None)
+        if client is not None:
+            return str(getattr(client, 'id', id(client)))
+    except (AttributeError, RuntimeError):
+        pass
+    return None
+
+
+def _batch_timer_tick(client_key):
+    """Run one batched refresh: get_instances_bulk for all registered instance_ids, update elements."""
+    global _timer_registry, _batch_timer_handle, current_user_id
+    reg = _timer_registry.get(client_key, [])
+    if not reg:
+        _batch_timer_handle.pop(client_key, None)
+        return
+    # Group by user_id (one bulk call per user)
+    by_user = {}
+    for instance_id, timer_element, uid in reg:
+        by_user.setdefault(uid, []).append((instance_id, timer_element))
+    still_active = []
+    for uid, items in by_user.items():
+        instance_ids = list({iid for iid, _ in items})
+        try:
+            bulk = im.get_instances_bulk(instance_ids, user_id=uid) if instance_ids else {}
+        except Exception:
+            bulk = {}
+        for instance_id, timer_element in items:
+            instance = bulk.get(instance_id) if isinstance(instance_id, str) else bulk.get(str(instance_id))
+            if not instance or not instance.get('started_at'):
+                try:
+                    timer_element.text = ""
+                except (AttributeError, RuntimeError, Exception):
+                    pass
+                continue
+            try:
+                import pandas as pd
+                started_at = pd.to_datetime(instance['started_at'])
+                now = datetime.now()
+                current_elapsed = (now - started_at).total_seconds() / 60.0
+                actual_str = instance.get('actual', '{}')
+                time_before = 0.0
+                if actual_str:
+                    try:
+                        actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+                        time_before = float(actual_data.get('time_spent_before_pause', 0.0) or 0.0)
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        pass
+                total_min = current_elapsed + time_before
+                timer_element.text = f"Ongoing for {format_elapsed_time(total_min)}"
+                still_active.append((instance_id, timer_element, uid))
+            except (AttributeError, RuntimeError, KeyError, Exception):
+                pass
+    _timer_registry[client_key] = still_active
+    if still_active:
+        try:
+            _batch_timer_handle[client_key] = ui.timer(
+                1.0, (lambda ck: lambda: _batch_timer_tick(ck))(client_key), once=True
+            )
+        except Exception:
+            pass
+    else:
+        _batch_timer_handle.pop(client_key, None)
+
+
+def _register_timer_for_batch(instance_id, timer_element, user_id):
+    """Register (instance_id, timer_element, user_id) for the next batched tick; start batch timer if needed."""
+    global _timer_registry, _batch_timer_handle
+    client_key = _get_client_key()
+    if client_key is None:
+        return False
+    _timer_registry.setdefault(client_key, []).append((instance_id, timer_element, user_id))
+    if client_key not in _batch_timer_handle:
+        try:
+            _batch_timer_handle[client_key] = ui.timer(
+                1.0, (lambda ck: lambda: _batch_timer_tick(ck))(client_key), once=True
+            )
+        except Exception:
+            pass
+    return True
+
+
+def update_ongoing_timer(instance_id, timer_element, instance=None):
     """Update the ongoing timer display for a started instance.
     
     This function updates the timer display and schedules the next update.
     It includes error handling to prevent timer leaks when clients disconnect.
+    When instance is provided (e.g. current_task), avoids N+1 get_instance call.
     """
     # Early return if element is not provided
     if not timer_element:
         return
     
-    # Check if instance is still active
     global current_user_id
-    instance = im.get_instance(instance_id, user_id=current_user_id)
+    if instance is None:
+        instance = im.get_instance(instance_id, user_id=current_user_id)
     if not instance or not instance.get('started_at'):
         # Instance no longer active or not started, stop timer
         try:
@@ -481,40 +571,31 @@ def update_ongoing_timer(instance_id, timer_element):
                 # Error checking client, stop timer to be safe
                 return
             
+            # N+1 fix: use batched timer (one get_instances_bulk per tick) instead of N get_instance
+            if _register_timer_for_batch(instance_id, timer_element, current_user_id):
+                return
+            # Fallback if no client key: per-instance timer
             active_instances = im.list_active_instances(user_id=current_user_id)
             is_still_active = any(inst.get('instance_id') == instance_id for inst in active_instances)
             if is_still_active:
-                # Create next timer with error handling in the callback
                 def safe_update():
                     try:
                         update_ongoing_timer(instance_id, timer_element)
                     except Exception:
-                        # Silently stop if update fails (client likely disconnected)
                         pass
-                
-                # Final check: verify client is still valid right before creating timer
-                # This helps reduce race conditions where client gets deleted between checks
                 try:
-                    # Re-check element client one more time right before timer creation
                     final_client = getattr(timer_element, 'client', None)
                     if final_client:
                         try:
-                            # Quick validation - access id and outbox
                             _ = final_client.id
                             _ = final_client.outbox
                         except (AttributeError, RuntimeError, Exception):
                             return
                 except Exception:
                     return
-                
-                # Wrap timer creation in try/except to catch client deletion errors
-                # Note: NiceGUI may log a warning if client is deleted, but we try to prevent it
                 try:
-                    # Create timer - if client is deleted, NiceGUI will log a warning but not raise
-                    # The warning is informational and doesn't crash the app
                     ui.timer(1.0, safe_update, once=True)
                 except (AttributeError, RuntimeError, Exception, BaseException):
-                    # Client was deleted or invalid, stop timer silently
                     pass
         except Exception:
             # Stop timer if any error occurs during scheduling
@@ -3153,16 +3234,21 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                             print(f"[Dashboard] Error calculating daily_productivity_score_idle_refresh: {e}")
                             return 0.0
                     
-                    # Special handling for expected_relief - get from analytics
+                    # Special handling for expected_relief - use pre-fetched data to avoid N+1
                     if key == 'expected_relief':
                         try:
-                            # Try to get from dashboard_metrics first
+                            # Use pre-fetched quality_metrics first (from get_targeted_metric_values)
+                            if qual_metrics and 'avg_expected_relief' in qual_metrics:
+                                val = qual_metrics.get('avg_expected_relief')
+                                if val is not None:
+                                    return float(val)
+                            # Then try dashboard_metrics (cached)
                             dashboard_metrics = analytics_instance.get_dashboard_metrics(user_id=cuid)
                             if dashboard_metrics and 'quality' in dashboard_metrics:
                                 val = dashboard_metrics['quality'].get('avg_expected_relief')
                                 if val is not None:
                                     return float(val)
-                            # Fallback: calculate from instances
+                            # Fallback: calculate from instances (cached)
                             df = analytics_instance._load_instances(user_id=cuid)
                             if not df.empty:
                                 completed = df[df['completed_at'].astype(str).str.len() > 0]
@@ -4381,6 +4467,14 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     current_user_id = session_user_id
     print(f"[Dashboard] build_dashboard: Set current_user_id={current_user_id} (session_user_id={session_user_id})")
     
+    # Batch 3: Warm instances cache once so all later _load_instances in this request hit cache (avoids N+1)
+    try:
+        if hasattr(an, '_load_instances'):
+            an._load_instances(user_id=current_user_id)
+            an._load_instances(completed_only=True, user_id=current_user_id)
+    except Exception as e:
+        print(f"[Dashboard] Warning: Could not warm instances cache: {e}")
+    
     # Debug: Check if user has any data
     try:
         task_count = len(tm.get_all(user_id=current_user_id)) if hasattr(tm, 'get_all') else 0
@@ -4391,9 +4485,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     except Exception as e:
         print(f"[Dashboard] Error checking user data: {e}")
     
-    # Invalidate cache when dashboard is built (in case user switched)
+    # Invalidate task cache when dashboard is built (in case user switched).
+    # Do NOT invalidate instance cache here: it causes every _load_instances in this request to miss and refetch.
+    # Instance cache is invalidated on create/update/delete in InstanceManager.
     tm._invalidate_task_caches()
-    im._invalidate_instance_caches()  # Also invalidate instance cache
     
     dashboard_start_time = time.perf_counter()
     init_perf_logger = get_init_perf_logger()
@@ -5590,7 +5685,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                         started_at = current_task.get('started_at', '')
                                         if started_at:
                                             timer_label = ui.label("").classes("text-lg font-semibold text-blue-600 mb-2")
-                                            update_ongoing_timer(instance_id, timer_label)
+                                            update_ongoing_timer(instance_id, timer_label, instance=current_task)
                                         
                                         initialized_at = current_task.get('initialized_at', '')
                                         if initialized_at:
@@ -5631,7 +5726,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                 started_at = current_task.get('started_at', '')
                                 if started_at:
                                     timer_label = ui.label("").classes("text-lg font-semibold text-blue-600 mb-2")
-                                    update_ongoing_timer(instance_id, timer_label)
+                                    update_ongoing_timer(instance_id, timer_label, instance=current_task)
                                 
                                 initialized_at = current_task.get('initialized_at', '')
                                 if initialized_at:

@@ -72,6 +72,14 @@ def build_analytics_page():
     from backend.auth import get_current_user
     current_user_id = get_current_user()
     
+    # Batch 3: Warm instances cache once so all _load_instances in this request hit cache (avoids N+1)
+    try:
+        if current_user_id is not None and hasattr(analytics_service, '_load_instances'):
+            analytics_service._load_instances(user_id=current_user_id)
+            analytics_service._load_instances(completed_only=True, user_id=current_user_id)
+    except Exception as e:
+        print(f"[Analytics] Warning: Could not warm instances cache: {e}")
+    
     # Analytics Module Navigation
     with ui.card().classes("p-4 mb-4 bg-blue-50 border border-blue-200"):
         ui.label("Analytics Modules").classes("text-lg font-semibold mb-2")

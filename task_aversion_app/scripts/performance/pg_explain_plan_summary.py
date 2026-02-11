@@ -21,6 +21,12 @@ from typing import Any, List, Optional, Tuple
 _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_ROOT / ".env")
+    load_dotenv()
+except ImportError:
+    pass
 
 
 def parse_plan_lines(lines: List[str]) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
@@ -112,10 +118,11 @@ def main() -> int:
         ),
         (
             "Single instance by id",
-            "SELECT * FROM task_instances WHERE user_id = :uid AND instance_id = 1",
+            "SELECT * FROM task_instances WHERE user_id = :uid AND instance_id = :instance_id",
         ),
     ]
-    params: Any = {"uid": uid}
+    # instance_id is VARCHAR; use string. Use a placeholder; script does not query real id.
+    params: Any = {"uid": uid, "instance_id": "1"}
 
     summaries: List[Tuple[str, str, Optional[str], Optional[str], Optional[str]]] = []
     with engine.connect() as conn:

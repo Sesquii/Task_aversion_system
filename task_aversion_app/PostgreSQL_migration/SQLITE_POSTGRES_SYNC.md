@@ -161,7 +161,7 @@ predicted = task_instance.predicted  # Returns Python dict
 
 ### 2. Verify Schema Compatibility
 
-Before syncing, ensure both databases have compatible schemas. Run all migrations (001-011) on each database:
+Before syncing, ensure both databases have compatible schemas. Run all migrations (001-013) on each database:
 
 ```bash
 # Check PostgreSQL schema
@@ -171,7 +171,7 @@ DATABASE_URL="postgresql://..." python PostgreSQL_migration/check_migration_stat
 DATABASE_URL="sqlite:///data/task_aversion.db" python SQLite_migration/check_migration_status.py
 ```
 
-If any migrations are missing, run them in order (001, 002, ... 011) on the database before exporting/importing.
+If any migrations are missing, run them in order (001, 002, ... 013) on the database before exporting/importing.
 
 ### 3. Test Synchronization in Development
 

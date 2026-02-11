@@ -788,7 +788,12 @@ class Analytics:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             return 0.0
     
-    def calculate_grit_score(self, row: pd.Series, task_completion_counts: Dict[str, int]) -> float:
+    def calculate_grit_score(
+        self,
+        row: pd.Series,
+        task_completion_counts: Dict[str, int],
+        instances_df: Optional[pd.DataFrame] = None
+    ) -> float:
         """Calculate grit score with:
         - Persistence factor (continuing despite obstacles) - NEW in v1.2
         - Focus factor (current attention state, emotion-based) - NEW in v1.2
@@ -862,7 +867,8 @@ class Analytics:
             # Calculate persistence factor (continuing despite obstacles)
             persistence_factor = self.calculate_persistence_factor(
                 row=row,
-                task_completion_counts=task_completion_counts
+                task_completion_counts=task_completion_counts,
+                instances_df=instances_df
             )
             # Returns 0.0-1.0, scale to 0.5-1.5 range to provide boost
             persistence_factor_scaled = 0.5 + persistence_factor * 1.0
@@ -923,11 +929,16 @@ class Analytics:
         except (KeyError, TypeError, ValueError, AttributeError):
             return 0.0
     
-    def _calculate_grit_score_base(self, row: pd.Series, task_completion_counts: Dict[str, int], 
-                                    disappointment_max_bonus: float = 1.5, 
-                                    disappointment_min_penalty: float = 0.67,
-                                    use_exponential_scaling: bool = False,
-                                    base_score_multiplier: float = 1.0) -> float:
+    def _calculate_grit_score_base(
+        self,
+        row: pd.Series,
+        task_completion_counts: Dict[str, int],
+        disappointment_max_bonus: float = 1.5,
+        disappointment_min_penalty: float = 0.67,
+        use_exponential_scaling: bool = False,
+        base_score_multiplier: float = 1.0,
+        instances_df: Optional[pd.DataFrame] = None
+    ) -> float:
         """Base function for calculating grit score with configurable disappointment resilience caps.
         
         This is a helper function used by v1.6 variants to avoid code duplication.
@@ -996,7 +1007,11 @@ class Analytics:
             passion_factor = max(0.5, min(1.5, passion_factor))
             
             # Calculate persistence and focus factors
-            persistence_factor = self.calculate_persistence_factor(row=row, task_completion_counts=task_completion_counts)
+            persistence_factor = self.calculate_persistence_factor(
+                row=row,
+                task_completion_counts=task_completion_counts,
+                instances_df=instances_df
+            )
             persistence_factor_scaled = 0.5 + persistence_factor * 1.0
             focus_factor = self.calculate_focus_factor(row)
             focus_factor_scaled = 0.5 + focus_factor * 1.0
@@ -2616,7 +2631,7 @@ class Analytics:
             user_id: Optional user_id to invalidate cache for specific user. If None, clears all user caches.
         """
         if user_id is not None:
-            cache_key = user_id if user_id is not None else "default"
+            cache_key = str(user_id)
             if cache_key in self._instances_cache_all:
                 del self._instances_cache_all[cache_key]
             if cache_key in self._instances_cache_all_time:
@@ -2662,7 +2677,7 @@ class Analytics:
             user_id: Optional user_id to invalidate cache for specific user. If None, clears all user caches.
         """
         if user_id is not None:
-            cache_key = user_id if user_id is not None else "default"
+            cache_key = str(user_id)
             if cache_key in Analytics._relief_summary_cache:
                 del Analytics._relief_summary_cache[cache_key]
             if cache_key in Analytics._relief_summary_cache_time:
@@ -2701,10 +2716,16 @@ class Analytics:
             completed_only: If True, only load completed instances (optimization for relief_summary)
             user_id: User ID to filter by (required for data isolation)
         """
+        try:
+            from backend.n1_debug import log_load_instances
+            log_load_instances(completed_only, user_id)
+        except Exception:
+            pass
         import time
         
-        # Check cache first - cache is now user-specific, keyed by user_id
-        cache_key = user_id if user_id is not None else "default"
+        # Check cache first - cache is now user-specific, keyed by user_id.
+        # Normalize to str so int and str same value (e.g. 1 and "1") hit the same cache.
+        cache_key = str(user_id) if user_id is not None else "default"
         current_time = time.time()
         
         if completed_only:
@@ -3002,18 +3023,21 @@ class Analytics:
                             has_cognitive = cognitive_scaled.notna() & (cognitive_scaled != 0)
                             df.loc[has_cognitive & missing_difficulty, 'task_difficulty'] = cognitive_scaled.loc[has_cognitive & missing_difficulty]
                     
-                    # Store in cache before returning
+                    # Store in cache before returning (use same key as read path: str(user_id))
                     import time
+                    write_key = str(user_id) if user_id is not None else "default"
                     if completed_only:
-                        # Cache is now user-specific, keyed by user_id
-                        cache_key = user_id if user_id is not None else "default"
-                        self._instances_cache_completed[cache_key] = df.copy()
-                        self._instances_cache_completed_time[cache_key] = time.time()
+                        self._instances_cache_completed[write_key] = df.copy()
+                        self._instances_cache_completed_time[write_key] = time.time()
                     else:
-                        # Cache is now user-specific, keyed by user_id
-                        cache_key = user_id if user_id is not None else "default"
-                        self._instances_cache_all[cache_key] = df.copy()
-                        self._instances_cache_all_time[cache_key] = time.time()
+                        self._instances_cache_all[write_key] = df.copy()
+                        self._instances_cache_all_time[write_key] = time.time()
+                        # Batch optimization: fill completed cache from same load so one query serves both
+                        if 'completed_at' in df.columns:
+                            completed_mask = df['completed_at'].replace('', pd.NA).notna()
+                            if completed_mask.any():
+                                self._instances_cache_completed[write_key] = df.loc[completed_mask].copy()
+                                self._instances_cache_completed_time[write_key] = time.time()
                     
                     return df
                 finally:
@@ -3487,9 +3511,9 @@ class Analytics:
         start = time.perf_counter()
         
         # Check cache first (always cache full result, then filter if needed)
-        # Cache is now user-specific, keyed by user_id
+        # Cache is now user-specific, keyed by user_id. Normalize to str for consistent hits.
         current_time = time.time()
-        cache_key = user_id if user_id is not None else "default"
+        cache_key = str(user_id) if user_id is not None else "default"
         if (cache_key in self._dashboard_metrics_cache and 
             cache_key in self._dashboard_metrics_cache_time and
             (current_time - self._dashboard_metrics_cache_time[cache_key]) < self._cache_ttl_seconds):
@@ -3937,13 +3961,12 @@ class Analytics:
             if needs_metric('volumetric_potential_score'):
                 result['productivity_volume']['volumetric_potential_score'] = round(volumetric_potential, 1)
         
-        # Store full result in cache (only if metrics=None, otherwise cache is less useful)
-        # Cache is now user-specific, keyed by user_id
+        # Store full result in cache (only if metrics=None); use same key as read path
         if metrics is None:
             import time
-            cache_key = user_id if user_id is not None else "default"
-            self._dashboard_metrics_cache[cache_key] = result.copy()
-            self._dashboard_metrics_cache_time[cache_key] = time.time()
+            write_key = str(user_id) if user_id is not None else "default"
+            self._dashboard_metrics_cache[write_key] = result.copy()
+            self._dashboard_metrics_cache_time[write_key] = time.time()
         
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_dashboard_metrics: {duration:.2f}ms")
@@ -4760,10 +4783,10 @@ class Analytics:
                 return True
         
         # Check cache (only if calculating all metrics)
-        # Cache is now user-specific, keyed by user_id
+        # Cache is now user-specific, keyed by user_id. Normalize to str for consistent hits.
         if requested_metrics is None:
             current_time = time_module.time()
-            cache_key = user_id if user_id is not None else "default"
+            cache_key = str(user_id) if user_id is not None else "default"
             if (cache_key in Analytics._composite_scores_cache and 
                 cache_key in Analytics._composite_scores_cache_time and
                 (current_time - Analytics._composite_scores_cache_time[cache_key]) < Analytics._cache_ttl_seconds):
@@ -4848,9 +4871,9 @@ class Analytics:
             scores['execution_score'] = 50.0  # Placeholder - will be updated by chunked calculation
         
         # Cache the result (only if calculating all metrics)
-        # Cache is now user-specific, keyed by user_id
+        # Cache is now user-specific, keyed by user_id. Normalize to str for consistent hits.
         if requested_metrics is None:
-            cache_key = user_id if user_id is not None else "default"
+            cache_key = str(user_id) if user_id is not None else "default"
             Analytics._composite_scores_cache[cache_key] = scores.copy()
             Analytics._composite_scores_cache_time[cache_key] = time_module.time()
         
@@ -5470,7 +5493,8 @@ class Analytics:
         self,
         row: Union[pd.Series, Dict],
         task_completion_counts: Optional[Dict[str, int]] = None,
-        lookback_days: int = 30
+        lookback_days: int = 30,
+        instances_df: Optional[pd.DataFrame] = None
     ) -> float:
         """Calculate persistence factor (0.0-1.0) based on continuing despite obstacles.
         
@@ -5605,9 +5629,12 @@ class Analytics:
                 if task_completion_counts and task_id in task_completion_counts:
                     completion_count = task_completion_counts[task_id]
                 else:
-                    # Calculate from data
-                    user_id = self._get_user_id(None)
-                    df = self._load_instances(user_id=user_id)
+                    # Calculate from data (use pre-loaded instances if provided to avoid N+1)
+                    if instances_df is not None:
+                        df = instances_df
+                    else:
+                        user_id = self._get_user_id(None)
+                        df = self._load_instances(user_id=user_id)
                     if not df.empty:
                         # Get completed tasks only
                         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -5647,8 +5674,12 @@ class Analytics:
         
         try:
             if task_id:
-                user_id = self._get_user_id(None)
-                df = self._load_instances(user_id=user_id)
+                # Use pre-loaded instances if provided to avoid N+1
+                if instances_df is not None:
+                    df = instances_df
+                else:
+                    user_id = self._get_user_id(None)
+                    df = self._load_instances(user_id=user_id)
                 if not df.empty:
                     # Get completed tasks only
                     completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -6070,10 +6101,11 @@ class Analytics:
                 )
                 execution_scores.append(exec_score)
                 
-                # Grit score
+                # Grit score (pass df to avoid N+1 in persistence factor)
                 grit_score = self.calculate_grit_score(
                     row=row,
-                    task_completion_counts=task_completion_counts_dict
+                    task_completion_counts=task_completion_counts_dict,
+                    instances_df=df
                 )
                 grit_scores.append(grit_score)
             except Exception:
@@ -7127,8 +7159,8 @@ class Analytics:
         # #endregion
         
         # Check cache first
-        # Cache is now user-specific, keyed by user_id
-        cache_key = user_id if user_id is not None else "default"
+        # Cache is now user-specific, keyed by user_id. Normalize to str for consistent hits.
+        cache_key = str(user_id) if user_id is not None else "default"
         current_time = time_module.time()
         if (cache_key in Analytics._relief_summary_cache and 
             cache_key in Analytics._relief_summary_cache_time and
@@ -7900,9 +7932,9 @@ class Analytics:
             for task_id, count in task_counts.items():
                 task_completion_counts[task_id] = int(count)
         
-        # Calculate grit score for all completed tasks
+        # Calculate grit score for all completed tasks (pass df to avoid N+1 in persistence factor)
         completed['grit_score'] = completed.apply(
-            lambda row: self.calculate_grit_score(row, task_completion_counts),
+            lambda row: self.calculate_grit_score(row, task_completion_counts, instances_df=df),
             axis=1
         )
         
@@ -7961,8 +7993,8 @@ class Analytics:
         }
         
         # Update cache before returning
-        # Cache is now user-specific, keyed by user_id
-        cache_key = user_id if user_id is not None else "default"
+        # Cache is now user-specific, keyed by user_id. Normalize to str for consistent hits.
+        cache_key = str(user_id) if user_id is not None else "default"
         Analytics._relief_summary_cache[cache_key] = result
         Analytics._relief_summary_cache_time[cache_key] = time_module.time()
         
@@ -9044,10 +9076,10 @@ class Analytics:
         task_completion_counts = Counter(completed['task_id'].tolist())
         task_completion_counts_dict = dict(task_completion_counts)
         
-        # Calculate grit_score for each instance
+        # Calculate grit_score for each instance (pass df to avoid N+1 in persistence factor)
         completed = completed.copy()
         completed['grit_score'] = completed.apply(
-            lambda row: self.calculate_grit_score(row, task_completion_counts_dict),
+            lambda row: self.calculate_grit_score(row, task_completion_counts_dict, instances_df=df),
             axis=1
         )
         
@@ -12370,9 +12402,9 @@ class Analytics:
                 for task_id, count in task_counts.items():
                     task_completion_counts[task_id] = int(count)
             
-            # Calculate grit score
+            # Calculate grit score (pass df to avoid N+1 in persistence factor)
             completed['grit_score'] = completed.apply(
-                lambda row: self.calculate_grit_score(row, task_completion_counts),
+                lambda row: self.calculate_grit_score(row, task_completion_counts, instances_df=df),
                 axis=1
             )
         elif attribute_key == 'relief_duration_score':
@@ -13109,9 +13141,9 @@ class Analytics:
                 for task_id, count in task_counts.items():
                     task_completion_counts[task_id] = int(count)
             
-            # Calculate grit score
+            # Calculate grit score (pass df to avoid N+1 in persistence factor)
             completed['grit_score'] = completed.apply(
-                lambda row: self.calculate_grit_score(row, task_completion_counts),
+                lambda row: self.calculate_grit_score(row, task_completion_counts, instances_df=df),
                 axis=1
             )
         

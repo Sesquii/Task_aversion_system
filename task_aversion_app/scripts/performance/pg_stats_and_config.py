@@ -25,6 +25,14 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# Load .env from task_aversion_app so DATABASE_URL is set when run from project
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_ROOT / ".env")
+    load_dotenv()
+except ImportError:
+    pass
+
 
 def main() -> int:
     database_url = os.getenv("DATABASE_URL", "")

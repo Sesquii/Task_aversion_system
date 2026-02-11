@@ -24,7 +24,10 @@ DEFAULT_PREFS = {
 
 # In-process cache for get_productivity_goal_settings (shared by Analytics + Settings).
 # Invalidated on set_productivity_goal_settings for the same user_id.
+# TTL 5 minutes so we refresh occasionally even if set was called from another process/tab.
 _productivity_goal_cache: Dict[str, Dict[str, Any]] = {}
+_productivity_goal_cache_time: Dict[str, float] = {}
+_productivity_goal_cache_ttl_seconds = 300
 _productivity_goal_cache_lock = threading.Lock()
 
 
@@ -187,9 +190,12 @@ class UserStateManager:
             - user_override_flag (bool, default False)
             - week_calculation_mode (str, default 'rolling'): 'rolling' or 'monday_based'
         """
+        import time
+        now = time.time()
         with _productivity_goal_cache_lock:
-            if user_id in _productivity_goal_cache:
-                return _productivity_goal_cache[user_id].copy()
+            if user_id in _productivity_goal_cache and user_id in _productivity_goal_cache_time:
+                if (now - _productivity_goal_cache_time[user_id]) < _productivity_goal_cache_ttl_seconds:
+                    return _productivity_goal_cache[user_id].copy()
         prefs = self.get_user_preferences(user_id)
         if not prefs:
             return {}
@@ -212,6 +218,7 @@ class UserStateManager:
                 settings['week_calculation_mode'] = 'rolling'  # Default to rolling 7-day
             with _productivity_goal_cache_lock:
                 _productivity_goal_cache[user_id] = settings.copy()
+                _productivity_goal_cache_time[user_id] = time.time()
             return settings
         except (json.JSONDecodeError, TypeError):
             return {}
@@ -253,6 +260,7 @@ class UserStateManager:
         result = self.update_preference(user_id, "productivity_goal_settings", settings_json)
         with _productivity_goal_cache_lock:
             _productivity_goal_cache.pop(user_id, None)
+            _productivity_goal_cache_time.pop(user_id, None)
         return result
     
     def get_productivity_history(self, user_id: str) -> List[Dict[str, Any]]:

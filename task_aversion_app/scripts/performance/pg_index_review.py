@@ -26,6 +26,13 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_ROOT / ".env")
+    load_dotenv()
+except ImportError:
+    pass
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="PostgreSQL index review")

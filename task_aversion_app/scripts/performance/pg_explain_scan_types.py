@@ -22,6 +22,12 @@ from typing import Any, List, Optional, Tuple
 _ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(_ROOT / ".env")
+    load_dotenv()
+except ImportError:
+    pass
 
 
 def extract_scan_and_cost(lines: List[str]) -> Tuple[str, Optional[str], Optional[str]]:
