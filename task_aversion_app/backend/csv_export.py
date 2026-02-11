@@ -119,8 +119,8 @@ def export_all_data_to_csv(
         
         # Export PopupTriggers (always create file, even if empty)
         # CRITICAL: Filter by user_id for data isolation
-        # PopupTrigger.user_id is Integer, filter by it
-        popup_triggers = session.query(PopupTrigger).filter(PopupTrigger.user_id == user_id).all()
+        # PopupTrigger.user_id is String in DB/model; use str(user_id) for comparison
+        popup_triggers = session.query(PopupTrigger).filter(PopupTrigger.user_id == str(user_id)).all()
         triggers_file = os.path.join(data_dir, 'popup_triggers.csv')
         if popup_triggers:
             triggers_data = [trigger.to_dict() for trigger in popup_triggers]
