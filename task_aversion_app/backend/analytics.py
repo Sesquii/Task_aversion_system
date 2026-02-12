@@ -22,6 +22,7 @@ from scipy import stats
 from .task_schema import TASK_ATTRIBUTES, attribute_defaults
 from .gap_detector import GapDetector
 from .user_state import UserStateManager
+from .profiling import get_profiler
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
@@ -7142,6 +7143,10 @@ class Analytics:
         import json
         total_start = time_module.perf_counter()
         
+        # Performance profiling (enabled via PROFILE_ANALYTICS=1)
+        profiler = get_profiler()
+        profiler.start_function("get_relief_summary")
+        
         # #region agent log
         try:
             with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -7438,7 +7443,9 @@ class Analytics:
         # Calculate efficiency inline from already-loaded completed DataFrame
         if not completed.empty:
             # Calculate efficiency for each completed task (vectorized where possible)
-            completed['efficiency_score'] = completed.apply(self.calculate_efficiency_score, axis=1)
+            completed['efficiency_score'] = profiler.time_apply(
+                completed, self.calculate_efficiency_score, "calculate_efficiency_score", axis=1
+            )
             valid_efficiency = completed[completed['efficiency_score'] > 0]
             if not valid_efficiency.empty:
                 avg_efficiency = valid_efficiency['efficiency_score'].mean()
@@ -7548,8 +7555,12 @@ class Analytics:
                 return scores
             
             # Calculate all score variants
-            relief_data_for_obstacles['obstacles_scores_robust'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_robust, axis=1)
-            relief_data_for_obstacles['obstacles_scores_sensitive'] = relief_data_for_obstacles.apply(_calculate_obstacles_scores_sensitive, axis=1)
+            relief_data_for_obstacles['obstacles_scores_robust'] = profiler.time_apply(
+                relief_data_for_obstacles, _calculate_obstacles_scores_robust, "obstacles_scores_robust", axis=1
+            )
+            relief_data_for_obstacles['obstacles_scores_sensitive'] = profiler.time_apply(
+                relief_data_for_obstacles, _calculate_obstacles_scores_sensitive, "obstacles_scores_sensitive", axis=1
+            )
             
             # Extract individual scores for backward compatibility and new analytics (OPTIMIZED: vectorized)
             score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
@@ -7600,8 +7611,12 @@ class Analytics:
             if not relief_data_last_7d.empty:
                 # Use .copy() to avoid SettingWithCopyWarning
                 relief_data_last_7d = relief_data_last_7d.copy()
-                relief_data_last_7d['spike_amount_robust'] = relief_data_last_7d.apply(_get_max_spike_robust, axis=1)
-                relief_data_last_7d['spike_amount_sensitive'] = relief_data_last_7d.apply(_get_max_spike_sensitive, axis=1)
+                relief_data_last_7d['spike_amount_robust'] = profiler.time_apply(
+                    relief_data_last_7d, _get_max_spike_robust, "spike_amount_robust", axis=1
+                )
+                relief_data_last_7d['spike_amount_sensitive'] = profiler.time_apply(
+                    relief_data_last_7d, _get_max_spike_sensitive, "spike_amount_sensitive", axis=1
+                )
                 max_spike_robust = relief_data_last_7d['spike_amount_robust'].max() if 'spike_amount_robust' in relief_data_last_7d.columns else 0.0
                 max_spike_sensitive = relief_data_last_7d['spike_amount_sensitive'].max() if 'spike_amount_sensitive' in relief_data_last_7d.columns else 0.0
             else:
@@ -7798,7 +7813,9 @@ class Analytics:
                     pass
                 return 0.0
             
-            completed['time_for_work_play'] = completed.apply(_get_actual_time_for_work_play, axis=1)
+            completed['time_for_work_play'] = profiler.time_apply(
+                completed, _get_actual_time_for_work_play, "time_for_work_play", axis=1
+            )
             completed['time_for_work_play'] = pd.to_numeric(completed['time_for_work_play'], errors='coerce').fillna(0.0)
             
             # Filter to completed tasks with valid dates
@@ -7843,7 +7860,9 @@ class Analytics:
                 pass
             return None
         
-        completed['time_actual_for_avg'] = completed.apply(_get_actual_time_for_avg, axis=1)
+        completed['time_actual_for_avg'] = profiler.time_apply(
+            completed, _get_actual_time_for_avg, "time_actual_for_avg", axis=1
+        )
         completed['time_actual_for_avg'] = pd.to_numeric(completed['time_actual_for_avg'], errors='coerce')
         
         # Calculate weekly average: average time per task across all completed tasks
@@ -7899,8 +7918,8 @@ class Analytics:
             else:
                 completed['predicted_dict'] = pd.Series([{}] * len(completed))
         
-        completed['productivity_score'] = completed.apply(
-            lambda row: self.calculate_productivity_score(
+        def _calc_productivity_score(row):
+            return self.calculate_productivity_score(
                 row,
                 self_care_tasks_per_day,
                 weekly_avg_time,
@@ -7909,8 +7928,9 @@ class Analytics:
                 weekly_work_summary=weekly_work_summary,
                 goal_hours_per_week=goal_hours_per_week,
                 weekly_productive_hours=weekly_productive_hours
-            ),
-            axis=1
+            )
+        completed['productivity_score'] = profiler.time_apply(
+            completed, _calc_productivity_score, "calculate_productivity_score", axis=1
         )
         
         # Calculate totals
@@ -7933,9 +7953,10 @@ class Analytics:
                 task_completion_counts[task_id] = int(count)
         
         # Calculate grit score for all completed tasks (pass df to avoid N+1 in persistence factor)
-        completed['grit_score'] = completed.apply(
-            lambda row: self.calculate_grit_score(row, task_completion_counts, instances_df=df),
-            axis=1
+        def _calc_grit_score(row):
+            return self.calculate_grit_score(row, task_completion_counts, instances_df=df)
+        completed['grit_score'] = profiler.time_apply(
+            completed, _calc_grit_score, "calculate_grit_score", axis=1
         )
         
         # Calculate grit score totals
@@ -8000,6 +8021,9 @@ class Analytics:
         
         total_time = (time_module.perf_counter() - total_start) * 1000
         print(f"[Analytics] get_relief_summary: {total_time:.2f}ms")
+        
+        # End profiling (logs breakdown to file if PROFILE_ANALYTICS=1)
+        profiler.end_function()
         
         # #region agent log
         try:

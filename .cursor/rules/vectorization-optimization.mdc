@@ -1,0 +1,59 @@
+---
+description: Two-layer pattern for formula optimization - preserve reference implementations when vectorizing
+globs: "**/backend/analytics.py,**/formula_*.py,**/ui/formula_control_system.py"
+alwaysApply: false
+---
+
+# Performance Optimization: Two-Layer Pattern
+
+When optimizing row-by-row `.apply()` calculations for performance:
+
+## Pattern: Keep Reference + Add Vectorized
+
+1. **PRESERVE** the original row-by-row function as the "reference implementation"
+2. **ADD** a new `_vectorized` or `_batch` version for production use
+3. **Document** both with cross-references
+
+```python
+# Layer 1: Reference implementation (for development, testing, formula refinement)
+def calculate_score(self, row, settings) -> float:
+    """Single-row calculation - clear logic, easy to modify.
+    
+    Note: For batch processing, use calculate_scores_batch() for 10-20x speedup.
+    """
+    # Original readable logic here
+    ...
+
+# Layer 2: Vectorized batch implementation (for production hot paths)
+def calculate_scores_batch(self, df, settings) -> np.ndarray:
+    """Vectorized batch calculation. See calculate_score() for formula logic."""
+    # Vectorized equivalent
+    ...
+```
+
+## Vectorization Patterns
+
+| Row-by-row | Vectorized |
+|------------|------------|
+| `max(a, b)` | `np.maximum(a, b)` |
+| `min(a, b)` | `np.minimum(a, b)` |
+| `if cond: x else: y` | `np.where(cond, x, y)` |
+| `abs(x)` | `np.abs(x)` |
+| `x ** n` | `x ** n` (works on arrays) |
+| `dict.get(key, default)` | Pre-extract to array first |
+
+## When to Update Each Version
+
+- **Parameter tweaks** (scalar multipliers from formula_settings): No code change needed
+- **Structural changes** (new columns, new score components): Update BOTH versions
+- **Testing new formula logic**: Modify reference version first, validate, then port to vectorized
+
+## Validation Pattern
+
+```python
+def test_vectorized_matches_reference(df, settings):
+    """Ensure vectorized produces same results as reference."""
+    reference = df.apply(lambda r: calc_score(r, settings), axis=1)
+    vectorized = calc_scores_batch(df, settings)
+    assert np.allclose(reference, vectorized, rtol=1e-5)
+```
