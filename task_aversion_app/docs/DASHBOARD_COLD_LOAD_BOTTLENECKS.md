@@ -1,4 +1,11 @@
-# Dashboard cold load (3–5 s) – remaining bottlenecks
+# Dashboard cold load – bottlenecks (RESOLVED)
+
+> **Status:** Main bottleneck resolved (2026-02-12). `get_relief_summary()` improved from 2.75s to 0.19s (14x faster).
+> See [PERFORMANCE_OPTIMIZATION_LOG.md](PERFORMANCE_OPTIMIZATION_LOG.md) for full details.
+
+---
+
+# Historical: Dashboard cold load (3–5 s) – original bottlenecks
 
 ## What we fixed
 
