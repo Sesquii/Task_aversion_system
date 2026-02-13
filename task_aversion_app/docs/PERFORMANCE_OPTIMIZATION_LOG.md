@@ -60,15 +60,17 @@ spike_amount_robust/sensitive:        0.69ms (0.3%)
 
 ## Remaining Bottlenecks / Future Optimization Opportunities
 
-### 1. Productivity Score Batch (88ms)
-Still the largest chunk. The date parsing loop for work/play time lookups could be optimized:
-```python
-for ca in df['completed_at'].tolist():
-    dt = pd.to_datetime(ca)  # Expensive per-row
-```
-Could vectorize with `pd.to_datetime(df['completed_at'])` and batch lookups.
+### 1. Productivity Score Batch – date parsing vectorized (2026-02-13)
+Completed: replaced per-row `pd.to_datetime(ca)` loop in `calculate_productivity_scores_batch()` with a single vectorized `pd.to_datetime(df['completed_at'], errors='coerce')` and `.dt.strftime('%Y-%m-%d')` for date strings. Reduces ~500+ pd.to_datetime calls to one per batch.
 
-### 2. Analytics Page (~2.8s) - PROFILED 2026-02-13
+### 2. Single load in get_analytics_page_data (2026-02-13)
+Completed: load instances once at the start of `get_analytics_page_data()` (both `_load_instances()` and `_load_instances(completed_only=True)`), then pass the DataFrames into `get_dashboard_metrics(instances_df=...)`, `get_relief_summary(instances_completed_df=...)`, and `calculate_time_tracking_consistency_score(instances_df=...)`. Sub-calls no longer call `_load_instances` when data is provided. Reduces redundant I/O and helps avoid NiceGUI connection timeout on slow loads.
+
+### 3. Connection timeout and deferred analytics load (2026-02-13)
+- **Timeout:** `ui.run(..., timeout_keep_alive=5)` in `app.py` so slower responses do not trigger "Response not ready" / connection drop (default ~3s).
+- **Deferred load:** Analytics page now shows shell in ~1s (title, nav, composite placeholder, "Loading analytics..."). Heavy work runs in a timer: `get_analytics_page_data()` then `_build_analytics_main_content()`. Same pattern as dashboard: first paint fast, data fills in after.
+
+### 4. Analytics Page (~2.8s) - PROFILED 2026-02-13
 Run: `python scripts/performance/profile_analytics_page.py -o data/logs/analytics_profile.txt`
 
 **Cold load profile (4.6s total, includes import overhead):**

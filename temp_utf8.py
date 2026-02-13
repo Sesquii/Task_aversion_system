@@ -1,4 +1,4 @@
-from nicegui import ui
+﻿from nicegui import ui
 import json
 import os
 import time
@@ -49,6 +49,506 @@ ATTRIBUTE_OPTIONS_DICT = {opt['value']: opt['label'] for opt in ATTRIBUTE_OPTION
 
 # Module-level timing for analytics page build (so finally block can read it regardless of scope)
 _analytics_build_start: list = []
+
+
+def register_analytics_page():
+    @ui.page('/analytics')
+    def analytics_dashboard():
+        try:
+            from backend.instrumentation import log_page_visit
+            log_page_visit('/analytics')
+        except ImportError:
+            pass
+        build_analytics_page()
+    
+    @ui.page('/analytics/emotional-flow')
+    def emotional_flow_page():
+        build_emotional_flow_page()
+    
+    @ui.page('/analytics/factors-comparison')
+    def factors_comparison_page():
+        from ui.factors_comparison_analytics import build_factors_comparison_page
+        build_factors_comparison_page()
+
+
+def build_analytics_page():
+    page_start = time.perf_counter()
+    _analytics_build_start.append(page_start)
+    t_phase = time.perf_counter()
+    try:
+        from backend.instrumentation import log_analytics_event
+        log_analytics_event('analytics_page_load_start')
+    except ImportError:
+        pass
+
+    ui.add_head_html("<style>.analytics-grid { gap: 1rem; }</style>")
+    ui.label("Analytics Studio").classes("text-2xl font-bold mb-2")
+    ui.label("Explore how task qualities evolve and prototype recommendation filters.").classes(
+        "text-gray-500 mb-4"
+    )
+    
+    # Get current user_id
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    
+    # Batch 3: Warm instances cache once so all _load_instances in this request hit cache (avoids N+1)
+    try:
+        if current_user_id is not None and hasattr(analytics_service, '_load_instances'):
+            warm_start = time.perf_counter()
+            analytics_service._load_instances(user_id=current_user_id)
+            analytics_service._load_instances(completed_only=True, user_id=current_user_id)
+            try:
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('phase_initial_ui_and_warm', duration_ms=(time.perf_counter() - t_phase) * 1000)
+                log_analytics_event('warm_instances_cache', duration_ms=(time.perf_counter() - warm_start) * 1000)
+            except ImportError:
+                pass
+        t_phase = time.perf_counter()
+    except Exception as e:
+        print(f"[Analytics] Warning: Could not warm instances cache: {e}")
+        t_phase = time.perf_counter()
+    
+    # Analytics Module Navigation
+    with ui.card().classes("p-4 mb-4 bg-blue-50 border border-blue-200"):
+        ui.label("Analytics Modules").classes("text-lg font-semibold mb-2")
+        ui.label("Explore specialized analytics views for different aspects of your task data.").classes("text-sm text-gray-600 mb-3")
+        with ui.row().classes("gap-3 flex-wrap"):
+            ui.button("≡ƒôè Emotional Flow", on_click=lambda: ui.navigate.to('/analytics/emotional-flow')).classes("bg-purple-500 text-white")
+            ui.label("Track emotion changes and patterns").classes("text-xs text-gray-500 self-center")
+            ui.button("≡ƒöä Relief Comparison", on_click=lambda: ui.navigate.to('/analytics/relief-comparison')).classes("bg-green-500 text-white")
+            ui.label("Compare expected vs actual relief").classes("text-xs text-gray-500 self-center")
+            ui.button("ΓÜÖ∩╕Å Factors Comparison", on_click=lambda: ui.navigate.to('/analytics/factors-comparison')).classes("bg-teal-500 text-white")
+            ui.label("Analyze factors that influence scores").classes("text-xs text-gray-500 self-center")
+            ui.button("≡ƒôï Cancelled Tasks", on_click=lambda: ui.navigate.to('/cancelled-tasks')).classes("bg-orange-500 text-white")
+            ui.label("View cancelled task patterns and statistics").classes("text-xs text-gray-500 self-center")
+            ui.button("≡ƒôê Summary", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
+            ui.label("View overall performance score").classes("text-xs text-gray-500 self-center")
+            ui.button("≡ƒôÜ Analytics Glossary", on_click=lambda: ui.navigate.to('/analytics/glossary')).classes("bg-gray-500 text-white")
+            ui.label("Learn about metrics and formulas").classes("text-xs text-gray-500 self-center")
+    
+    # Composite Score Summary
+    from backend.user_state import UserStateManager
+    user_state = UserStateManager()
+    # Convert int user_id to string for UserStateManager methods
+    user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
+    
+    current_weights = user_state.get_score_weights(user_id_str) or {}
+    
+    # Composite Score section - load asynchronously to avoid timeout
+    composite_container = ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200")
+    with composite_container:
+        loading_label = ui.label("Loading composite score...").classes("text-sm text-gray-500")
+        with ui.row().classes("items-center gap-4 w-full").style("display: none;") as composite_row:
+            ui.label("Composite Score").classes("text-lg font-semibold")
+            with ui.card().classes("p-3 bg-white border-2 border-indigo-300") as score_card:
+                score_label = ui.label("--").classes("text-3xl font-bold text-indigo-700")
+                ui.label("/ 100").classes("text-sm text-indigo-600")
+            ui.button("View Details", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
+            ui.button("Configure Weights", on_click=lambda: ui.navigate.to('/settings')).classes("bg-gray-500 text-white")
+    
+    def load_composite_score():
+        """Load composite score asynchronously."""
+        try:
+            try:
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('load_composite_score_start')
+            except ImportError:
+                pass
+
+            get_scores_start = time.perf_counter()
+            all_scores = analytics_service.get_all_scores_for_composite(days=7, user_id=current_user_id)
+            get_scores_duration = (time.perf_counter() - get_scores_start) * 1000
+
+            try:
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('get_all_scores_for_composite', duration_ms=get_scores_duration, score_count=len(all_scores))
+            except ImportError:
+                pass
+            
+            composite_result = analytics_service.calculate_composite_score(
+                components=all_scores,
+                weights=current_weights,
+                normalize_components=True
+            )
+            
+            # Update UI
+            loading_label.style("display: none;")
+            composite_row.style("display: flex;")
+            score_label.text = f"{composite_result['composite_score']:.1f}"
+
+            try:
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('load_composite_score_complete', duration_ms=(time.perf_counter() - get_scores_start) * 1000)
+            except ImportError:
+                pass
+        except Exception as e:
+            handle_error_with_ui(
+                'load_composite_score',
+                e,
+                user_id=get_current_user()
+            )
+            loading_label.text = "Error loading composite score"
+            loading_label.classes("text-red-500")
+    
+    # Load composite score asynchronously
+    ui.timer(0.1, load_composite_score, once=True)
+
+    # Get all main analytics data in one batched call (Phase 2 optimization)
+    try:
+        from backend.instrumentation import log_analytics_event
+        log_analytics_event('phase_before_page_data', duration_ms=(time.perf_counter() - t_phase) * 1000)
+        page_data_start = time.perf_counter()
+    except ImportError:
+        page_data_start = None
+    page_data = analytics_service.get_analytics_page_data(days=7, user_id=current_user_id)
+    t_phase = time.perf_counter()  # Start of UI-after-data phase
+    if page_data_start is not None:
+        try:
+            from backend.instrumentation import log_analytics_event
+            log_analytics_event('get_analytics_page_data', duration_ms=(time.perf_counter() - page_data_start) * 1000)
+        except ImportError:
+            pass
+    metrics = page_data['dashboard_metrics']
+    relief_summary = page_data['relief_summary']
+    tracking_data = page_data['time_tracking']
+    
+    # Time Tracking Consistency Section
+    with ui.card().classes("p-4 mb-4 bg-teal-50 border border-teal-200"):
+        ui.label("Time Tracking Consistency").classes("text-xl font-bold mb-2")
+        ui.label("Measures how well you track your time. Sleep up to 8 hours is rewarded. Untracked time is penalized.").classes(
+            "text-sm text-gray-600 mb-3"
+        )
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Tracking Score").classes("text-xs text-gray-500")
+                ui.label(f"{tracking_data['tracking_consistency_score']:.1f}").classes(
+                    "text-2xl font-bold"
+                )
+                ui.label("/ 100").classes("text-xs text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Tracked Time").classes("text-xs text-gray-500")
+                tracked_hours = tracking_data['avg_tracked_time_minutes'] / 60.0
+                ui.label(f"{tracked_hours:.1f} hrs").classes("text-lg font-semibold")
+                ui.label(f"({tracking_data['avg_tracked_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Untracked Time").classes("text-xs text-gray-500")
+                untracked_hours = tracking_data['avg_untracked_time_minutes'] / 60.0
+                ui.label(f"{untracked_hours:.1f} hrs").classes("text-lg font-semibold text-orange-600")
+                ui.label(f"({tracking_data['avg_untracked_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Sleep Time").classes("text-xs text-gray-500")
+                sleep_hours = tracking_data['avg_sleep_time_minutes'] / 60.0
+                ui.label(f"{sleep_hours:.1f} hrs").classes("text-lg font-semibold")
+                ui.label(f"({tracking_data['avg_sleep_time_minutes']:.0f} min)").classes(
+                    "text-xs text-gray-600"
+                )
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Tracking Coverage").classes("text-xs text-gray-500")
+                coverage_pct = tracking_data['tracking_coverage'] * 100.0
+                ui.label(f"{coverage_pct:.1f}%").classes("text-lg font-semibold")
+                ui.label("of day tracked").classes("text-xs text-gray-600")
+        
+        ui.separator().classes("my-3")
+        ui.label(
+            "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
+            "Higher tracking consistency means more of your day is logged."
+        ).classes("text-sm text-gray-600")
+    
+    life_balance = metrics.get('life_balance', {})
+    with ui.row().classes("gap-3 flex-wrap mb-4"):
+        for title, value in [
+            ("Active", metrics['counts']['active']),
+            ("Completed 7d", metrics['counts']['completed_7d']),
+            ("Completion Rate", f"{metrics['counts']['completion_rate']}%"),
+            ("Today's self care tasks", metrics['counts']['daily_self_care_tasks']),
+            ("Avg Daily Self Care Tasks", f"{metrics['counts']['avg_daily_self_care_tasks']:.1f}"),
+            ("Time Est. Accuracy", f"{metrics['time']['estimation_accuracy']:.2f}x" if metrics['time']['estimation_accuracy'] > 0 else "N/A"),
+            ("Avg Relief", metrics['quality']['avg_relief']),
+            ("Avg Mental Energy", metrics['quality'].get('avg_mental_energy_needed', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
+            ("Avg Difficulty", metrics['quality'].get('avg_task_difficulty', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
+            ("Avg Stress Level", metrics['quality']['avg_stress_level']),
+            ("Avg Net Wellbeing", metrics['quality']['avg_net_wellbeing']),
+            ("Avg Net Wellbeing (Norm)", metrics['quality']['avg_net_wellbeing_normalized']),
+            ("Adjusted Wellbeing", f"{metrics['quality'].get('adjusted_wellbeing', 0.0):.1f}"),
+            ("Adjusted Wellbeing (Norm)", f"{metrics['quality'].get('adjusted_wellbeing_normalized', 50.0):.1f}"),
+            ("Avg Stress Efficiency", metrics['quality']['avg_stress_efficiency'] if metrics['quality']['avg_stress_efficiency'] is not None else "N/A"),
+            ("Avg Aversion", f"{metrics['quality'].get('avg_aversion', 0.0):.1f}"),
+            ("General Aversion Score", f"{metrics.get('aversion', {}).get('general_aversion_score', 0.0):.1f}"),
+            ("Avg Relief Score (No Mult)", f"{relief_summary.get('avg_relief_score_no_mult', 0.0):.1f}"),
+            ("Avg Relief Score (With Mult)", f"{relief_summary.get('avg_relief_duration_score', 0.0):.1f}"),
+            ("Total Relief Score (No Mult)", f"{relief_summary.get('total_relief_score_no_mult', 0.0):.1f}"),
+            ("Total Relief Score (With Mult)", f"{relief_summary.get('total_relief_score', 0.0):.1f}"),
+            ("Weekly Relief (Base)", f"{relief_summary.get('weekly_relief_score', 0.0):.1f}"),
+            ("Weekly Relief + Bonus (Robust)", f"{relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0):.1f}"),
+            ("Weekly Relief + Bonus (Sensitive)", f"{relief_summary.get('weekly_relief_score_with_bonus_sensitive', 0.0):.1f}"),
+            ("Total Productivity Score", f"{relief_summary.get('total_productivity_score', 0.0):.1f}"),
+            ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
+            ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
+            ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
+            ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
+            ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
+        ]:
+            with ui.card().classes("p-3 min-w-[150px]"):
+                ui.label(title).classes("text-xs text-gray-500")
+                ui.label(value).classes("text-xl font-bold")
+                # Add link to thoroughness glossary for thoroughness metrics
+                if title in ["Thoroughness Score", "Thoroughness Factor"]:
+                    ui.button("≡ƒôÜ Learn More", 
+                            on_click=lambda: ui.navigate.to('/analytics/glossary/thoroughness_factor')).classes(
+                        "text-xs bg-teal-500 text-white mt-1"
+                    )
+    
+    # Get target hours from settings for display
+    goal_settings = user_state.get_productivity_goal_settings(user_id_str)
+    goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
+    target_hours_per_day = goal_hours_per_week / 5.0  # Assume 5 work days
+    
+    # Productivity Volume Section
+    productivity_volume = metrics.get('productivity_volume', {})
+    with ui.card().classes("p-4 mb-4"):
+        ui.label("Productivity Volume Analysis").classes("text-xl font-bold mb-2")
+        ui.label("Metrics that account for both efficiency and total work volume").classes("text-sm text-gray-500 mb-3")
+        ui.label(f"Goal: {goal_hours_per_week:.1f} hours/week ({target_hours_per_day:.1f} hours/day)").classes("text-xs text-blue-600 font-semibold mb-2")
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Avg Daily Work Time").classes("text-xs text-gray-500")
+                avg_work_time = productivity_volume.get('avg_daily_work_time', 0.0)
+                ui.label(f"{avg_work_time:.1f} min").classes("text-lg font-semibold")
+                ui.label(f"({avg_work_time/60:.1f} hours)").classes("text-xs text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Work Volume Score").classes("text-xs text-gray-500")
+                volume_score = productivity_volume.get('work_volume_score', 0.0)
+                ui.label(f"{volume_score:.1f}").classes("text-lg font-semibold")
+                ui.label("(0-100 scale)").classes("text-xs text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Work Consistency").classes("text-xs text-gray-500")
+                consistency = productivity_volume.get('work_consistency_score', 50.0)
+                ui.label(f"{consistency:.1f}").classes("text-lg font-semibold")
+                ui.label("(0-100 scale)").classes("text-xs text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px] border-2 border-blue-300"):
+                ui.label("Productivity Potential").classes("text-xs text-gray-500 font-semibold")
+                potential = productivity_volume.get('productivity_potential_score', 0.0)
+                ui.label(f"{potential:.1f}").classes("text-2xl font-bold text-blue-600")
+                ui.label(f"If you worked {target_hours_per_day:.1f} hrs/day (Volumetric)").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] border-2 border-orange-300"):
+                ui.label("Work Volume Gap").classes("text-xs text-gray-500 font-semibold")
+                gap = productivity_volume.get('work_volume_gap', 0.0)
+                ui.label(f"{gap:.1f} hours").classes("text-2xl font-bold text-orange-600")
+                ui.label(f"Gap to {target_hours_per_day:.1f} hrs/day target").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] border-2 border-green-300"):
+                ui.label("Composite Productivity").classes("text-xs text-gray-500 font-semibold")
+                composite = productivity_volume.get('composite_productivity_score', 0.0)
+                ui.label(f"{composite:.1f}").classes("text-2xl font-bold text-green-600")
+                ui.label("Efficiency + Volume + Consistency").classes("text-xs text-gray-400")
+        
+        # Add glossary link
+        with ui.row().classes("mt-2"):
+            ui.button("View Volumetric Productivity Glossary", 
+                     on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
+                "text-xs bg-blue-500 text-white"
+            )
+        
+        # New Volumetric Productivity Section
+        ui.separator().classes("my-4")
+        with ui.row().classes("items-center gap-2 mb-2"):
+            ui.label("Volumetric Productivity (Volume-Integrated)").classes("text-lg font-semibold")
+            ui.button("View Glossary", 
+                     on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
+                "text-xs bg-green-500 text-white"
+            )
+        
+        ui.label("Productivity score that integrates volume factor to provide more accurate measurements.").classes("text-sm text-gray-500 mb-3")
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px] bg-gray-50"):
+                ui.label("Base Productivity (Avg)").classes("text-xs text-gray-500 font-semibold")
+                base_prod = productivity_volume.get('avg_base_productivity', 0.0)
+                ui.label(f"{base_prod:.1f}").classes("text-lg font-semibold")
+                ui.label("Per-task average").classes("text-xs text-gray-400 italic")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-green-100 border-2 border-green-300"):
+                ui.label("Volumetric Productivity").classes("text-xs text-gray-700 font-bold")
+                volumetric = productivity_volume.get('volumetric_productivity_score', 0.0)
+                ui.label(f"{volumetric:.1f}").classes("text-2xl font-bold text-green-700")
+                ui.label("Base ├ù Volume Factor").classes("text-xs text-gray-600 italic")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-blue-100 border-2 border-blue-300"):
+                ui.label("Volumetric Potential").classes("text-xs text-gray-700 font-bold")
+                volumetric_pot = productivity_volume.get('volumetric_potential_score', 0.0)
+                ui.label(f"{volumetric_pot:.1f}").classes("text-2xl font-bold text-blue-700")
+                ui.label(f"At target volume ({target_hours_per_day:.1f} hrs/day)").classes("text-xs text-gray-600 italic")
+    
+    # Show warning if efficiency is high but volume is low
+    avg_efficiency = metrics.get('quality', {}).get('avg_stress_efficiency')
+    if avg_efficiency is not None and volume_score < 50 and avg_efficiency > 2.0:
+        with ui.card().classes("p-3 mb-4 bg-yellow-50 border-2 border-yellow-300"):
+            with ui.row().classes("items-center gap-2"):
+                ui.icon("warning", size="md").classes("text-yellow-600")
+                ui.label("High efficiency but low work volume detected").classes("font-semibold text-yellow-800")
+            ui.label(f"You're highly efficient (efficiency: {avg_efficiency:.2f}) but only working {avg_work_time/60:.1f} hours/day on average.").classes("text-sm text-yellow-700 mt-1")
+            ui.label(f"Working more could significantly increase your productivity. Gap: {gap:.1f} hours/day to reach {target_hours_per_day:.1f} hours/day target.").classes("text-sm text-yellow-700")
+    
+    # Life Balance Section
+    with ui.card().classes("p-4 mb-4"):
+        ui.label("Life Balance").classes("text-xl font-bold mb-2")
+        ui.label("Comparison of Work vs Play task amounts").classes("text-sm text-gray-500 mb-3")
+        
+        balance_score = life_balance.get('balance_score', 50.0)
+        work_count = life_balance.get('work_count', 0)
+        play_count = life_balance.get('play_count', 0)
+        self_care_count = life_balance.get('self_care_count', 0)
+        work_time = life_balance.get('work_time_minutes', 0.0)
+        play_time = life_balance.get('play_time_minutes', 0.0)
+        self_care_time = life_balance.get('self_care_time_minutes', 0.0)
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Balance Score").classes("text-xs text-gray-500")
+                ui.label(f"{balance_score:.1f}").classes("text-2xl font-bold")
+                ui.label("(50 = balanced)").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Work Tasks").classes("text-xs text-gray-500")
+                ui.label(f"{work_count} tasks").classes("text-lg font-semibold")
+                ui.label(f"{work_time:.1f} min").classes("text-sm text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Play Tasks").classes("text-xs text-gray-500")
+                ui.label(f"{play_count} tasks").classes("text-lg font-semibold")
+                ui.label(f"{play_time:.1f} min").classes("text-sm text-gray-600")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Self Care Tasks").classes("text-xs text-gray-500")
+                ui.label(f"{self_care_count} tasks").classes("text-lg font-semibold")
+                ui.label(f"{self_care_time:.1f} min").classes("text-sm text-gray-600")
+    
+    # Obstacles Overcome Section
+    with ui.card().classes("p-4 mb-4"):
+        ui.label("Overcoming Obstacles").classes("text-xl font-bold mb-2")
+        ui.label("Tracking spontaneous aversion spikes and rewards for overcoming them").classes("text-sm text-gray-500 mb-3")
+        
+        total_obstacles_robust = relief_summary.get('total_obstacles_score_robust', 0.0)
+        total_obstacles_sensitive = relief_summary.get('total_obstacles_score_sensitive', 0.0)
+        max_spike_robust = relief_summary.get('max_obstacle_spike_robust', 0.0)
+        max_spike_sensitive = relief_summary.get('max_obstacle_spike_sensitive', 0.0)
+        bonus_mult_robust = relief_summary.get('weekly_obstacles_bonus_multiplier_robust', 1.0)
+        bonus_mult_sensitive = relief_summary.get('weekly_obstacles_bonus_multiplier_sensitive', 1.0)
+        
+        with ui.row().classes("gap-4 flex-wrap"):
+            with ui.card().classes("p-3 min-w-[200px] border-2 border-blue-300"):
+                ui.label("Total Obstacles Score (Robust)").classes("text-xs text-gray-500 font-semibold")
+                ui.label(f"{total_obstacles_robust:.1f}").classes("text-2xl font-bold text-blue-600")
+                ui.label("Median-based baseline").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] border-2 border-purple-300"):
+                ui.label("Total Obstacles Score (Sensitive)").classes("text-xs text-gray-500 font-semibold")
+                ui.label(f"{total_obstacles_sensitive:.1f}").classes("text-2xl font-bold text-purple-600")
+                ui.label("Trimmed mean baseline").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Max Obstacle Spike (Robust)").classes("text-xs text-gray-500")
+                ui.label(f"{max_spike_robust:.1f}").classes("text-xl font-semibold")
+                ui.label("This week").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px]"):
+                ui.label("Max Obstacle Spike (Sensitive)").classes("text-xs text-gray-500")
+                ui.label(f"{max_spike_sensitive:.1f}").classes("text-xl font-semibold")
+                ui.label("This week").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-green-50"):
+                ui.label("Weekly Bonus Multiplier (Robust)").classes("text-xs text-gray-500")
+                ui.label(f"{bonus_mult_robust:.2f}x").classes("text-xl font-bold text-green-600")
+                if bonus_mult_robust > 1.0:
+                    bonus_pct = (bonus_mult_robust - 1.0) * 100
+                    ui.label(f"+{bonus_pct:.0f}% bonus").classes("text-xs text-green-600")
+                else:
+                    ui.label("No bonus").classes("text-xs text-gray-400")
+            
+            with ui.card().classes("p-3 min-w-[200px] bg-green-50"):
+                ui.label("Weekly Bonus Multiplier (Sensitive)").classes("text-xs text-gray-500")
+                ui.label(f"{bonus_mult_sensitive:.2f}x").classes("text-xl font-bold text-green-600")
+                if bonus_mult_sensitive > 1.0:
+                    bonus_pct = (bonus_mult_sensitive - 1.0) * 100
+                    ui.label(f"+{bonus_pct:.0f}% bonus").classes("text-xs text-green-600")
+                else:
+                    ui.label("No bonus").classes("text-xs text-gray-400")
+    
+    # Aversion Analytics Section - Multiple Formula Comparison
+    with ui.card().classes("p-4 mb-4"):
+        ui.label("Aversion Analytics").classes("text-xl font-bold mb-2")
+        ui.label("Comparing different obstacles score formulas to understand how net relief and relief expectations affect scoring").classes("text-sm text-gray-500 mb-3")
+        
+        # Formula descriptions
+        formula_descriptions = {
+            'expected_only': 'Uses expected relief (decision-making context)',
+            'actual_only': 'Uses actual relief (outcome-based)',
+            'minimum': 'Uses min(expected, actual) - most conservative',
+            'average': 'Uses (expected + actual) / 2 - balanced',
+            'net_penalty': 'Uses expected, bonus if actual < expected (disappointment factor)',
+            'net_bonus': 'Uses expected, reduced if actual > expected (surprise benefit)',
+            'net_weighted': 'Uses expected, weighted by net relief factor'
+        }
+        
+        # Display scores in a grid
+        with ui.row().classes("gap-3 flex-wrap"):
+            score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
+            
+            for variant in score_variants:
+                robust_key = f'total_obstacles_{variant}_robust'
+                sensitive_key = f'total_obstacles_{variant}_sensitive'
+                
+                robust_score = relief_summary.get(robust_key, 0.0)
+                sensitive_score = relief_summary.get(sensitive_key, 0.0)
+                
+                with ui.card().classes("p-3 min-w-[220px] border border-gray-200"):
+                    # Variant name (formatted)
+                    variant_label = variant.replace('_', ' ').title()
+                    ui.label(variant_label).classes("text-xs font-semibold text-gray-700 mb-1")
+                    
+                    # Description
+                    ui.label(formula_descriptions.get(variant, '')).classes("text-xs text-gray-500 mb-2")
+                    
+                    # Scores
+                    with ui.row().classes("gap-2 items-center"):
+                        ui.label("Robust:").classes("text-xs text-gray-600")
+                        ui.label(f"{robust_score:.1f}").classes("text-sm font-bold text-blue-600")
+                    
+                    with ui.row().classes("gap-2 items-center"):
+                        ui.label("Sensitive:").classes("text-xs text-gray-600")
+                        ui.label(f"{sensitive_score:.1f}").classes("text-sm font-bold text-purple-600")
+
+    # Get all chart data in one batched call (Phase 2 optimization)
+    chart_data = analytics_service.get_chart_data(user_id=current_user_id)
+    
+    with ui.row().classes("analytics-grid flex-wrap w-full"):
+        _render_time_chart(chart_data['trend_series'], user_id=current_user_id)
+        _render_attribute_box(chart_data['attribute_distribution'], user_id=current_user_id)
+
+    _render_trends_section(user_id=current_user_id)
+    _render_stress_metrics_section(chart_data['stress_dimension_data'], user_id=current_user_id)
+    
+    # Get all rankings data in one batched call (Phase 2 optimization)
+    rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10, user_id=current_user_id)
+    
+    _render_task_rankings(rankings_data, user_id=current_user_id)
+    _render_stress_efficiency_leaderboard(rankings_data['stress_efficiency_leaderboard'], user_id=current_user_id)
+    _render_metric_comparison(metrics, user_id=current_user_id)
+    _render_correlation_explorer(user_id=current_user_id)
 
 
 def _render_time_chart(df=None, user_id=None):
@@ -189,7 +689,7 @@ def _render_trends_section(user_id=None):
 
 def _render_stress_metrics_section(stress_data=None, user_id=None):
     """Render stress dimension metrics with bar charts and line graphs.
-
+    
     Args:
         stress_data: Optional pre-fetched stress dimension data (for batching)
         user_id: User ID for data isolation
@@ -200,23 +700,23 @@ def _render_stress_metrics_section(stress_data=None, user_id=None):
         ui.label("Separate visualization of cognitive, emotional, and physical stress dimensions").classes(
             "text-sm text-gray-500 mb-3"
         )
-
+        
         # Helper function to calculate daily average
         def calc_daily_avg(daily_list):
             if not daily_list:
                 return 0.0
             values = [item['value'] for item in daily_list if item.get('value') is not None]
             return sum(values) / len(values) if values else 0.0
-
+        
         # Get stress dimension data if not provided
         if stress_data is None:
             stress_data = analytics_service.get_stress_dimension_data(user_id=user_id)
-
+        
         # Calculate daily averages (overall, not just 7-day)
         cognitive_daily_avg = calc_daily_avg(stress_data.get('cognitive', {}).get('daily', []))
         emotional_daily_avg = calc_daily_avg(stress_data.get('emotional', {}).get('daily', []))
         physical_daily_avg = calc_daily_avg(stress_data.get('physical', {}).get('daily', []))
-
+        
         # Separate bar charts for each metric type
         with ui.row().classes("gap-4 flex-wrap mb-4"):
             # Comparison bar chart - Totals
@@ -247,7 +747,7 @@ def _render_stress_metrics_section(stress_data=None, user_id=None):
                     )
                     fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
                     ui.plotly(fig)
-
+            
             # Comparison bar chart - 7-day average
             with ui.card().classes("p-3 flex-1 min-w-[300px]"):
                 ui.label("7-Day Average by Dimension").classes("font-bold text-md mb-2")
@@ -276,7 +776,7 @@ def _render_stress_metrics_section(stress_data=None, user_id=None):
                     )
                     fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
                     ui.plotly(fig)
-
+            
             # Comparison bar chart - Daily average
             with ui.card().classes("p-3 flex-1 min-w-[300px]"):
                 ui.label("Daily Average by Dimension").classes("font-bold text-md mb-2")
@@ -305,48 +805,48 @@ def _render_stress_metrics_section(stress_data=None, user_id=None):
                     )
                     fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
                     ui.plotly(fig)
-
+        
         # Line graphs showing values over time
         with ui.card().classes("p-3 w-full mt-4"):
             ui.label("Stress Dimensions Over Time").classes("font-bold text-md mb-2")
-
+            
             # Prepare data for time series
             cognitive_daily = stress_data.get('cognitive', {}).get('daily', [])
             emotional_daily = stress_data.get('emotional', {}).get('daily', [])
             physical_daily = stress_data.get('physical', {}).get('daily', [])
-
+            
             if not cognitive_daily and not emotional_daily and not physical_daily:
                 ui.label("No time series data yet. Complete some tasks to see trends.").classes("text-xs text-gray-500")
             else:
                 # Combine all daily data into a single dataframe
                 time_series_rows = []
-
+                
                 for item in cognitive_daily:
                     time_series_rows.append({
                         'date': item['date'],
                         'value': item['value'],
                         'dimension': 'Cognitive'
                     })
-
+                
                 for item in emotional_daily:
                     time_series_rows.append({
                         'date': item['date'],
                         'value': item['value'],
                         'dimension': 'Emotional'
                     })
-
+                
                 for item in physical_daily:
                     time_series_rows.append({
                         'date': item['date'],
                         'value': item['value'],
                         'dimension': 'Physical'
                     })
-
+                
                 if time_series_rows:
                     ts_df = pd.DataFrame(time_series_rows)
                     ts_df['date'] = pd.to_datetime(ts_df['date'])
                     ts_df = ts_df.sort_values('date')
-
+                    
                     fig = px.line(
                         ts_df,
                         x='date',
@@ -369,7 +869,7 @@ def _render_stress_metrics_section(stress_data=None, user_id=None):
                     ui.plotly(fig)
                 else:
                     ui.label("No time series data available").classes("text-xs text-gray-500")
-
+        
         # Summary statistics
         with ui.row().classes("gap-4 flex-wrap mt-4"):
             with ui.card().classes("p-3 min-w-[200px]"):
@@ -377,13 +877,13 @@ def _render_stress_metrics_section(stress_data=None, user_id=None):
                 ui.label(f"Total: {stress_data['cognitive']['total']:.1f}").classes("text-sm")
                 ui.label(f"7-Day Avg: {stress_data['cognitive']['avg_7d']:.1f}").classes("text-sm")
                 ui.label(f"Daily Avg: {cognitive_daily_avg:.1f}").classes("text-sm")
-
+            
             with ui.card().classes("p-3 min-w-[200px]"):
                 ui.label("Emotional Stress").classes("text-xs text-gray-500 font-semibold")
                 ui.label(f"Total: {stress_data['emotional']['total']:.1f}").classes("text-sm")
                 ui.label(f"7-Day Avg: {stress_data['emotional']['avg_7d']:.1f}").classes("text-sm")
                 ui.label(f"Daily Avg: {emotional_daily_avg:.1f}").classes("text-sm")
-
+            
             with ui.card().classes("p-3 min-w-[200px]"):
                 ui.label("Physical Stress").classes("text-xs text-gray-500 font-semibold")
                 ui.label(f"Total: {stress_data['physical']['total']:.1f}").classes("text-sm")
@@ -393,7 +893,7 @@ def _render_stress_metrics_section(stress_data=None, user_id=None):
 
 def _render_metric_comparison(metrics=None, user_id=None):
     """Render a flexible metric comparison tool with scatter plots.
-
+    
     Args:
         metrics: Optional pre-fetched dashboard metrics (for batching)
         user_id: User ID for data isolation
@@ -401,75 +901,77 @@ def _render_metric_comparison(metrics=None, user_id=None):
     ui.separator().classes("my-4")
     with ui.card().classes("p-4 w-full"):
         ui.label("Metric Comparison").classes("text-xl font-bold mb-2")
-        ui.label(
-            "Compare any two metrics with interactive scatter plots. "
-            "Perfect for analyzing relationships like Productivity vs Grit."
-        ).classes("text-sm text-gray-500 mb-3")
-
+        ui.label("Compare any two metrics with interactive scatter plots. Perfect for analyzing relationships like Productivity vs Grit.").classes(
+            "text-sm text-gray-500 mb-3"
+        )
+        
         with ui.row().classes("gap-3 flex-wrap"):
             x_select = ui.select(
                 options=ATTRIBUTE_OPTIONS_DICT,
-                value='productivity_score' if 'productivity_score' in ATTRIBUTE_OPTIONS_DICT else (
-                    next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None
-                ),
+                value='productivity_score' if 'productivity_score' in ATTRIBUTE_OPTIONS_DICT else (next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None),
                 label="X-Axis Metric",
             ).props("dense outlined clearable").classes("min-w-[200px]")
-
+            
             y_select = ui.select(
                 options=ATTRIBUTE_OPTIONS_DICT,
-                value='grit_score' if 'grit_score' in ATTRIBUTE_OPTIONS_DICT else (
-                    next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None
-                ),
+                value='grit_score' if 'grit_score' in ATTRIBUTE_OPTIONS_DICT else (next(iter(ATTRIBUTE_OPTIONS_DICT)) if ATTRIBUTE_OPTIONS_DICT else None),
                 label="Y-Axis Metric",
             ).props("dense outlined clearable").classes("min-w-[200px]")
-
+            
             show_trendline = ui.switch("Show trendline", value=True).props("dense")
             show_efficiency = ui.switch("Show efficiency metrics", value=True).props("dense")
-
+        
         chart_area = ui.column().classes("mt-3 w-full gap-3")
         stats_area = ui.column().classes("mt-3 w-full gap-2")
-
+        
         def render_comparison():
+            # Get metrics if not provided
             nonlocal metrics
             if metrics is None:
                 metrics = analytics_service.get_dashboard_metrics(user_id=user_id)
             chart_area.clear()
             stats_area.clear()
-
+            
             x_attr = x_select.value
             y_attr = y_select.value
-
+            
             if not x_attr or not y_attr:
                 with chart_area:
                     ui.label("Select both X and Y metrics to compare.").classes("text-xs text-gray-500")
                 return
-
+            
             if x_attr == y_attr:
                 with chart_area:
                     ui.label("Choose two different metrics to compare.").classes("text-xs text-gray-500")
                 return
-
+            
+            # Get scatter data
             scatter = analytics_service.get_scatter_data(x_attr, y_attr, user_id=user_id)
             stats = analytics_service.calculate_correlation(x_attr, y_attr, method='pearson', user_id=user_id)
-
+            
             label_x = ATTRIBUTE_LABELS.get(x_attr, x_attr)
             label_y = ATTRIBUTE_LABELS.get(y_attr, y_attr)
-
+            
             if scatter.get('n', 0) == 0:
                 with chart_area:
                     ui.label("Not enough data to plot. Complete some tasks first.").classes("text-xs text-gray-500")
                 return
-
-            scatter_df = pd.DataFrame({'x': scatter['x'], 'y': scatter['y']})
-
+            
+            # Create scatter plot
+            scatter_df = pd.DataFrame({
+                'x': scatter['x'],
+                'y': scatter['y']
+            })
+            
+            # Check if statsmodels is available for trendline
             use_trendline = False
-            if getattr(show_trendline, 'value', True):
+            if show_trendline.value:
                 try:
                     import statsmodels.api as sm  # noqa: F401
                     use_trendline = True
                 except ImportError:
-                    pass
-
+                    pass  # statsmodels not available, skip trendline
+            
             fig = px.scatter(
                 scatter_df,
                 x='x',
@@ -478,197 +980,320 @@ def _render_metric_comparison(metrics=None, user_id=None):
                 title=f"{label_x} vs {label_y}",
                 trendline='ols' if use_trendline else None,
             )
-            fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), hovermode='closest')
-
+            fig.update_layout(
+                margin=dict(l=20, r=20, t=40, b=20),
+                hovermode='closest'
+            )
+            
             with chart_area:
                 ui.plotly(fig)
-
+            
+            # Show statistics
             with stats_area:
                 corr = stats.get('correlation')
                 p_val = stats.get('p_value')
                 r_sq = stats.get('r_squared')
                 n = stats.get('n')
-
+                
                 with ui.card().classes("p-3"):
                     ui.label("Correlation Statistics").classes("font-semibold text-sm mb-2")
                     with ui.column().classes("gap-1"):
                         if corr is not None:
                             ui.label(f"Correlation (r): {corr:.3f}").classes("text-sm")
+                            # Interpret correlation strength
                             if abs(corr) >= 0.7:
-                                strength, color = "Strong", "text-green-600"
+                                strength = "Strong"
+                                color = "text-green-600"
                             elif abs(corr) >= 0.4:
-                                strength, color = "Moderate", "text-yellow-600"
+                                strength = "Moderate"
+                                color = "text-yellow-600"
                             elif abs(corr) >= 0.2:
-                                strength, color = "Weak", "text-orange-600"
+                                strength = "Weak"
+                                color = "text-orange-600"
                             else:
-                                strength, color = "Very Weak", "text-gray-600"
+                                strength = "Very Weak"
+                                color = "text-gray-600"
                             ui.label(f"Strength: {strength}").classes(f"text-xs {color}")
                         else:
                             ui.label("Correlation: N/A").classes("text-sm")
-
+                        
                         if r_sq is not None:
-                            ui.label(f"R^2: {r_sq:.3f} ({r_sq*100:.1f}% variance explained)").classes("text-sm")
-
+                            ui.label(f"R┬▓: {r_sq:.3f} ({r_sq*100:.1f}% variance explained)").classes("text-sm")
+                        
                         if p_val is not None:
                             significance = "Significant" if p_val < 0.05 else "Not Significant"
                             ui.label(f"p-value: {p_val:.4f} ({significance})").classes("text-sm")
-
+                        
                         ui.label(f"Sample size: {n}").classes("text-xs text-gray-500")
-
-                if getattr(show_efficiency, 'value', True):
+                
+                # Efficiency analysis for various metric combinations
+                if show_efficiency.value:
+                    # Define disclaimers for problematic combinations
+                    disclaimers = {
+                        # Productivity score already factors time efficiency
+                        ('duration_minutes', 'productivity_score'): "ΓÜá∩╕Å Note: Productivity Score already incorporates time efficiency (rewards completing faster than estimated). This ratio shows absolute productivity density, not efficiency relative to estimates.",
+                        ('productivity_score', 'duration_minutes'): "ΓÜá∩╕Å Note: Productivity Score already incorporates time efficiency (rewards completing faster than estimated). This ratio shows absolute productivity density, not efficiency relative to estimates.",
+                        # Stress efficiency is already relief/stress
+                        ('stress_level', 'stress_efficiency'): "ΓÜá∩╕Å Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                        ('stress_efficiency', 'stress_level'): "ΓÜá∩╕Å Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                        ('relief_score', 'stress_efficiency'): "ΓÜá∩╕Å Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                        ('stress_efficiency', 'relief_score'): "ΓÜá∩╕Å Note: Stress Efficiency is already calculated as Relief/Stress. This comparison may be redundant.",
+                    }
+                    
+                    # Define efficiency analysis configurations
+                    # Format: (x_attr, y_attr): (ratio_formula, description, interpretation_thresholds, label, use_time_efficiency)
                     efficiency_configs = {
+                        # Productivity vs Grit
                         ('productivity_score', 'grit_score'): (
                             lambda x, y: x / y if y > 0 else None,
                             "Productivity per unit of Grit",
                             {'high': 2.0, 'moderate': 0.5},
                             "Higher ratio = more productivity with less grit investment",
+                            False
                         ),
                         ('grit_score', 'productivity_score'): (
                             lambda x, y: y / x if x > 0 else None,
                             "Productivity per unit of Grit",
                             {'high': 2.0, 'moderate': 0.5},
                             "Higher ratio = more productivity with less grit investment",
+                            False
                         ),
+                        # Work Time vs Play Time
                         ('work_time', 'play_time'): (
                             lambda x, y: x / y if y > 0 else None,
                             "Work Time per unit of Play Time",
                             {'high': 2.0, 'moderate': 0.5},
                             "Ratio shows work-play balance (1.0 = balanced)",
+                            False
                         ),
                         ('play_time', 'work_time'): (
                             lambda x, y: x / y if y > 0 else None,
                             "Play Time per unit of Work Time",
                             {'high': 0.5, 'moderate': 0.2},
                             "Ratio shows play-work balance (1.0 = balanced)",
+                            False
                         ),
+                        # Stress vs Relief (Stress Efficiency)
                         ('stress_level', 'relief_score'): (
                             lambda x, y: y / x if x > 0 else None,
                             "Relief per unit of Stress (Stress Efficiency)",
                             {'high': 2.0, 'moderate': 1.0},
-                            "Higher ratio = more relief for less stress.",
+                            "Higher ratio = more relief for less stress. Note: This is the same calculation as the Stress Efficiency metric.",
+                            False
                         ),
                         ('relief_score', 'stress_level'): (
                             lambda x, y: x / y if y > 0 else None,
                             "Relief per unit of Stress (Stress Efficiency)",
                             {'high': 2.0, 'moderate': 1.0},
-                            "Higher ratio = more relief for less stress.",
+                            "Higher ratio = more relief for less stress. Note: This is the same calculation as the Stress Efficiency metric.",
+                            False
                         ),
+                        # Time vs Productivity - Use new time efficiency metric
                         ('duration_minutes', 'productivity_score'): (
-                            None,
+                            None,  # Will use time efficiency calculation instead
                             "Time Efficiency (Estimate/Actual)",
                             {'high': 1.2, 'moderate': 1.0},
-                            "Higher ratio = completed faster than estimated.",
-                            True,
+                            "Higher ratio = completed faster than estimated. 1.0 = on time, >1.0 = faster, <1.0 = slower.",
+                            True
                         ),
                         ('productivity_score', 'duration_minutes'): (
-                            None,
+                            None,  # Will use time efficiency calculation instead
                             "Time Efficiency (Estimate/Actual)",
                             {'high': 1.2, 'moderate': 1.0},
-                            "Higher ratio = completed faster than estimated.",
-                            True,
+                            "Higher ratio = completed faster than estimated. 1.0 = on time, >1.0 = faster, <1.0 = slower.",
+                            True
                         ),
+                        # Stress vs Net Wellbeing
                         ('stress_level', 'net_wellbeing'): (
                             lambda x, y: y / x if x > 0 else None,
                             "Net Wellbeing per unit of Stress",
                             {'high': 1.0, 'moderate': 0.5},
                             "Higher ratio = better wellbeing despite stress",
+                            False
                         ),
                         ('net_wellbeing', 'stress_level'): (
                             lambda x, y: x / y if y > 0 else None,
                             "Net Wellbeing per unit of Stress",
                             {'high': 1.0, 'moderate': 0.5},
                             "Higher ratio = better wellbeing despite stress",
+                            False
                         ),
+                        # Relief vs Net Wellbeing
                         ('relief_score', 'net_wellbeing'): (
                             lambda x, y: y / x if x > 0 else None,
                             "Net Wellbeing per unit of Relief",
                             {'high': 1.5, 'moderate': 1.0},
                             "Higher ratio = wellbeing exceeds relief (positive impact)",
+                            False
                         ),
                         ('net_wellbeing', 'relief_score'): (
                             lambda x, y: x / y if y > 0 else None,
                             "Net Wellbeing per unit of Relief",
                             {'high': 1.5, 'moderate': 1.0},
                             "Higher ratio = wellbeing exceeds relief (positive impact)",
+                            False
                         ),
+                        # Time vs Relief
                         ('duration_minutes', 'relief_score'): (
                             lambda x, y: y / x if x > 0 else None,
                             "Relief per minute",
                             {'high': 0.5, 'moderate': 0.2},
                             "Higher ratio = more relief per time invested",
+                            False
                         ),
                         ('relief_score', 'duration_minutes'): (
                             lambda x, y: x / y if y > 0 else None,
                             "Relief per minute",
                             {'high': 0.5, 'moderate': 0.2},
                             "Higher ratio = more relief per time invested",
+                            False
                         ),
                     }
-
+                    
+                    # Check if current combination has efficiency analysis
                     key = (x_attr, y_attr)
                     if key in efficiency_configs:
                         config = efficiency_configs[key]
-                        use_time_eff = config[4] if len(config) > 4 else False
-
-                        if use_time_eff:
-                            time_data = scatter.get('time_data')
-                            if time_data and 'time_estimate' in time_data and 'time_actual' in time_data:
-                                time_estimates = time_data['time_estimate']
-                                time_actuals = time_data['time_actual']
-                                efficiency_ratios = []
-                                for est, actual in zip(time_estimates, time_actuals):
-                                    if est is not None and actual is not None and est > 0 and actual > 0:
-                                        ratio = est / actual
-                                        efficiency_ratios.append(ratio)
-                                if efficiency_ratios:
-                                    avg_eff = sum(efficiency_ratios) / len(efficiency_ratios)
-                                    thresholds = config[2]
-                                    with ui.card().classes("p-3 bg-blue-50"):
-                                        ui.label("Time Efficiency Analysis").classes(
-                                            "font-semibold text-sm mb-2 text-blue-700"
-                                        )
-                                        ui.label(f"Average Time Efficiency: {avg_eff:.3f}").classes("text-sm")
-                                        high_t, mod_t = thresholds.get('high', 1.0), thresholds.get('moderate', 1.0)
-                                        if avg_eff >= high_t:
-                                            interp, col = "Highly Efficient (Faster than Estimated)", "text-green-600"
-                                        elif avg_eff >= mod_t:
-                                            interp, col = "On Time or Moderately Efficient", "text-yellow-600"
-                                        else:
-                                            interp, col = "Less Efficient (Slower than Estimated)", "text-orange-600"
-                                        ui.label(f"Interpretation: {interp}").classes(f"text-xs font-semibold {col}")
-                        else:
-                            ratio_func, description, thresholds, interp_label = config[0], config[1], config[2], config[3]
-                            x_vals, y_vals = scatter['x'], scatter['y']
-                            efficiency_ratios = []
-                            for x, y in zip(x_vals, y_vals):
-                                if x is not None and y is not None and ratio_func:
-                                    ratio = ratio_func(x, y)
-                                    if ratio is not None:
-                                        efficiency_ratios.append(ratio)
-                            if efficiency_ratios:
-                                avg_eff = sum(efficiency_ratios) / len(efficiency_ratios)
-                                high_t = thresholds.get('high', 1.0)
-                                mod_t = thresholds.get('moderate', 0.5)
-                                with ui.card().classes("p-3 bg-blue-50"):
-                                    ui.label("Efficiency Analysis").classes(
-                                        "font-semibold text-sm mb-2 text-blue-700"
-                                    )
-                                    ui.label(f"Average Efficiency Ratio: {avg_eff:.3f}").classes("text-sm")
-                                    ui.label(f"({description})").classes("text-xs text-gray-600")
-                                    if avg_eff >= high_t:
-                                        interp, col = "Highly Efficient", "text-green-600"
-                                    elif avg_eff >= mod_t:
-                                        interp, col = "Moderately Efficient", "text-yellow-600"
+                        use_time_efficiency = config[4] if len(config) > 4 else False
+                        
+                        if use_time_efficiency:
+                            # Use new time efficiency metric based on estimates
+                            ratio_func, description, thresholds, interpretation_label, _ = config
+                            
+                            with ui.card().classes("p-3 bg-blue-50"):
+                                ui.label("Time Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
+                                
+                                # Show disclaimer if applicable
+                                if key in disclaimers:
+                                    with ui.row().classes("mb-2"):
+                                        ui.icon("info", size="sm").classes("text-yellow-600 mt-0.5")
+                                        ui.label(disclaimers[key]).classes("text-xs text-yellow-700")
+                                
+                                # Get time data from scatter
+                                time_data = scatter.get('time_data')
+                                if time_data and 'time_estimate' in time_data and 'time_actual' in time_data:
+                                    time_estimates = time_data['time_estimate']
+                                    time_actuals = time_data['time_actual']
+                                    
+                                    # Calculate time efficiency: estimate/actual (higher = faster than estimated)
+                                    efficiency_ratios = []
+                                    for est, actual in zip(time_estimates, time_actuals):
+                                        if est is not None and actual is not None and est > 0 and actual > 0:
+                                            ratio = est / actual  # >1.0 means faster than estimated
+                                            efficiency_ratios.append(ratio)
+                                    
+                                    if efficiency_ratios:
+                                        avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios)
+                                        
+                                        with ui.column().classes("gap-1"):
+                                            ui.label(f"Average Time Efficiency: {avg_efficiency:.3f}").classes("text-sm")
+                                            ui.label(f"({description})").classes("text-xs text-gray-600")
+                                            
+                                            # Interpretation
+                                            high_threshold = thresholds.get('high', 1.0)
+                                            moderate_threshold = thresholds.get('moderate', 1.0)
+                                            
+                                            if avg_efficiency >= high_threshold:
+                                                interpretation = "Highly Efficient (Faster than Estimated)"
+                                                color = "text-green-600"
+                                            elif avg_efficiency >= moderate_threshold:
+                                                interpretation = "On Time or Moderately Efficient"
+                                                color = "text-yellow-600"
+                                            else:
+                                                interpretation = "Less Efficient (Slower than Estimated)"
+                                                color = "text-orange-600"
+                                            
+                                            ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
+                                            ui.label(interpretation_label).classes("text-xs text-gray-500 mt-1")
+                                            
+                                            # Add volume context warning if efficiency is high but volume is low
+                                            # Use already-loaded metrics from page_data to avoid duplicate call
+                                            volume_metrics = metrics.get('productivity_volume', {})
+                                            volume_score = volume_metrics.get('work_volume_score', 0.0)
+                                            avg_work_time = volume_metrics.get('avg_daily_work_time', 0.0)
+                                            
+                                            if avg_efficiency >= high_threshold and volume_score < 50:
+                                                with ui.row().classes("mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded"):
+                                                    ui.icon("info", size="sm").classes("text-yellow-600 mt-0.5")
+                                                    with ui.column().classes("gap-0"):
+                                                        ui.label("Volume Context").classes("text-xs font-semibold text-yellow-800")
+                                                        ui.label(f"High efficiency ({avg_efficiency:.2f}) but low work volume ({avg_work_time/60:.1f} hrs/day).").classes("text-xs text-yellow-700")
+                                                        ui.label("Working more could significantly increase total productivity.").classes("text-xs text-yellow-700")
                                     else:
-                                        interp, col = "Less Efficient", "text-orange-600"
-                                    ui.label(f"Interpretation: {interp}").classes(f"text-xs font-semibold {col}")
-                                    ui.label(interp_label).classes("text-xs text-gray-500 mt-1")
-
+                                        ui.label("Insufficient time estimate data for efficiency calculation").classes("text-xs text-gray-500")
+                                else:
+                                    ui.label("Time estimate data not available. Complete tasks with time estimates to see efficiency analysis.").classes("text-xs text-gray-500")
+                        else:
+                            # Standard efficiency calculation
+                            ratio_func, description, thresholds, interpretation_label, _ = config
+                            
+                            with ui.card().classes("p-3 bg-blue-50"):
+                                ui.label("Efficiency Analysis").classes("font-semibold text-sm mb-2 text-blue-700")
+                                
+                                # Show disclaimer if applicable
+                                if key in disclaimers:
+                                    with ui.row().classes("mb-2"):
+                                        ui.icon("info", size="sm").classes("text-yellow-600 mt-0.5")
+                                        ui.label(disclaimers[key]).classes("text-xs text-yellow-700")
+                                
+                                x_vals = scatter['x']
+                                y_vals = scatter['y']
+                                
+                                # Calculate efficiency ratios
+                                efficiency_ratios = []
+                                for x, y in zip(x_vals, y_vals):
+                                    if x is not None and y is not None:
+                                        ratio = ratio_func(x, y)
+                                        if ratio is not None:
+                                            efficiency_ratios.append(ratio)
+                                
+                                if efficiency_ratios:
+                                    avg_efficiency = sum(efficiency_ratios) / len(efficiency_ratios)
+                                    
+                                    with ui.column().classes("gap-1"):
+                                        ui.label(f"Average Efficiency Ratio: {avg_efficiency:.3f}").classes("text-sm")
+                                        ui.label(f"({description})").classes("text-xs text-gray-600")
+                                        
+                                        # Interpretation based on thresholds
+                                        high_threshold = thresholds.get('high', 1.0)
+                                        moderate_threshold = thresholds.get('moderate', 0.5)
+                                        
+                                        if avg_efficiency >= high_threshold:
+                                            interpretation = "Highly Efficient"
+                                            color = "text-green-600"
+                                        elif avg_efficiency >= moderate_threshold:
+                                            interpretation = "Moderately Efficient"
+                                            color = "text-yellow-600"
+                                        else:
+                                            interpretation = "Less Efficient"
+                                            color = "text-orange-600"
+                                        
+                                        ui.label(f"Interpretation: {interpretation}").classes(f"text-xs font-semibold {color}")
+                                        ui.label(interpretation_label).classes("text-xs text-gray-500 mt-1")
+                                        
+                                        # Add volume context warning if efficiency is high but volume is low
+                                        # Use already-loaded metrics from page_data to avoid duplicate call
+                                        volume_metrics = metrics.get('productivity_volume', {})
+                                        volume_score = volume_metrics.get('work_volume_score', 0.0)
+                                        avg_work_time = volume_metrics.get('avg_daily_work_time', 0.0)
+                                        
+                                        if avg_efficiency >= high_threshold and volume_score < 50:
+                                            with ui.row().classes("mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded"):
+                                                ui.icon("info", size="sm").classes("text-yellow-600 mt-0.5")
+                                                with ui.column().classes("gap-0"):
+                                                    ui.label("Volume Context").classes("text-xs font-semibold text-yellow-800")
+                                                    ui.label(f"High efficiency ({avg_efficiency:.2f}) but low work volume ({avg_work_time/60:.1f} hrs/day).").classes("text-xs text-yellow-700")
+                                                    ui.label("Working more could significantly increase total productivity.").classes("text-xs text-yellow-700")
+                                else:
+                                    ui.label("Insufficient data for efficiency calculation").classes("text-xs text-gray-500")
+        
+        # Set up event handlers
         x_select.on('update:model-value', lambda e: render_comparison())
         y_select.on('update:model-value', lambda e: render_comparison())
         show_trendline.on('update:model-value', lambda e: render_comparison())
         show_efficiency.on('update:model-value', lambda e: render_comparison())
-
+        
+        # Initial render
         render_comparison()
 
 
@@ -689,12 +1314,20 @@ def _render_correlation_explorer(user_id=None):
                     label="Dependent (Y)",
                 ).props("dense outlined clearable")
                 method_select = ui.select(
-                    options={'pearson': 'Pearson', 'spearman': 'Spearman'},
+                    options={
+                        'pearson': 'Pearson',
+                        'spearman': 'Spearman',
+                    },
                     value='pearson',
                     label="Method",
                 ).props("dense outlined")
                 ui.label("Bins for threshold analysis").classes("text-xs text-gray-500 mt-1")
-                bin_slider = ui.slider(min=3, max=15, value=8, step=1).props("dense")
+                bin_slider = ui.slider(
+                    min=3,
+                    max=15,
+                    value=8,
+                    step=1,
+                ).props("dense")
 
             chart_area = ui.column().classes("mt-3 w-full gap-3")
 
@@ -726,6 +1359,7 @@ def _render_correlation_explorer(user_id=None):
                 label_x = ATTRIBUTE_LABELS.get(x_attr, x_attr)
                 label_y = ATTRIBUTE_LABELS.get(y_attr, y_attr)
 
+                # Scatter plot
                 with chart_area:
                     if scatter.get('n', 0) == 0:
                         ui.label("Not enough data to plot a scatter yet.").classes("text-xs text-gray-500")
@@ -741,6 +1375,7 @@ def _render_correlation_explorer(user_id=None):
                         fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
                         ui.plotly(fig)
 
+                # Correlation summary
                 with chart_area:
                     corr = stats.get('correlation')
                     p_val = stats.get('p_value')
@@ -751,12 +1386,13 @@ def _render_correlation_explorer(user_id=None):
                         f"Method: {meta.get('name', method.title())}",
                         f"r: {corr:.3f}" if corr is not None else "r: N/A",
                         f"p-value: {p_val:.4f}" if p_val is not None else "p-value: N/A",
-                        f"R^2: {r_sq:.3f}" if r_sq is not None else "R^2: N/A",
+                        f"r┬▓: {r_sq:.3f}" if r_sq is not None else "r┬▓: N/A",
                         f"Samples: {n}",
                     ]
                     ui.label("Correlation summary").classes("font-semibold text-sm mt-2")
                     ui.markdown("\n".join([f"- {line}" for line in summary_lines])).classes("text-xs")
 
+                # Threshold analysis
                 with chart_area:
                     bins_data = thresholds.get('bins') or []
                     if not bins_data:
@@ -768,15 +1404,9 @@ def _render_correlation_explorer(user_id=None):
                         best_max = thresholds.get('best_max')
                         best_min = thresholds.get('best_min')
                         if best_max:
-                            ui.label(
-                                f"Highest average: {best_max['range']} -> {best_max['dependent_avg']} "
-                                f"(n={best_max['count']})"
-                            ).classes("text-xs text-green-600")
+                            ui.label(f"Highest average: {best_max['range']} ΓåÆ {best_max['dependent_avg']} (n={best_max['count']})").classes("text-xs text-green-600")
                         if best_min:
-                            ui.label(
-                                f"Lowest average: {best_min['range']} -> {best_min['dependent_avg']} "
-                                f"(n={best_min['count']})"
-                            ).classes("text-xs text-red-600")
+                            ui.label(f"Lowest average: {best_min['range']} ΓåÆ {best_min['dependent_avg']} (n={best_min['count']})").classes("text-xs text-red-600")
 
             x_select.on('update:model-value', lambda e: render_correlation())
             y_select.on('update:model-value', lambda e: render_correlation())
@@ -788,18 +1418,18 @@ def _render_correlation_explorer(user_id=None):
 
 def _render_task_rankings(rankings_data=None, user_id=None):
     """Render task performance rankings.
-
+    
     Args:
         rankings_data: Optional pre-fetched rankings data (for batching)
         user_id: User ID for data isolation
     """
     ui.separator()
     ui.label("Task Performance Rankings").classes("text-xl font-semibold mt-4")
-
+    
     # Get rankings data if not provided
     if rankings_data is None:
         rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10, user_id=user_id)
-
+    
     with ui.row().classes("gap-4 flex-wrap mt-2"):
         # Top tasks by relief
         top_relief = rankings_data['relief_ranking']
@@ -810,7 +1440,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
             else:
                 for task in top_relief:
                     ui.label(f"{escape_for_display(task['task_name'])}: {task['metric_value']} (n={task['count']})").classes("text-sm")
-
+        
         # Top tasks by stress efficiency
         top_efficiency = rankings_data['stress_efficiency_ranking']
         with ui.card().classes("p-3 min-w-[250px]"):
@@ -820,7 +1450,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
             else:
                 for task in top_efficiency:
                     ui.label(f"{escape_for_display(task['task_name'])}: {task['metric_value']:.2f} (n={task['count']})").classes("text-sm")
-
+        
         # Top tasks by behavioral score
         top_behavioral = rankings_data['behavioral_score_ranking']
         with ui.card().classes("p-3 min-w-[250px]"):
@@ -830,7 +1460,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
             else:
                 for task in top_behavioral:
                     ui.label(f"{escape_for_display(task['task_name'])}: {task['metric_value']} (n={task['count']})").classes("text-sm")
-
+        
         # Lowest stress tasks
         low_stress = rankings_data['stress_level_ranking']
         with ui.card().classes("p-3 min-w-[250px]"):
@@ -844,7 +1474,7 @@ def _render_task_rankings(rankings_data=None, user_id=None):
 
 def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
     """Render stress efficiency leaderboard.
-
+    
     Args:
         leaderboard: Optional pre-fetched leaderboard data (for batching)
         user_id: User ID for data isolation
@@ -852,14 +1482,14 @@ def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
     ui.separator()
     ui.label("Stress Efficiency Leaderboard").classes("text-xl font-semibold mt-4")
     ui.label("Tasks that give you the most relief per unit of stress").classes("text-sm text-gray-500 mb-2")
-
+    
     if leaderboard is None:
         leaderboard = analytics_service.get_stress_efficiency_leaderboard(top_n=10, user_id=user_id)
-
+    
     if not leaderboard:
         ui.label("No data yet. Complete some tasks to see your stress efficiency leaders.").classes("text-xs text-gray-500")
         return
-
+    
     with ui.card().classes("p-3 w-full"):
         # Simple table using cards for better compatibility
         with ui.column().classes("w-full gap-1"):
@@ -880,566 +1510,6 @@ def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
                     ui.label(f"{task['avg_relief']:.1f}").classes("w-20 text-right")
                     ui.label(f"{task['avg_stress']:.1f}").classes("w-20 text-right")
                     ui.label(str(task['count'])).classes("w-16 text-right")
-
-
-def _build_analytics_main_content(
-    container,
-    page_data,
-    user_id_str,
-    user_state,
-    current_user_id,
-    render_time_chart,
-    render_attribute_box,
-    render_trends_section,
-    render_stress_metrics_section,
-    render_task_rankings,
-    render_stress_efficiency_leaderboard,
-    render_metric_comparison,
-    render_correlation_explorer,
-):
-    """Build main analytics content into container (called from deferred timer).
-    Render functions are passed in so the timer callback does not rely on module globals."""
-    metrics = page_data['dashboard_metrics']
-    relief_summary = page_data['relief_summary']
-    tracking_data = page_data['time_tracking']
-    with container:
-        # Time Tracking Consistency Section
-        with ui.card().classes("p-4 mb-4 bg-teal-50 border border-teal-200"):
-            ui.label("Time Tracking Consistency").classes("text-xl font-bold mb-2")
-            ui.label("Measures how well you track your time. Sleep up to 8 hours is rewarded. Untracked time is penalized.").classes(
-                "text-sm text-gray-600 mb-3"
-            )
-        
-            with ui.row().classes("gap-4 flex-wrap"):
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Tracking Score").classes("text-xs text-gray-500")
-                    ui.label(f"{tracking_data['tracking_consistency_score']:.1f}").classes(
-                        "text-2xl font-bold"
-                    )
-                    ui.label("/ 100").classes("text-xs text-gray-600")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Avg Tracked Time").classes("text-xs text-gray-500")
-                    tracked_hours = tracking_data['avg_tracked_time_minutes'] / 60.0
-                    ui.label(f"{tracked_hours:.1f} hrs").classes("text-lg font-semibold")
-                    ui.label(f"({tracking_data['avg_tracked_time_minutes']:.0f} min)").classes(
-                        "text-xs text-gray-600"
-                    )
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Avg Untracked Time").classes("text-xs text-gray-500")
-                    untracked_hours = tracking_data['avg_untracked_time_minutes'] / 60.0
-                    ui.label(f"{untracked_hours:.1f} hrs").classes("text-lg font-semibold text-orange-600")
-                    ui.label(f"({tracking_data['avg_untracked_time_minutes']:.0f} min)").classes(
-                        "text-xs text-gray-600"
-                    )
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Avg Sleep Time").classes("text-xs text-gray-500")
-                    sleep_hours = tracking_data['avg_sleep_time_minutes'] / 60.0
-                    ui.label(f"{sleep_hours:.1f} hrs").classes("text-lg font-semibold")
-                    ui.label(f"({tracking_data['avg_sleep_time_minutes']:.0f} min)").classes(
-                        "text-xs text-gray-600"
-                    )
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Tracking Coverage").classes("text-xs text-gray-500")
-                    coverage_pct = tracking_data['tracking_coverage'] * 100.0
-                    ui.label(f"{coverage_pct:.1f}%").classes("text-lg font-semibold")
-                    ui.label("of day tracked").classes("text-xs text-gray-600")
-        
-            ui.separator().classes("my-3")
-            ui.label(
-                "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
-                "Higher tracking consistency means more of your day is logged."
-            ).classes("text-sm text-gray-600")
-    
-        life_balance = metrics.get('life_balance', {})
-        with ui.row().classes("gap-3 flex-wrap mb-4"):
-            for title, value in [
-                ("Active", metrics['counts']['active']),
-                ("Completed 7d", metrics['counts']['completed_7d']),
-                ("Completion Rate", f"{metrics['counts']['completion_rate']}%"),
-                ("Today's self care tasks", metrics['counts']['daily_self_care_tasks']),
-                ("Avg Daily Self Care Tasks", f"{metrics['counts']['avg_daily_self_care_tasks']:.1f}"),
-                ("Time Est. Accuracy", f"{metrics['time']['estimation_accuracy']:.2f}x" if metrics['time']['estimation_accuracy'] > 0 else "N/A"),
-                ("Avg Relief", metrics['quality']['avg_relief']),
-                ("Avg Mental Energy", metrics['quality'].get('avg_mental_energy_needed', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
-                ("Avg Difficulty", metrics['quality'].get('avg_task_difficulty', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
-                ("Avg Stress Level", metrics['quality']['avg_stress_level']),
-                ("Avg Net Wellbeing", metrics['quality']['avg_net_wellbeing']),
-                ("Avg Net Wellbeing (Norm)", metrics['quality']['avg_net_wellbeing_normalized']),
-                ("Adjusted Wellbeing", f"{metrics['quality'].get('adjusted_wellbeing', 0.0):.1f}"),
-                ("Adjusted Wellbeing (Norm)", f"{metrics['quality'].get('adjusted_wellbeing_normalized', 50.0):.1f}"),
-                ("Avg Stress Efficiency", metrics['quality']['avg_stress_efficiency'] if metrics['quality']['avg_stress_efficiency'] is not None else "N/A"),
-                ("Avg Aversion", f"{metrics['quality'].get('avg_aversion', 0.0):.1f}"),
-                ("General Aversion Score", f"{metrics.get('aversion', {}).get('general_aversion_score', 0.0):.1f}"),
-                ("Avg Relief Score (No Mult)", f"{relief_summary.get('avg_relief_score_no_mult', 0.0):.1f}"),
-                ("Avg Relief Score (With Mult)", f"{relief_summary.get('avg_relief_duration_score', 0.0):.1f}"),
-                ("Total Relief Score (No Mult)", f"{relief_summary.get('total_relief_score_no_mult', 0.0):.1f}"),
-                ("Total Relief Score (With Mult)", f"{relief_summary.get('total_relief_score', 0.0):.1f}"),
-                ("Weekly Relief (Base)", f"{relief_summary.get('weekly_relief_score', 0.0):.1f}"),
-                ("Weekly Relief + Bonus (Robust)", f"{relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0):.1f}"),
-                ("Weekly Relief + Bonus (Sensitive)", f"{relief_summary.get('weekly_relief_score_with_bonus_sensitive', 0.0):.1f}"),
-                ("Total Productivity Score", f"{relief_summary.get('total_productivity_score', 0.0):.1f}"),
-                ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
-                ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
-                ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
-                ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
-                ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
-            ]:
-                with ui.card().classes("p-3 min-w-[150px]"):
-                    ui.label(title).classes("text-xs text-gray-500")
-                    ui.label(value).classes("text-xl font-bold")
-                    # Add link to thoroughness glossary for thoroughness metrics
-                    if title in ["Thoroughness Score", "Thoroughness Factor"]:
-                        ui.button("📚 Learn More", 
-                                on_click=lambda: ui.navigate.to('/analytics/glossary/thoroughness_factor')).classes(
-                            "text-xs bg-teal-500 text-white mt-1"
-                        )
-    
-        # Get target hours from settings for display
-        goal_settings = user_state.get_productivity_goal_settings(user_id_str)
-        goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
-        target_hours_per_day = goal_hours_per_week / 5.0  # Assume 5 work days
-    
-        # Productivity Volume Section
-        productivity_volume = metrics.get('productivity_volume', {})
-        with ui.card().classes("p-4 mb-4"):
-            ui.label("Productivity Volume Analysis").classes("text-xl font-bold mb-2")
-            ui.label("Metrics that account for both efficiency and total work volume").classes("text-sm text-gray-500 mb-3")
-            ui.label(f"Goal: {goal_hours_per_week:.1f} hours/week ({target_hours_per_day:.1f} hours/day)").classes("text-xs text-blue-600 font-semibold mb-2")
-        
-            with ui.row().classes("gap-4 flex-wrap"):
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Avg Daily Work Time").classes("text-xs text-gray-500")
-                    avg_work_time = productivity_volume.get('avg_daily_work_time', 0.0)
-                    ui.label(f"{avg_work_time:.1f} min").classes("text-lg font-semibold")
-                    ui.label(f"({avg_work_time/60:.1f} hours)").classes("text-xs text-gray-600")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Work Volume Score").classes("text-xs text-gray-500")
-                    volume_score = productivity_volume.get('work_volume_score', 0.0)
-                    ui.label(f"{volume_score:.1f}").classes("text-lg font-semibold")
-                    ui.label("(0-100 scale)").classes("text-xs text-gray-600")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Work Consistency").classes("text-xs text-gray-500")
-                    consistency = productivity_volume.get('work_consistency_score', 50.0)
-                    ui.label(f"{consistency:.1f}").classes("text-lg font-semibold")
-                    ui.label("(0-100 scale)").classes("text-xs text-gray-600")
-            
-                with ui.card().classes("p-3 min-w-[200px] border-2 border-blue-300"):
-                    ui.label("Productivity Potential").classes("text-xs text-gray-500 font-semibold")
-                    potential = productivity_volume.get('productivity_potential_score', 0.0)
-                    ui.label(f"{potential:.1f}").classes("text-2xl font-bold text-blue-600")
-                    ui.label(f"If you worked {target_hours_per_day:.1f} hrs/day (Volumetric)").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px] border-2 border-orange-300"):
-                    ui.label("Work Volume Gap").classes("text-xs text-gray-500 font-semibold")
-                    gap = productivity_volume.get('work_volume_gap', 0.0)
-                    ui.label(f"{gap:.1f} hours").classes("text-2xl font-bold text-orange-600")
-                    ui.label(f"Gap to {target_hours_per_day:.1f} hrs/day target").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px] border-2 border-green-300"):
-                    ui.label("Composite Productivity").classes("text-xs text-gray-500 font-semibold")
-                    composite = productivity_volume.get('composite_productivity_score', 0.0)
-                    ui.label(f"{composite:.1f}").classes("text-2xl font-bold text-green-600")
-                    ui.label("Efficiency + Volume + Consistency").classes("text-xs text-gray-400")
-        
-            # Add glossary link
-            with ui.row().classes("mt-2"):
-                ui.button("View Volumetric Productivity Glossary", 
-                         on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
-                    "text-xs bg-blue-500 text-white"
-                )
-        
-            # New Volumetric Productivity Section
-            ui.separator().classes("my-4")
-            with ui.row().classes("items-center gap-2 mb-2"):
-                ui.label("Volumetric Productivity (Volume-Integrated)").classes("text-lg font-semibold")
-                ui.button("View Glossary", 
-                         on_click=lambda: ui.navigate.to('/analytics/glossary/volumetric_productivity')).classes(
-                    "text-xs bg-green-500 text-white"
-                )
-        
-            ui.label("Productivity score that integrates volume factor to provide more accurate measurements.").classes("text-sm text-gray-500 mb-3")
-        
-            with ui.row().classes("gap-4 flex-wrap"):
-                with ui.card().classes("p-3 min-w-[200px] bg-gray-50"):
-                    ui.label("Base Productivity (Avg)").classes("text-xs text-gray-500 font-semibold")
-                    base_prod = productivity_volume.get('avg_base_productivity', 0.0)
-                    ui.label(f"{base_prod:.1f}").classes("text-lg font-semibold")
-                    ui.label("Per-task average").classes("text-xs text-gray-400 italic")
-            
-                with ui.card().classes("p-3 min-w-[200px] bg-green-100 border-2 border-green-300"):
-                    ui.label("Volumetric Productivity").classes("text-xs text-gray-700 font-bold")
-                    volumetric = productivity_volume.get('volumetric_productivity_score', 0.0)
-                    ui.label(f"{volumetric:.1f}").classes("text-2xl font-bold text-green-700")
-                    ui.label("Base × Volume Factor").classes("text-xs text-gray-600 italic")
-            
-                with ui.card().classes("p-3 min-w-[200px] bg-blue-100 border-2 border-blue-300"):
-                    ui.label("Volumetric Potential").classes("text-xs text-gray-700 font-bold")
-                    volumetric_pot = productivity_volume.get('volumetric_potential_score', 0.0)
-                    ui.label(f"{volumetric_pot:.1f}").classes("text-2xl font-bold text-blue-700")
-                    ui.label(f"At target volume ({target_hours_per_day:.1f} hrs/day)").classes("text-xs text-gray-600 italic")
-    
-        # Show warning if efficiency is high but volume is low
-        avg_efficiency = metrics.get('quality', {}).get('avg_stress_efficiency')
-        if avg_efficiency is not None and volume_score < 50 and avg_efficiency > 2.0:
-            with ui.card().classes("p-3 mb-4 bg-yellow-50 border-2 border-yellow-300"):
-                with ui.row().classes("items-center gap-2"):
-                    ui.icon("warning", size="md").classes("text-yellow-600")
-                    ui.label("High efficiency but low work volume detected").classes("font-semibold text-yellow-800")
-                ui.label(f"You're highly efficient (efficiency: {avg_efficiency:.2f}) but only working {avg_work_time/60:.1f} hours/day on average.").classes("text-sm text-yellow-700 mt-1")
-                ui.label(f"Working more could significantly increase your productivity. Gap: {gap:.1f} hours/day to reach {target_hours_per_day:.1f} hours/day target.").classes("text-sm text-yellow-700")
-    
-        # Life Balance Section
-        with ui.card().classes("p-4 mb-4"):
-            ui.label("Life Balance").classes("text-xl font-bold mb-2")
-            ui.label("Comparison of Work vs Play task amounts").classes("text-sm text-gray-500 mb-3")
-        
-            balance_score = life_balance.get('balance_score', 50.0)
-            work_count = life_balance.get('work_count', 0)
-            play_count = life_balance.get('play_count', 0)
-            self_care_count = life_balance.get('self_care_count', 0)
-            work_time = life_balance.get('work_time_minutes', 0.0)
-            play_time = life_balance.get('play_time_minutes', 0.0)
-            self_care_time = life_balance.get('self_care_time_minutes', 0.0)
-        
-            with ui.row().classes("gap-4 flex-wrap"):
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Balance Score").classes("text-xs text-gray-500")
-                    ui.label(f"{balance_score:.1f}").classes("text-2xl font-bold")
-                    ui.label("(50 = balanced)").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Work Tasks").classes("text-xs text-gray-500")
-                    ui.label(f"{work_count} tasks").classes("text-lg font-semibold")
-                    ui.label(f"{work_time:.1f} min").classes("text-sm text-gray-600")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Play Tasks").classes("text-xs text-gray-500")
-                    ui.label(f"{play_count} tasks").classes("text-lg font-semibold")
-                    ui.label(f"{play_time:.1f} min").classes("text-sm text-gray-600")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Self Care Tasks").classes("text-xs text-gray-500")
-                    ui.label(f"{self_care_count} tasks").classes("text-lg font-semibold")
-                    ui.label(f"{self_care_time:.1f} min").classes("text-sm text-gray-600")
-    
-        # Obstacles Overcome Section
-        with ui.card().classes("p-4 mb-4"):
-            ui.label("Overcoming Obstacles").classes("text-xl font-bold mb-2")
-            ui.label("Tracking spontaneous aversion spikes and rewards for overcoming them").classes("text-sm text-gray-500 mb-3")
-        
-            total_obstacles_robust = relief_summary.get('total_obstacles_score_robust', 0.0)
-            total_obstacles_sensitive = relief_summary.get('total_obstacles_score_sensitive', 0.0)
-            max_spike_robust = relief_summary.get('max_obstacle_spike_robust', 0.0)
-            max_spike_sensitive = relief_summary.get('max_obstacle_spike_sensitive', 0.0)
-            bonus_mult_robust = relief_summary.get('weekly_obstacles_bonus_multiplier_robust', 1.0)
-            bonus_mult_sensitive = relief_summary.get('weekly_obstacles_bonus_multiplier_sensitive', 1.0)
-        
-            with ui.row().classes("gap-4 flex-wrap"):
-                with ui.card().classes("p-3 min-w-[200px] border-2 border-blue-300"):
-                    ui.label("Total Obstacles Score (Robust)").classes("text-xs text-gray-500 font-semibold")
-                    ui.label(f"{total_obstacles_robust:.1f}").classes("text-2xl font-bold text-blue-600")
-                    ui.label("Median-based baseline").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px] border-2 border-purple-300"):
-                    ui.label("Total Obstacles Score (Sensitive)").classes("text-xs text-gray-500 font-semibold")
-                    ui.label(f"{total_obstacles_sensitive:.1f}").classes("text-2xl font-bold text-purple-600")
-                    ui.label("Trimmed mean baseline").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Max Obstacle Spike (Robust)").classes("text-xs text-gray-500")
-                    ui.label(f"{max_spike_robust:.1f}").classes("text-xl font-semibold")
-                    ui.label("This week").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Max Obstacle Spike (Sensitive)").classes("text-xs text-gray-500")
-                    ui.label(f"{max_spike_sensitive:.1f}").classes("text-xl font-semibold")
-                    ui.label("This week").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px] bg-green-50"):
-                    ui.label("Weekly Bonus Multiplier (Robust)").classes("text-xs text-gray-500")
-                    ui.label(f"{bonus_mult_robust:.2f}x").classes("text-xl font-bold text-green-600")
-                    if bonus_mult_robust > 1.0:
-                        bonus_pct = (bonus_mult_robust - 1.0) * 100
-                        ui.label(f"+{bonus_pct:.0f}% bonus").classes("text-xs text-green-600")
-                    else:
-                        ui.label("No bonus").classes("text-xs text-gray-400")
-            
-                with ui.card().classes("p-3 min-w-[200px] bg-green-50"):
-                    ui.label("Weekly Bonus Multiplier (Sensitive)").classes("text-xs text-gray-500")
-                    ui.label(f"{bonus_mult_sensitive:.2f}x").classes("text-xl font-bold text-green-600")
-                    if bonus_mult_sensitive > 1.0:
-                        bonus_pct = (bonus_mult_sensitive - 1.0) * 100
-                        ui.label(f"+{bonus_pct:.0f}% bonus").classes("text-xs text-green-600")
-                    else:
-                        ui.label("No bonus").classes("text-xs text-gray-400")
-    
-        # Aversion Analytics Section - Multiple Formula Comparison
-        with ui.card().classes("p-4 mb-4"):
-            ui.label("Aversion Analytics").classes("text-xl font-bold mb-2")
-            ui.label("Comparing different obstacles score formulas to understand how net relief and relief expectations affect scoring").classes("text-sm text-gray-500 mb-3")
-        
-            # Formula descriptions
-            formula_descriptions = {
-                'expected_only': 'Uses expected relief (decision-making context)',
-                'actual_only': 'Uses actual relief (outcome-based)',
-                'minimum': 'Uses min(expected, actual) - most conservative',
-                'average': 'Uses (expected + actual) / 2 - balanced',
-                'net_penalty': 'Uses expected, bonus if actual < expected (disappointment factor)',
-                'net_bonus': 'Uses expected, reduced if actual > expected (surprise benefit)',
-                'net_weighted': 'Uses expected, weighted by net relief factor'
-            }
-        
-            # Display scores in a grid
-            with ui.row().classes("gap-3 flex-wrap"):
-                score_variants = ['expected_only', 'actual_only', 'minimum', 'average', 'net_penalty', 'net_bonus', 'net_weighted']
-            
-                for variant in score_variants:
-                    robust_key = f'total_obstacles_{variant}_robust'
-                    sensitive_key = f'total_obstacles_{variant}_sensitive'
-                
-                    robust_score = relief_summary.get(robust_key, 0.0)
-                    sensitive_score = relief_summary.get(sensitive_key, 0.0)
-                
-                    with ui.card().classes("p-3 min-w-[220px] border border-gray-200"):
-                        # Variant name (formatted)
-                        variant_label = variant.replace('_', ' ').title()
-                        ui.label(variant_label).classes("text-xs font-semibold text-gray-700 mb-1")
-                    
-                        # Description
-                        ui.label(formula_descriptions.get(variant, '')).classes("text-xs text-gray-500 mb-2")
-                    
-                        # Scores
-                        with ui.row().classes("gap-2 items-center"):
-                            ui.label("Robust:").classes("text-xs text-gray-600")
-                            ui.label(f"{robust_score:.1f}").classes("text-sm font-bold text-blue-600")
-                    
-                        with ui.row().classes("gap-2 items-center"):
-                            ui.label("Sensitive:").classes("text-xs text-gray-600")
-                            ui.label(f"{sensitive_score:.1f}").classes("text-sm font-bold text-purple-600")
-
-        # Get all chart data in one batched call (Phase 2 optimization)
-        chart_data = analytics_service.get_chart_data(user_id=current_user_id)
-    
-        with ui.row().classes("analytics-grid flex-wrap w-full"):
-            render_time_chart(chart_data['trend_series'], user_id=current_user_id)
-            render_attribute_box(chart_data['attribute_distribution'], user_id=current_user_id)
-
-        render_trends_section(user_id=current_user_id)
-        render_stress_metrics_section(chart_data['stress_dimension_data'], user_id=current_user_id)
-    
-        # Get all rankings data in one batched call (Phase 2 optimization)
-        rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10, user_id=current_user_id)
-    
-        render_task_rankings(rankings_data, user_id=current_user_id)
-        render_stress_efficiency_leaderboard(rankings_data['stress_efficiency_leaderboard'], user_id=current_user_id)
-        render_metric_comparison(metrics, user_id=current_user_id)
-        render_correlation_explorer(user_id=current_user_id)
-
-
-def register_analytics_page():
-    @ui.page('/analytics')
-    def analytics_dashboard():
-        try:
-            from backend.instrumentation import log_page_visit
-            log_page_visit('/analytics')
-        except ImportError:
-            pass
-        build_analytics_page()
-    
-    @ui.page('/analytics/emotional-flow')
-    def emotional_flow_page():
-        build_emotional_flow_page()
-    
-    @ui.page('/analytics/factors-comparison')
-    def factors_comparison_page():
-        from ui.factors_comparison_analytics import build_factors_comparison_page
-        build_factors_comparison_page()
-
-
-def build_analytics_page():
-    page_start = time.perf_counter()
-    _analytics_build_start.append(page_start)
-    t_phase = time.perf_counter()
-    try:
-        from backend.instrumentation import log_analytics_event
-        log_analytics_event('analytics_page_load_start')
-    except ImportError:
-        pass
-
-    ui.add_head_html("<style>.analytics-grid { gap: 1rem; }</style>")
-    ui.label("Analytics Studio").classes("text-2xl font-bold mb-2")
-    ui.label("Explore how task qualities evolve and prototype recommendation filters.").classes(
-        "text-gray-500 mb-4"
-    )
-    
-    # Get current user_id
-    from backend.auth import get_current_user
-    current_user_id = get_current_user()
-    
-    # Analytics Module Navigation (no sync warm here - deferred load below keeps first paint fast)
-    t_phase = time.perf_counter()
-    with ui.card().classes("p-4 mb-4 bg-blue-50 border border-blue-200"):
-        ui.label("Analytics Modules").classes("text-lg font-semibold mb-2")
-        ui.label("Explore specialized analytics views for different aspects of your task data.").classes("text-sm text-gray-600 mb-3")
-        with ui.row().classes("gap-3 flex-wrap"):
-            ui.button("📊 Emotional Flow", on_click=lambda: ui.navigate.to('/analytics/emotional-flow')).classes("bg-purple-500 text-white")
-            ui.label("Track emotion changes and patterns").classes("text-xs text-gray-500 self-center")
-            ui.button("🔄 Relief Comparison", on_click=lambda: ui.navigate.to('/analytics/relief-comparison')).classes("bg-green-500 text-white")
-            ui.label("Compare expected vs actual relief").classes("text-xs text-gray-500 self-center")
-            ui.button("⚙️ Factors Comparison", on_click=lambda: ui.navigate.to('/analytics/factors-comparison')).classes("bg-teal-500 text-white")
-            ui.label("Analyze factors that influence scores").classes("text-xs text-gray-500 self-center")
-            ui.button("📋 Cancelled Tasks", on_click=lambda: ui.navigate.to('/cancelled-tasks')).classes("bg-orange-500 text-white")
-            ui.label("View cancelled task patterns and statistics").classes("text-xs text-gray-500 self-center")
-            ui.button("📈 Summary", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
-            ui.label("View overall performance score").classes("text-xs text-gray-500 self-center")
-            ui.button("📚 Analytics Glossary", on_click=lambda: ui.navigate.to('/analytics/glossary')).classes("bg-gray-500 text-white")
-            ui.label("Learn about metrics and formulas").classes("text-xs text-gray-500 self-center")
-    
-    # Composite Score Summary
-    from backend.user_state import UserStateManager
-    user_state = UserStateManager()
-    # Convert int user_id to string for UserStateManager methods
-    user_id_str = str(current_user_id) if current_user_id is not None else "default_user"
-    
-    current_weights = user_state.get_score_weights(user_id_str) or {}
-    
-    # Composite Score section - load asynchronously to avoid timeout
-    composite_container = ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200")
-    with composite_container:
-        loading_label = ui.label("Loading composite score...").classes("text-sm text-gray-500")
-        with ui.row().classes("items-center gap-4 w-full").style("display: none;") as composite_row:
-            ui.label("Composite Score").classes("text-lg font-semibold")
-            with ui.card().classes("p-3 bg-white border-2 border-indigo-300") as score_card:
-                score_label = ui.label("--").classes("text-3xl font-bold text-indigo-700")
-                ui.label("/ 100").classes("text-sm text-indigo-600")
-            ui.button("View Details", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
-            ui.button("Configure Weights", on_click=lambda: ui.navigate.to('/settings')).classes("bg-gray-500 text-white")
-    
-    def load_composite_score():
-        """Load composite score asynchronously."""
-        try:
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('load_composite_score_start')
-            except ImportError:
-                pass
-
-            get_scores_start = time.perf_counter()
-            all_scores = analytics_service.get_all_scores_for_composite(days=7, user_id=current_user_id)
-            get_scores_duration = (time.perf_counter() - get_scores_start) * 1000
-
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('get_all_scores_for_composite', duration_ms=get_scores_duration, score_count=len(all_scores))
-            except ImportError:
-                pass
-            
-            composite_result = analytics_service.calculate_composite_score(
-                components=all_scores,
-                weights=current_weights,
-                normalize_components=True
-            )
-            
-            # Update UI
-            loading_label.style("display: none;")
-            composite_row.style("display: flex;")
-            score_label.text = f"{composite_result['composite_score']:.1f}"
-
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('load_composite_score_complete', duration_ms=(time.perf_counter() - get_scores_start) * 1000)
-            except ImportError:
-                pass
-        except Exception as e:
-            handle_error_with_ui(
-                'load_composite_score',
-                e,
-                user_id=get_current_user()
-            )
-            loading_label.text = "Error loading composite score"
-            loading_label.classes("text-red-500")
-    
-    # Load composite score asynchronously
-    ui.timer(0.1, load_composite_score, once=True)
-
-    # Defer heavy analytics data load so page shell returns in ~1s (avoids NiceGUI connection timeout)
-    try:
-        from backend.instrumentation import log_analytics_event
-        log_analytics_event('phase_before_page_data', duration_ms=(time.perf_counter() - t_phase) * 1000)
-    except ImportError:
-        pass
-    loading_analytics_label = ui.label("Loading analytics...").classes("text-sm text-gray-500 mb-4")
-    error_row = ui.row().classes("items-center gap-2 mb-4").style("display: none;")
-    content_container = ui.column().classes("w-full")
-
-    # Capture in defaults so timer callback has them even if page scope is gone
-    def load_analytics_content(
-        _container=content_container,
-        _loading=loading_analytics_label,
-        _err_row=error_row,
-        _uid=current_user_id,
-        _uid_str=user_id_str,
-        _ustate=user_state,
-        _rtc=_render_time_chart,
-        _rab=_render_attribute_box,
-        _rts=_render_trends_section,
-        _rsms=_render_stress_metrics_section,
-        _rtr=_render_task_rankings,
-        _rsel=_render_stress_efficiency_leaderboard,
-        _rmc=_render_metric_comparison,
-        _rce=_render_correlation_explorer,
-    ):
-        import traceback
-        _err_row.style("display: none;")
-        _loading.style("display: block;")
-        _loading.text = "Loading analytics..."
-        _loading.classes("text-sm text-gray-500 mb-4")
-        try:
-            page_data_start = time.perf_counter()
-            page_data = analytics_service.get_analytics_page_data(days=7, user_id=_uid)
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('get_analytics_page_data', duration_ms=(time.perf_counter() - page_data_start) * 1000)
-            except ImportError:
-                pass
-            _loading.style("display: none;")
-            _build_analytics_main_content(
-                _container,
-                page_data,
-                _uid_str,
-                _ustate,
-                _uid,
-                render_time_chart=_rtc,
-                render_attribute_box=_rab,
-                render_trends_section=_rts,
-                render_stress_metrics_section=_rsms,
-                render_task_rankings=_rtr,
-                render_stress_efficiency_leaderboard=_rsel,
-                render_metric_comparison=_rmc,
-                render_correlation_explorer=_rce,
-            )
-        except Exception as e:
-            traceback.print_exc()
-            try:
-                handle_error_with_ui('load_analytics_content', e, user_id=_uid)
-            except Exception:
-                pass
-            _loading.style("display: none;")
-            _container.clear()
-            _err_row.clear()
-            with _err_row:
-                err_msg = str(e) if str(e) else type(e).__name__
-                ui.label(f"Error: {type(e).__name__}: {err_msg}").classes("text-red-500 text-sm")
-                ui.button("Retry", on_click=load_analytics_content).classes("text-sm")
-            _err_row.style("display: flex;")
-
-    ui.timer(0.1, load_analytics_content, once=True)
 
     try:
         from backend.instrumentation import log_analytics_event
@@ -1472,7 +1542,7 @@ def build_emotional_flow_page():
     
     # Navigation
     with ui.row().classes("gap-2 mb-4"):
-        ui.button("← Back to Analytics", on_click=lambda: ui.navigate.to('/analytics')).props("outlined")
+        ui.button("ΓåÉ Back to Analytics", on_click=lambda: ui.navigate.to('/analytics')).props("outlined")
         ui.label("Emotional Flow Analytics").classes("text-2xl font-bold")
     
     ui.label("Track how your emotions change from task start to completion, and discover patterns in your emotional responses.").classes(
@@ -1494,7 +1564,7 @@ def build_emotional_flow_page():
                 ui.label(title).classes("text-xs text-gray-500")
                 ui.label(value).classes("text-xl font-bold")
     
-    # Emotion transition chart (initialization → completion)
+    # Emotion transition chart (initialization ΓåÆ completion)
     _render_emotion_transitions(flow_data)
     
     # Emotional load vs relief scatter
@@ -1630,9 +1700,9 @@ def _render_emotional_load_vs_relief(flow_data):
         # Add interpretation
         with ui.card().classes("p-3 mt-3 bg-blue-50"):
             ui.label("Interpretation").classes("text-xs font-semibold text-blue-700 mb-1")
-            ui.label("• High emotional load + High relief = Meaningful accomplishment despite difficulty").classes("text-xs text-blue-600")
-            ui.label("• High emotional load + Low relief = Tasks that were stressful but not rewarding").classes("text-xs text-blue-600")
-            ui.label("• Low emotional load + High relief = Easy wins that feel good").classes("text-xs text-blue-600")
+            ui.label("ΓÇó High emotional load + High relief = Meaningful accomplishment despite difficulty").classes("text-xs text-blue-600")
+            ui.label("ΓÇó High emotional load + Low relief = Tasks that were stressful but not rewarding").classes("text-xs text-blue-600")
+            ui.label("ΓÇó Low emotional load + High relief = Easy wins that feel good").classes("text-xs text-blue-600")
 
 
 def _render_expected_vs_actual_emotional(flow_data):

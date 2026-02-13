@@ -830,19 +830,25 @@ class Analytics:
         actual_dicts = df['actual_dict'].tolist() if 'actual_dict' in df.columns else [{}] * n
         predicted_dicts = df['predicted_dict'].tolist() if 'predicted_dict' in df.columns else [{}] * n
         
-        # Pre-allocate arrays
-        completion_pct = np.zeros(n)
-        time_actual = np.zeros(n)
-        time_estimate = np.zeros(n)
-        
-        # Extract from dicts
-        for i in range(n):
-            ad = actual_dicts[i] if isinstance(actual_dicts[i], dict) else {}
-            pd_dict = predicted_dicts[i] if isinstance(predicted_dicts[i], dict) else {}
-            
-            completion_pct[i] = float(ad.get('completion_percent', 100) or 100)
-            time_actual[i] = float(ad.get('time_actual_minutes', 0) or 0)
-            time_estimate[i] = float(pd_dict.get('time_estimate_minutes', 0) or pd_dict.get('estimate', 0) or 0)
+        # Single-pass extraction from dicts (one list comp + one numpy array)
+        def _get(d: Any, key: str, default: float) -> float:
+            if not isinstance(d, dict):
+                return default
+            v = d.get(key, default)
+            return float(v) if v is not None else default
+
+        extracted = [
+            (
+                _get(ad, 'completion_percent', 100.0) or 100.0,
+                _get(ad, 'time_actual_minutes', 0.0) or 0.0,
+                _get(pd, 'time_estimate_minutes', 0.0) or _get(pd, 'estimate', 0.0) or 0.0,
+            )
+            for ad, pd in zip(actual_dicts, predicted_dicts)
+        ]
+        arr = np.array(extracted, dtype=np.float64)
+        completion_pct = arr[:, 0]
+        time_actual = arr[:, 1]
+        time_estimate = arr[:, 2]
         
         # Get task types and normalize
         task_types = df['task_type'].fillna('Work').astype(str).str.strip().str.lower().values if 'task_type' in df.columns else np.array(['work'] * n)
@@ -850,33 +856,32 @@ class Analytics:
         # Get status for cancelled check
         statuses = df['status'].fillna('active').astype(str).str.lower().values if 'status' in df.columns else np.array(['active'] * n)
         
-        # Get completed_at dates for lookups
-        completed_dates = []
+        # Get completed_at dates for lookups (vectorized: one pd.to_datetime call instead of n)
         if 'completed_at' in df.columns:
-            for ca in df['completed_at'].tolist():
-                try:
-                    dt = pd.to_datetime(ca)
-                    completed_dates.append(dt.date().isoformat() if pd.notna(dt) else '')
-                except (ValueError, TypeError):
-                    completed_dates.append('')
+            completed_dt = pd.to_datetime(df['completed_at'], errors='coerce')
+            date_ser = completed_dt.dt.strftime('%Y-%m-%d')
+            completed_dates = date_ser.fillna('').replace('NaT', '').tolist()
         else:
             completed_dates = [''] * n
         
-        # Pre-compute work/play time arrays for each row's date
-        work_time_today = np.zeros(n)
-        play_time_today = np.zeros(n)
+        # Pre-compute work/play time and self_care arrays (single pass each)
         if work_play_time_per_day:
-            for i, date_str in enumerate(completed_dates):
-                if date_str and date_str in work_play_time_per_day:
-                    day_data = work_play_time_per_day[date_str]
-                    work_time_today[i] = float(day_data.get('work_time', 0) or 0)
-                    play_time_today[i] = float(day_data.get('play_time', 0) or 0)
-        
-        # Pre-compute self care multipliers
-        self_care_multipliers = np.ones(n)
-        for i, date_str in enumerate(completed_dates):
-            if date_str and date_str in self_care_tasks_per_day:
-                self_care_multipliers[i] = float(self_care_tasks_per_day[date_str])
+            wp_pairs = [
+                (float(dd.get('work_time', 0) or 0), float(dd.get('play_time', 0) or 0))
+                for d in completed_dates
+                for dd in [work_play_time_per_day.get(d, {}) if d else {}]
+            ]
+            wp_arr = np.array(wp_pairs, dtype=np.float64)
+            work_time_today = wp_arr[:, 0]
+            play_time_today = wp_arr[:, 1]
+        else:
+            work_time_today = np.zeros(n, dtype=np.float64)
+            play_time_today = np.zeros(n, dtype=np.float64)
+
+        self_care_multipliers = np.array(
+            [float(self_care_tasks_per_day.get(d, 1)) if d else 1.0 for d in completed_dates],
+            dtype=np.float64
+        )
         
         # Load settings
         settings = productivity_settings or self.productivity_settings or {}
@@ -3877,7 +3882,12 @@ class Analytics:
         
         return expanded
     
-    def get_dashboard_metrics(self, metrics: Optional[List[str]] = None, user_id: Optional[int] = None) -> Dict[str, Dict[str, Optional[float]]]:
+    def get_dashboard_metrics(
+        self,
+        metrics: Optional[List[str]] = None,
+        user_id: Optional[int] = None,
+        instances_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, Dict[str, Optional[float]]]:
         """Get dashboard metrics, optionally calculating only specific metrics.
         
         Uses caching to avoid repeated calculations. Cache is TTL-based (5 minutes).
@@ -3890,6 +3900,7 @@ class Analytics:
                     - ['quality.avg_relief', 'quality.avg_stress_level']
                     - ['work_volume_score', 'completion_rate']
             user_id: Optional user_id. If None, gets from authenticated session.
+            instances_df: Optional pre-loaded instances (all). When provided, skips _load_instances.
         
         Returns:
             Dict with same structure as before, but only contains requested metrics (or all if metrics=None)
@@ -3946,7 +3957,10 @@ class Analytics:
             def needs_metric(key: str) -> bool:
                 return True
         
-        df = self._load_instances(user_id=user_id)
+        if instances_df is not None:
+            df = instances_df
+        else:
+            df = self._load_instances(user_id=user_id)
         if df.empty:
             return {
                 'counts': {'active': 0, 'completed_7d': 0, 'total_created': 0, 'total_completed': 0, 'completion_rate': 0.0, 'daily_self_care_tasks': 0, 'avg_daily_self_care_tasks': 0.0},
@@ -4740,11 +4754,12 @@ class Analytics:
         }
 
     def calculate_time_tracking_consistency_score(
-        self, 
+        self,
         days: int = 7,
         target_sleep_hours: float = 8.0,
-        user_id: Optional[int] = None
-    ) -> Dict[str, any]:
+        user_id: Optional[int] = None,
+        instances_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, Any]:
         """Calculate time tracking consistency score based on tracked vs untracked time.
         
         Penalizes untracked time (time not logged as work/play/self_care/sleep).
@@ -4761,6 +4776,7 @@ class Analytics:
             days: Number of days to analyze (default 7)
             target_sleep_hours: Target sleep hours per day to reward (default 8.0)
             user_id: Optional user_id. If None, gets from authenticated session.
+            instances_df: Optional pre-loaded instances. When provided, skips _load_instances.
             
         Returns:
             Dict with:
@@ -4788,7 +4804,10 @@ class Analytics:
             duration = (time.perf_counter() - start) * 1000
             print(f"[Analytics] calculate_time_tracking_consistency_score (cached): {duration:.2f}ms")
             return self._time_tracking_cache[cache_key].copy()
-        df = self._load_instances(user_id=user_id)
+        if instances_df is not None:
+            df = instances_df
+        else:
+            df = self._load_instances(user_id=user_id)
         
         if df.empty or user_id is None:
             return {
@@ -7479,13 +7498,18 @@ class Analytics:
         productivity_time = completed_last_7d['time_actual'].fillna(0).sum()
         return float(productivity_time)
 
-    def get_relief_summary(self, user_id: Optional[int] = None) -> Dict[str, any]:
+    def get_relief_summary(
+        self,
+        user_id: Optional[int] = None,
+        instances_completed_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, Any]:
         """Calculate relief points, productivity time, and relief statistics.
         
         Results are cached for 30 seconds to improve performance on repeated calls.
         
         Args:
             user_id: Optional user_id. If None, gets from authenticated session.
+            instances_completed_df: Optional pre-loaded completed instances. When provided, skips _load_instances.
         """
         user_id = self._get_user_id(user_id)
         import time as time_module
@@ -7553,10 +7577,12 @@ class Analytics:
         except: pass
         # #endregion
         
-        # Calculate fresh result with timing
-        # OPTIMIZATION: Only load completed instances (relief_summary only needs completed tasks)
+        # Use pre-loaded completed instances when provided (avoids redundant _load_instances in batched call)
         load_start = time_module.time()
-        df = self._load_instances(completed_only=True, user_id=user_id)
+        if instances_completed_df is not None:
+            df = instances_completed_df
+        else:
+            df = self._load_instances(completed_only=True, user_id=user_id)
         load_time = (time_module.time() - load_start) * 1000
         print(f"[Analytics] get_relief_summary: _load_instances (completed_only=True): {load_time:.2f}ms")
         
@@ -13883,15 +13909,21 @@ class Analytics:
         # Get user_id if not provided
         user_id = self._get_user_id(user_id)
 
-        # Get all three datasets (they may use caching internally)
+        # Load instances once and pass to all three sub-calls to avoid redundant _load_instances
+        # (reduces I/O and helps stay under NiceGUI connection timeout)
+        df_all = self._load_instances(user_id=user_id)
+        df_completed = self._load_instances(completed_only=True, user_id=user_id)
+
         t0 = time.perf_counter()
-        dashboard_metrics = self.get_dashboard_metrics(user_id=user_id)
+        dashboard_metrics = self.get_dashboard_metrics(user_id=user_id, instances_df=df_all)
         dm_ms = (time.perf_counter() - t0) * 1000
         t0 = time.perf_counter()
-        relief_summary = self.get_relief_summary(user_id=user_id)
+        relief_summary = self.get_relief_summary(user_id=user_id, instances_completed_df=df_completed)
         rs_ms = (time.perf_counter() - t0) * 1000
         t0 = time.perf_counter()
-        time_tracking = self.calculate_time_tracking_consistency_score(days=days, user_id=user_id)
+        time_tracking = self.calculate_time_tracking_consistency_score(
+            days=days, user_id=user_id, instances_df=df_all
+        )
         tt_ms = (time.perf_counter() - t0) * 1000
 
         duration = (time.perf_counter() - start) * 1000

@@ -384,5 +384,13 @@ if __name__ in {"__main__", "__mp_main__"}:
     print("[Backend] Storage: " + _backend_label())
     print("---")
     print("")
-    ui.run(title='Task Aversion System', port=8080, host=host, reload=False, storage_secret=storage_secret)
+    # timeout_keep_alive=5: allow slower analytics page load without connection drop (default ~3s can trigger "Response not ready")
+    ui.run(
+        title='Task Aversion System',
+        port=8080,
+        host=host,
+        reload=False,
+        storage_secret=storage_secret,
+        timeout_keep_alive=5,
+    )
 
