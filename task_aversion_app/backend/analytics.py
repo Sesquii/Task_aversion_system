@@ -44,6 +44,8 @@ class Analytics:
     # User-specific caches: {user_id: cache_value}
     _relief_summary_cache = {}  # {user_id: cache_value}
     _relief_summary_cache_time = {}  # {user_id: timestamp}
+    _life_balance_cache: Dict[str, Dict[str, Any]] = {}  # {user_id: cache_value}
+    _life_balance_cache_time: Dict[str, float] = {}  # {user_id: timestamp}
     _composite_scores_cache = {}  # {user_id: cache_value}
     _composite_scores_cache_time = {}  # {user_id: timestamp}
     _cache_ttl_seconds = 300  # Cache for 5 minutes (optimized for dashboard performance)
@@ -3044,10 +3046,12 @@ class Analytics:
         self._leaderboard_cache.clear()
         self._leaderboard_cache_time.clear()
         self._leaderboard_cache_top_n.clear()
-        # Also invalidate relief_summary cache since it depends on instances
+        # Also invalidate relief_summary and life_balance caches since they depend on instances
         Analytics._relief_summary_cache.clear()
         Analytics._relief_summary_cache_time.clear()
-    
+        Analytics._life_balance_cache.clear()
+        Analytics._life_balance_cache_time.clear()
+
     @staticmethod
     def _invalidate_relief_summary_cache(user_id: Optional[int] = None):
         """Invalidate the relief_summary cache. Call this when productivity/relief calculations need refresh.
@@ -4356,128 +4360,91 @@ class Analytics:
         print(f"[Analytics] get_dashboard_metrics: {duration:.2f}ms")
         return result
 
-    def get_life_balance(self, user_id: Optional[int] = None) -> Dict[str, any]:
+    def get_life_balance(self, user_id: Optional[int] = None) -> Dict[str, Any]:
         """Calculate life balance metric comparing work and play task amounts.
-        
+
+        Optimized: loads only completed instances, uses single-pass aggregation,
+        and caches result for TTL to reduce repeated work from get_dashboard_metrics.
+
         Args:
             user_id: Optional user_id. If None, gets from authenticated session.
-        
+
         Returns:
             Dict with work_count, play_count, work_time_minutes, play_time_minutes,
             balance_score (0-100, where 50 = balanced), and ratio
         """
         user_id = self._get_user_id(user_id)
-        df = self._load_instances(user_id=user_id)
-        
+        import time as time_module
+        cache_key = str(user_id) if user_id is not None else "default"
+        current_time = time_module.time()
+        if (cache_key in Analytics._life_balance_cache and
+                cache_key in Analytics._life_balance_cache_time and
+                (current_time - Analytics._life_balance_cache_time[cache_key]) < self._cache_ttl_seconds):
+            return Analytics._life_balance_cache[cache_key]
+
+        empty_result = {
+            'work_count': 0,
+            'play_count': 0,
+            'self_care_count': 0,
+            'work_time_minutes': 0.0,
+            'play_time_minutes': 0.0,
+            'self_care_time_minutes': 0.0,
+            'balance_score': 50.0,
+            'work_play_ratio': 0.0,
+        }
+
+        # Load only completed instances (avoids loading all instances + slow completed_at filter)
+        df = self._load_instances(completed_only=True, user_id=user_id)
         if df.empty:
-            return {
-                'work_count': 0,
-                'play_count': 0,
-                'self_care_count': 0,
-                'work_time_minutes': 0.0,
-                'play_time_minutes': 0.0,
-                'self_care_time_minutes': 0.0,
-                'balance_score': 50.0,
-                'work_play_ratio': 0.0,
-            }
-        
-        # Load tasks to get task_type
+            return empty_result
+
         from .task_manager import TaskManager
         task_manager = TaskManager()
         tasks_df = task_manager.get_all(user_id=user_id)
-        
         if tasks_df.empty or 'task_type' not in tasks_df.columns:
-            return {
-                'work_count': 0,
-                'play_count': 0,
-                'self_care_count': 0,
-                'work_time_minutes': 0.0,
-                'play_time_minutes': 0.0,
-                'self_care_time_minutes': 0.0,
-                'balance_score': 50.0,
-                'work_play_ratio': 0.0,
-            }
-        
-        # Join instances with tasks to get task_type
+            return empty_result
+
         merged = df.merge(
             tasks_df[['task_id', 'task_type']],
             on='task_id',
             how='left'
         )
-        
-        # Filter to completed tasks only
-        if 'completed_at' not in merged.columns:
-            return {
-                'work_count': 0,
-                'play_count': 0,
-                'self_care_count': 0,
-                'work_time_minutes': 0.0,
-                'play_time_minutes': 0.0,
-                'self_care_time_minutes': 0.0,
-                'balance_score': 50.0,
-                'work_play_ratio': 0.0,
-            }
-        completed = merged[merged['completed_at'].astype(str).str.len() > 0].copy()
-        
-        if completed.empty:
-            return {
-                'work_count': 0,
-                'play_count': 0,
-                'self_care_count': 0,
-                'work_time_minutes': 0.0,
-                'play_time_minutes': 0.0,
-                'self_care_time_minutes': 0.0,
-                'balance_score': 50.0,
-                'work_play_ratio': 0.0,
-            }
-        
-        # Fill missing task_type with 'Work' as default
-        completed['task_type'] = completed['task_type'].fillna('Work')
-        
-        # Normalize task_type to lowercase for comparison
-        completed['task_type_normalized'] = completed['task_type'].astype(str).str.strip().str.lower()
-        
-        # Get duration in minutes
-        completed['duration_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce').fillna(0.0)
-        
-        # Count tasks by type (case-insensitive)
-        work_tasks = completed[completed['task_type_normalized'] == 'work']
-        play_tasks = completed[completed['task_type_normalized'] == 'play']
-        self_care_tasks = completed[completed['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])]
-        
-        work_count = len(work_tasks)
-        play_count = len(play_tasks)
-        self_care_count = len(self_care_tasks)
-        
-        # Calculate time spent
-        work_time = work_tasks['duration_numeric'].sum()
-        play_time = play_tasks['duration_numeric'].sum()
-        self_care_time = self_care_tasks['duration_numeric'].sum()
-        
-        # Calculate work/play ratio (work / (work + play))
+        if merged.empty:
+            return empty_result
+
+        # Single-pass: normalize type and duration once, then aggregate with masks
+        task_type = merged['task_type'].fillna('Work').astype(str).str.strip().str.lower()
+        duration_numeric = pd.to_numeric(merged['duration_minutes'], errors='coerce').fillna(0.0)
+
+        work_mask = (task_type == 'work')
+        play_mask = (task_type == 'play')
+        self_care_mask = task_type.isin(['self care', 'selfcare', 'self-care'])
+
+        work_count = int(work_mask.sum())
+        play_count = int(play_mask.sum())
+        self_care_count = int(self_care_mask.sum())
+
+        work_time = float(duration_numeric.where(work_mask, 0.0).sum())
+        play_time = float(duration_numeric.where(play_mask, 0.0).sum())
+        self_care_time = float(duration_numeric.where(self_care_mask, 0.0).sum())
+
         total_work_play_time = work_time + play_time
-        if total_work_play_time > 0:
-            work_play_ratio = work_time / total_work_play_time
-        else:
-            work_play_ratio = 0.5  # Neutral if no data
-        
-        # Calculate balance score (0-100 scale)
-        # 50 = perfectly balanced (50% work, 50% play)
-        # 0 = all play, 100 = all work
-        # Formula: 50 + (work_play_ratio - 0.5) * 100
-        balance_score = 50.0 + ((work_play_ratio - 0.5) * 100.0)
-        balance_score = max(0.0, min(100.0, balance_score))
-        
-        return {
-            'work_count': int(work_count),
-            'play_count': int(play_count),
-            'self_care_count': int(self_care_count),
-            'work_time_minutes': round(float(work_time), 1),
-            'play_time_minutes': round(float(play_time), 1),
-            'self_care_time_minutes': round(float(self_care_time), 1),
+        work_play_ratio = (work_time / total_work_play_time) if total_work_play_time > 0 else 0.5
+        balance_score = max(0.0, min(100.0, 50.0 + (work_play_ratio - 0.5) * 100.0))
+
+        result = {
+            'work_count': work_count,
+            'play_count': play_count,
+            'self_care_count': self_care_count,
+            'work_time_minutes': round(work_time, 1),
+            'play_time_minutes': round(play_time, 1),
+            'self_care_time_minutes': round(self_care_time, 1),
             'balance_score': round(balance_score, 1),
             'work_play_ratio': round(work_play_ratio, 3),
         }
+        Analytics._life_balance_cache[cache_key] = result
+        Analytics._life_balance_cache_time[cache_key] = time_module.time()
+        return result
 
     def get_daily_work_volume_metrics(self, days: int = 30, user_id: Optional[int] = None) -> Dict[str, any]:
         """Calculate daily work volume metrics including average work time, volume score, and consistency.

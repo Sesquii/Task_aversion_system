@@ -68,13 +68,29 @@ for ca in df['completed_at'].tolist():
 ```
 Could vectorize with `pd.to_datetime(df['completed_at'])` and batch lookups.
 
-### 2. Analytics Page (~2.8s)
-Not yet profiled. Likely candidates:
-- Chart data generation (Plotly)
-- Multiple analytics method calls
-- Historical data aggregation
+### 2. Analytics Page (~2.8s) - PROFILED 2026-02-13
+Run: `python scripts/performance/profile_analytics_page.py -o data/logs/analytics_profile.txt`
 
-**Next step:** Add profiling to analytics page to identify hotspots.
+**Cold load profile (4.6s total, includes import overhead):**
+
+| Function | Cumulative | % of total |
+|----------|------------|------------|
+| get_analytics_page_data | 2.70s | 59% |
+| get_dashboard_metrics | 2.26s | 49% |
+| get_life_balance | 1.87s | 41% |
+| get_relief_summary | 418ms | 9% |
+| _load_instances (16 calls) | 560ms | 12% |
+| pd.to_datetime (1122 calls) | 444ms | 10% |
+| calculate_productivity_scores_batch | 225ms | 5% |
+
+**Top optimization targets:**
+1. **get_life_balance** – 1.87s, called from get_dashboard_metrics. Primary hotspot.
+2. **get_dashboard_metrics** – 2.26s total; optimize get_life_balance and any other heavy subcalls.
+3. **pd.to_datetime** – 1122 calls, 444ms. Vectorize or cache date parsing.
+4. **get_relief_summary** – 418ms. Partially optimized; consider further batching.
+5. **calculate_productivity_scores_batch** – 225ms. Date parsing loop could be vectorized.
+
+**Note:** Profile run had empty _load_instances (no auth in standalone script). With real data, _load_instances and downstream costs may be higher.
 
 ### 3. OAuth → Basic UI (~1s)
 Initial load includes:

@@ -1,8 +1,10 @@
 from nicegui import ui
+import json
+import os
+import time
+
 import pandas as pd
 import plotly.express as px
-import time
-import json
 
 from backend.analytics import Analytics
 from backend.task_schema import TASK_ATTRIBUTES
@@ -45,6 +47,9 @@ ATTRIBUTE_OPTIONS = NUMERIC_ATTRIBUTE_OPTIONS + CALCULATED_METRICS
 ATTRIBUTE_LABELS = {opt['value']: opt['label'] for opt in ATTRIBUTE_OPTIONS}
 ATTRIBUTE_OPTIONS_DICT = {opt['value']: opt['label'] for opt in ATTRIBUTE_OPTIONS}
 
+# Module-level timing for analytics page build (so finally block can read it regardless of scope)
+_analytics_build_start: list = []
+
 
 def register_analytics_page():
     @ui.page('/analytics')
@@ -67,13 +72,14 @@ def register_analytics_page():
 
 
 def build_analytics_page():
+    page_start = time.perf_counter()
+    _analytics_build_start.append(page_start)
+    t_phase = time.perf_counter()
     try:
         from backend.instrumentation import log_analytics_event
         log_analytics_event('analytics_page_load_start')
     except ImportError:
         pass
-    page_start = time.perf_counter()
-    t_phase = time.perf_counter()  # For phase timing
 
     ui.add_head_html("<style>.analytics-grid { gap: 1rem; }</style>")
     ui.label("Analytics Studio").classes("text-2xl font-bold mb-2")
@@ -1507,11 +1513,23 @@ def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
 
     try:
         from backend.instrumentation import log_analytics_event
-        total_ms = (time.perf_counter() - page_start) * 1000
-        log_analytics_event('analytics_page_build_complete', duration_ms=total_ms)
         log_analytics_event('phase_ui_after_page_data', duration_ms=(time.perf_counter() - t_phase) * 1000)
     except (ImportError, NameError):
         pass
+    finally:
+        # Use module-level start so duration is correct even when local page_start is not in scope (e.g. NiceGUI context)
+        if _analytics_build_start:
+            total_ms = (time.perf_counter() - _analytics_build_start.pop()) * 1000
+        else:
+            total_ms = 0.0
+        # Always log total page load time (even if an exception occurred during UI build)
+        try:
+            from backend.instrumentation import log_analytics_event, is_analytics_enabled
+            log_analytics_event('analytics_page_build_complete', duration_ms=total_ms)
+            if is_analytics_enabled():
+                print(f"[Analytics] Page load (sync build): {total_ms:.2f}ms")
+        except (ImportError, NameError):
+            pass
 
 
 def build_emotional_flow_page():

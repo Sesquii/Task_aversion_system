@@ -4,7 +4,7 @@ Instrumentation for debugging page refresh, navigation, cache invalidation, and 
 Enable via environment variables:
 - INSTRUMENT_NAVIGATION=1  - Log all ui.navigate.to(), ui.navigate.reload() calls (refresh/navigation debugging)
 - INSTRUMENT_CACHE=1       - Log all cache invalidations (Analytics, TaskManager, InstanceManager)
-- INSTRUMENT_ANALYTICS=1   - Log analytics page load timing and hot functions
+- INSTRUMENT_ANALYTICS=1   - Log analytics page load timing and hot functions; also prints "[Analytics] Page load (sync build): Xms" to console on each /analytics load
 
 Use separate log files for different debugging sessions:
 - INSTRUMENT_LOG_NAV=path  - Override nav log path (default: data/logs/instrumentation_navigation.log)
