@@ -5858,9 +5858,17 @@ def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
         if current_task:
             inst_id = current_task.get('instance_id')
             task_name = current_task.get('task_name') or 'Task'
+            pred = current_task.get('predicted') or '{}'
+            try:
+                pred_data = json.loads(pred) if isinstance(pred, str) else pred
+            except (json.JSONDecodeError, TypeError):
+                pred_data = {}
+            task_desc = (pred_data.get('description') or '').strip()
             with ui.card().classes('w-full p-4 bg-blue-50 border-blue-200'):
                 ui.label('Current task').classes('text-xs text-gray-600')
                 ui.label(task_name).classes('font-semibold')
+                if task_desc:
+                    ui.label(task_desc).classes('text-sm text-gray-600')
                 try:
                     import pandas as pd
                     started = current_task.get('started_at')
@@ -6053,9 +6061,17 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
                     if current_task:
                         inst_id = current_task.get('instance_id')
                         task_name = current_task.get('task_name') or 'Task'
+                        pred = current_task.get('predicted') or '{}'
+                        try:
+                            pred_data = json.loads(pred) if isinstance(pred, str) else pred
+                        except (json.JSONDecodeError, TypeError):
+                            pred_data = {}
+                        task_desc = (pred_data.get('description') or '').strip()
                         with ui.card().classes('w-full p-3 bg-blue-50 border-blue-200'):
                             ui.label('Current task').classes('text-xs text-gray-600')
                             ui.label(task_name).classes('font-semibold text-sm')
+                            if task_desc:
+                                ui.label(task_desc).classes('text-xs text-gray-600')
                             try:
                                 import pandas as pd
                                 started = current_task.get('started_at')
