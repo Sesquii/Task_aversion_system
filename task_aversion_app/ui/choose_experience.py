@@ -16,12 +16,9 @@ def choose_experience_page():
         ui.navigate.to('/login')
         return
 
-    def set_mode(ui_mode: str, mobile_version: str = ''):
+    def set_mode(ui_mode: str):
         # Pass in URL so index can set storage before rendering (avoids race with storage sync)
-        if ui_mode == 'mobile' and mobile_version in ('a', 'b'):
-            ui.navigate.to(f'/?ui_mode=mobile&mobile_version={mobile_version}')
-        else:
-            ui.navigate.to(f'/?ui_mode={ui_mode}')
+        ui.navigate.to(f'/?ui_mode={ui_mode}')
 
     with ui.column().classes('w-full max-w-md mx-auto mt-16 gap-6'):
         ui.label('How will you use the app on this device?').classes(
@@ -38,14 +35,9 @@ def choose_experience_page():
                 icon='computer',
             ).classes('w-full text-lg py-3')
             ui.button(
-                'Use on this device: Mobile (Version A)',
-                on_click=lambda: set_mode('mobile', 'a'),
+                'Use on this device: Mobile',
+                on_click=lambda: set_mode('mobile'),
                 icon='phone_android',
-            ).classes('w-full text-lg py-3')
-            ui.button(
-                'Use on this device: Mobile (Version B)',
-                on_click=lambda: set_mode('mobile', 'b'),
-                icon='apps',
             ).classes('w-full text-lg py-3')
 
         ui.label('You can change this later in Settings.').classes(

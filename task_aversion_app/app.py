@@ -20,7 +20,7 @@ from backend.emotion_manager import EmotionManager
 from backend.routine_scheduler import start_scheduler
 from backend.auth import get_current_user, oauth_callback
 
-from ui.dashboard import build_dashboard, build_dashboard_mobile_a, build_dashboard_mobile_b
+from ui.dashboard import build_dashboard, build_dashboard_mobile_b
 from ui.create_task import create_task_page
 from ui.initialize_task import initialize_task_page
 from ui.complete_task import complete_task_page
@@ -86,17 +86,12 @@ def register_pages():
             ui.navigate.to('/login')
             return
 
-        # Per-device UI mode: allow query param from choose-experience (avoids storage sync race)
+        # Per-device UI mode: allow query param from choose-experience or settings (avoids storage sync race)
         ui_mode = request.query_params.get('ui_mode')
-        mobile_version = request.query_params.get('mobile_version')
         if ui_mode in ('mobile', 'desktop'):
             app.storage.browser['ui_mode'] = ui_mode
-            if ui_mode == 'mobile' and mobile_version in ('a', 'b'):
-                app.storage.browser['mobile_version'] = mobile_version
         else:
             ui_mode = app.storage.browser.get('ui_mode')
-        if ui_mode == 'mobile':
-            mobile_version = app.storage.browser.get('mobile_version') or 'a'
 
         if not ui_mode or ui_mode not in ('mobile', 'desktop'):
             ui.navigate.to('/choose-experience')
@@ -107,10 +102,7 @@ def register_pages():
             return
         try:
             if ui_mode == 'mobile':
-                if mobile_version == 'b':
-                    build_dashboard_mobile_b(task_manager, user_id=user_id)
-                else:
-                    build_dashboard_mobile_a(task_manager, user_id=user_id)
+                build_dashboard_mobile_b(task_manager, user_id=user_id)
             else:
                 build_dashboard(task_manager, user_id=user_id)
         except Exception as e:

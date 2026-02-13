@@ -103,7 +103,9 @@ def _build_settings_content(user_id):
         def set_ui_mode(mode: str):
             app.storage.browser["ui_mode"] = mode
             label = "Desktop" if mode == "desktop" else "Mobile"
-            ui.notify(f"Using {label} layout on this device. Applies on next dashboard visit.", color="positive")
+            ui.notify(f"Using {label} layout on this device.", color="positive")
+            # Navigate with query param so dashboard receives mode (avoids storage sync race)
+            ui.navigate.to(f"/?ui_mode={mode}")
 
         with ui.row().classes("gap-2"):
             ui.button(
@@ -117,18 +119,7 @@ def _build_settings_content(user_id):
                 on_click=lambda: set_ui_mode("mobile"),
             ).classes("flex-1")
         ui.label(f"Current: {current_mode.capitalize()}").classes("text-xs text-gray-500")
-        current_mobile_version = app.storage.browser.get("mobile_version") or "a"
-
-        def set_mobile_version(version: str):
-            app.storage.browser["mobile_version"] = version
-            ui.notify(f"Using Mobile Version {version.upper()}. Applies on next dashboard visit.", color="positive")
-
-        with ui.row().classes("gap-2 mt-2"):
-            ui.label("Mobile version (when using Mobile layout):").classes("text-xs text-gray-600")
-            ui.button("Version A", on_click=lambda: set_mobile_version("a")).props("dense size=sm").classes("text-xs")
-            ui.button("Version B", on_click=lambda: set_mobile_version("b")).props("dense size=sm").classes("text-xs")
-        ui.label(f"Current mobile version: {current_mobile_version.upper()}").classes("text-xs text-gray-500")
-        ui.label("Change applies when you open the dashboard again.").classes("text-xs text-gray-500")
+        ui.label("Click a button to switch and go to the dashboard.").classes("text-xs text-gray-500")
 
     with ui.card().classes("w-full max-w-xl p-4 gap-3"):
         ui.label("Surveys").classes("text-lg font-semibold")
