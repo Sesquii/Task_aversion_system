@@ -195,6 +195,11 @@ def clear_all_caches():
     This includes Analytics, InstanceManager, and TaskManager caches.
     """
     try:
+        from backend.instrumentation import log_cache_invalidation
+        log_cache_invalidation('Auth', 'clear_all_caches')
+    except ImportError:
+        pass
+    try:
         # Clear Analytics class-level caches
         try:
             from backend.analytics import Analytics

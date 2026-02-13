@@ -3004,6 +3004,11 @@ class Analytics:
         Args:
             user_id: Optional user_id to invalidate cache for specific user. If None, clears all user caches.
         """
+        try:
+            from backend.instrumentation import log_cache_invalidation
+            log_cache_invalidation('Analytics', '_invalidate_instances_cache', user_id=user_id)
+        except ImportError:
+            pass
         if user_id is not None:
             cache_key = str(user_id)
             if cache_key in self._instances_cache_all:
@@ -3050,6 +3055,11 @@ class Analytics:
         Args:
             user_id: Optional user_id to invalidate cache for specific user. If None, clears all user caches.
         """
+        try:
+            from backend.instrumentation import log_cache_invalidation
+            log_cache_invalidation('Analytics', '_invalidate_relief_summary_cache', user_id=user_id)
+        except ImportError:
+            pass
         if user_id is not None:
             cache_key = str(user_id)
             if cache_key in Analytics._relief_summary_cache:
@@ -13902,17 +13912,30 @@ class Analytics:
         """
         import time
         start = time.perf_counter()
-        
+
         # Get user_id if not provided
         user_id = self._get_user_id(user_id)
-        
+
         # Get all three datasets (they may use caching internally)
+        t0 = time.perf_counter()
         dashboard_metrics = self.get_dashboard_metrics(user_id=user_id)
+        dm_ms = (time.perf_counter() - t0) * 1000
+        t0 = time.perf_counter()
         relief_summary = self.get_relief_summary(user_id=user_id)
+        rs_ms = (time.perf_counter() - t0) * 1000
+        t0 = time.perf_counter()
         time_tracking = self.calculate_time_tracking_consistency_score(days=days, user_id=user_id)
-        
+        tt_ms = (time.perf_counter() - t0) * 1000
+
         duration = (time.perf_counter() - start) * 1000
         print(f"[Analytics] get_analytics_page_data (batched): {duration:.2f}ms")
+        try:
+            from backend.instrumentation import log_analytics_event
+            log_analytics_event('get_analytics_page_data_breakdown', duration_ms=duration,
+                               dashboard_metrics_ms=round(dm_ms, 2), relief_summary_ms=round(rs_ms, 2),
+                               time_tracking_ms=round(tt_ms, 2))
+        except ImportError:
+            pass
         
         return {
             'dashboard_metrics': dashboard_metrics,

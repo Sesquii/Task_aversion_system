@@ -87,6 +87,11 @@ class TaskManager:
     
     def _invalidate_task_caches(self):
         """Invalidate all task caches. Call this when tasks are created/updated/deleted."""
+        try:
+            from backend.instrumentation import log_cache_invalidation
+            log_cache_invalidation('TaskManager', '_invalidate_task_caches')
+        except ImportError:
+            pass
         # Clear old-style cache attributes
         self._tasks_list_cache = None
         self._tasks_list_cache_time = None

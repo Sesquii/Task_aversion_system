@@ -23,9 +23,14 @@ def initialize_task_page(task_manager, emotion_manager):
 
     @ui.page('/initialize-task')
     def page(request: Request):
+        try:
+            from backend.instrumentation import log_page_visit
+            log_page_visit('/initialize-task', query=str(request.query_params))
+        except ImportError:
+            pass
         page_start_time = time.perf_counter()
         perf_logger.log_event("initialize_task_page_load_start", instance_id=request.query_params.get("instance_id"))
-        
+
         params = request.query_params  # ✅
 
         instance_id = params.get("instance_id")

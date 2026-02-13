@@ -49,6 +49,11 @@ ATTRIBUTE_OPTIONS_DICT = {opt['value']: opt['label'] for opt in ATTRIBUTE_OPTION
 def register_analytics_page():
     @ui.page('/analytics')
     def analytics_dashboard():
+        try:
+            from backend.instrumentation import log_page_visit
+            log_page_visit('/analytics')
+        except ImportError:
+            pass
         build_analytics_page()
     
     @ui.page('/analytics/emotional-flow')
@@ -62,6 +67,14 @@ def register_analytics_page():
 
 
 def build_analytics_page():
+    try:
+        from backend.instrumentation import log_analytics_event
+        log_analytics_event('analytics_page_load_start')
+    except ImportError:
+        pass
+    page_start = time.perf_counter()
+    t_phase = time.perf_counter()  # For phase timing
+
     ui.add_head_html("<style>.analytics-grid { gap: 1rem; }</style>")
     ui.label("Analytics Studio").classes("text-2xl font-bold mb-2")
     ui.label("Explore how task qualities evolve and prototype recommendation filters.").classes(
@@ -75,10 +88,19 @@ def build_analytics_page():
     # Batch 3: Warm instances cache once so all _load_instances in this request hit cache (avoids N+1)
     try:
         if current_user_id is not None and hasattr(analytics_service, '_load_instances'):
+            warm_start = time.perf_counter()
             analytics_service._load_instances(user_id=current_user_id)
             analytics_service._load_instances(completed_only=True, user_id=current_user_id)
+            try:
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('phase_initial_ui_and_warm', duration_ms=(time.perf_counter() - t_phase) * 1000)
+                log_analytics_event('warm_instances_cache', duration_ms=(time.perf_counter() - warm_start) * 1000)
+            except ImportError:
+                pass
+        t_phase = time.perf_counter()
     except Exception as e:
         print(f"[Analytics] Warning: Could not warm instances cache: {e}")
+        t_phase = time.perf_counter()
     
     # Analytics Module Navigation
     with ui.card().classes("p-4 mb-4 bg-blue-50 border border-blue-200"):
@@ -121,23 +143,21 @@ def build_analytics_page():
     def load_composite_score():
         """Load composite score asynchronously."""
         try:
-            # #region agent log
             try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'analytics_page.py:load_composite', 'message': 'calling get_all_scores_for_composite', 'data': {'timestamp': time.time()}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-            
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('load_composite_score_start')
+            except ImportError:
+                pass
+
             get_scores_start = time.perf_counter()
             all_scores = analytics_service.get_all_scores_for_composite(days=7, user_id=current_user_id)
             get_scores_duration = (time.perf_counter() - get_scores_start) * 1000
-            
-            # #region agent log
+
             try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H5', 'location': 'analytics_page.py:load_composite', 'message': 'get_all_scores_for_composite completed', 'data': {'duration_ms': get_scores_duration, 'score_count': len(all_scores)}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('get_all_scores_for_composite', duration_ms=get_scores_duration, score_count=len(all_scores))
+            except ImportError:
+                pass
             
             composite_result = analytics_service.calculate_composite_score(
                 components=all_scores,
@@ -149,6 +169,12 @@ def build_analytics_page():
             loading_label.style("display: none;")
             composite_row.style("display: flex;")
             score_label.text = f"{composite_result['composite_score']:.1f}"
+
+            try:
+                from backend.instrumentation import log_analytics_event
+                log_analytics_event('load_composite_score_complete', duration_ms=(time.perf_counter() - get_scores_start) * 1000)
+            except ImportError:
+                pass
         except Exception as e:
             handle_error_with_ui(
                 'load_composite_score',
@@ -162,7 +188,20 @@ def build_analytics_page():
     ui.timer(0.1, load_composite_score, once=True)
 
     # Get all main analytics data in one batched call (Phase 2 optimization)
+    try:
+        from backend.instrumentation import log_analytics_event
+        log_analytics_event('phase_before_page_data', duration_ms=(time.perf_counter() - t_phase) * 1000)
+        page_data_start = time.perf_counter()
+    except ImportError:
+        page_data_start = None
     page_data = analytics_service.get_analytics_page_data(days=7, user_id=current_user_id)
+    t_phase = time.perf_counter()  # Start of UI-after-data phase
+    if page_data_start is not None:
+        try:
+            from backend.instrumentation import log_analytics_event
+            log_analytics_event('get_analytics_page_data', duration_ms=(time.perf_counter() - page_data_start) * 1000)
+        except ImportError:
+            pass
     metrics = page_data['dashboard_metrics']
     relief_summary = page_data['relief_summary']
     tracking_data = page_data['time_tracking']
@@ -1465,6 +1504,14 @@ def _render_stress_efficiency_leaderboard(leaderboard=None, user_id=None):
                     ui.label(f"{task['avg_relief']:.1f}").classes("w-20 text-right")
                     ui.label(f"{task['avg_stress']:.1f}").classes("w-20 text-right")
                     ui.label(str(task['count'])).classes("w-16 text-right")
+
+    try:
+        from backend.instrumentation import log_analytics_event
+        total_ms = (time.perf_counter() - page_start) * 1000
+        log_analytics_event('analytics_page_build_complete', duration_ms=total_ms)
+        log_analytics_event('phase_ui_after_page_data', duration_ms=(time.perf_counter() - t_phase) * 1000)
+    except (ImportError, NameError):
+        pass
 
 
 def build_emotional_flow_page():

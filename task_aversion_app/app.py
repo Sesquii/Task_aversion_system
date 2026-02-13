@@ -1,5 +1,20 @@
 # app.py
 from nicegui import ui
+
+# Instrument navigation/cache/analytics early (before any pages use ui.navigate)
+try:
+    from backend.instrumentation import (
+        instrument_navigate,
+        _log_cache_start,
+        _log_analytics_start,
+    )
+    instrument_navigate(ui)
+    _log_cache_start()
+    _log_analytics_start()
+except Exception as e:
+    import sys
+    print(f"[App] Instrumentation setup failed: {e}", file=sys.stderr)
+
 from backend.task_manager import TaskManager
 from backend.emotion_manager import EmotionManager
 from backend.routine_scheduler import start_scheduler
@@ -59,6 +74,11 @@ def register_pages():
     
     @ui.page('/')
     def index():
+        try:
+            from backend.instrumentation import log_page_visit
+            log_page_visit('/')
+        except ImportError:
+            pass
         # Check authentication
         user_id = get_current_user()
         if user_id is None:

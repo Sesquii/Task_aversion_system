@@ -78,6 +78,11 @@ class InstanceManager:
     def _invalidate_instance_caches(self):
         """Invalidate all instance caches (shared across all InstanceManager instances).
         Call this when instances are created/updated/deleted."""
+        try:
+            from backend.instrumentation import log_cache_invalidation
+            log_cache_invalidation('InstanceManager', '_invalidate_instance_caches')
+        except ImportError:
+            pass
         InstanceManager._shared_active_instances_cache = None
         InstanceManager._shared_active_instances_cache_time = None
         InstanceManager._shared_recent_completed_cache.clear()
