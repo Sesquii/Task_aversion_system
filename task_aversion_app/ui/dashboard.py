@@ -5855,7 +5855,6 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
         with ui.row().classes('w-full justify-between items-center'):
             ui.label('Task Aversion System').classes('text-lg font-bold')
             with ui.row().classes('gap-1'):
-                ui.button(icon='computer', on_click=lambda: _set_ui_mode_and_go('desktop')).props('flat dense size=sm').classes('min-h-0')
                 ui.button(icon='settings', on_click=lambda: ui.navigate.to('/settings')).props('flat dense size=sm round').classes('min-h-0')
                 ui.button(icon='logout', on_click=_mobile_logout, color='red').props('flat dense size=sm round').classes('min-h-0')
 

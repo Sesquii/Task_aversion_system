@@ -4,21 +4,27 @@ Choose UI mode for this device (mobile vs desktop). Stored in browser storage
 so the same user can have desktop on PC and mobile on phone.
 """
 from nicegui import ui
+from fastapi import Request
 
 from backend.auth import get_current_user
 
 
 @ui.page('/choose-experience')
-def choose_experience_page():
+def choose_experience_page(request: Request):
     """Let user choose mobile or desktop layout for this device only."""
     user_id = get_current_user()
     if user_id is None:
         ui.navigate.to('/login')
         return
 
+    preselect = request.query_params.get("preselect")
+    if preselect in ("desktop", "mobile"):
+        ui.run_javascript(f'window.location.href = "/?ui_mode={preselect}";')
+        return
+
     def set_mode(ui_mode: str):
         # Pass in URL so index can set storage before rendering (avoids race with storage sync)
-        ui.navigate.to(f'/?ui_mode={ui_mode}')
+        ui.run_javascript(f'window.location.href = "/?ui_mode={ui_mode}";')
 
     with ui.column().classes('w-full max-w-md mx-auto mt-16 gap-6'):
         ui.label('How will you use the app on this device?').classes(

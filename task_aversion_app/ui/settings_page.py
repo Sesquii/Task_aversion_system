@@ -101,11 +101,8 @@ def _build_settings_content(user_id):
         current_mode = app.storage.browser.get("ui_mode") or "desktop"
 
         def set_ui_mode(mode: str):
-            app.storage.browser["ui_mode"] = mode
-            label = "Desktop" if mode == "desktop" else "Mobile"
-            ui.notify(f"Using {label} layout on this device.", color="positive")
-            # Navigate with query param so dashboard receives mode (avoids storage sync race)
-            ui.navigate.to(f"/?ui_mode={mode}")
+            # Reload via choose-experience so app follows same logic as initial selection after login
+            ui.run_javascript(f'window.location.href = "/choose-experience?preselect={mode}";')
 
         with ui.row().classes("gap-2"):
             ui.button(
