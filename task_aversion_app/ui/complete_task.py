@@ -9,6 +9,7 @@ from backend.recommendation_logger import recommendation_logger
 from backend.security_utils import escape_for_display
 from ui.popup_modal import show_popup_modal
 from ui.error_reporting import handle_error_with_ui
+from ui.slider_style import progress_slider
 import json
 
 im = InstanceManager()
@@ -152,12 +153,12 @@ def complete_task_page(task_manager, emotion_manager):
         if instance_id:
             ui.label("Update Expected Aversion").classes("text-lg font-semibold mt-4")
             ui.label("Your aversion to this task may have changed. Update it here if needed.").classes("text-xs text-gray-500 mb-2")
-            aversion_slider = ui.slider(min=0, max=100, step=1, value=current_expected_aversion)
+            aversion_slider = progress_slider(0, 100, 1, current_expected_aversion)
 
         # ----- Actual values -----
 
         ui.label("Actual Relief").classes("text-lg font-semibold")
-        actual_relief = ui.slider(min=0, max=100, step=1, value=default_relief)
+        actual_relief = progress_slider(0, 100, 1, default_relief)
         # Show predicted value from initialization if available
         # Values are stored on 0-100 scale and displayed as-is (no scaling)
         if 'expected_relief' in predicted_data:
@@ -174,7 +175,7 @@ def complete_task_page(task_manager, emotion_manager):
 
         ui.label("Mental Energy Needed").classes("text-lg font-semibold")
         ui.label("How much mental effort was required to understand and process this task?").classes("text-xs text-gray-500")
-        actual_mental_energy = ui.slider(min=0, max=100, step=1, value=default_mental_energy)
+        actual_mental_energy = progress_slider(0, 100, 1, default_mental_energy)
         # Show predicted value from initialization if available
         if 'expected_mental_energy' in predicted_data:
             pred_val = predicted_data.get('expected_mental_energy')
@@ -199,7 +200,7 @@ def complete_task_page(task_manager, emotion_manager):
 
         ui.label("Task Difficulty").classes("text-lg font-semibold")
         ui.label("How inherently difficult or complex was this task?").classes("text-xs text-gray-500")
-        actual_difficulty = ui.slider(min=0, max=100, step=1, value=default_difficulty)
+        actual_difficulty = progress_slider(0, 100, 1, default_difficulty)
         # Show predicted value from initialization if available
         if 'expected_difficulty' in predicted_data:
             pred_val = predicted_data.get('expected_difficulty')
@@ -224,7 +225,7 @@ def complete_task_page(task_manager, emotion_manager):
 
         ui.label("Actual Distress").classes("text-lg font-semibold")
         ui.label("How much stress or emotional activation did you experience?").classes("text-xs text-gray-500")
-        actual_emotional = ui.slider(min=0, max=100, step=1, value=default_emotional)
+        actual_emotional = progress_slider(0, 100, 1, default_emotional)
         # Show predicted value from initialization if available
         if 'expected_emotional_load' in predicted_data:
             pred_val = predicted_data.get('expected_emotional_load')
@@ -239,7 +240,7 @@ def complete_task_page(task_manager, emotion_manager):
                 pass
 
         ui.label("Actual Physical Demand").classes("text-lg font-semibold")
-        actual_physical = ui.slider(min=0, max=100, step=1, value=default_physical)
+        actual_physical = progress_slider(0, 100, 1, default_physical)
         # Show predicted value from initialization if available
         if 'expected_physical_load' in predicted_data:
             pred_val = predicted_data.get('expected_physical_load')
@@ -393,7 +394,7 @@ def complete_task_page(task_manager, emotion_manager):
                 with emotion_sliders_container:
                     with ui.row().classes("items-center gap-2 w-full"):
                         ui.label(emotion).classes("text-sm font-medium min-w-[120px]")
-                        slider = ui.slider(min=0, max=100, step=1, value=default_value)
+                        slider = progress_slider(0, 100, 1, default_value)
                         emotion_sliders[emotion] = slider
                         value_label = ui.label(f"{default_value}").classes("text-sm min-w-[40px]")
                         value_label.bind_text_from(slider, 'value', lambda v: str(v))

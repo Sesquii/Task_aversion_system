@@ -12,6 +12,7 @@ from backend.performance_logger import get_perf_logger
 from backend.security_utils import escape_for_display
 from ui.popup_modal import show_popup_modal
 from ui.error_reporting import handle_error_with_ui
+from ui.slider_style import progress_slider
 
 im = InstanceManager()
 popup_dispatcher = PopupDispatcher()
@@ -191,7 +192,7 @@ def initialize_task_page(task_manager, emotion_manager):
             
             with aversion_container:
                 # Slider - always visible, defaults to 0 if not marked as aversive, or 50 if marked
-                aversion_slider = ui.slider(min=0, max=100, step=1, value=default_aversion)
+                aversion_slider = progress_slider(0, 100, 1, default_aversion)
                 
                 # Show initial aversion marker and previous aversion info
                 if initial_aversion is not None:
@@ -227,7 +228,7 @@ def initialize_task_page(task_manager, emotion_manager):
 
             # Cognitive load slider (NiceGUI 1.x → no label)
             ui.label("Predicted relief").classes("text-lg font-semibold")
-            predicted_relief = ui.slider(min=0, max=100, step=1, value=default_relief)
+            predicted_relief = progress_slider(0, 100, 1, default_relief)
             # Show previous value indicator if available
             if 'expected_relief' in previous_averages:
                 prev_val = previous_averages['expected_relief']
@@ -238,7 +239,7 @@ def initialize_task_page(task_manager, emotion_manager):
 
             ui.label("Mental Energy Needed").classes("text-lg font-semibold")
             ui.label("How much mental effort is required to understand and process this task?").classes("text-xs text-gray-500")
-            mental_energy = ui.slider(min=0, max=100, step=1, value=default_mental_energy)
+            mental_energy = progress_slider(0, 100, 1, default_mental_energy)
             if 'expected_mental_energy' in previous_averages:
                 prev_val = previous_averages['expected_mental_energy']
                 if prev_val != default_mental_energy:
@@ -252,7 +253,7 @@ def initialize_task_page(task_manager, emotion_manager):
             
             ui.label("Task Difficulty").classes("text-lg font-semibold")
             ui.label("How inherently difficult or complex is this task?").classes("text-xs text-gray-500")
-            task_difficulty = ui.slider(min=0, max=100, step=1, value=default_difficulty)
+            task_difficulty = progress_slider(0, 100, 1, default_difficulty)
             if 'expected_difficulty' in previous_averages:
                 prev_val = previous_averages['expected_difficulty']
                 if prev_val != default_difficulty:
@@ -266,7 +267,7 @@ def initialize_task_page(task_manager, emotion_manager):
             
             ui.label("Expected Distress").classes("text-lg font-semibold")
             ui.label("How much stress or emotional activation do you expect?").classes("text-xs text-gray-500")
-            emotional_load = ui.slider(min=0, max=100, step=1, value=default_emotional)
+            emotional_load = progress_slider(0, 100, 1, default_emotional)
             if 'expected_emotional_load' in previous_averages:
                 prev_val = previous_averages['expected_emotional_load']
                 if prev_val != default_emotional:
@@ -274,7 +275,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
             ui.label("Expected Physical Load").classes("text-lg font-semibold")
-            physical_load = ui.slider(min=0, max=100, step=1, value=default_physical)
+            physical_load = progress_slider(0, 100, 1, default_physical)
             if 'expected_physical_load' in previous_averages:
                 prev_val = previous_averages['expected_physical_load']
                 if prev_val != default_physical:
@@ -362,7 +363,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     
                     with emotion_sliders_container:
                         ui.label(escape_for_display(emotion)).classes("text-sm")
-                        slider = ui.slider(min=0, max=100, step=1, value=default_value)
+                        slider = progress_slider(0, 100, 1, default_value)
                         emotion_sliders[emotion] = slider
                         ui.label(f"Value: {default_value}").bind_text_from(slider, 'value', lambda v: f"Value: {v}").classes("text-xs text-gray-500")
 
@@ -397,7 +398,7 @@ def initialize_task_page(task_manager, emotion_manager):
             physical_context.on("update:model-value", physical_changed)
 
             ui.label("Motivation Level").classes("text-lg font-semibold")
-            motivation = ui.slider(min=0, max=100, step=1, value=default_motivation)
+            motivation = progress_slider(0, 100, 1, default_motivation)
             if 'motivation' in previous_averages:
                 prev_val = previous_averages['motivation']
                 if prev_val != default_motivation:

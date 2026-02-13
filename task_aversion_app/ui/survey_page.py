@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from nicegui import ui
 
 from backend.survey import SurveyManager
+from ui.slider_style import progress_slider
 from backend.user_state import UserStateManager
 from backend.auth import get_current_user
 from backend.security_utils import escape_for_display
@@ -118,7 +119,9 @@ def survey_page():
             other_input.on("update:model-value", on_change)
 
     def render_scale(question):
-        slider = ui.slider(min=question.get("scale_min", 1), max=question.get("scale_max", 10), step=1)
+        scale_min = question.get("scale_min", 1)
+        scale_max = question.get("scale_max", 10)
+        slider = progress_slider(scale_min, scale_max, 1, scale_min)
         controls[question["question_id"]] = lambda: (slider.value, "")
         slider.on("update:model-value", lambda _: update_progress())
 
