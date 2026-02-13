@@ -1,4 +1,4 @@
-from nicegui import ui
+from nicegui import ui, app
 from backend.user_state import UserStateManager
 from backend.instance_manager import InstanceManager
 from backend.analytics import Analytics
@@ -91,8 +91,45 @@ def _build_settings_content(user_id):
     # Logout button at the top
     with ui.card().classes("w-full max-w-xl p-4 gap-3 mb-4 bg-red-50 border-2 border-red-200"):
         ui.label("Account").classes("text-lg font-semibold text-red-700")
-        ui.button("🚪 Logout", on_click=handle_logout, color='red').classes("w-full")
+        ui.button("Logout", on_click=handle_logout, color='red').classes("w-full")
         ui.label("Log out of your account. You will need to log in again to access your data.").classes("text-xs text-gray-600 mt-1")
+
+    # Interface (this device): mobile vs desktop layout
+    with ui.card().classes("w-full max-w-xl p-4 gap-3 mb-4"):
+        ui.label("Interface (this device)").classes("text-lg font-semibold")
+        ui.label("Choose layout for this device only. Your phone and computer can use different layouts.").classes("text-sm text-gray-600")
+        current_mode = app.storage.browser.get("ui_mode") or "desktop"
+
+        def set_ui_mode(mode: str):
+            app.storage.browser["ui_mode"] = mode
+            label = "Desktop" if mode == "desktop" else "Mobile"
+            ui.notify(f"Using {label} layout on this device. Applies on next dashboard visit.", color="positive")
+
+        with ui.row().classes("gap-2"):
+            ui.button(
+                "Desktop",
+                icon="computer",
+                on_click=lambda: set_ui_mode("desktop"),
+            ).classes("flex-1")
+            ui.button(
+                "Mobile",
+                icon="phone_android",
+                on_click=lambda: set_ui_mode("mobile"),
+            ).classes("flex-1")
+        ui.label(f"Current: {current_mode.capitalize()}").classes("text-xs text-gray-500")
+        current_mobile_version = app.storage.browser.get("mobile_version") or "a"
+
+        def set_mobile_version(version: str):
+            app.storage.browser["mobile_version"] = version
+            ui.notify(f"Using Mobile Version {version.upper()}. Applies on next dashboard visit.", color="positive")
+
+        with ui.row().classes("gap-2 mt-2"):
+            ui.label("Mobile version (when using Mobile layout):").classes("text-xs text-gray-600")
+            ui.button("Version A", on_click=lambda: set_mobile_version("a")).props("dense size=sm").classes("text-xs")
+            ui.button("Version B", on_click=lambda: set_mobile_version("b")).props("dense size=sm").classes("text-xs")
+        ui.label(f"Current mobile version: {current_mobile_version.upper()}").classes("text-xs text-gray-500")
+        ui.label("Change applies when you open the dashboard again.").classes("text-xs text-gray-500")
+
     with ui.card().classes("w-full max-w-xl p-4 gap-3"):
         ui.label("Surveys").classes("text-lg font-semibold")
         ui.button("Take Mental Health Survey", on_click=go_survey)

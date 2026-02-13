@@ -837,14 +837,10 @@ async def oauth_callback(request: Request):
             create_session(user_id, email)
             print(f"[Auth] OAuth callback successful: Created session for user_id={user_id}, email={email}")
             
-            # Redirect to original URL or dashboard
-            redirect_url = app.storage.browser.pop('login_redirect', '/')
-            print(f"[Auth] Redirecting to: {redirect_url}")
-            
-            # Use JavaScript redirect to ensure it works properly
-            ui.run_javascript(f'window.location.href = "{redirect_url}";')
-            
-            # Show welcome message (may not display if redirect happens quickly)
+            # Redirect to choose-experience so user picks mobile/desktop for this device
+            app.storage.browser.pop('login_redirect', None)  # clear; choose-experience will send to /
+            print("[Auth] Redirecting to: /choose-experience")
+            ui.run_javascript('window.location.href = "/choose-experience";')
             ui.notify(f"Welcome, {name or email}!", color='positive')
     
     except Exception as e:

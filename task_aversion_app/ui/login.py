@@ -2,7 +2,7 @@
 """
 Login page with Google OAuth authentication.
 """
-from nicegui import ui
+from nicegui import ui, app
 from backend.auth import get_current_user, login_with_google, logout
 from backend.security_utils import escape_for_display
 from ui.error_reporting import handle_error_with_ui
@@ -17,19 +17,29 @@ def login_page():
         # User is already logged in
         with ui.column().classes('w-full max-w-md mx-auto mt-8 gap-4'):
             ui.label('You are already logged in').classes('text-2xl font-bold text-center')
-            
+
             with ui.card().classes('w-full p-6'):
+                ui.label('Use on this device').classes('text-lg font-semibold mb-2')
+                ui.label('This choice is saved for this device only.').classes('text-sm text-gray-600 mb-3')
+                with ui.row().classes('gap-2'):
+                    ui.button(
+                        'Desktop',
+                        icon='computer',
+                        on_click=lambda: _set_ui_mode('desktop'),
+                    ).classes('flex-1')
+                    ui.button(
+                        'Mobile',
+                        icon='phone_android',
+                        on_click=lambda: _set_ui_mode('mobile'),
+                    ).classes('flex-1')
+                ui.separator().classes('my-4')
                 ui.label('Current Session').classes('text-lg font-semibold mb-4')
-                
-                # Get user email from session (stored in session data)
-                from nicegui import app
                 session_token = app.storage.browser.get('session_token')
                 if session_token:
                     session_data = app.storage.general.get(f'session:{session_token}')
                     if session_data:
                         email = session_data.get('email', 'Unknown')
                         ui.label(f'Email: {escape_for_display(email)}').classes('mb-2')
-                
                 with ui.row().classes('gap-2 mt-4'):
                     ui.button('Go to Dashboard', on_click=lambda: ui.navigate.to('/')).classes('flex-1')
                     ui.button('Logout', on_click=lambda: handle_logout_and_reload()).classes('flex-1')
@@ -94,6 +104,13 @@ def login_page():
                         </p>
                     </div>
                 ''', sanitize=False).classes('text-gray-700')
+
+
+def _set_ui_mode(mode: str):
+    """Set UI mode for this device (mobile/desktop). Stored in browser only."""
+    app.storage.browser['ui_mode'] = mode
+    label = 'Desktop' if mode == 'desktop' else 'Mobile'
+    ui.notify(f'Using {label} layout on this device', color='positive')
 
 
 def handle_logout():

@@ -1,5 +1,5 @@
 # app.py
-from nicegui import ui
+from nicegui import ui, app
 
 # Instrument navigation/cache/analytics early (before any pages use ui.navigate)
 try:
@@ -20,7 +20,7 @@ from backend.emotion_manager import EmotionManager
 from backend.routine_scheduler import start_scheduler
 from backend.auth import get_current_user, oauth_callback
 
-from ui.dashboard import build_dashboard
+from ui.dashboard import build_dashboard, build_dashboard_mobile_a, build_dashboard_mobile_b
 from ui.create_task import create_task_page
 from ui.initialize_task import initialize_task_page
 from ui.complete_task import complete_task_page
@@ -33,6 +33,7 @@ from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handlin
 # Import pages - these will auto-register via @ui.page() decorators
 # Import order matters - login page should be imported first
 from ui.login import login_page  # registers /login
+from ui import choose_experience  # registers /choose-experience
 # import submodules without rebinding the nicegui `ui` object
 from ui import survey_page  # registers /survey
 from ui import settings_page  # registers /settings
@@ -73,7 +74,7 @@ def register_pages():
     # No need to call it again
     
     @ui.page('/')
-    def index():
+    def index(request: Request):
         try:
             from backend.instrumentation import log_page_visit
             log_page_visit('/')
@@ -84,13 +85,34 @@ def register_pages():
         if user_id is None:
             ui.navigate.to('/login')
             return
-        
+
+        # Per-device UI mode: allow query param from choose-experience (avoids storage sync race)
+        ui_mode = request.query_params.get('ui_mode')
+        mobile_version = request.query_params.get('mobile_version')
+        if ui_mode in ('mobile', 'desktop'):
+            app.storage.browser['ui_mode'] = ui_mode
+            if ui_mode == 'mobile' and mobile_version in ('a', 'b'):
+                app.storage.browser['mobile_version'] = mobile_version
+        else:
+            ui_mode = app.storage.browser.get('ui_mode')
+        if ui_mode == 'mobile':
+            mobile_version = app.storage.browser.get('mobile_version') or 'a'
+
+        if not ui_mode or ui_mode not in ('mobile', 'desktop'):
+            ui.navigate.to('/choose-experience')
+            return
+
         # Check for gap handling needs before showing dashboard
         if check_and_redirect_to_gap_handling():
             return
         try:
-            # Pass user_id to dashboard
-            build_dashboard(task_manager, user_id=user_id)
+            if ui_mode == 'mobile':
+                if mobile_version == 'b':
+                    build_dashboard_mobile_b(task_manager, user_id=user_id)
+                else:
+                    build_dashboard_mobile_a(task_manager, user_id=user_id)
+            else:
+                build_dashboard(task_manager, user_id=user_id)
         except Exception as e:
             # Show user-friendly error page instead of crashing
             import traceback

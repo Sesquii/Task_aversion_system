@@ -5770,6 +5770,417 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                 build_recommendations_section()
 
 
+def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
+    """
+    Mobile Version A: active task first, then create task template, template search
+    (max 3), initialized tasks search (max 5). For use when away from computer.
+    """
+    global current_user_id
+    from backend.auth import get_current_user
+
+    session_user_id = get_current_user()
+    if session_user_id is None:
+        ui.navigate.to('/login')
+        return
+    current_user_id = session_user_id
+
+    tm._invalidate_task_caches()
+    current_task = get_current_task()
+    active_list = im.list_active_instances(user_id=current_user_id)
+    active_not_current = [
+        a for a in active_list
+        if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)
+    ]
+    all_tasks = tm.get_all(user_id=current_user_id)
+    if all_tasks is None:
+        templates = []
+    elif hasattr(all_tasks, 'empty') and all_tasks.empty:
+        templates = []
+    elif hasattr(all_tasks, 'to_dict'):
+        templates = all_tasks.to_dict('records')
+    else:
+        templates = list(all_tasks) if all_tasks else []
+
+    def _filter_templates(query: str, limit: int = 3):
+        """Filter templates by name/description, return up to limit."""
+        if not query or not query.strip():
+            return templates[:limit]
+        q = query.strip().lower()
+        out = []
+        for t in templates:
+            name = str(t.get('name') or '').lower()
+            desc = str(t.get('description') or '').lower()
+            if q in name or q in desc:
+                out.append(t)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def _filter_initialized(query: str, limit: int = 5):
+        """Filter initialized (active not current) by task name / predicted description."""
+        if not query or not query.strip():
+            return active_not_current[:limit]
+        q = query.strip().lower()
+        out = []
+        for inst in active_not_current:
+            name = str(inst.get('task_name') or '').lower()
+            pred = inst.get('predicted') or '{}'
+            try:
+                pred_data = json.loads(pred) if isinstance(pred, str) else pred
+            except (json.JSONDecodeError, TypeError):
+                pred_data = {}
+            desc = str(pred_data.get('description') or '').lower()
+            if q in name or q in desc:
+                out.append(inst)
+                if len(out) >= limit:
+                    break
+        return out
+
+    with ui.column().classes('w-full max-w-lg mx-auto p-4 gap-4'):
+        # Header
+        with ui.row().classes('w-full justify-between items-center'):
+            ui.label('Task Aversion System').classes('text-xl font-bold')
+            with ui.row().classes('gap-2'):
+                ui.button('B', on_click=lambda: _set_mobile_version_and_go('b')).props('flat dense size=sm').classes('text-xs')
+                ui.button(
+                    'Desktop',
+                    icon='computer',
+                    on_click=lambda: _set_ui_mode_and_go('desktop'),
+                ).classes('text-sm')
+                ui.button(icon='settings', on_click=lambda: ui.navigate.to('/settings')).props('flat round')
+                ui.button(
+                    icon='logout',
+                    on_click=_mobile_logout,
+                    color='red',
+                ).props('flat round')
+
+        # 1. Active task at top
+        if current_task:
+            inst_id = current_task.get('instance_id')
+            task_name = current_task.get('task_name') or 'Task'
+            with ui.card().classes('w-full p-4 bg-blue-50 border-blue-200'):
+                ui.label('Current task').classes('text-xs text-gray-600')
+                ui.label(task_name).classes('font-semibold')
+                try:
+                    import pandas as pd
+                    started = current_task.get('started_at')
+                    actual_str = current_task.get('actual') or '{}'
+                    time_before = 0.0
+                    if actual_str:
+                        try:
+                            actual_data = json.loads(actual_str) if isinstance(actual_str, str) else {}
+                            time_before = float(actual_data.get('time_spent_before_pause', 0) or 0)
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            pass
+                        if started:
+                            started_dt = pd.to_datetime(started)
+                            elapsed = (datetime.now() - started_dt).total_seconds() / 60.0 + time_before
+                            ui.label(f'Ongoing: {format_elapsed_time(elapsed)}').classes('text-sm text-gray-600')
+                except Exception:
+                    ui.label('Ongoing').classes('text-sm text-gray-600')
+                with ui.row().classes('gap-2 mt-2'):
+                    ui.button('Pause', icon='pause', on_click=lambda i=inst_id: open_pause_dialog(i)).classes('flex-1')
+                    ui.button('Complete', icon='check', on_click=lambda i=inst_id: go_complete(i), color='green').classes('flex-1')
+                    ui.button('Cancel', icon='close', on_click=lambda i=inst_id: go_cancel(i), color='red').classes('flex-1')
+
+        # 2. Create task template button
+        ui.button('Create task template', on_click=lambda: ui.navigate.to('/create_task'), color='primary').classes('w-full')
+
+        # 3. Template search (max 3 results)
+        ui.label('Search templates').classes('text-sm font-semibold')
+        template_search = ui.input(
+            placeholder='Search templates...',
+            value='',
+        ).classes('w-full').props('clearable')
+        template_results = ui.column().classes('w-full gap-2')
+
+        def _render_template_results():
+            template_results.clear()
+            with template_results:
+                query = template_search.value or ''
+                shown = _filter_templates(query, limit=3)
+                if not shown:
+                    ui.label('No matching templates').classes('text-sm text-gray-500')
+                else:
+                    for task in shown:
+                        task_id = task.get('task_id')
+                        name = task.get('name') or 'Unnamed'
+                        ui.button(
+                            name,
+                            icon='add',
+                            on_click=lambda t=task_id: init_quick(t),
+                        ).classes('w-full justify-start')
+
+        template_search.on('update:model-value', lambda: _render_template_results())
+        _render_template_results()
+
+        # 4. Initialized tasks search (max 5 results)
+        ui.label('Search initialized tasks').classes('text-sm font-semibold')
+        initialized_search = ui.input(
+            placeholder='Search initialized tasks...',
+            value='',
+        ).classes('w-full').props('clearable')
+        initialized_results = ui.column().classes('w-full gap-2')
+
+        def _render_initialized_results():
+            initialized_results.clear()
+            with initialized_results:
+                query = initialized_search.value or ''
+                shown = _filter_initialized(query, limit=5)
+                if not shown:
+                    ui.label('No matching initialized tasks').classes('text-sm text-gray-500')
+                else:
+                    for inst in shown:
+                        iid = inst.get('instance_id')
+                        name = inst.get('task_name') or 'Task'
+                        started = inst.get('started_at')
+                        pred = inst.get('predicted') or '{}'
+                        try:
+                            pred_data = json.loads(pred) if isinstance(pred, str) else pred
+                        except (json.JSONDecodeError, TypeError):
+                            pred_data = {}
+                        desc = (pred_data.get('description') or '').strip()
+                        with ui.card().classes('w-full p-2'):
+                            ui.label(name).classes('font-medium text-sm')
+                            if desc:
+                                ui.label(desc).classes('text-xs text-gray-600 line-clamp-2')
+                            with ui.row().classes('gap-1 mt-1 flex-wrap'):
+                                if started:
+                                    ui.button('Resume', icon='play_arrow', on_click=lambda i=iid: resume_instance(i)).props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                                else:
+                                    ui.button('Start', icon='play_arrow', on_click=lambda i=iid: start_instance(i)).props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                                ui.button('Done', icon='check', on_click=lambda i=iid: go_complete(i), color='green').props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                                ui.button('Cancel', icon='close', on_click=lambda i=iid: go_cancel(i), color='red').props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+
+        initialized_search.on('update:model-value', lambda: _render_initialized_results())
+        _render_initialized_results()
+
+        ui.label('View full analytics on desktop').classes('text-sm text-gray-500')
+        ui.link('Open analytics in browser', '/analytics').classes('text-sm')
+
+
+def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
+    """
+    Mobile Version B: app-like layout with horizontal icon bar (feed-style section switching).
+    Sections: Active task | Template manager | Recommendations (placeholder) |
+    Search initialized | Analytics (placeholder).
+    """
+    global current_user_id
+    from backend.auth import get_current_user
+
+    session_user_id = get_current_user()
+    if session_user_id is None:
+        ui.navigate.to('/login')
+        return
+    current_user_id = session_user_id
+
+    tm._invalidate_task_caches()
+    current_task = get_current_task()
+    active_list = im.list_active_instances(user_id=current_user_id)
+    active_not_current = [
+        a for a in active_list
+        if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)
+    ]
+    all_tasks = tm.get_all(user_id=current_user_id)
+    if all_tasks is None:
+        templates = []
+    elif hasattr(all_tasks, 'empty') and all_tasks.empty:
+        templates = []
+    elif hasattr(all_tasks, 'to_dict'):
+        templates = all_tasks.to_dict('records')
+    else:
+        templates = list(all_tasks) if all_tasks else []
+
+    def _filter_templates_b(query: str, limit: int = 3):
+        if not query or not query.strip():
+            return templates[:limit]
+        q = query.strip().lower()
+        out = []
+        for t in templates:
+            name = str(t.get('name') or '').lower()
+            desc = str(t.get('description') or '').lower()
+            if q in name or q in desc:
+                out.append(t)
+                if len(out) >= limit:
+                    break
+        return out
+
+    def _filter_initialized_b(query: str, limit: int = 5):
+        if not query or not query.strip():
+            return active_not_current[:limit]
+        q = query.strip().lower()
+        out = []
+        for inst in active_not_current:
+            name = str(inst.get('task_name') or '').lower()
+            pred = inst.get('predicted') or '{}'
+            try:
+                pred_data = json.loads(pred) if isinstance(pred, str) else pred
+            except (json.JSONDecodeError, TypeError):
+                pred_data = {}
+            desc = str(pred_data.get('description') or '').lower()
+            if q in name or q in desc:
+                out.append(inst)
+                if len(out) >= limit:
+                    break
+        return out
+
+    with ui.column().classes('w-full max-w-lg mx-auto p-3 gap-2'):
+        # Title
+        with ui.row().classes('w-full justify-between items-center'):
+            ui.label('Task Aversion System').classes('text-lg font-bold')
+            with ui.row().classes('gap-1'):
+                ui.button('A', on_click=lambda: _set_mobile_version_and_go('a')).props('flat dense size=sm').classes('min-h-0 text-xs')
+                ui.button(icon='computer', on_click=lambda: _set_ui_mode_and_go('desktop')).props('flat dense size=sm').classes('min-h-0')
+                ui.button(icon='settings', on_click=lambda: ui.navigate.to('/settings')).props('flat dense size=sm round').classes('min-h-0')
+                ui.button(icon='logout', on_click=_mobile_logout, color='red').props('flat dense size=sm round').classes('min-h-0')
+
+        # Horizontal icon bar: Active | Templates | Recommendations | Initialized | Analytics
+        with ui.row().classes('w-full justify-between items-center gap-1 py-2 border-b'):
+            ui.button(icon='play_circle_filled', on_click=lambda: _show_section('active')).props('flat dense size=sm round').classes('min-h-0')
+            ui.button(icon='list_alt', on_click=lambda: _show_section('templates')).props('flat dense size=sm round').classes('min-h-0')
+            ui.button(icon='recommend', on_click=lambda: _show_section('recommendations')).props('flat dense size=sm round').classes('min-h-0')
+            ui.button(icon='search', on_click=lambda: _show_section('initialized')).props('flat dense size=sm round').classes('min-h-0')
+            ui.button(icon='analytics', on_click=lambda: _show_section('analytics')).props('flat dense size=sm round').classes('min-h-0')
+
+        section_container = ui.column().classes('w-full flex-1 gap-2 min-h-0')
+        active_section = {'value': 'active'}
+
+        def _show_section(section: str):
+            active_section['value'] = section
+            section_container.clear()
+            with section_container:
+                if section == 'active':
+                    if current_task:
+                        inst_id = current_task.get('instance_id')
+                        task_name = current_task.get('task_name') or 'Task'
+                        with ui.card().classes('w-full p-3 bg-blue-50 border-blue-200'):
+                            ui.label('Current task').classes('text-xs text-gray-600')
+                            ui.label(task_name).classes('font-semibold text-sm')
+                            try:
+                                import pandas as pd
+                                started = current_task.get('started_at')
+                                actual_str = current_task.get('actual') or '{}'
+                                time_before = 0.0
+                                if actual_str:
+                                    try:
+                                        actual_data = json.loads(actual_str) if isinstance(actual_str, str) else {}
+                                        time_before = float(actual_data.get('time_spent_before_pause', 0) or 0)
+                                    except (json.JSONDecodeError, ValueError, TypeError):
+                                        pass
+                                    if started:
+                                        started_dt = pd.to_datetime(started)
+                                        elapsed = (datetime.now() - started_dt).total_seconds() / 60.0 + time_before
+                                        ui.label(f'Ongoing: {format_elapsed_time(elapsed)}').classes('text-xs text-gray-600')
+                            except Exception:
+                                pass
+                            with ui.row().classes('gap-2 mt-2'):
+                                ui.button('Pause', icon='pause', on_click=lambda i=inst_id: open_pause_dialog(i)).props('dense size=sm').classes('text-xs')
+                                ui.button('Complete', icon='check', on_click=lambda i=inst_id: go_complete(i), color='green').props('dense size=sm').classes('text-xs')
+                                ui.button('Cancel', icon='close', on_click=lambda i=inst_id: go_cancel(i), color='red').props('dense size=sm').classes('text-xs')
+                    else:
+                        ui.label('No active task').classes('text-sm text-gray-500')
+
+                elif section == 'templates':
+                    ui.button('Create task template', on_click=lambda: ui.navigate.to('/create_task'), color='primary').classes('w-full text-sm')
+                    search_in = ui.input(placeholder='Search templates...', value='').classes('w-full').props('clearable dense')
+                    results_col = ui.column().classes('w-full gap-1')
+
+                    def _render_t():
+                        results_col.clear()
+                        with results_col:
+                            q = search_in.value or ''
+                            for task in _filter_templates_b(q, 3):
+                                tid = task.get('task_id')
+                                n = task.get('name') or 'Unnamed'
+                                ui.button(n, icon='add', on_click=lambda t=tid: init_quick(t)).classes('w-full justify-start text-sm')
+                    search_in.on('update:model-value', _render_t)
+                    _render_t()
+
+                elif section == 'recommendations':
+                    ui.icon('recommend', size='lg').classes('text-gray-400')
+                    ui.label('Recommendations').classes('text-sm font-semibold')
+                    ui.label('Recommendations are available in desktop mode.').classes('text-xs text-gray-500')
+
+                elif section == 'initialized':
+                    search_in = ui.input(placeholder='Search initialized tasks...', value='').classes('w-full').props('clearable dense')
+                    results_col = ui.column().classes('w-full gap-1')
+
+                    def _render_i():
+                        results_col.clear()
+                        with results_col:
+                            q = search_in.value or ''
+                            shown = _filter_initialized_b(q, 5)
+                            if not shown:
+                                ui.label('No matching tasks').classes('text-xs text-gray-500')
+                            else:
+                                for inst in shown:
+                                    iid = inst.get('instance_id')
+                                    name = inst.get('task_name') or 'Task'
+                                    started = inst.get('started_at')
+                                    pred = inst.get('predicted') or '{}'
+                                    try:
+                                        pred_data = json.loads(pred) if isinstance(pred, str) else pred
+                                    except (json.JSONDecodeError, TypeError):
+                                        pred_data = {}
+                                    desc = (pred_data.get('description') or '').strip()
+                                    with ui.card().classes('w-full p-2'):
+                                        ui.label(name).classes('font-medium text-sm')
+                                        if desc:
+                                            ui.label(desc).classes('text-xs text-gray-600')
+                                        with ui.row().classes('gap-1 mt-1 flex-wrap'):
+                                            if started:
+                                                ui.button('Resume', icon='play_arrow', on_click=lambda i=iid: resume_instance(i)).props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                                            else:
+                                                ui.button('Start', icon='play_arrow', on_click=lambda i=iid: start_instance(i)).props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                                            ui.button('Done', icon='check', on_click=lambda i=iid: go_complete(i), color='green').props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                                            ui.button('Cancel', icon='close', on_click=lambda i=iid: go_cancel(i), color='red').props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                    search_in.on('update:model-value', _render_i)
+                    _render_i()
+
+                else:  # analytics placeholder
+                    ui.icon('analytics', size='lg').classes('text-gray-400')
+                    ui.label('Mobile analytics').classes('text-sm font-semibold')
+                    ui.label('Coming soon.').classes('text-xs text-gray-500')
+                    ui.link('Open analytics in browser', '/analytics').classes('text-xs')
+
+        _show_section('active')
+
+
+def _set_ui_mode_and_go(mode: str):
+    """Set UI mode for this device and go to dashboard (used by mobile/desktop switcher)."""
+    from nicegui import app
+    app.storage.browser['ui_mode'] = mode
+    ui.navigate.to('/')
+
+
+def _set_mobile_version_and_go(version: str):
+    """Set mobile version (a or b) for this device and reload dashboard."""
+    from nicegui import app
+    app.storage.browser['mobile_version'] = version
+    ui.navigate.to('/')
+
+
+def _mobile_logout():
+    """Logout from mobile header; clear session and redirect to login."""
+    from backend.auth import logout
+    success = logout()
+    if success:
+        ui.notify('Logged out successfully', color='positive')
+    else:
+        ui.notify('Error during logout', color='negative')
+    ui.run_javascript('''
+        try {
+            if (window.localStorage) {
+                localStorage.removeItem("session_token");
+                localStorage.removeItem("tas_user_id");
+                localStorage.removeItem("user_id");
+                localStorage.removeItem("login_redirect");
+            }
+        } catch(e) { console.log("Error clearing localStorage:", e); }
+        window.location.href = "/login";
+    ''')
+
+
 def build_summary_section():
     """Build the summary section with productivity time and productivity efficiency."""
     relief_summary = an.get_relief_summary()
