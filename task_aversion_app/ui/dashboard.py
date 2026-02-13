@@ -73,6 +73,7 @@ current_user_id = None
 # Global variables for initialized tasks search
 initialized_tasks_container = None
 initialized_search_input_ref = None
+initialized_paused_checkbox_ref = None
 
 # #region agent log
 import json
@@ -633,7 +634,7 @@ def refresh_initialized_tasks(search_query=None):
     Args:
         search_query: Optional string to filter tasks by name, description, notes, or pause notes
     """
-    global initialized_tasks_container, initialized_search_input_ref, current_user_id
+    global initialized_tasks_container, initialized_search_input_ref, initialized_paused_checkbox_ref, current_user_id
     
     # CRITICAL: Always get user_id from current session, not global variable
     # This ensures data isolation when users switch accounts
@@ -697,9 +698,17 @@ def refresh_initialized_tasks(search_query=None):
     
     # Filter out current task from active list
     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
-    
+
+    # Optionally filter to paused only (started_at set)
+    if initialized_paused_checkbox_ref is not None:
+        try:
+            if getattr(initialized_paused_checkbox_ref, 'value', False):
+                active_not_current = [a for a in active_not_current if a.get('started_at')]
+        except Exception:
+            pass
+
     print(f"[Dashboard] Total initialized tasks before filtering: {len(active_not_current)}")
-    
+
     # Apply search filter if provided
     if search_query:
         search_query = str(search_query).strip().lower()
@@ -5549,11 +5558,15 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         # Add tooltip using NiceGUI's tooltip feature
                         time_label.tooltip(tooltip_content)
                     
-                    # Search bar for initialized tasks
-                    initialized_search_input = ui.input(
-                        label="Search initialized tasks",
-                        placeholder="Search by name, description, or notes..."
-                    ).classes("w-full mb-2")
+                    # Search bar for initialized tasks and Paused checkbox
+                    with ui.row().classes("w-full items-center gap-2 mb-2"):
+                        initialized_search_input = ui.input(
+                            label="Search initialized tasks",
+                            placeholder="Search by name, description, or notes..."
+                        ).classes("flex-1")
+                        initialized_paused_checkbox = ui.checkbox("Paused", value=False).classes("text-sm")
+                    global initialized_paused_checkbox_ref
+                    initialized_paused_checkbox_ref = initialized_paused_checkbox
                     # #region agent log
                     debug_log('dashboard.py:4629', 'Initialized tasks search input created', {'input_id': str(id(initialized_search_input))}, 'H3')
                     # #endregion
@@ -5615,6 +5628,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         debug_log('dashboard.py:4675', 'Attempting to attach initialized tasks search handler', {'input_id': str(id(initialized_search_input)), 'container_exists': initialized_tasks_container is not None}, 'H2')
                         # #endregion
                         initialized_search_input.on('update:model-value', handle_initialized_search)
+                        initialized_paused_checkbox.on('update:model-value', lambda: refresh_initialized_tasks())
                         print("[Dashboard] Initialized tasks search input event handler attached")
                         # #region agent log
                         debug_log('dashboard.py:4678', 'Initialized tasks search handler attached successfully', {}, 'H2')
@@ -5801,10 +5815,10 @@ def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
     else:
         templates = list(all_tasks) if all_tasks else []
 
-    def _filter_templates(query: str, limit: int = 3):
-        """Filter templates by name/description, return up to limit."""
+    def _filter_templates(query: str, limit: Optional[int] = None):
+        """Filter templates by name/description. If limit None, return all matching."""
         if not query or not query.strip():
-            return templates[:limit]
+            return templates[:limit] if limit else templates
         q = query.strip().lower()
         out = []
         for t in templates:
@@ -5812,17 +5826,20 @@ def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
             desc = str(t.get('description') or '').lower()
             if q in name or q in desc:
                 out.append(t)
-                if len(out) >= limit:
+                if limit and len(out) >= limit:
                     break
         return out
 
-    def _filter_initialized(query: str, limit: int = 5):
-        """Filter initialized (active not current) by task name / predicted description."""
+    def _filter_initialized(query: str, limit: Optional[int] = None, paused_only: bool = False):
+        """Filter initialized (active not current) by task name/description. Optionally only paused (started_at set)."""
+        base = active_not_current
+        if paused_only:
+            base = [a for a in base if a.get('started_at')]
         if not query or not query.strip():
-            return active_not_current[:limit]
+            return base[:limit] if limit else base
         q = query.strip().lower()
         out = []
-        for inst in active_not_current:
+        for inst in base:
             name = str(inst.get('task_name') or '').lower()
             pred = inst.get('predicted') or '{}'
             try:
@@ -5832,7 +5849,7 @@ def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
             desc = str(pred_data.get('description') or '').lower()
             if q in name or q in desc:
                 out.append(inst)
-                if len(out) >= limit:
+                if limit and len(out) >= limit:
                     break
         return out
 
@@ -5894,19 +5911,20 @@ def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
         # 2. Create task template button
         ui.button('Create task template', on_click=lambda: ui.navigate.to('/create_task'), color='primary').classes('w-full')
 
-        # 3. Template search (max 3 results)
+        # 3. Template search (all results, scrollable ~10 visible)
         ui.label('Search templates').classes('text-sm font-semibold')
         template_search = ui.input(
             placeholder='Search templates...',
             value='',
         ).classes('w-full').props('clearable')
-        template_results = ui.column().classes('w-full gap-2')
+        template_scroll = ui.column().classes('w-full gap-2 overflow-y-auto').style('max-height: 320px;')
+        template_results = template_scroll  # render into scroll container
 
         def _render_template_results():
             template_results.clear()
             with template_results:
                 query = template_search.value or ''
-                shown = _filter_templates(query, limit=3)
+                shown = _filter_templates(query, limit=None)
                 if not shown:
                     ui.label('No matching templates').classes('text-sm text-gray-500')
                 else:
@@ -5922,19 +5940,23 @@ def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
         template_search.on('update:model-value', lambda: _render_template_results())
         _render_template_results()
 
-        # 4. Initialized tasks search (max 5 results)
+        # 4. Initialized tasks search (all results, scrollable ~10 visible) + Paused checkbox
         ui.label('Search initialized tasks').classes('text-sm font-semibold')
-        initialized_search = ui.input(
-            placeholder='Search initialized tasks...',
-            value='',
-        ).classes('w-full').props('clearable')
-        initialized_results = ui.column().classes('w-full gap-2')
+        with ui.row().classes('w-full items-center gap-2'):
+            initialized_search = ui.input(
+                placeholder='Search initialized tasks...',
+                value='',
+            ).classes('flex-1').props('clearable')
+            initialized_paused_checkbox = ui.checkbox('Paused', value=False).classes('text-sm')
+        initialized_scroll = ui.column().classes('w-full gap-2 overflow-y-auto').style('max-height: 320px;')
+        initialized_results = initialized_scroll
 
         def _render_initialized_results():
             initialized_results.clear()
             with initialized_results:
                 query = initialized_search.value or ''
-                shown = _filter_initialized(query, limit=5)
+                paused_only = bool(initialized_paused_checkbox.value)
+                shown = _filter_initialized(query, limit=None, paused_only=paused_only)
                 if not shown:
                     ui.label('No matching initialized tasks').classes('text-sm text-gray-500')
                 else:
@@ -5961,6 +5983,7 @@ def build_dashboard_mobile_a(task_manager, user_id: Optional[int] = None):
                                 ui.button('Cancel', icon='close', on_click=lambda i=iid: go_cancel(i), color='red').props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
 
         initialized_search.on('update:model-value', lambda: _render_initialized_results())
+        initialized_paused_checkbox.on('update:model-value', lambda: _render_initialized_results())
         _render_initialized_results()
 
         ui.label('View full analytics on desktop').classes('text-sm text-gray-500')
@@ -5999,9 +6022,9 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
     else:
         templates = list(all_tasks) if all_tasks else []
 
-    def _filter_templates_b(query: str, limit: int = 3):
+    def _filter_templates_b(query: str, limit: Optional[int] = None):
         if not query or not query.strip():
-            return templates[:limit]
+            return templates[:limit] if limit else templates
         q = query.strip().lower()
         out = []
         for t in templates:
@@ -6009,16 +6032,17 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
             desc = str(t.get('description') or '').lower()
             if q in name or q in desc:
                 out.append(t)
-                if len(out) >= limit:
+                if limit and len(out) >= limit:
                     break
         return out
 
-    def _filter_initialized_b(query: str, limit: int = 5):
+    def _filter_initialized_b(query: str, limit: Optional[int] = None, paused_only: bool = False):
+        base = [a for a in active_not_current if a.get('started_at')] if paused_only else active_not_current
         if not query or not query.strip():
-            return active_not_current[:limit]
+            return base[:limit] if limit else base
         q = query.strip().lower()
         out = []
-        for inst in active_not_current:
+        for inst in base:
             name = str(inst.get('task_name') or '').lower()
             pred = inst.get('predicted') or '{}'
             try:
@@ -6028,7 +6052,7 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
             desc = str(pred_data.get('description') or '').lower()
             if q in name or q in desc:
                 out.append(inst)
-                if len(out) >= limit:
+                if limit and len(out) >= limit:
                     break
         return out
 
@@ -6042,10 +6066,10 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
                 ui.button(icon='settings', on_click=lambda: ui.navigate.to('/settings')).props('flat dense size=sm round').classes('min-h-0')
                 ui.button(icon='logout', on_click=_mobile_logout, color='red').props('flat dense size=sm round').classes('min-h-0')
 
-        # Horizontal icon bar: Active | Templates | Recommendations | Initialized | Analytics
+        # Horizontal icon bar: Active | + (Templates) | Recommendations | Initialized | Analytics
         with ui.row().classes('w-full justify-between items-center gap-1 py-2 border-b'):
             ui.button(icon='play_circle_filled', on_click=lambda: _show_section('active')).props('flat dense size=sm round').classes('min-h-0')
-            ui.button(icon='list_alt', on_click=lambda: _show_section('templates')).props('flat dense size=sm round').classes('min-h-0')
+            ui.button('+', on_click=lambda: _show_section('templates')).props('flat dense size=sm round').classes('min-h-0 text-lg font-bold')
             ui.button(icon='recommend', on_click=lambda: _show_section('recommendations')).props('flat dense size=sm round').classes('min-h-0')
             ui.button(icon='search', on_click=lambda: _show_section('initialized')).props('flat dense size=sm round').classes('min-h-0')
             ui.button(icon='analytics', on_click=lambda: _show_section('analytics')).props('flat dense size=sm round').classes('min-h-0')
@@ -6099,13 +6123,13 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
                 elif section == 'templates':
                     ui.button('Create task template', on_click=lambda: ui.navigate.to('/create_task'), color='primary').classes('w-full text-sm')
                     search_in = ui.input(placeholder='Search templates...', value='').classes('w-full').props('clearable dense')
-                    results_col = ui.column().classes('w-full gap-1')
+                    results_col = ui.column().classes('w-full gap-1 overflow-y-auto').style('max-height: 320px;')
 
                     def _render_t():
                         results_col.clear()
                         with results_col:
                             q = search_in.value or ''
-                            for task in _filter_templates_b(q, 3):
+                            for task in _filter_templates_b(q, limit=None):
                                 tid = task.get('task_id')
                                 n = task.get('name') or 'Unnamed'
                                 ui.button(n, icon='add', on_click=lambda t=tid: init_quick(t)).classes('w-full justify-start text-sm')
@@ -6118,14 +6142,18 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
                     ui.label('Recommendations are available in desktop mode.').classes('text-xs text-gray-500')
 
                 elif section == 'initialized':
-                    search_in = ui.input(placeholder='Search initialized tasks...', value='').classes('w-full').props('clearable dense')
-                    results_col = ui.column().classes('w-full gap-1')
+                    ui.label('Search initialized tasks').classes('text-xs font-semibold')
+                    with ui.row().classes('w-full items-center gap-2'):
+                        search_in = ui.input(placeholder='Search initialized tasks...', value='').classes('flex-1').props('clearable dense')
+                        paused_cb = ui.checkbox('Paused', value=False).classes('text-xs')
+                    results_col = ui.column().classes('w-full gap-1 overflow-y-auto').style('max-height: 320px;')
 
                     def _render_i():
                         results_col.clear()
                         with results_col:
                             q = search_in.value or ''
-                            shown = _filter_initialized_b(q, 5)
+                            paused_only = bool(paused_cb.value)
+                            shown = _filter_initialized_b(q, limit=None, paused_only=paused_only)
                             if not shown:
                                 ui.label('No matching tasks').classes('text-xs text-gray-500')
                             else:
@@ -6150,6 +6178,7 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
                                                 ui.button('Start', icon='play_arrow', on_click=lambda i=iid: start_instance(i)).props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
                                             ui.button('Done', icon='check', on_click=lambda i=iid: go_complete(i), color='green').props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
                                             ui.button('Cancel', icon='close', on_click=lambda i=iid: go_cancel(i), color='red').props('flat dense size=sm').classes('text-xs py-1 px-2 min-h-0')
+                    paused_cb.on('update:model-value', lambda: _render_i())
                     search_in.on('update:model-value', _render_i)
                     _render_i()
 
