@@ -7,7 +7,24 @@ Quick reference for updating the Task Aversion System on your VPS.
 - SSH access to VPS
 - App deployed at `/home/brandon/Task_aversion_system`
 
-## Update Workflow
+## One-command update (recommended)
+
+From the repo root on the VPS (after `git pull` or already up to date):
+
+```bash
+cd ~/Task_aversion_system
+bash deploy/update_vps.sh
+```
+
+The script runs the full workflow automatically. It **pauses once** before backup/migrations/restart and says: *"Press Enter to continue (then enter password when prompted)."* When you press Enter, it runs the backup, migration checks, all migrations (001–013), and `sudo systemctl restart`; enter your password when sudo (or PostgreSQL, if prompted) asks for it.
+
+To use a different repo path:
+
+```bash
+REPO_ROOT=/path/to/Task_aversion_system bash deploy/update_vps.sh
+```
+
+## Update Workflow (manual steps)
 
 ### 1. SSH into VPS
 
@@ -103,7 +120,9 @@ sudo systemctl cat task-aversion-app
 - Check you're using venv Python: `which python`
 - Migrations are idempotent (safe to re-run)
 
-## Quick Copy-Paste Version
+## Quick Copy-Paste Version (no script)
+
+If you prefer to run steps manually instead of `deploy/update_vps.sh`:
 
 ```bash
 # Full update sequence
