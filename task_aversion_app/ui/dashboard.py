@@ -2488,6 +2488,14 @@ def _get_value_key_from_history(history_data: dict) -> str:
     return None
 
 
+def _is_weekly_total_metric(metric_key: str, metric_config: dict) -> bool:
+    """True if this metric's current_value is a weekly total (e.g. hours/week); else a daily average or point-in-time value."""
+    if metric_key in ('productivity_time', 'productivity_score'):
+        return True
+    label = (metric_config.get('label') or '').lower()
+    return 'time' in metric_key.lower() or 'hours' in label
+
+
 def get_baseline_value(history_data: dict, baseline_type: str, value_key: str = None) -> float:
     """Get baseline value for a metric based on baseline type.
     
@@ -2700,9 +2708,11 @@ def render_monitored_metrics_section(container):
                 if (metric.startswith('avg_') or 
                     metric.startswith('thoroughness_') or 
                     metric in ['adjusted_wellbeing', 'adjusted_wellbeing_normalized', 
-                              'general_aversion_score', 'expected_relief']):
+                              'general_aversion_score', 'expected_relief'] or
+                    metric in ['stress_level', 'relief_score', 'net_wellbeing', 'net_wellbeing_normalized',
+                               'cognitive_load', 'emotional_load', 'physical_load']):
                     quality_metric_keys.append(metric)
-        
+
         if quality_metric_keys:
             # Build list of dashboard metric keys to request (format: 'category.key')
             dashboard_metric_keys = []
@@ -2716,6 +2726,11 @@ def render_monitored_metrics_section(container):
                     dashboard_metric_keys.append(f'aversion.{key}')
                 elif key == 'expected_relief':
                     dashboard_metric_keys.append('quality.avg_expected_relief')
+                elif key == 'relief_score':
+                    dashboard_metric_keys.append('quality.avg_relief')
+                elif key in ['stress_level', 'net_wellbeing', 'net_wellbeing_normalized', 'cognitive_load',
+                             'emotional_load', 'physical_load']:
+                    dashboard_metric_keys.append(f'quality.avg_{key}')
             
             # Call get_dashboard_metrics() with selective calculation
             metrics_data = an.get_dashboard_metrics(metrics=dashboard_metric_keys, user_id=uid) if hasattr(an, 'get_dashboard_metrics') else {}
@@ -2732,6 +2747,8 @@ def render_monitored_metrics_section(container):
                     result['quality_metrics'][key] = aversion[key]
                 elif key == 'expected_relief' and 'avg_expected_relief' in quality:
                     result['quality_metrics'][key] = quality['avg_expected_relief']
+                elif key == 'relief_score' and 'avg_relief' in quality:
+                    result['quality_metrics'][key] = quality['avg_relief']
         
         # Metrics that come from composite_scores
         known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score', 
@@ -3198,8 +3215,8 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             'label': 'Productivity Score',
             'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
-            'history_key': 'scores',
+            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+            'history_key': 'productivity_scores',
             'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
         },
@@ -3295,6 +3312,13 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             
             def make_get_history(key, uid=current_user_id):
                 def get_history():
+                    # Daily productivity score resets at midnight; use get_attribute_trends for history
+                    if key == 'daily_productivity_score_idle_refresh':
+                        try:
+                            return an.get_attribute_trends(key, aggregation='sum', days=90, user_id=uid)
+                        except Exception as e:
+                            print(f"[Dashboard] Error getting history for {key}: {e}")
+                            return None
                     if hasattr(an, 'get_generic_metric_history'):
                         return an.get_generic_metric_history(key, days=90, user_id=uid)
                     return None
@@ -3406,23 +3430,45 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     history_data = {}
             except Exception as e:
                 history_data = {}
-            
-            # Calculate baseline
-            if history_data and len(history_data.get('dates', [])) > 0:
+            # #region agent log
+            if metric_key == 'productivity_score':
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
+                        f.write(json.dumps({
+                            'id': 'log_ps_hist', 'hypothesisId': 'H1', 'location': 'dashboard.py:_update_metric_cards_incremental',
+                            'message': 'productivity_score history', 'data': {
+                                'has_history': bool(history_data and history_data.get('dates')),
+                                'history_keys': list(history_data.keys()) if isinstance(history_data, dict) else [],
+                                'config_history_key': metric_config.get('history_key'),
+                                'key_in_history': metric_config.get('history_key') in history_data if isinstance(history_data, dict) else False,
+                                'has_get_weekly_productivity_score_history': hasattr(an, 'get_weekly_productivity_score_history'),
+                                'has_get_weekly_productivity_history': hasattr(an, 'get_weekly_productivity_history'),
+                            },
+                            'timestamp': int(time.time() * 1000)
+                        }) + '\n')
+                except Exception:
+                    pass
+            # #endregion
+
+            # Calculate baseline (skip for daily productivity score - it resets every day)
+            if metric_key == 'daily_productivity_score_idle_refresh':
+                baseline_value = current_value  # No comparison; neutral color
+            elif history_data and len(history_data.get('dates', [])) > 0:
                 value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
                 if value_key and value_key in history_data and len(history_data.get(value_key, [])) > 0:
                     baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
                     # Only use calculated baseline if it's valid (not zero and different from current)
                     if baseline_daily > 0:
-                        baseline_value = baseline_daily * 7.0
+                        multiplier = 7.0 if _is_weekly_total_metric(metric_key, metric_config) else 1.0
+                        baseline_value = baseline_daily * multiplier
                     else:
                         # Fallback: calculate from actual history values
                         values = history_data.get(value_key, [])
                         if values and len(values) > 0:
-                            # Filter out zeros and calculate average
                             valid_values = [v for v in values if v and v > 0]
                             if valid_values:
-                                baseline_value = (sum(valid_values) / len(valid_values)) * 7.0
+                                multiplier = 7.0 if _is_weekly_total_metric(metric_key, metric_config) else 1.0
+                                baseline_value = (sum(valid_values) / len(valid_values)) * multiplier
                             else:
                                 baseline_value = current_value
                         else:
@@ -3432,25 +3478,27 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             else:
                 baseline_value = current_value
             
-            # Update baseline label
-            baseline_label_text = {
-                'last_3_months': '3mo avg',
-                'last_month': '1mo avg',
-                'last_week': '1wk avg',
-                'average': 'avg',
-                'all_data': 'all avg'
-            }.get(coloration_baseline, 'avg')
-            
-            if 'time' in metric_key.lower() or 'hours' in metric_config.get('label', '').lower():
-                if baseline_value > 0:
-                    card_info['baseline_label'].text = f"{baseline_label_text}: {baseline_value:.1f}h/wk"
-                else:
-                    card_info['baseline_label'].text = f"{baseline_label_text}: N/A"
+            # Update baseline label (daily productivity score resets daily - no average)
+            if metric_key == 'daily_productivity_score_idle_refresh':
+                card_info['baseline_label'].text = "resets daily"
             else:
-                if baseline_value > 0:
-                    card_info['baseline_label'].text = f"{baseline_label_text}: {baseline_value:.1f}"
+                baseline_label_text = {
+                    'last_3_months': '3mo avg',
+                    'last_month': '1mo avg',
+                    'last_week': '1wk avg',
+                    'average': 'avg',
+                    'all_data': 'all avg'
+                }.get(coloration_baseline, 'avg')
+                if 'time' in metric_key.lower() or 'hours' in metric_config.get('label', '').lower():
+                    if baseline_value > 0:
+                        card_info['baseline_label'].text = f"{baseline_label_text}: {baseline_value:.1f}h/wk"
+                    else:
+                        card_info['baseline_label'].text = f"{baseline_label_text}: N/A"
                 else:
-                    card_info['baseline_label'].text = f"{baseline_label_text}: N/A"
+                    if baseline_value > 0:
+                        card_info['baseline_label'].text = f"{baseline_label_text}: {baseline_value:.1f}"
+                    else:
+                        card_info['baseline_label'].text = f"{baseline_label_text}: N/A"
             
             # Store baseline for color calculation
             card_info['baseline_value'] = baseline_value
@@ -3489,6 +3537,46 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             except Exception as e:
                 print(f"[Dashboard] Error updating card props for {metric_key}: {e}")
             
+            # Create tooltip chart on first render when history is available (so graph shows immediately)
+            value_key = metric_config.get('history_key') or 'values'
+            if history_data and history_data.get('dates') and history_data.get(value_key) and len(history_data['dates']) > 0 and len(history_data.get(value_key, [])) > 0:
+                try:
+                    dates = history_data['dates']
+                    values = history_data[value_key]
+                    if metric_key == 'daily_productivity_score_idle_refresh':
+                        current_line_val = current_value  # Today's total (daily metric)
+                        weekly_avg = 0.0
+                        three_month_avg = 0.0
+                    elif _is_weekly_total_metric(metric_key, metric_config):
+                        current_line_val = current_value / 7.0 if current_value > 0 else 0.0
+                        weekly_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
+                        three_month_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
+                    else:
+                        current_line_val = current_value
+                        weekly_avg = history_data.get('weekly_average', 0.0)
+                        three_month_avg = history_data.get('three_month_average', 0.0)
+                    fig = create_metric_tooltip_chart(
+                        dates, values, current_line_val, weekly_avg, three_month_avg,
+                        metric_config['chart_title'], line_color
+                    )
+                    if fig:
+                        tooltip_id = metric_config['tooltip_id']
+                        with ui.element('div').props(f'id="chart-temp-{tooltip_id}"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
+                            ui.plotly(fig)
+                        ui.run_javascript(f'''
+                            setTimeout(function() {{
+                                var tempDiv = document.getElementById("chart-temp-{tooltip_id}");
+                                var tooltipDiv = document.getElementById("tooltip-{tooltip_id}");
+                                if (tempDiv && tooltipDiv) {{
+                                    var plotlyDiv = tempDiv.querySelector(".plotly");
+                                    if (plotlyDiv) {{ tooltipDiv.innerHTML = plotlyDiv.outerHTML; }}
+                                    tempDiv.remove();
+                                }}
+                            }}, 500);
+                        ''')
+                except Exception as e:
+                    print(f"[Dashboard] Error creating tooltip chart for {metric_key}: {e}")
+            
             card_info['rendered'] = True
         else:
             # Already rendered - just update colors with current value and stored baseline
@@ -3516,16 +3604,24 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 history_data = {}
             
             # Create tooltip chart if history available
-            if history_data and history_data.get('dates') and len(history_data.get('dates', [])) > 0:
+            value_key = metric_config.get('history_key') or 'values'
+            if history_data and history_data.get('dates') and len(history_data.get('dates', [])) > 0 and history_data.get(value_key):
                 try:
                     dates = history_data['dates']
-                    values = history_data[metric_config['history_key']]
+                    values = history_data[value_key]
                     if len(dates) > 0 and len(values) > 0:
-                        # Calculate averages for chart
-                        current_daily_avg = current_value / 7.0 if current_value > 0 else 0.0
-                        weekly_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
-                        three_month_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
-                        
+                        if metric_key == 'daily_productivity_score_idle_refresh':
+                            current_daily_avg = current_value  # Today's total (daily metric)
+                            weekly_avg = 0.0
+                            three_month_avg = 0.0
+                        elif _is_weekly_total_metric(metric_key, metric_config):
+                            current_daily_avg = current_value / 7.0 if current_value > 0 else 0.0
+                            weekly_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
+                            three_month_avg = baseline_value / 7.0 if baseline_value > 0 else 0.0
+                        else:
+                            current_daily_avg = current_value
+                            weekly_avg = history_data.get('weekly_average', 0.0)
+                            three_month_avg = history_data.get('three_month_average', 0.0)
                         fig = create_metric_tooltip_chart(
                             dates,
                             values,
@@ -3636,8 +3732,8 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             'label': 'Productivity Score',
             'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
-            'history_key': 'scores',
+            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+            'history_key': 'productivity_scores',
             'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
         },
@@ -3942,8 +4038,8 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
             'label': 'Productivity Score',
             'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
-            'history_key': 'scores',
+            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+            'history_key': 'productivity_scores',
             'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
         },
@@ -4053,8 +4149,8 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
                             'label': 'Productivity Score',
                             'get_value': lambda: loaded_summary.get('weekly_productivity_score', 0.0),
                             'format_value': lambda v: f"{v:.1f}",
-                            'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
-                            'history_key': 'scores',
+                            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+                            'history_key': 'productivity_scores',
                             'tooltip_id': 'monitored-productivity_score',
                             'chart_title': 'Daily Productivity Score'
                         },
@@ -4202,17 +4298,22 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                 history_data = {}
             
             # Calculate baseline (generic for any metric)
-            # For metrics without history, use current_value as baseline (no comparison)
-            if history_data and len(history_data.get('dates', [])) > 0:
+            # Daily productivity score resets every day - no average/baseline
+            if metric_key == 'daily_productivity_score_idle_refresh':
+                baseline_value = current_value  # No comparison; neutral color
+            elif history_data and len(history_data.get('dates', [])) > 0:
                 value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
                 baseline_daily = get_baseline_value(history_data, coloration_baseline, value_key)
-                # All metrics store weekly totals in current_value, so convert baseline daily average to weekly
-                baseline_value = baseline_daily * 7.0
+                # Only weekly-total metrics (e.g. productivity_time) store weekly totals; others are daily averages
+                if _is_weekly_total_metric(metric_key, metric_config):
+                    baseline_value = baseline_daily * 7.0
+                else:
+                    baseline_value = baseline_daily
             else:
                 # No history available - use current value as baseline (neutral comparison)
                 baseline_value = current_value
             
-            # Get color class (compare weekly totals)
+            # Get color class (compare current to baseline)
             bg_class, line_color = get_metric_bg_class(current_value, baseline_value)
             
             # Map bg_class to background color for inline style
@@ -4232,28 +4333,27 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                     formatted_value = metric_config['format_value'](current_value)
                     ui.label(formatted_value).classes("text-lg font-bold")
                     
-                    # Show baseline info
-                    baseline_label = {
-                        'last_3_months': '3mo avg',
-                        'last_month': '1mo avg',
-                        'last_week': '1wk avg',
-                        'average': 'avg',
-                        'all_data': 'all avg'
-                    }.get(coloration_baseline, 'avg')
-                    
-                    # Format baseline display (generic for any metric)
-                    if 'time' in metric_key.lower() or 'hours' in metric_config.get('label', '').lower():
-                        # Time-based metrics: show as hours/week
-                        if baseline_value > 0:
-                            ui.label(f"{baseline_label}: {baseline_value:.1f}h/wk").classes("text-xs text-gray-400")
-                        else:
-                            ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
+                    # Show baseline info (daily productivity score resets daily - no average)
+                    if metric_key == 'daily_productivity_score_idle_refresh':
+                        ui.label("resets daily").classes("text-xs text-gray-400")
                     else:
-                        # Score-based metrics: show as number
-                        if baseline_value > 0:
-                            ui.label(f"{baseline_label}: {baseline_value:.1f}").classes("text-xs text-gray-400")
+                        baseline_label = {
+                            'last_3_months': '3mo avg',
+                            'last_month': '1mo avg',
+                            'last_week': '1wk avg',
+                            'average': 'avg',
+                            'all_data': 'all avg'
+                        }.get(coloration_baseline, 'avg')
+                        if 'time' in metric_key.lower() or 'hours' in metric_config.get('label', '').lower():
+                            if baseline_value > 0:
+                                ui.label(f"{baseline_label}: {baseline_value:.1f}h/wk").classes("text-xs text-gray-400")
+                            else:
+                                ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
                         else:
-                            ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
+                            if baseline_value > 0:
+                                ui.label(f"{baseline_label}: {baseline_value:.1f}").classes("text-xs text-gray-400")
+                            else:
+                                ui.label(f"{baseline_label}: N/A").classes("text-xs text-gray-400")
                 
                 # Create tooltip container
                 tooltip_id = metric_config['tooltip_id']
@@ -4267,11 +4367,19 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                 if has_history:
                     dates = history_data['dates']
                     values = history_data[metric_config['history_key']]
-                    
                     if len(dates) > 0 and len(values) > 0:
-                        # Calculate current daily average (generic: all metrics store weekly totals)
-                        current_daily_avg = current_value / 7.0 if current_value > 0 else 0.0
-                        
+                        if metric_key == 'daily_productivity_score_idle_refresh':
+                            current_daily_avg = current_value  # Today's total (daily metric)
+                            weekly_avg = 0.0
+                            three_month_avg = 0.0
+                        elif _is_weekly_total_metric(metric_key, metric_config):
+                            current_daily_avg = current_value / 7.0 if current_value > 0 else 0.0
+                            weekly_avg = history_data.get('weekly_average', 0.0)
+                            three_month_avg = history_data.get('three_month_average', 0.0)
+                        else:
+                            current_daily_avg = current_value
+                            weekly_avg = history_data.get('weekly_average', 0.0)
+                            three_month_avg = history_data.get('three_month_average', 0.0)
                         # #region agent log
                         try:
                             with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -4282,8 +4390,8 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                             dates,
                             values,
                             current_daily_avg,
-                            history_data.get('weekly_average', 0.0),
-                            history_data.get('three_month_average', 0.0),
+                            weekly_avg,
+                            three_month_avg,
                             metric_config['chart_title'],
                             line_color
                         )
