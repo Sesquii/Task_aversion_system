@@ -687,11 +687,20 @@ def refresh_initialized_tasks(search_query=None):
     # Filter out current task from active list
     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
 
-    # Optionally filter to paused only (started_at set)
+    # Optionally filter to paused only (actual.paused flag; backend clears started_at when pausing)
     if initialized_paused_checkbox_ref is not None:
         try:
             if getattr(initialized_paused_checkbox_ref, 'value', False):
-                active_not_current = [a for a in active_not_current if a.get('started_at')]
+                paused_only_list = []
+                for a in active_not_current:
+                    act = a.get('actual') or '{}'
+                    try:
+                        act_d = json.loads(act) if isinstance(act, str) else (act if isinstance(act, dict) else {})
+                    except (json.JSONDecodeError, TypeError):
+                        act_d = {}
+                    if act_d.get('paused', False):
+                        paused_only_list.append(a)
+                active_not_current = paused_only_list
         except Exception:
             pass
 
