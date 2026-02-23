@@ -251,103 +251,78 @@ def go_cancel(instance_id):
 
 
 def open_pause_dialog(instance_id):
-    """Show dialog to pause an instance with optional reason and completion percentage.
-    
-    The task is paused immediately when the dialog opens, and the dialog is just for
-    collecting optional notes and completion percentage.
+    """Show dialog to add optional notes and completion %; task is paused when user clicks Pause and save.
+
+    The task keeps running until the user clicks "Pause and save". That single action records
+    time spent up to that moment and saves notes, so time and notes stay in sync.
     """
-    # Get current user for data isolation
     from backend.auth import get_current_user
     current_user_id = get_current_user()
     if current_user_id is None:
         ui.notify("Not authenticated", color='negative')
         return
-    
-    # Pause the task immediately (with no reason/completion yet)
+
+    # Pre-fill completion % if instance is already paused (e.g. editing notes)
+    default_completion = 0
     try:
-        im.pause_instance(instance_id, reason=None, completion_percentage=0.0, user_id=current_user_id)
-        ui.notify("Task paused", color='info')
-    except Exception as exc:
-        handle_error_with_ui("pause_task", exc, user_id=current_user_id, context={'instance_id': instance_id})
-        return
-    
-    # Now show dialog to collect optional notes and completion percentage
+        instance = im.get_instance(instance_id, user_id=current_user_id)
+        if instance:
+            actual_raw = instance.get("actual") or "{}"
+            actual_data = json.loads(actual_raw) if isinstance(actual_raw, str) else (actual_raw if isinstance(actual_raw, dict) else {})
+            pct = actual_data.get("pause_completion_percentage")
+            if pct is not None:
+                default_completion = max(0, min(100, int(float(pct))))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+
     with ui.dialog() as dialog, ui.card().classes("w-96"):
-        ui.label("Add pause notes (optional)").classes("text-lg font-bold mb-2")
-        ui.label("Task is already paused. You can add notes below or just close this dialog.").classes("text-sm text-gray-600 mb-3")
-        
-        # Warning about pause/resume bug
-        with ui.card().classes("p-2 mb-3 bg-orange-50 border border-orange-200"):
-            ui.label("⚠️ WARNING: There is a known bug where time spent on task may not always save correctly between pause and resume. Please verify your time is tracked correctly after resuming.").classes("text-xs text-orange-700")
-        
+        ui.label("Pause task").classes("text-lg font-bold mb-2")
+        ui.label("The task will be paused when you click \"Pause and save\". Add notes and completion % below (optional).").classes("text-sm text-gray-600 mb-3")
+
         reason_input = ui.textarea(
             label="Reason (optional)",
             placeholder="Why did you pause this task?"
         ).classes("w-full")
-        
+
         completion_input = ui.number(
             label="Completion percentage",
-            value=0,
+            value=default_completion,
             min=0,
             max=100,
             step=1,
             format="%.0f"
         ).classes("w-full")
 
-        def update_pause_info():
-            """Update the pause reason and completion percentage without recalculating time."""
-            reason_text = (reason_input.value or "").strip()
+        def do_pause_and_save():
+            """Pause the task now (recording time to this moment) and save notes in one step."""
+            ui.notify("Pausing...", color="info")
+            reason_text = (reason_input.value or "").strip() or None
             completion_pct = completion_input.value
             if completion_pct is None:
                 completion_pct = 0
             try:
                 completion_pct = float(completion_pct)
-                if completion_pct < 0:
-                    completion_pct = 0
-                elif completion_pct > 100:
-                    completion_pct = 100
+                completion_pct = max(0.0, min(100.0, completion_pct))
             except (ValueError, TypeError):
                 completion_pct = 0
-            
             try:
-                # Get the current instance and update its actual JSON directly
-                # This avoids recalculating time since we already paused
-                instance = im.get_instance(instance_id, user_id=current_user_id)
-                if instance:
-                    import json
-                    actual_str = instance.get("actual") or "{}"
-                    try:
-                        actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                    except (json.JSONDecodeError, TypeError):
-                        actual_data = {}
-                    
-                    # Update pause reason and completion percentage
-                    if reason_text:
-                        actual_data['pause_reason'] = reason_text
-                    elif 'pause_reason' in actual_data and not reason_text:
-                        # Remove pause_reason if user cleared it
-                        del actual_data['pause_reason']
-                    actual_data['pause_completion_percentage'] = completion_pct
-                    
-                    # Save the updated actual data by updating the instance directly
-                    # We need to call pause_instance again but it will preserve time_spent_before_pause
-                    # since the task is already paused (started_at is empty)
-                    # Get current user for data isolation
-                    from backend.auth import get_current_user
-                    current_user_id = get_current_user()
-                    if current_user_id is None:
-                        ui.notify("Not authenticated", color='negative')
-                        return
-                    im.pause_instance(instance_id, reason_text if reason_text else None, completion_pct, user_id=current_user_id)
-                    ui.notify("Pause notes updated", color='positive')
+                im.pause_instance(
+                    instance_id,
+                    reason=reason_text,
+                    completion_percentage=completion_pct,
+                    user_id=current_user_id,
+                )
+                ui.notify("Task paused", color="positive")
                 dialog.close()
                 ui.navigate.reload()
             except Exception as exc:
-                handle_error_with_ui("update_pause_info", exc, user_id=current_user_id, context={'instance_id': instance_id})
+                handle_error_with_ui(
+                    "pause_task", exc, user_id=current_user_id, context={"instance_id": instance_id}
+                )
 
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
-            ui.button("Close", color="warning", on_click=dialog.close)
-            ui.button("Save Notes", color="primary", on_click=update_pause_info)
+            ui.button("Cancel", color="warning", on_click=dialog.close)
+            ui.button("Pause and save", color="primary", on_click=do_pause_and_save)
 
     dialog.open()
 
@@ -406,17 +381,25 @@ def _batch_timer_tick(client_key):
                 continue
             try:
                 import pandas as pd
-                started_at = pd.to_datetime(instance['started_at'])
                 now = datetime.now()
-                current_elapsed = (now - started_at).total_seconds() / 60.0
                 actual_str = instance.get('actual', '{}')
-                time_before = 0.0
+                actual_data = {}
                 if actual_str:
                     try:
                         actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
-                        time_before = float(actual_data.get('time_spent_before_pause', 0.0) or 0.0)
                     except (json.JSONDecodeError, ValueError, TypeError):
                         pass
+                # Session start = time since last start/resume (excludes paused time)
+                session_start = None
+                if actual_data.get('resume_started_at'):
+                    try:
+                        session_start = pd.to_datetime(actual_data['resume_started_at'])
+                    except (ValueError, TypeError):
+                        pass
+                if session_start is None:
+                    session_start = pd.to_datetime(instance['started_at'])
+                current_elapsed = (now - session_start).total_seconds() / 60.0
+                time_before = float(actual_data.get('time_spent_before_pause', 0.0) or 0.0)
                 total_min = current_elapsed + time_before
                 timer_element.text = f"Ongoing for {format_elapsed_time(total_min)}"
                 still_active.append((instance_id, timer_element, uid))
@@ -478,31 +461,36 @@ def update_ongoing_timer(instance_id, timer_element, instance=None):
         from datetime import datetime
         import pandas as pd
         import json
-        
-        started_at = pd.to_datetime(instance['started_at'])
+
         now = datetime.now()
-        current_elapsed_minutes = (now - started_at).total_seconds() / 60.0
-        
-        # Get time spent before pause (if task was paused and resumed)
-        time_spent_before_pause = 0.0
         actual_str = instance.get('actual', '{}')
+        actual_data = {}
         if actual_str:
             try:
-                if isinstance(actual_str, str):
-                    actual_data = json.loads(actual_str) if actual_str else {}
-                else:
-                    actual_data = actual_str if isinstance(actual_str, dict) else {}
-                
-                time_before = actual_data.get('time_spent_before_pause', 0.0)
-                if isinstance(time_before, (int, float)):
-                    time_spent_before_pause = float(time_before)
+                actual_data = json.loads(actual_str) if isinstance(actual_str, str) and actual_str else (actual_str if isinstance(actual_str, dict) else {})
             except (json.JSONDecodeError, ValueError, TypeError):
                 pass
-        
-        # Total elapsed time = current session + time from previous sessions
+
+        # Session start = time since last start/resume (excludes paused time)
+        session_start = None
+        if actual_data.get('resume_started_at'):
+            try:
+                session_start = pd.to_datetime(actual_data['resume_started_at'])
+            except (ValueError, TypeError):
+                pass
+        if session_start is None:
+            session_start = pd.to_datetime(instance['started_at'])
+        current_elapsed_minutes = (now - session_start).total_seconds() / 60.0
+
+        time_spent_before_pause = 0.0
+        time_before = actual_data.get('time_spent_before_pause', 0.0)
+        if isinstance(time_before, (int, float)):
+            time_spent_before_pause = float(time_before)
+
+        # Total elapsed = current session (no paused time) + previous sessions
         total_elapsed_minutes = current_elapsed_minutes + time_spent_before_pause
         elapsed_str = format_elapsed_time(total_elapsed_minutes)
-        
+
         # Update the element text (with comprehensive error handling)
         try:
             timer_element.text = f"Ongoing for {elapsed_str}"
@@ -843,9 +831,10 @@ def refresh_initialized_tasks(search_query=None):
                         ui.button("", on_click=lambda iid=instance_id: go_complete(iid)).props(f'id="context-btn-instance-complete-{instance_id}"').style("display: none;")
                         with ui.row().classes("w-full items-center gap-2"):
                             ui.label(escape_for_display(inst.get("task_name"))).classes("text-sm font-bold flex-1")
-                            # Small indicator icon if task has pause notes
+                            # Small indicator icon if task has pause notes (tooltip shows the notes)
                             if has_pause_notes:
-                                ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip("This task was paused - see notes when you start it")
+                                pause_tooltip = "Pause notes: " + (escape_for_display(pause_reason.strip()) if pause_reason else "—")
+                                ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip(pause_tooltip)
                         ui.label(f"{time_estimate} min").classes("text-xs text-gray-600")
                         
                         # Show completion percentage if task was paused
@@ -5890,19 +5879,28 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
                                 ui.label(task_desc).classes('text-xs text-gray-600')
                             try:
                                 import pandas as pd
-                                started = current_task.get('started_at')
                                 actual_str = current_task.get('actual') or '{}'
-                                time_before = 0.0
+                                actual_data = {}
                                 if actual_str:
                                     try:
                                         actual_data = json.loads(actual_str) if isinstance(actual_str, str) else {}
-                                        time_before = float(actual_data.get('time_spent_before_pause', 0) or 0)
                                     except (json.JSONDecodeError, ValueError, TypeError):
                                         pass
+                                time_before = float(actual_data.get('time_spent_before_pause', 0) or 0)
+                                session_start = None
+                                if actual_data.get('resume_started_at'):
+                                    try:
+                                        session_start = pd.to_datetime(actual_data['resume_started_at'])
+                                    except (ValueError, TypeError):
+                                        pass
+                                if session_start is None:
+                                    started = current_task.get('started_at')
                                     if started:
-                                        started_dt = pd.to_datetime(started)
-                                        elapsed = (datetime.now() - started_dt).total_seconds() / 60.0 + time_before
-                                        ui.label(f'Ongoing: {format_elapsed_time(elapsed)}').classes('text-xs text-gray-600')
+                                        session_start = pd.to_datetime(started)
+                                if session_start is not None:
+                                    current_elapsed = (datetime.now() - session_start).total_seconds() / 60.0
+                                    elapsed = current_elapsed + time_before
+                                    ui.label(f'Ongoing: {format_elapsed_time(elapsed)}').classes('text-xs text-gray-600')
                             except Exception:
                                 pass
                             with ui.row().classes('gap-2 mt-2'):

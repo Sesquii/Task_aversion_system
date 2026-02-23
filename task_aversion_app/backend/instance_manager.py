@@ -597,9 +597,11 @@ class InstanceManager:
         if 'resume_started_at' in actual_data:
             del actual_data['resume_started_at']
 
-        # Persist pause reason in actual payload
+        # Persist pause reason in actual payload (always overwrite, never append)
         if reason:
             actual_data['pause_reason'] = reason
+        elif 'pause_reason' in actual_data:
+            del actual_data['pause_reason']
         actual_data['paused'] = True
         sys.stderr.write(f"[PAUSE DEBUG] Final actual_data before saving: {actual_data}\n")
         sys.stderr.flush()
@@ -739,14 +741,19 @@ class InstanceManager:
                 if 'resume_started_at' in actual_data:
                     del actual_data['resume_started_at']
                 
-                # Persist pause reason in actual payload
+                # Persist pause reason in actual payload (always overwrite, never append)
                 if reason:
                     actual_data['pause_reason'] = reason
+                elif 'pause_reason' in actual_data:
+                    del actual_data['pause_reason']
                 actual_data['paused'] = True
                 sys.stderr.write(f"[PAUSE DEBUG] Final actual_data before saving: {actual_data}\n")
                 sys.stderr.flush()
-                instance.actual = actual_data
-                
+                # Assign a new dict and force SQLAlchemy to flush the JSON column (assign + flag_modified)
+                instance.actual = dict(actual_data)
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(instance, "actual")
+
                 session.commit()
                 sys.stderr.write(f"[PAUSE DEBUG] Database commit completed\n")
                 sys.stderr.flush()
@@ -1381,8 +1388,11 @@ class InstanceManager:
                 sys.stderr.write(f"[RESUME DEBUG] Setting started_at to: {now}\n")
                 sys.stderr.flush()
                 instance.started_at = now
-                instance.actual = actual_data
-                
+                # Assign a new dict and force SQLAlchemy to flush the JSON column
+                instance.actual = dict(actual_data)
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(instance, "actual")
+
                 # Set status to 'active' when resuming a task
                 instance.status = 'active'
                 sys.stderr.write(f"[RESUME DEBUG] Setting status to: 'active'\n")
@@ -1919,6 +1929,93 @@ class InstanceManager:
             print(f"[InstanceManager] Database error in update_cancelled_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._update_cancelled_instance_csv(instance_id, cancellation_data)
+
+    def update_instance_pause_notes(
+        self,
+        instance_id: str,
+        reason: Optional[str] = None,
+        completion_percentage: float = 0.0,
+        user_id: Optional[int] = None,
+    ) -> bool:
+        """Update only pause notes (reason and completion %) on an already-paused instance.
+        Does not change timing or status. Use this when the user saves notes from the pause dialog.
+        """
+        if user_id is None:
+            print("[InstanceManager] WARNING: update_instance_pause_notes() called without user_id")
+            return False
+        if self.use_db:
+            return self._update_instance_pause_notes_db(
+                instance_id, reason, completion_percentage, user_id
+            )
+        return self._update_instance_pause_notes_csv(
+            instance_id, reason, completion_percentage
+        )
+
+    def _update_instance_pause_notes_csv(
+        self,
+        instance_id: str,
+        reason: Optional[str],
+        completion_percentage: float,
+    ) -> bool:
+        """CSV: merge pause_reason and pause_completion_percentage into instance actual."""
+        self._reload()
+        matches = self.df.index[self.df["instance_id"] == instance_id]
+        if len(matches) == 0:
+            return False
+        idx = matches[0]
+        actual_str = self.df.at[idx, "actual"] or "{}"
+        try:
+            actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
+        except (json.JSONDecodeError, TypeError):
+            actual_data = {}
+        if reason is not None:
+            actual_data["pause_reason"] = reason
+        elif "pause_reason" in actual_data:
+            del actual_data["pause_reason"]
+        actual_data["pause_completion_percentage"] = max(0.0, min(100.0, float(completion_percentage)))
+        actual_data["paused"] = True
+        self.df.at[idx, "actual"] = json.dumps(actual_data)
+        self._save()
+        self._invalidate_instance_caches()
+        return True
+
+    def _update_instance_pause_notes_db(
+        self,
+        instance_id: str,
+        reason: Optional[str],
+        completion_percentage: float,
+        user_id: int,
+    ) -> bool:
+        """DB: merge pause_reason and pause_completion_percentage into instance actual."""
+        try:
+            with self.db_session() as session:
+                query = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id,
+                    self.TaskInstance.user_id == user_id,
+                )
+                instance = query.first()
+                if not instance:
+                    return False
+                actual_data = instance.actual or {}
+                if not isinstance(actual_data, dict):
+                    actual_data = {}
+                if reason is not None:
+                    actual_data["pause_reason"] = reason
+                elif "pause_reason" in actual_data:
+                    del actual_data["pause_reason"]
+                actual_data["pause_completion_percentage"] = max(
+                    0.0, min(100.0, float(completion_percentage))
+                )
+                actual_data["paused"] = True
+                instance.actual = dict(actual_data)
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(instance, "actual")
+                session.commit()
+            self._invalidate_instance_caches()
+            return True
+        except Exception as e:
+            print(f"[InstanceManager] update_instance_pause_notes DB error: {e}")
+            return False
 
     def add_prediction_to_instance(self, instance_id, predicted: dict, user_id: Optional[int] = None):
         """Add prediction data to an instance. Works with both CSV and database.

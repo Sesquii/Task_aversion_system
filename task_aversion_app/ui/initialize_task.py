@@ -70,6 +70,15 @@ def initialize_task_page(task_manager, emotion_manager):
             predicted_data = json.loads(predicted_raw) if predicted_raw else {}
         except json.JSONDecodeError:
             predicted_data = {}
+
+        # Parse instance actual data for pause notes (so they appear in initialization area)
+        actual_raw = instance.get('actual') or '{}'
+        try:
+            actual_data = json.loads(actual_raw) if isinstance(actual_raw, str) else (actual_raw if isinstance(actual_raw, dict) else {})
+        except (json.JSONDecodeError, TypeError):
+            actual_data = {}
+        pause_reason = (actual_data.get('pause_reason') or '').strip()
+        is_paused = actual_data.get('paused', False)
         default_estimate = predicted_data.get('time_estimate_minutes') \
             or predicted_data.get('estimate') \
             or (task.get('default_estimate_minutes') if task else 0) \
@@ -179,9 +188,18 @@ def initialize_task_page(task_manager, emotion_manager):
                     
                     ui.button("Edit Completion Data →", on_click=go_to_completion_edit).classes("mt-2 bg-blue-500 text-white")
 
+            # Show saved pause notes in Task Specifics when task was paused
+            existing_desc = (predicted_data.get('description') or '').strip()
+            if edit_mode and is_completed_task:
+                initial_description = existing_desc
+            elif is_paused and pause_reason:
+                initial_description = (existing_desc + '\n\n--- Notes from pause ---\n' + pause_reason) if existing_desc else pause_reason
+            else:
+                initial_description = existing_desc
+
             description_field = ui.textarea(
                 label="Task Specifics (optional)",
-                value=predicted_data.get('description', '') if (edit_mode and is_completed_task) else '',
+                value=initial_description,
             )
 
             # Aversion slider - always show so it can be adjusted for future instances
