@@ -1,0 +1,37 @@
+---
+description: VPS update and deployment command sequence for task-aversion-app (use when user asks about updating the VPS or deploying)
+alwaysApply: false
+---
+
+# VPS Update / Deploy
+
+When the user asks how to update the VPS or deploy the app, give this command sequence (run from local or from the VPS after SSH).
+
+## From local (then on VPS)
+
+1. SSH into the VPS:
+   ```bash
+   ssh tas
+   ```
+
+2. Go to project and app directory:
+   ```bash
+   cd /home/brandon/Task_aversion_system
+   cd task_aversion_app
+   ```
+
+3. Pull latest and restart the app:
+   ```bash
+   git pull origin main
+   sudo systemctl restart task-aversion-app
+   ```
+
+## One-liner (after SSH)
+
+From `/home/brandon/Task_aversion_system/task_aversion_app`:
+
+```bash
+git pull origin main; sudo systemctl restart task-aversion-app
+```
+
+Host alias: `tas`. Service: `task-aversion-app`.

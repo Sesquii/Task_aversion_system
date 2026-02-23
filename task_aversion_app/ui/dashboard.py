@@ -5829,7 +5829,19 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
         return out
 
     def _filter_initialized_b(query: str, limit: Optional[int] = None, paused_only: bool = False):
-        base = [a for a in active_not_current if a.get('started_at')] if paused_only else active_not_current
+        # Paused filter uses actual.paused (backend clears started_at when pausing)
+        if paused_only:
+            base = []
+            for a in active_not_current:
+                act = a.get('actual') or '{}'
+                try:
+                    act_d = json.loads(act) if isinstance(act, str) else (act if isinstance(act, dict) else {})
+                except (json.JSONDecodeError, TypeError):
+                    act_d = {}
+                if act_d.get('paused', False):
+                    base.append(a)
+        else:
+            base = active_not_current
         if not query or not query.strip():
             return base[:limit] if limit else base
         q = query.strip().lower()
@@ -5895,6 +5907,10 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
                                         actual_data = json.loads(actual_str) if isinstance(actual_str, str) else {}
                                     except (json.JSONDecodeError, ValueError, TypeError):
                                         pass
+                                pause_reason = str(actual_data.get('pause_reason') or '').strip()
+                                if pause_reason:
+                                    ui.label('Pause notes').classes('text-xs text-gray-500 mt-1')
+                                    ui.label(escape_for_display(pause_reason)).classes('text-xs text-gray-700 p-2 bg-orange-50 border border-orange-200 rounded mt-0.5').style('max-width: 100%; word-wrap: break-word; white-space: pre-wrap;')
                                 time_before = float(actual_data.get('time_spent_before_pause', 0) or 0)
                                 session_start = None
                                 if actual_data.get('resume_started_at'):
