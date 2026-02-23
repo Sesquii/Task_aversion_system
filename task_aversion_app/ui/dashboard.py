@@ -3191,7 +3191,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
             'get_history': lambda: an.get_weekly_hours_history(),
             'history_key': 'hours',
-            'tooltip_id': 'monitored-productivity-time',
+            'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
         },
         'productivity_score': {
@@ -3200,7 +3200,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             'format_value': lambda v: f"{v:.1f}",
             'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
             'history_key': 'scores',
-            'tooltip_id': 'monitored-productivity-score',
+            'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
         },
     }
@@ -3629,7 +3629,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
             'get_history': lambda: an.get_weekly_hours_history(),
             'history_key': 'hours',
-            'tooltip_id': 'monitored-productivity-time',
+            'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
         },
         'productivity_score': {
@@ -3638,7 +3638,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             'format_value': lambda v: f"{v:.1f}",
             'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
             'history_key': 'scores',
-            'tooltip_id': 'monitored-productivity-score',
+            'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
         },
     }
@@ -3935,7 +3935,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
             'get_history': lambda: an.get_weekly_hours_history(),
             'history_key': 'hours',
-            'tooltip_id': 'monitored-productivity-time',
+            'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
         },
         'productivity_score': {
@@ -3944,7 +3944,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
             'format_value': lambda v: f"{v:.1f}",
             'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
             'history_key': 'scores',
-            'tooltip_id': 'monitored-productivity-score',
+            'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
         },
     }
@@ -4046,7 +4046,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
                             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{loaded_summary.get('productivity_time_minutes', 0):.0f} min",
                             'get_history': lambda: an.get_weekly_hours_history(),
                             'history_key': 'hours',
-                            'tooltip_id': 'monitored-productivity-time',
+                            'tooltip_id': 'monitored-productivity_time',
                             'chart_title': 'Daily Hours'
                         },
                         'productivity_score': {
@@ -4055,7 +4055,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
                             'format_value': lambda v: f"{v:.1f}",
                             'get_history': lambda: an.get_weekly_productivity_score_history() if hasattr(an, 'get_weekly_productivity_score_history') else None,
                             'history_key': 'scores',
-                            'tooltip_id': 'monitored-productivity-score',
+                            'tooltip_id': 'monitored-productivity_score',
                             'chart_title': 'Daily Productivity Score'
                         },
                     }
