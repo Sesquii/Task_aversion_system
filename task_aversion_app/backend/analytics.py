@@ -3916,26 +3916,44 @@ class Analytics:
         if (cache_key in self._dashboard_metrics_cache and 
             cache_key in self._dashboard_metrics_cache_time and
             (current_time - self._dashboard_metrics_cache_time[cache_key]) < self._cache_ttl_seconds):
-            # Cache hit - filter if specific metrics requested
+            # Cache hit - filter if specific metrics requested and return (avoids slow recalc on VPS)
             if metrics is not None:
-                # Filter cached result to requested metrics
                 requested_metrics = self._expand_metric_dependencies(metrics)
                 def needs_metric(key: str) -> bool:
                     return key in requested_metrics
-                
-                # Filter the cached result
-                filtered_result = {}
+
                 cached_data = self._dashboard_metrics_cache[cache_key]
+                filtered_result = {}
                 if 'counts' in cached_data:
-                    filtered_result['counts'] = {}
-                    for key in ['active', 'completed_7d', 'total_created', 'total_completed', 'completion_rate', 'daily_self_care_tasks', 'avg_daily_self_care_tasks']:
-                        if needs_metric(key) and key in cached_data['counts']:
-                            filtered_result['counts'][key] = cached_data['counts'][key]
-                
-                # Similar filtering for other sections...
-                # For simplicity, if metrics are requested, we'll recalculate (more accurate)
-                # But for common case of metrics=None, we use cache
-                pass  # Will fall through to calculation
+                    filtered_result['counts'] = {
+                        k: v for k, v in cached_data['counts'].items()
+                        if needs_metric(k)
+                    }
+                if 'quality' in cached_data:
+                    filtered_result['quality'] = {
+                        k: v for k, v in cached_data['quality'].items()
+                        if needs_metric(k)
+                    }
+                if 'time' in cached_data:
+                    filtered_result['time'] = {
+                        k: v for k, v in cached_data['time'].items()
+                        if needs_metric(k)
+                    }
+                if 'aversion' in cached_data:
+                    filtered_result['aversion'] = {
+                        k: v for k, v in cached_data['aversion'].items()
+                        if needs_metric(k)
+                    }
+                if 'productivity_volume' in cached_data:
+                    filtered_result['productivity_volume'] = {
+                        k: v for k, v in cached_data['productivity_volume'].items()
+                        if needs_metric(k)
+                    }
+                if 'life_balance' in cached_data and needs_metric('life_balance_score'):
+                    filtered_result['life_balance'] = cached_data['life_balance']
+                duration = (time.perf_counter() - start) * 1000
+                print(f"[Analytics] get_dashboard_metrics (cached, filtered): {duration:.2f}ms")
+                return filtered_result
             else:
                 # No filtering needed, return cached full result
                 duration = (time.perf_counter() - start) * 1000
@@ -8698,31 +8716,13 @@ class Analytics:
 
     def get_weekly_productivity_history(self) -> Dict[str, any]:
         """Get historical daily productivity score data for trend analysis (last 90 days).
-        
+
         Returns:
             Dict with 'dates' (list of date strings), 'productivity_scores' (list of scores per day),
             'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
         """
-        import time as time_module
-        import traceback
-        import json
-        # #region agent log
-        prod_hist_start = time_module.time()
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                call_stack = ''.join(traceback.format_stack()[-3:-1])
-                f.write(json.dumps({
-                    'sessionId': 'debug-session',
-                    'runId': 'run1',
-                    'hypothesisId': 'C',
-                    'location': 'analytics.py:5243',
-                    'message': 'get_weekly_productivity_history called',
-                    'data': {'caller': call_stack.split('\\n')[-2].strip() if call_stack else 'unknown'},
-                    'timestamp': int(time_module.time() * 1000)
-                }) + '\n')
-        except: pass
-        # #endregion
-        
+        from datetime import timedelta
+
         user_id = self._get_user_id(None)
         df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
@@ -8745,7 +8745,7 @@ class Analytics:
         # Get self-care tasks per day for productivity score calculation
         completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
         completed = completed[completed['completed_at_dt'].notna()].copy()
-        
+
         if completed.empty:
             return {
                 'dates': [],
@@ -8754,8 +8754,21 @@ class Analytics:
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
             }
-        
-        # Calculate productivity scores
+
+        # Filter to last 90 days before expensive per-row work (avoids slowdown with large history)
+        ninety_days_ago = datetime.now() - timedelta(days=90)
+        completed = completed[completed['completed_at_dt'] >= ninety_days_ago].copy()
+
+        if completed.empty:
+            return {
+                'dates': [],
+                'productivity_scores': [],
+                'current_value': 0.0,
+                'weekly_average': 0.0,
+                'three_month_average': 0.0,
+            }
+
+        # Calculate productivity scores (only on 90-day subset)
         self_care_tasks_per_day = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             completed_with_type = completed.merge(
@@ -8765,7 +8778,7 @@ class Analytics:
             )
             completed_with_type['task_type'] = completed_with_type['task_type'].fillna('Work')
             completed_with_type['task_type_normalized'] = completed_with_type['task_type'].astype(str).str.strip().str.lower()
-            
+
             # Count self-care tasks per day
             self_care_tasks = completed_with_type[
                 completed_with_type['task_type_normalized'].isin(['self care', 'selfcare', 'self-care'])
@@ -8777,8 +8790,8 @@ class Analytics:
                 daily_counts = self_care_tasks.groupby('date').size()
                 for date, count in daily_counts.items():
                     self_care_tasks_per_day[str(date)] = int(count)
-        
-        # Calculate productivity score for each completed task
+
+        # Calculate productivity score for each completed task (90-day set only)
         weekly_avg_time = 0.0  # Will be calculated if needed
         completed['productivity_score'] = completed.apply(
             lambda row: self.calculate_productivity_score(
@@ -8788,10 +8801,10 @@ class Analytics:
             ),
             axis=1
         )
-        
+
         completed['productivity_score'] = pd.to_numeric(completed['productivity_score'], errors='coerce')
         completed = completed[completed['productivity_score'].notna()].copy()
-        
+
         if completed.empty:
             return {
                 'dates': [],
@@ -8800,11 +8813,8 @@ class Analytics:
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
             }
-        
-        # Filter to last 90 days
-        from datetime import timedelta
-        ninety_days_ago = datetime.now() - timedelta(days=90)
-        valid = completed[completed['completed_at_dt'] >= ninety_days_ago].copy()
+
+        valid = completed.copy()
         
         if valid.empty:
             return {
@@ -8859,23 +8869,7 @@ class Analytics:
         # Check if we have at least 2 weeks of data
         days_with_data = len(daily_data)
         has_sufficient_data = days_with_data >= 14
-        
-        prod_hist_time = (time_module.time() - prod_hist_start) * 1000
-        # #region agent log
-        try:
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({
-                    'sessionId': 'debug-session',
-                    'runId': 'run1',
-                    'hypothesisId': 'C',
-                    'location': 'analytics.py:5393',
-                    'message': 'get_weekly_productivity_history completed',
-                    'data': {'time_ms': prod_hist_time, 'days_count': days_with_data},
-                    'timestamp': int(time_module.time() * 1000)
-                }) + '\n')
-        except: pass
-        # #endregion
-        
+
         return {
             'dates': daily_data['date_str'].tolist(),
             'productivity_scores': daily_data['productivity_score'].tolist(),

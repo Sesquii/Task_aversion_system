@@ -3312,10 +3312,14 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             
             def make_get_history(key, uid=current_user_id):
                 def get_history():
-                    # Daily productivity score resets at midnight; use get_attribute_trends for history
+                    # Daily productivity score resets at midnight; use get_attribute_trends for history.
+                    # Use 21 days on dashboard (not 90) to avoid 90x expensive daily calculations
+                    # which slow load and can cause timeouts/page resets on VPS.
                     if key == 'daily_productivity_score_idle_refresh':
                         try:
-                            return an.get_attribute_trends(key, aggregation='sum', days=90, user_id=uid)
+                            return an.get_attribute_trends(
+                                key, aggregation='sum', days=21, user_id=uid
+                            )
                         except Exception as e:
                             print(f"[Dashboard] Error getting history for {key}: {e}")
                             return None
@@ -3411,12 +3415,6 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 card_info['value_label'].set_text(formatted_value)
             else:
                 print(f"[Dashboard] Value label widget for {metric_key} doesn't support text updates")
-            # #region agent log
-            try:
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'updating metric card value', 'data': {'metric_key': metric_key, 'value': current_value, 'formatted': formatted_value, 'has_text_attr': hasattr(card_info['value_label'], 'text'), 'has_set_text': hasattr(card_info['value_label'], 'set_text')}, 'timestamp': int(time.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
         except Exception as e:
             print(f"[Dashboard] Error updating value for {metric_key}: {e}")
             import traceback
@@ -3424,31 +3422,90 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
         
         # Get history for baseline (only once, when fully rendered)
         if not card_info.get('rendered', False):
+            # Defer expensive history for productivity_score so initial load stays fast (avoids VPS timeout / page reset)
+            if metric_key == 'productivity_score' and hasattr(an, 'get_weekly_productivity_history'):
+                _ps_baseline_label = {
+                    'last_3_months': '3mo avg', 'last_month': '1mo avg', 'last_week': '1wk avg',
+                    'average': 'avg', 'all_data': 'all avg'
+                }.get(coloration_baseline, 'avg')
+                card_info['baseline_label'].text = f"{_ps_baseline_label}: ..."
+                card_info['baseline_value'] = current_value
+                _bg_class, _ = get_metric_bg_class(current_value, current_value)
+                _bg_color = {'metric-bg-green': '#d1fae5', 'metric-bg-yellow': '#fef3c7', 'metric-bg-red': '#fee2e2', '': '#f3f4f6'}.get(_bg_class, '#f3f4f6')
+                try:
+                    card_info['card'].style(f"min-width: 0; background-color: {_bg_color} !important;")
+                except Exception:
+                    pass
+                try:
+                    card_info['card'].props(f'data-tooltip-id="{metric_config["tooltip_id"]}"')
+                except Exception:
+                    pass
+                card_info['rendered'] = True
+
+                _ps_card = card_info
+                _ps_an = an
+                _ps_coloration_baseline = coloration_baseline
+                _ps_current_value = current_value
+                _ps_config = metric_config
+
+                def _deferred_ps_baseline():
+                    try:
+                        if not _ps_card:
+                            return
+                        _h = _ps_an.get_weekly_productivity_history()
+                        if not _h or not _h.get('dates') or not _h.get('productivity_scores'):
+                            try:
+                                _ps_card['baseline_label'].text = f"{_ps_baseline_label}: N/A"
+                            except Exception:
+                                pass
+                            return
+                        _bdaily = get_baseline_value(_h, _ps_coloration_baseline, 'productivity_scores')
+                        _bval = _bdaily * 7.0 if _bdaily > 0 else _ps_current_value
+                        try:
+                            _ps_card['baseline_label'].text = f"{_ps_baseline_label}: {_bval:.1f}"
+                        except Exception:
+                            pass
+                        _ps_card['baseline_value'] = _bval
+                        _bg_class, _line_color = get_metric_bg_class(_ps_current_value, _bval)
+                        _bg_color = {'metric-bg-green': '#d1fae5', 'metric-bg-yellow': '#fef3c7', 'metric-bg-red': '#fee2e2', '': '#f3f4f6'}.get(_bg_class, '#f3f4f6')
+                        try:
+                            _ps_card['card'].style(f"min-width: 0; background-color: {_bg_color} !important;")
+                        except Exception:
+                            pass
+                        _cur_line = _ps_current_value / 7.0 if _ps_current_value > 0 else 0.0
+                        _wk_avg = _bval / 7.0 if _bval > 0 else 0.0
+                        _fig = create_metric_tooltip_chart(
+                            _h['dates'], _h['productivity_scores'],
+                            _cur_line, _wk_avg, _wk_avg,
+                            _ps_config['chart_title'], _line_color
+                        )
+                        if _fig:
+                            _tid = _ps_config['tooltip_id']
+                            with ui.element('div').props(f'id="chart-temp-{_tid}"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
+                                ui.plotly(_fig)
+                            ui.run_javascript(f'''
+                                setTimeout(function() {{
+                                    var tempDiv = document.getElementById("chart-temp-{_tid}");
+                                    var tooltipDiv = document.getElementById("tooltip-{_tid}");
+                                    if (tempDiv && tooltipDiv) {{
+                                        var plotlyDiv = tempDiv.querySelector(".plotly");
+                                        if (plotlyDiv) {{ tooltipDiv.innerHTML = plotlyDiv.outerHTML; }}
+                                        tempDiv.remove();
+                                    }}
+                                }}, 500);
+                            ''')
+                    except Exception as e:
+                        print(f"[Dashboard] Deferred productivity score baseline error: {e}")
+
+                ui.timer(0.5, _deferred_ps_baseline, once=True)
+                continue
+
             try:
                 history_data = metric_config['get_history']()
                 if history_data is None:
                     history_data = {}
             except Exception as e:
                 history_data = {}
-            # #region agent log
-            if metric_key == 'productivity_score':
-                try:
-                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                        f.write(json.dumps({
-                            'id': 'log_ps_hist', 'hypothesisId': 'H1', 'location': 'dashboard.py:_update_metric_cards_incremental',
-                            'message': 'productivity_score history', 'data': {
-                                'has_history': bool(history_data and history_data.get('dates')),
-                                'history_keys': list(history_data.keys()) if isinstance(history_data, dict) else [],
-                                'config_history_key': metric_config.get('history_key'),
-                                'key_in_history': metric_config.get('history_key') in history_data if isinstance(history_data, dict) else False,
-                                'has_get_weekly_productivity_score_history': hasattr(an, 'get_weekly_productivity_score_history'),
-                                'has_get_weekly_productivity_history': hasattr(an, 'get_weekly_productivity_history'),
-                            },
-                            'timestamp': int(time.time() * 1000)
-                        }) + '\n')
-                except Exception:
-                    pass
-            # #endregion
 
             # Calculate baseline (skip for daily productivity score - it resets every day)
             if metric_key == 'daily_productivity_score_idle_refresh':
@@ -3946,12 +4003,14 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # 3. Return the history data in the expected format
                     # ====================================================================
                     
-                    # Special handling for daily_productivity_score_idle_refresh - use get_attribute_trends
-                    # This ensures the historical data uses the same calculation logic (midnight refresh)
-                    # as the current value, providing consistent trend visualization.
+                    # Special handling for daily_productivity_score_idle_refresh - use get_attribute_trends.
+                    # Use 21 days on dashboard (not 90) to avoid 90x expensive daily calculations
+                    # which slow load and can cause timeouts/page resets on VPS.
                     if key == 'daily_productivity_score_idle_refresh':
                         try:
-                            trends = an.get_attribute_trends(key, aggregation='sum', days=90, user_id=uid)
+                            trends = an.get_attribute_trends(
+                                key, aggregation='sum', days=21, user_id=uid
+                            )
                             return trends
                         except Exception as e:
                             print(f"[Dashboard] Error getting history for {key}: {e}")
