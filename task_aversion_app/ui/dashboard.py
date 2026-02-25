@@ -1752,8 +1752,8 @@ def edit_template(task):
         name_input = ui.input(label="Task Name", value=current_name).classes("w-full")
         desc_input = ui.textarea(label="Description (optional)", value=current_desc).classes("w-full")
         task_type_select = ui.select(
-            ['Work', 'Play', 'Self care'], 
-            label='Task Type', 
+            ['Work', 'Play', 'Self care', 'Sleep'],
+            label='Task Type',
             value=current_task_type
         ).classes("w-full")
         est_input = ui.number(label='Default estimate minutes', value=current_est).classes("w-full")
@@ -1947,8 +1947,8 @@ def copy_template(task):
         name_input = ui.input(label="Task Name", value=default_copy_name).classes("w-full")
         desc_input = ui.textarea(label="Description (optional)", value=current_desc).classes("w-full")
         task_type_select = ui.select(
-            ['Work', 'Play', 'Self care'], 
-            label='Task Type', 
+            ['Work', 'Play', 'Self care', 'Sleep'],
+            label='Task Type',
             value=current_task_type
         ).classes("w-full")
         est_input = ui.number(label='Default estimate minutes', value=current_est).classes("w-full")
@@ -5671,7 +5671,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                     except Exception:
                         task_map = {}
 
-                    total_time_by_type = {'Work': 0, 'Play': 0, 'Self care': 0}
+                    total_time_by_type = {'Work': 0, 'Play': 0, 'Self care': 0, 'Sleep': 0}
                     total_time = 0
 
                     for inst in active_not_current:
@@ -5702,6 +5702,8 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                     total_time_by_type['Play'] += time_estimate
                                 elif task_type_lower in ['self care', 'selfcare', 'self-care']:
                                     total_time_by_type['Self care'] += time_estimate
+                                elif task_type_lower == 'sleep':
+                                    total_time_by_type['Sleep'] += time_estimate
                                 else:  # Default to Work
                                     total_time_by_type['Work'] += time_estimate
                                 total_time += time_estimate
@@ -5718,6 +5720,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         tooltip_parts.append(f"Work: {total_time_by_type['Work']} min")
                         tooltip_parts.append(f"Play: {total_time_by_type['Play']} min")
                         tooltip_parts.append(f"Self care: {total_time_by_type['Self care']} min")
+                        tooltip_parts.append(f"Sleep: {total_time_by_type['Sleep']} min")
                         tooltip_content = "<br>".join(tooltip_parts)
                         
                         # Add tooltip using NiceGUI's tooltip feature
@@ -6882,6 +6885,7 @@ def build_recommendations_section():
                     'Work': 'Work',
                     'Play': 'Play',
                     'Self care': 'Self care',
+                    'Sleep': 'Sleep',
                 },
                 label="Task Type",
                 value=dash_filters.get('task_type', ''),

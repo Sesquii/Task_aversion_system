@@ -117,6 +117,9 @@ def generate_baseline_completion_plotly() -> Optional[go.Figure]:
             elif task_type_lower in ['self care', 'selfcare', 'self-care']:
                 multiplier = 1.0
                 baseline_score = completion_pct * multiplier
+            elif task_type_lower == 'sleep':
+                multiplier = 1.0
+                baseline_score = completion_pct * multiplier
             else:
                 multiplier = 1.0
                 baseline_score = completion_pct * multiplier
@@ -154,11 +157,15 @@ def generate_baseline_completion_plotly() -> Optional[go.Figure]:
                             line=dict(dash='dash', color='green', width=2), opacity=0.5), row=1, col=1)
     fig.add_trace(go.Scatter(x=work_completion, y=play_scores, mode='lines', name='Play Theoretical (×1.0)',
                             line=dict(dash='dash', color='orange', width=2), opacity=0.5), row=1, col=1)
+    sleep_scores = [cp * 1.0 for cp in work_completion]
+    fig.add_trace(go.Scatter(x=work_completion, y=sleep_scores, mode='lines', name='Sleep Theoretical (×1.0)',
+                            line=dict(dash='dash', color='purple', width=2), opacity=0.5), row=1, col=1)
     
     # User data by task type
     work_data = [(cp, score) for cp, score, tt in zip(completion_percentages, baseline_scores, task_types) if tt == 'work']
     self_care_data = [(cp, score) for cp, score, tt in zip(completion_percentages, baseline_scores, task_types) if tt in ['self care', 'selfcare', 'self-care']]
     play_data = [(cp, score) for cp, score, tt in zip(completion_percentages, baseline_scores, task_types) if tt == 'play']
+    sleep_data = [(cp, score) for cp, score, tt in zip(completion_percentages, baseline_scores, task_types) if tt == 'sleep']
     
     if work_data:
         work_cp, work_sc = zip(*work_data)
@@ -172,6 +179,10 @@ def generate_baseline_completion_plotly() -> Optional[go.Figure]:
         p_cp, p_sc = zip(*play_data)
         fig.add_trace(go.Scatter(x=list(p_cp), y=list(p_sc), mode='markers', name='Play Data',
                                 marker=dict(color='orange', size=8, opacity=0.6, line=dict(width=0.5, color='black'))), row=1, col=1)
+    if sleep_data:
+        sl_cp, sl_sc = zip(*sleep_data)
+        fig.add_trace(go.Scatter(x=list(sl_cp), y=list(sl_sc), mode='markers', name='Sleep Data',
+                                marker=dict(color='purple', size=8, opacity=0.6, line=dict(width=0.5, color='black'))), row=1, col=1)
     
     # Plot 2: Histogram of completion percentages
     fig.add_trace(go.Histogram(x=completion_percentages, nbinsx=20, name='Completion %',

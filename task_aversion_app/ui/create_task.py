@@ -21,7 +21,7 @@ def create_task_page(task_manager, emotion_manager):
 
             name = ui.input(label="Task Name")
             desc = ui.textarea(label="Description (optional)")
-            task_type = ui.select(['Work', 'Play', 'Self care'], label='Task Type', value='Work')
+            task_type = ui.select(['Work', 'Play', 'Self care', 'Sleep'], label='Task Type', value='Work')
             est = ui.number(label='Default estimate minutes', value=0)
             
             # Simple checkbox for aversion - if checked, sets default to 50

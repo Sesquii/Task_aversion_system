@@ -365,7 +365,7 @@ def productivity_module_page():
             
             # Task type
             task_type_input = ui.select(
-                options={'work': 'Work', 'self_care': 'Self Care', 'play': 'Play'},
+                options={'work': 'Work', 'self_care': 'Self Care', 'play': 'Play', 'sleep': 'Sleep'},
                 value='work',
                 label="Task Type"
             ).props("dense outlined").classes("flex-1")

@@ -1,0 +1,52 @@
+---
+description: Direct metric/formula changes to client analytics when migration is complete; always notify user where and why.
+globs: ["**/analytics*.py", "**/analytics*.js", "**/analytics/**"]
+alwaysApply: false
+---
+
+# Analytics Migration: Client vs Server Source of Truth
+
+## When This Rule Applies
+
+When the user (or the current task) asks to **add, change, or refine metrics or formulas** (e.g. relief, dashboard metrics, composite scores, efficiency, productivity, grit), follow the convention below. This rule does **not** always apply: it is conditional on migration status.
+
+## Migration Status
+
+- **Client migration complete**: The project has a dedicated **client-side analytics module** (JavaScript) that is the source of truth for dashboard/relief/composite metrics. Canonical paths (when present): `task_aversion_app/static/js/analytics.js`, or `task_aversion_app/static/analytics/*.js`, or a frontend app’s `src/analytics/` (or equivalent) used for these metrics.
+- **Migration not complete**: No such client module exists yet; server-side `backend/analytics.py` remains the source of truth.
+
+## What To Do
+
+1. **If client migration is complete** (client analytics module exists and is used for these metrics):
+   - Put all **metric and formula** changes in the **client module** (JavaScript). Do not add or change those formulas in `backend/analytics.py` (except for light helpers or documented exceptions, e.g. a small server-side calculator used only for LLM/reports).
+2. **If client migration is not complete**:
+   - Put metric and formula changes in **`backend/analytics.py`** as today.
+
+## Required Response to the User
+
+After making (or refusing) edits, **always** state clearly in your response:
+
+- **Option A — Edit applied by rule**:  
+  *"Applied the analytics-migration rule: [metric/formula] change was made in [client module path | backend/analytics.py] because [migration is complete and client is source of truth | migration is not complete and server is still source of truth]."*
+
+- **Option B — Request problematic**:  
+  *"Request was problematic: [reason, e.g. ambiguous target, conflict with rule, or client module not found when migration was assumed]. [What you did instead, if anything.]"*
+
+Do not silently edit without this clarification.
+
+## Summary
+
+| Migration state   | Where to put metric/formula changes | Notify user |
+|-------------------|--------------------------------------|-------------|
+| Client complete   | Client analytics module (JS)         | Yes (A or B) |
+| Not complete      | `backend/analytics.py`               | Yes (A or B) |
+
+## Do Not Remove Python Analytics Code
+
+- **Keep all original Python analytics logic and code in the codebase.** Do not remove, delete, or trim `backend/analytics.py` (or its helpers) as part of the JS migration.
+- **Only change routing**: When the client path is active, the UI should not *call* the Python analytics functions; it fetches from the API and runs JS instead. The Python code remains in the repo, unused in those paths.
+- Any decision to remove or refactor the server-side analytics code is separate and only after the migration is complete and you explicitly choose to do so.
+
+## Server Computation (Calculator Endpoint)
+
+If a small server-side "calculator" is used only for LLM/reports (same formulas, on-demand), server CPU is **much lower** than current usage: today the server runs heavy analytics on every dashboard/analytics load (e.g. `get_relief_summary`, `get_dashboard_metrics`, `_load_instances`); with client-side analytics, those runs move to the browser. A calculator endpoint runs only when explicitly called (e.g. one-off for an email or LLM context), so server analytics load drops to a **small fraction** of current (on the order of single-digit percent or less, depending on how often you call it).

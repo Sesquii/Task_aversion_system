@@ -508,6 +508,9 @@ class Analytics:
             return 3.0
         elif task_type_lower == 'play':
             return 0.5
+        elif task_type_lower == 'sleep':
+            # Placeholder for future sleep score integration
+            return 1.0
         else:
             return 1.0
     
@@ -691,6 +694,9 @@ class Analytics:
                 base_score = completion_pct
                 score = base_score * multiplier
             
+            elif task_type_lower == 'sleep':
+                # Sleep: neutral for productivity (completion_pct); sleep score can be integrated later
+                score = completion_pct
             elif task_type_lower == 'play':
                 # Productivity penalty from play: only applies when play exceeds work by threshold
                 # Check if play time exceeds work time by the threshold
@@ -947,15 +953,20 @@ class Analytics:
         play_penalty_multiplier = -0.003 * time_percentage
         play_scores = np.where(apply_play_penalty, completion_pct * play_penalty_multiplier, completion_pct)
         
+        # --- Sleep tasks (neutral for productivity; sleep score can be integrated later) ---
+        is_sleep = (task_types == 'sleep') & ~is_cancelled
+        sleep_scores = completion_pct
+        
         # --- Default (other task types) ---
-        is_other = ~is_work & ~is_self_care & ~is_play & ~is_cancelled
+        is_other = ~is_work & ~is_self_care & ~is_play & ~is_sleep & ~is_cancelled
         other_scores = completion_pct
         
         # Combine scores based on task type
         scores = np.where(is_cancelled, cancelled_penalty,
                  np.where(is_work, work_scores,
                  np.where(is_self_care, self_care_scores,
-                 np.where(is_play, play_scores, other_scores))))
+                 np.where(is_play, play_scores,
+                 np.where(is_sleep, sleep_scores, other_scores)))))
         
         # === PHASE 3: Efficiency adjustment ===
         has_time_data = (time_estimate > 0) & (time_actual > 0) & ~is_cancelled
@@ -4451,14 +4462,17 @@ class Analytics:
         work_mask = (task_type == 'work')
         play_mask = (task_type == 'play')
         self_care_mask = task_type.isin(['self care', 'selfcare', 'self-care'])
+        sleep_mask = (task_type == 'sleep')
 
         work_count = int(work_mask.sum())
         play_count = int(play_mask.sum())
         self_care_count = int(self_care_mask.sum())
+        sleep_count = int(sleep_mask.sum())
 
         work_time = float(duration_numeric.where(work_mask, 0.0).sum())
         play_time = float(duration_numeric.where(play_mask, 0.0).sum())
         self_care_time = float(duration_numeric.where(self_care_mask, 0.0).sum())
+        sleep_time = float(duration_numeric.where(sleep_mask, 0.0).sum())
 
         total_work_play_time = work_time + play_time
         work_play_ratio = (work_time / total_work_play_time) if total_work_play_time > 0 else 0.5
@@ -4468,9 +4482,11 @@ class Analytics:
             'work_count': work_count,
             'play_count': play_count,
             'self_care_count': self_care_count,
+            'sleep_count': sleep_count,
             'work_time_minutes': round(work_time, 1),
             'play_time_minutes': round(play_time, 1),
             'self_care_time_minutes': round(self_care_time, 1),
+            'sleep_time_minutes': round(sleep_time, 1),
             'balance_score': round(balance_score, 1),
             'work_play_ratio': round(work_play_ratio, 3),
         }
