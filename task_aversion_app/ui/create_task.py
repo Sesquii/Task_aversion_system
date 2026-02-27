@@ -23,7 +23,7 @@ def create_task_page(task_manager, emotion_manager):
             desc = ui.textarea(label="Description (optional)")
             task_type = ui.select(['Work', 'Play', 'Self care', 'Sleep'], label='Task Type', value='Work')
             est = ui.number(label='Default estimate minutes', value=0)
-            
+
             # Simple checkbox for aversion - if checked, sets default to 50
             aversion_checkbox = ui.checkbox("Check if you are averse to starting this task")
 
@@ -142,7 +142,7 @@ def create_task_page(task_manager, emotion_manager):
                         routine_time=time_str,
                         completion_window_hours=completion_window_hours_val,
                         completion_window_days=completion_window_days_val,
-                        user_id=user_id
+                        user_id=user_id,
                     )
 
                     ui.notify(f"Task created: {tid}", color='positive')

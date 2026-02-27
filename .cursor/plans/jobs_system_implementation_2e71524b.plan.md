@@ -50,6 +50,7 @@ todos:
     status: pending
     dependencies:
       - task_manager_integration
+isProject: false
 ---
 
 # Jobs System Implementation Plan
@@ -74,19 +75,16 @@ task_type (Work, Self care, Play)
 **New Tables:**
 
 1. `jobs` table:
-
-   - `job_id` (String, primary key) - Format: `j{timestamp}`
-   - `name` (String, nullable=False)
-   - `task_type` (String) - Links to Work/Self care/Play
-   - `description` (Text, optional)
-   - `created_at`, `updated_at` (DateTime)
-
+  - `job_id` (String, primary key) - Format: `j{timestamp}`
+  - `name` (String, nullable=False)
+  - `task_type` (String) - Links to Work/Self care/Play
+  - `description` (Text, optional)
+  - `created_at`, `updated_at` (DateTime)
 2. `job_task_mapping` table (many-to-many):
-
-   - `job_id` (String, foreign key → jobs.job_id)
-   - `task_id` (String, foreign key → tasks.task_id)
-   - `created_at` (DateTime)
-   - Composite primary key: (job_id, task_id)
+  - `job_id` (String, foreign key → jobs.job_id)
+  - `task_id` (String, foreign key → tasks.task_id)
+  - `created_at` (DateTime)
+  - Composite primary key: (job_id, task_id)
 
 **Default Jobs:**
 
@@ -101,30 +99,27 @@ task_type (Work, Self care, Play)
 **Files to modify/create:**
 
 1. **[backend/database.py](task_aversion_app/backend/database.py)**
-
-   - Add `Job` SQLAlchemy model
-   - Add `JobTaskMapping` SQLAlchemy model
-   - Update `init_db()` to create new tables
-
-2. **Create [backend/job_manager.py](task_aversion_app/backend/job_manager.py)**
-
-   - `JobManager` class (similar pattern to `TaskManager`)
-   - Methods:
-     - `create_job(name, task_type, description='')` → returns job_id
-     - `get_job(job_id)` → returns job dict
-     - `get_all_jobs(task_type=None)` → returns list of job dicts
-     - `update_job(job_id, **kwargs)`
-     - `delete_job(job_id)` (with safety checks)
-     - `assign_task_to_job(task_id, job_id)`
-     - `remove_task_from_job(task_id, job_id)`
-     - `get_tasks_for_job(job_id)` → returns list of task dicts
-     - `get_jobs_for_task(task_id)` → returns list of job dicts
-     - `get_top_jobs(limit=10, days=30)` → returns jobs with completions in last 30 days, sorted by completion count
-   - Support both database and CSV backends (dual backend pattern)
+  - Add `Job` SQLAlchemy model
+  - Add `JobTaskMapping` SQLAlchemy model
+  - Update `init_db()` to create new tables
+2. **Create [backend/job_manager.py**](task_aversion_app/backend/job_manager.py)
+  - `JobManager` class (similar pattern to `TaskManager`)
+  - Methods:
+    - `create_job(name, task_type, description='')` → returns job_id
+    - `get_job(job_id)` → returns job dict
+    - `get_all_jobs(task_type=None)` → returns list of job dicts
+    - `update_job(job_id, **kwargs)`
+    - `delete_job(job_id)` (with safety checks)
+    - `assign_task_to_job(task_id, job_id)`
+    - `remove_task_from_job(task_id, job_id)`
+    - `get_tasks_for_job(job_id)` → returns list of task dicts
+    - `get_jobs_for_task(task_id)` → returns list of job dicts
+    - `get_top_jobs(limit=10, days=30)` → returns jobs with completions in last 30 days, sorted by completion count
+  - Support both database and CSV backends (dual backend pattern)
 
 ### Phase 2: Migration Scripts
 
-**Create [migrate_add_jobs.py](task_aversion_app/migrate_add_jobs.py)**
+**Create [migrate_add_jobs.py**](task_aversion_app/migrate_add_jobs.py)
 
 - Create default jobs (Development, Education, Music, Upkeep, Fitness, Videogames, Chat, Bar)
 - Create `jobs` and `job_task_mapping` tables
@@ -141,108 +136,88 @@ task_type (Work, Self care, Play)
 **Files to modify:**
 
 1. **[ui/dashboard.py](task_aversion_app/ui/dashboard.py)**
-
-   - Replace "Quick Tasks (Last 5)" with "Top Jobs"
-   - Display job cards showing:
-     - Job name
-     - Number of instances completed (last 30 days)
-     - Total time spent (last 30 days)
-     - Task count for that job
-   - Click job card → navigate to job task selection page
-   - Filter: Only show jobs with completions in last 30 days
-
-2. **Create [ui/job_task_selection.py](task_aversion_app/ui/job_task_selection.py)**
-
-   - New page: `/job-tasks?job_id={job_id}`
-   - Display all tasks assigned to the job
-   - "Initialize Task" button for each task
-   - "Add New Task to Job" button (creates task and assigns to job)
-   - Search/filter tasks within job
-   - Back button to dashboard
-
+  - Replace "Quick Tasks (Last 5)" with "Top Jobs"
+  - Display job cards showing:
+    - Job name
+    - Number of instances completed (last 30 days)
+    - Total time spent (last 30 days)
+    - Task count for that job
+  - Click job card → navigate to job task selection page
+  - Filter: Only show jobs with completions in last 30 days
+2. **Create [ui/job_task_selection.py**](task_aversion_app/ui/job_task_selection.py)
+  - New page: `/job-tasks?job_id={job_id}`
+  - Display all tasks assigned to the job
+  - "Initialize Task" button for each task
+  - "Add New Task to Job" button (creates task and assigns to job)
+  - Search/filter tasks within job
+  - Back button to dashboard
 3. **[ui/dashboard.py](task_aversion_app/ui/dashboard.py)** - Search Enhancement
-
-   - Add search mode toggle: "Search by Job" or "Search by Task"
-   - Job search: Search job names, show matching jobs
-   - Task search: Existing behavior (search task names/descriptions)
-   - Unified search: Search both jobs and tasks, show results grouped
+  - Add search mode toggle: "Search by Job" or "Search by Task"
+  - Job search: Search job names, show matching jobs
+  - Task search: Existing behavior (search task names/descriptions)
+  - Unified search: Search both jobs and tasks, show results grouped
 
 ### Phase 4: Backend Integration
 
 **Files to modify:**
 
 1. **[backend/task_manager.py](task_aversion_app/backend/task_manager.py)**
-
-   - Update `create_task()` to optionally accept `job_ids` parameter
-   - Add `assign_to_jobs(task_id, job_ids)` method
-   - Update `get_task()` to include `job_ids` in returned dict
-
+  - Update `create_task()` to optionally accept `job_ids` parameter
+  - Add `assign_to_jobs(task_id, job_ids)` method
+  - Update `get_task()` to include `job_ids` in returned dict
 2. **[backend/instance_manager.py](task_aversion_app/backend/instance_manager.py)**
-
-   - Update `create_instance()` to preserve job context (optional)
-   - Add helper method `get_job_for_instance(instance_id)` → returns job info
-
+  - Update `create_instance()` to preserve job context (optional)
+  - Add helper method `get_job_for_instance(instance_id)` → returns job info
 3. **[ui/create_task.py](task_aversion_app/ui/create_task.py)**
-
-   - Add job selection (multi-select) when creating task
-   - Show job assignment in task edit form
+  - Add job selection (multi-select) when creating task
+  - Show job assignment in task edit form
 
 ### Phase 5: Analytics Integration
 
 **Files to modify:**
 
 1. **[backend/analytics.py](task_aversion_app/backend/analytics.py)**
-
-   - Add `get_top_jobs(days=30, limit=10)` method:
-     - Returns jobs with completions in last N days
-     - Includes: job_id, name, completion_count, total_time_minutes, avg_relief, avg_aversion
-     - Sorted by completion_count descending
-
-   - Add `get_job_analytics(job_id, days=30)` method:
-     - Job-specific metrics: completion rate, avg relief, avg aversion, time distribution
-     - Emotional patterns: stress/relief trends for this job
-     - Task performance within job
-
-   - Add `get_cross_job_recommendations(job_id, limit=5)` method:
-     - Recommends tasks from other jobs based on:
-       - Similar emotional profiles (similar relief/stress patterns)
-       - Complementary skills
-       - Cross-job correlations
-
-   - Add `get_universal_task_analytics()` method:
-     - Finds tasks that work well across multiple jobs
-     - Identifies tasks with high relief/low stress across all jobs
-     - Discovers correlations between tasks and jobs
-     - Useful for finding "universal" tasks (like brainstorming)
-
+  - Add `get_top_jobs(days=30, limit=10)` method:
+    - Returns jobs with completions in last N days
+    - Includes: job_id, name, completion_count, total_time_minutes, avg_relief, avg_aversion
+    - Sorted by completion_count descending
+  - Add `get_job_analytics(job_id, days=30)` method:
+    - Job-specific metrics: completion rate, avg relief, avg aversion, time distribution
+    - Emotional patterns: stress/relief trends for this job
+    - Task performance within job
+  - Add `get_cross_job_recommendations(job_id, limit=5)` method:
+    - Recommends tasks from other jobs based on:
+      - Similar emotional profiles (similar relief/stress patterns)
+      - Complementary skills
+      - Cross-job correlations
+  - Add `get_universal_task_analytics()` method:
+    - Finds tasks that work well across multiple jobs
+    - Identifies tasks with high relief/low stress across all jobs
+    - Discovers correlations between tasks and jobs
+    - Useful for finding "universal" tasks (like brainstorming)
 2. **[ui/analytics_page.py](task_aversion_app/ui/analytics_page.py)** (if exists)
-
-   - Add "Job Analytics" section
-   - Display top jobs chart
-   - Job-specific analytics views
-   - Cross-job recommendations display
+  - Add "Job Analytics" section
+  - Display top jobs chart
+  - Job-specific analytics views
+  - Cross-job recommendations display
 
 ### Phase 6: Dashboard Updates
 
 **Files to modify:**
 
 1. **[ui/dashboard.py](task_aversion_app/ui/dashboard.py)**
-
-   - Update `get_top_jobs()` helper function:
-     - Query JobManager for top jobs (last 30 days)
-     - Format: job name, completion count, time spent
-     - Filter out jobs with no recent activity
-
-   - Update template search:
-     - Add job search mode
-     - Show job results separately from task results
-     - Allow filtering by job
-
+  - Update `get_top_jobs()` helper function:
+    - Query JobManager for top jobs (last 30 days)
+    - Format: job name, completion count, time spent
+    - Filter out jobs with no recent activity
+  - Update template search:
+    - Add job search mode
+    - Show job results separately from task results
+    - Allow filtering by job
 2. **Navigation flow:**
-   ```
+  ```
    Dashboard → Click "Top Job" → Job Task Selection Page → Select Task → Initialize Task (existing flow)
-   ```
-
+  ```
 
 ## Data Flow
 
@@ -308,3 +283,4 @@ def get_top_jobs(days=30, limit=10):
 - `backend/analytics.py` (job analytics methods)
 - `ui/dashboard.py` (Top Jobs, search enhancement)
 - `ui/create_task.py` (job selection)
+

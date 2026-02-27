@@ -4,7 +4,6 @@ from backend.instance_manager import InstanceManager
 from backend.analytics import Analytics
 from backend.auth import get_current_user, logout
 from ui.error_reporting import handle_error_with_ui
-import json
 
 analytics = Analytics()
 
@@ -164,8 +163,6 @@ def _build_settings_content(user_id):
                 settings.update(existing)
                 user_state.set_productivity_goal_settings(current_user_id_str, settings)
                 ui.notify("Goal hours saved!", color="positive")
-                # Update display
-                daily_target_new = new_goal / 5.0
                 ui.navigate.reload()
             
             ui.button("Save Goal Hours", on_click=save_goal_hours).classes("bg-green-500 text-white mt-2 w-full")
@@ -179,8 +176,6 @@ def _build_settings_content(user_id):
             try:
                 from backend.csv_export import create_data_zip
                 import os
-                import tempfile
-                from pathlib import Path
                 
                 # CRITICAL: Get current logged-in user_id for data isolation
                 current_user_id = get_current_user()

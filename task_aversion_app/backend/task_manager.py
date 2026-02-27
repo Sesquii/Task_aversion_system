@@ -256,8 +256,18 @@ class TaskManager:
                 # CSV doesn't have user_id column - return None for security (data isolation)
                 print(f"[TaskManager] WARNING: CSV mode - user_id filtering requested but 'user_id' column not found. Returning None for data isolation.")
                 return None
-            return rows.iloc[0].to_dict() if not rows.empty else None
-    
+            if rows.empty:
+                return None
+            out = rows.iloc[0].to_dict()
+            try:
+                from backend.job_manager import JobManager
+                jm = JobManager(use_csv=True)
+                jobs = jm.get_jobs_for_task(task_id)
+                out['job_ids'] = [j['job_id'] for j in jobs]
+            except Exception:
+                out['job_ids'] = []
+            return out
+
     def _get_task_db(self, task_id, user_id: Optional[int] = None):
         """Database-specific get_task."""
         try:
@@ -270,7 +280,17 @@ class TaskManager:
                         from sqlalchemy import or_
                         query = query.filter(or_(self.Task.user_id == user_id, self.Task.user_id.is_(None)))
                     task = query.first()
-                    return task.to_dict() if task else None
+                    if task is None:
+                        return None
+                    out = task.to_dict()
+                    try:
+                        from backend.job_manager import JobManager
+                        jm = JobManager(use_csv=not self.use_db)
+                        jobs = jm.get_jobs_for_task(task_id)
+                        out['job_ids'] = [j['job_id'] for j in jobs]
+                    except Exception:
+                        out['job_ids'] = []
+                    return out
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in get_task and CSV fallback is disabled: {e}") from e
@@ -432,10 +452,10 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._get_all_csv(user_id)
 
-    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None):
+    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None, job_ids: Optional[List[str]] = None):
         """
         Creates a new task definition and returns task_id. Works with both CSV and database.
-        
+
         Args:
             default_initial_aversion: Optional initial aversion value (0-100) to use as default when first initializing this task
             routine_frequency: 'none', 'daily', or 'weekly'
@@ -444,7 +464,8 @@ class TaskManager:
             completion_window_hours: Hours to complete task after initialization without penalty
             completion_window_days: Days to complete task after initialization without penalty
             user_id: User ID to associate task with (required for database, optional for CSV during migration)
-            
+            job_ids: Optional list of job_id to assign this task to (after creation).
+
         Raises:
             ValidationError: If input validation fails (name too long, etc.)
         """
@@ -454,15 +475,18 @@ class TaskManager:
             description = validate_description(description)
         except ValidationError as e:
             raise  # Re-raise validation errors for UI to handle
-        
+
         if routine_days_of_week is None:
             routine_days_of_week = []
         # Invalidate caches before creating
         self._invalidate_task_caches()
         if self.use_db:
-            return self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days, user_id)
+            task_id = self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days, user_id)
         else:
-            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
+            task_id = self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
+        if task_id and job_ids:
+            self.assign_to_jobs(task_id, job_ids, user_id=user_id)
+        return task_id
     
     def _create_task_csv(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
         """CSV-specific create_task."""
@@ -688,6 +712,36 @@ class TaskManager:
             self.use_db = False
             self._ensure_csv_initialized()
             return self._update_task_csv(task_id, user_id, **kwargs)
+
+    def assign_to_jobs(
+        self,
+        task_id: str,
+        job_ids: List[str],
+        user_id: Optional[int] = None,
+    ) -> None:
+        """Set job assignment for a task. Replaces existing assignments.
+
+        Args:
+            task_id: Task ID to assign.
+            job_ids: List of job_id to assign the task to (can be empty to clear).
+            user_id: User ID (optional; used for consistency, job assignment is global per task).
+        """
+        try:
+            from backend.job_manager import JobManager
+        except ImportError:
+            return
+        jm = JobManager(use_csv=not self.use_db)
+        current = jm.get_jobs_for_task(task_id)
+        current_ids = {j['job_id'] for j in current}
+        for jid in current_ids:
+            if jid not in job_ids:
+                jm.remove_task_from_job(task_id, jid)
+        for jid in job_ids:
+            if jid not in current_ids:
+                try:
+                    jm.assign_task_to_job(task_id, jid)
+                except ValueError:
+                    pass  # Job does not exist
 
     def find_by_name(self, name, user_id: Optional[int] = None):
         """Find a task by name. Works with both CSV and database.

@@ -71,7 +71,11 @@ def build_known_issues_page():
             with ui.card().classes("p-4 bg-yellow-50 border-l-4 border-yellow-400"):
                 ui.label("Current Emotions Display").classes("text-lg font-semibold mb-2")
                 ui.label("'Current emotions' from a task initialized but having a delay to activation will actually display the initialization emotions instead of the most recently completed task emotions.").classes("text-sm")
-    
+
+            with ui.card().classes("p-4 bg-yellow-50 border-l-4 border-yellow-400"):
+                ui.label("Initialized Tasks Search").classes("text-lg font-semibold mb-2")
+                ui.label("Typing in the search box for initialized tasks (e.g. \"recommendation\") can show all tasks instead of filtering. Search filter logic is not applied correctly in some cases. Low priority.").classes("text-sm")
+
     # Back to Dashboard button
     with ui.row().classes("mt-6"):
         ui.button("← Back to Dashboard", 

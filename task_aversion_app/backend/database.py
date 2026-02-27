@@ -626,5 +626,59 @@ class SurveyResponse(Base):
         return f"<SurveyResponse(response_id='{self.response_id}', user_id='{self.user_id}', question_category='{self.question_category}')>"
 
 
+# ============================================================================
+# Jobs (grouping layer between task_type and tasks)
+# ============================================================================
+
+class Job(Base):
+    """
+    Job model - groups tasks into meaningful categories (Development, Upkeep, Fitness, etc.).
+    Links to task_type (Work, Self care, Play). Tasks can belong to multiple jobs (many-to-many).
+    """
+    __tablename__ = 'jobs'
+
+    job_id = Column(String, primary_key=True)  # Format: j{timestamp}
+    name = Column(String, nullable=False, index=True)
+    task_type = Column(String, default='Work', index=True)  # Work, Self care, Play
+    description = Column(Text, default='')
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary."""
+        return {
+            'job_id': self.job_id,
+            'name': self.name,
+            'task_type': self.task_type or 'Work',
+            'description': self.description or '',
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self):
+        return f"<Job(job_id='{self.job_id}', name='{self.name}')>"
+
+
+class JobTaskMapping(Base):
+    """
+    Many-to-many mapping between jobs and tasks.
+    A task can belong to multiple jobs.
+    """
+    __tablename__ = 'job_task_mapping'
+
+    job_id = Column(String, ForeignKey('jobs.job_id', ondelete='CASCADE'), primary_key=True)
+    task_id = Column(String, ForeignKey('tasks.task_id', ondelete='CASCADE'), primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def to_dict(self) -> dict:
+        """Convert model instance to dictionary."""
+        return {
+            'job_id': self.job_id,
+            'task_id': self.task_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    __table_args__ = ()
+
 # Future models will be added here as needed
 

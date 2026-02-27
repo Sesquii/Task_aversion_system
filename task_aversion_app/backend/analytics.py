@@ -3892,7 +3892,313 @@ class Analytics:
                             to_process.add(dep)
         
         return expanded
-    
+
+    def get_top_jobs(
+        self,
+        days: int = 30,
+        limit: int = 10,
+        user_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return jobs with completions in the last N days, sorted by completion count.
+
+        Only includes jobs that have at least one completed instance in the window.
+        Each result includes job_id, name, completion_count, total_time_minutes,
+        avg_relief, avg_aversion, and task_count.
+
+        Args:
+            days: Number of days to look back (default 30).
+            limit: Maximum number of jobs to return (default 10).
+            user_id: User ID for data isolation. If None, uses current user from auth.
+        """
+        user_id = self._get_user_id(user_id)
+        if user_id is None:
+            return []
+
+        try:
+            from backend.job_manager import JobManager
+        except ImportError:
+            return []
+
+        jm = JobManager(use_csv=os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes'))
+        all_jobs = jm.get_all_jobs()
+        if not all_jobs:
+            return []
+
+        completed_df = self._load_instances(completed_only=True, user_id=user_id)
+        if completed_df.empty or 'completed_at' not in completed_df.columns:
+            return []
+        completed_df = completed_df[
+            completed_df['completed_at'].astype(str).str.strip() != ''
+        ].copy()
+        if completed_df.empty:
+            return []
+        completed_df['completed_at_dt'] = pd.to_datetime(
+            completed_df['completed_at'], errors='coerce'
+        )
+        completed_df = completed_df.dropna(subset=['completed_at_dt'])
+        cutoff = datetime.now() - timedelta(days=days)
+        completed_df = completed_df[completed_df['completed_at_dt'] >= cutoff]
+        if completed_df.empty:
+            return []
+
+        def safe_float(val: Any, default: float = 0.0) -> float:
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                return default
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return default
+
+        results = []
+        for job in all_jobs:
+            job_id = job.get('job_id')
+            name = job.get('name') or 'Unnamed'
+            tasks = jm.get_tasks_for_job(job_id, user_id=user_id)
+            task_ids = {t.get('task_id') for t in tasks if t.get('task_id')}
+            if not task_ids:
+                continue
+            job_instances = completed_df[completed_df['task_id'].isin(task_ids)]
+            if job_instances.empty:
+                continue
+            completion_count = len(job_instances)
+            total_time = job_instances['duration_minutes'].apply(
+                lambda x: safe_float(x, 0.0)
+            ).sum()
+            relief_vals = job_instances['relief_score'].apply(
+                lambda x: safe_float(x, None)
+            ).dropna()
+            avg_relief = float(relief_vals.mean()) if len(relief_vals) > 0 else None
+            aversion_vals = None
+            if 'emotional_load' in job_instances.columns:
+                aversion_vals = job_instances['emotional_load'].apply(
+                    lambda x: safe_float(x, None)
+                ).dropna()
+            avg_aversion = float(aversion_vals.mean()) if aversion_vals is not None and len(aversion_vals) > 0 else None
+            results.append({
+                'job_id': job_id,
+                'name': name,
+                'task_type': job.get('task_type') or 'Work',
+                'completion_count': completion_count,
+                'total_time_minutes': round(total_time, 1),
+                'avg_relief': round(avg_relief, 2) if avg_relief is not None else None,
+                'avg_aversion': round(avg_aversion, 2) if avg_aversion is not None else None,
+                'task_count': len(tasks),
+            })
+        results.sort(key=lambda x: x['completion_count'], reverse=True)
+        return results[:limit]
+
+    def get_job_analytics(
+        self,
+        job_id: str,
+        days: int = 30,
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Job-specific metrics: completion rate, avg relief/aversion, time distribution, task performance."""
+        user_id = self._get_user_id(user_id)
+        if user_id is None:
+            return {}
+
+        try:
+            from backend.job_manager import JobManager
+        except ImportError:
+            return {}
+
+        jm = JobManager(use_csv=os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes'))
+        job = jm.get_job(job_id)
+        if not job:
+            return {}
+        tasks = jm.get_tasks_for_job(job_id, user_id=user_id)
+        task_ids = {t.get('task_id') for t in tasks if t.get('task_id')}
+        if not task_ids:
+            return {
+                'job_id': job_id,
+                'name': job.get('name'),
+                'task_type': job.get('task_type'),
+                'completion_count': 0,
+                'total_time_minutes': 0,
+                'avg_relief': None,
+                'avg_aversion': None,
+                'task_count': 0,
+                'task_performance': [],
+            }
+
+        completed_df = self._load_instances(completed_only=True, user_id=user_id)
+        if completed_df.empty or 'completed_at' not in completed_df.columns:
+            return {
+                'job_id': job_id,
+                'name': job.get('name'),
+                'task_type': job.get('task_type'),
+                'completion_count': 0,
+                'total_time_minutes': 0,
+                'avg_relief': None,
+                'avg_aversion': None,
+                'task_count': len(tasks),
+                'task_performance': [],
+            }
+        completed_df = completed_df[completed_df['completed_at'].astype(str).str.strip() != ''].copy()
+        completed_df['completed_at_dt'] = pd.to_datetime(completed_df['completed_at'], errors='coerce')
+        completed_df = completed_df.dropna(subset=['completed_at_dt'])
+        cutoff = datetime.now() - timedelta(days=days)
+        completed_df = completed_df[completed_df['completed_at_dt'] >= cutoff]
+        job_instances = completed_df[completed_df['task_id'].isin(task_ids)]
+
+        def safe_float(val: Any, default: float = 0.0) -> float:
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                return default
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return default
+
+        completion_count = len(job_instances)
+        total_time = job_instances['duration_minutes'].apply(lambda x: safe_float(x, 0.0)).sum()
+        relief_vals = job_instances['relief_score'].apply(lambda x: safe_float(x, None)).dropna()
+        avg_relief = float(relief_vals.mean()) if len(relief_vals) > 0 else None
+        avg_aversion = None
+        if 'emotional_load' in job_instances.columns:
+            av = job_instances['emotional_load'].apply(lambda x: safe_float(x, None)).dropna()
+            avg_aversion = float(av.mean()) if len(av) > 0 else None
+
+        task_performance = []
+        if not job_instances.empty and 'task_id' in job_instances.columns:
+            for tid in task_ids:
+                tinst = job_instances[job_instances['task_id'] == tid]
+                if tinst.empty:
+                    continue
+                task_performance.append({
+                    'task_id': tid,
+                    'completion_count': len(tinst),
+                    'total_time_minutes': round(tinst['duration_minutes'].apply(lambda x: safe_float(x, 0.0)).sum(), 1),
+                })
+        task_performance.sort(key=lambda x: x['completion_count'], reverse=True)
+
+        return {
+            'job_id': job_id,
+            'name': job.get('name'),
+            'task_type': job.get('task_type'),
+            'completion_count': completion_count,
+            'total_time_minutes': round(total_time, 1),
+            'avg_relief': round(avg_relief, 2) if avg_relief is not None else None,
+            'avg_aversion': round(avg_aversion, 2) if avg_aversion is not None else None,
+            'task_count': len(tasks),
+            'task_performance': task_performance,
+        }
+
+    def get_cross_job_recommendations(
+        self,
+        job_id: str,
+        limit: int = 5,
+        user_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Recommend tasks from other jobs based on similar emotional profiles (relief/stress)."""
+        user_id = self._get_user_id(user_id)
+        if user_id is None:
+            return []
+
+        try:
+            from backend.job_manager import JobManager
+        except ImportError:
+            return []
+
+        jm = JobManager(use_csv=os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes'))
+        job_analytics = self.get_job_analytics(job_id, days=30, user_id=user_id)
+        if not job_analytics or job_analytics.get('completion_count', 0) == 0:
+            return []
+        target_avg_relief = job_analytics.get('avg_relief')
+        target_avg_aversion = job_analytics.get('avg_aversion')
+        all_jobs = jm.get_all_jobs()
+        candidates = []
+        for j in all_jobs:
+            if j.get('job_id') == job_id:
+                continue
+            ja = self.get_job_analytics(j.get('job_id'), days=30, user_id=user_id)
+            if not ja or ja.get('completion_count', 0) == 0:
+                continue
+            dr = abs((ja.get('avg_relief') or 0) - (target_avg_relief or 0))
+            da = abs((ja.get('avg_aversion') or 0) - (target_avg_aversion or 0))
+            candidates.append((dr + da, j, ja))
+        candidates.sort(key=lambda x: x[0])
+        out = []
+        for _dist, j, _ja in candidates[: limit * 2]:
+            tasks = jm.get_tasks_for_job(j['job_id'], user_id=user_id)
+            for t in tasks[:2]:
+                out.append({
+                    'task_id': t.get('task_id'),
+                    'task_name': t.get('name'),
+                    'job_id': j['job_id'],
+                    'job_name': j.get('name'),
+                })
+                if len(out) >= limit:
+                    break
+            if len(out) >= limit:
+                break
+        return out[:limit]
+
+    def get_universal_task_analytics(
+        self,
+        user_id: Optional[int] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Find tasks with high relief / low stress that appear across multiple jobs."""
+        user_id = self._get_user_id(user_id)
+        if user_id is None:
+            return []
+
+        try:
+            from backend.job_manager import JobManager
+        except ImportError:
+            return []
+
+        jm = JobManager(use_csv=os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes'))
+        completed_df = self._load_instances(completed_only=True, user_id=user_id)
+        if completed_df.empty or 'relief_score' not in completed_df.columns:
+            return []
+        completed_df = completed_df[completed_df['completed_at'].astype(str).str.strip() != ''].copy()
+        task_job_count = {}
+        task_relief = {}
+        task_aversion = {}
+        for _idx, row in completed_df.iterrows():
+            tid = row.get('task_id')
+            if not tid:
+                continue
+            jobs = jm.get_jobs_for_task(tid)
+            n_jobs = len(jobs)
+            task_job_count[tid] = task_job_count.get(tid, 0) + n_jobs if n_jobs > 0 else 1
+            r = row.get('relief_score')
+            try:
+                r = float(r) if r not in (None, '', np.nan) else None
+            except (TypeError, ValueError):
+                r = None
+            if r is not None:
+                if tid not in task_relief:
+                    task_relief[tid] = []
+                task_relief[tid].append(r)
+            el = row.get('emotional_load') if 'emotional_load' in completed_df.columns else None
+            try:
+                el = float(el) if el not in (None, '', np.nan) else None
+            except (TypeError, ValueError):
+                el = None
+            if el is not None:
+                if tid not in task_aversion:
+                    task_aversion[tid] = []
+                task_aversion[tid].append(el)
+        universal = []
+        for tid, relief_list in task_relief.items():
+            avg_r = sum(relief_list) / len(relief_list)
+            avg_a = None
+            if tid in task_aversion and task_aversion[tid]:
+                avg_a = sum(task_aversion[tid]) / len(task_aversion[tid])
+            job_count = task_job_count.get(tid, 0)
+            universal.append({
+                'task_id': tid,
+                'avg_relief': round(avg_r, 2),
+                'avg_aversion': round(avg_a, 2) if avg_a is not None else None,
+                'job_count': job_count,
+                'completion_count': len(relief_list),
+            })
+        universal.sort(key=lambda x: (-x['avg_relief'], x['avg_aversion'] or 999))
+        return universal[:limit]
+
     def get_dashboard_metrics(
         self,
         metrics: Optional[List[str]] = None,

@@ -23,6 +23,10 @@ from backend.auth import get_current_user, oauth_callback
 from ui.dashboard import build_dashboard, build_dashboard_mobile_b
 from ui.create_task import create_task_page
 from ui.initialize_task import initialize_task_page
+from ui.job_task_selection import register_job_task_selection_page
+from ui.assign_tasks_to_jobs import register_assign_tasks_to_jobs_page
+from ui.create_job import register_create_job_page
+from ui.jobs_page import register_jobs_page
 from ui.complete_task import complete_task_page
 from ui.cancel_task import cancel_task_page
 from ui.analytics_page import register_analytics_page
@@ -32,29 +36,30 @@ from ui.known_issues_page import register_known_issues_page
 from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handling
 # Import pages - these will auto-register via @ui.page() decorators
 # Import order matters - login page should be imported first
-from ui.login import login_page  # registers /login
-from ui import choose_experience  # registers /choose-experience
+# These imports are for side effects (route registration via @ui.page)
+from ui.login import login_page  # noqa: F401  (registers /login)
+from ui import choose_experience  # noqa: F401  (registers /choose-experience)
 # import submodules without rebinding the nicegui `ui` object
-from ui import survey_page  # registers /survey
-from ui import settings_page  # registers /settings
-from ui import cancelled_tasks_page  # registers /cancelled-tasks
-from ui import task_editing_manager  # registers /task-editing-manager
-from ui import composite_score_weights_page  # registers /settings/composite-score-weights
-from ui import cancellation_penalties_page  # registers /settings/cancellation-penalties
-from ui import productivity_settings_page  # registers /settings/productivity-settings
+from ui import survey_page  # noqa: F401  (registers /survey)
+from ui import settings_page  # noqa: F401  (registers /settings)
+from ui import cancelled_tasks_page  # noqa: F401  (registers /cancelled-tasks)
+from ui import task_editing_manager  # noqa: F401  (registers /task-editing-manager)
+from ui import composite_score_weights_page  # noqa: F401  (registers /settings/composite-score-weights)
+from ui import cancellation_penalties_page  # noqa: F401  (registers /settings/cancellation-penalties)
+from ui import productivity_settings_page  # noqa: F401  (registers /settings/productivity-settings)
 # from ui import data_guide_page  # registers /data-guide - TODO: Re-enable when data guide is updated for local setup
-from ui import composite_score_page  # registers /composite-score
-from ui import summary_page  # registers /summary
-from ui import notes_page  # registers /notes
-from ui import productivity_goals_experimental  # registers /goals/productivity-hours
-from ui import goals_page  # registers /goals
-from ui import productivity_module  # registers /productivity-module - ⚠️ FLAGGED FOR REMOVAL AFTER REVIEW
-from ui import experimental_landing  # registers /experimental
+from ui import composite_score_page  # noqa: F401  (registers /composite-score)
+from ui import summary_page  # noqa: F401  (registers /summary)
+from ui import notes_page  # noqa: F401  (registers /notes)
+from ui import productivity_goals_experimental  # noqa: F401  (registers /goals/productivity-hours)
+from ui import goals_page  # noqa: F401  (registers /goals)
+from ui import productivity_module  # noqa: F401  (registers /productivity-module) - flagged for removal after review
+from ui import experimental_landing  # noqa: F401  (registers /experimental)
 from ui.formula_baseline_charts import register_formula_baseline_charts  # registers /experimental/formula-baseline-charts
-from ui import formula_control_system  # registers /experimental/formula-control-system/productivity-score
-from ui import coursera_analysis  # registers /experimental/coursera-analysis
-from ui import productivity_grit_tradeoff  # registers /experimental/productivity-grit-tradeoff
-from ui import task_distribution  # registers /experimental/task-distribution
+from ui import formula_control_system  # noqa: F401  (registers /experimental/formula-control-system/productivity-score)
+from ui import coursera_analysis  # noqa: F401  (registers /experimental/coursera-analysis)
+from ui import productivity_grit_tradeoff  # noqa: F401  (registers /experimental/productivity-grit-tradeoff)
+from ui import task_distribution  # noqa: F401  (registers /experimental/task-distribution)
 
 
 task_manager = TaskManager()
@@ -105,7 +110,7 @@ def register_pages():
                 build_dashboard_mobile_b(task_manager, user_id=user_id)
             else:
                 build_dashboard(task_manager, user_id=user_id)
-        except Exception as e:
+        except Exception:
             # Show user-friendly error page instead of crashing
             import traceback
             error_details = traceback.format_exc()
@@ -140,6 +145,10 @@ def register_pages():
 
     create_task_page(task_manager, emotion_manager)
     initialize_task_page(task_manager, emotion_manager)
+    register_job_task_selection_page(task_manager)
+    register_assign_tasks_to_jobs_page(task_manager)
+    register_create_job_page()
+    register_jobs_page()
     complete_task_page(task_manager, emotion_manager)
     cancel_task_page(task_manager, emotion_manager)
     register_analytics_page()

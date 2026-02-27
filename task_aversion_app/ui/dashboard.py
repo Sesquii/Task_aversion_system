@@ -7,7 +7,6 @@ import time
 import logging
 from datetime import datetime
 from typing import Optional
-import plotly.express as px
 import plotly.graph_objects as go
 from backend.task_manager import TaskManager
 from backend.instance_manager import InstanceManager
@@ -886,12 +885,13 @@ def refresh_initialized_tasks(search_query=None):
     print(f"[Dashboard] refresh_initialized_tasks() completed successfully in {refresh_duration:.2f}ms")
 
 
-def refresh_templates(search_query=None):
+def refresh_templates(search_query=None, search_mode='task'):
     """
     Refresh the task templates display with optional search filtering.
-    
+
     Args:
-        search_query: Optional string to filter templates by name, description, or task_type
+        search_query: Optional string to filter templates and/or jobs by name, description, type.
+        search_mode: 'task' (templates only), 'job' (jobs only), or 'both' (jobs then templates).
     """
     global template_col
     # #region agent log
@@ -987,38 +987,56 @@ def refresh_templates(search_query=None):
 
     template_col.clear()
 
-    if not rows:
-        print("[Dashboard] No templates to display after filtering")
-        with template_col:
-            if search_query:
-                ui.markdown(f"_No templates match '{search_query}'_")
-            else:
-                ui.markdown("_No templates available_")
-        return
+    q_lower = str(search_query).strip().lower() if search_query else None
+    show_jobs = search_mode in ('job', 'both')
+    show_tasks = search_mode in ('task', 'both')
 
-    print(f"[Dashboard] Rendering {len(rows)} templates in 3-column layout")
-
-    # Use 3 nested columns for templates
     with template_col:
-        col1 = ui.column().classes("w-1/3")
-        col2 = ui.column().classes("w-1/3")
-        col3 = ui.column().classes("w-1/3")
-        columns = [col1, col2, col3]
-        
-        for idx, t in enumerate(rows):
-            col = columns[idx % 3]
-            print(f"[Dashboard] Rendering template {idx+1}/{len(rows)}: '{t.get('name')}' in column {idx % 3 + 1}")
-            with col:
-                task_id = t['task_id']
-                card_id = f"template-{task_id}"
-                with ui.card().classes("p-2 mb-2 w-full context-menu-card").props(f'id="{card_id}" data-template-id="{task_id}" data-context-menu="template"'):
-                    ui.markdown(f"**{escape_for_display(t['name'])}**").classes("text-xs")
-                    ui.button("Initialize", on_click=lambda tid=task_id: init_quick(tid)).props("dense size=sm").classes("w-full")
-                    # Hidden buttons for context menu actions
-                    ui.button("", on_click=lambda task=t: edit_template(task)).props(f'id="context-btn-template-edit-{task_id}"').style("display: none;")
-                    ui.button("", on_click=lambda task=t: copy_template(task)).props(f'id="context-btn-template-copy-{task_id}"').style("display: none;")
-                    ui.button("", on_click=lambda tid=task_id: delete_template(tid)).props(f'id="context-btn-template-delete-{task_id}"').style("display: none;")
-    
+        if show_jobs:
+            try:
+                from backend.job_manager import JobManager
+                jm = JobManager()
+                all_jobs = jm.get_all_jobs()
+            except Exception:
+                all_jobs = []
+            job_rows = all_jobs
+            if q_lower:
+                job_rows = [j for j in all_jobs if q_lower in (j.get('name') or '').lower() or q_lower in (j.get('task_type') or '').lower()]
+            if job_rows:
+                ui.markdown("**Jobs**").classes("text-sm font-semibold w-full mb-2")
+                job_row = ui.row().classes("w-full gap-2 flex-wrap")
+                with job_row:
+                    for j in job_rows:
+                        jid = j.get('job_id', '')
+                        jname = j.get('name', 'Unnamed')
+                        with ui.card().classes("p-2 mb-2 flex-1 min-w-[140px]").style("cursor: pointer;").on("click", lambda jid=jid: ui.navigate.to(f"/job-tasks?job_id={jid}")):
+                            ui.label(escape_for_display(jname)).classes("text-xs font-medium")
+                            ui.label(j.get('task_type') or 'Work').classes("text-xs text-gray-500")
+                ui.separator().classes("my-2")
+            elif show_jobs and not show_tasks:
+                ui.markdown("_No jobs match your search_" if q_lower else "_No jobs_").classes("text-sm text-gray-500")
+
+        if show_tasks:
+            if not rows:
+                ui.markdown("_No templates match your search_" if q_lower else "_No templates available_").classes("text-sm text-gray-500")
+            else:
+                ui.markdown("**Tasks**").classes("text-sm font-semibold w-full mb-2")
+                col1 = ui.column().classes("w-1/3")
+                col2 = ui.column().classes("w-1/3")
+                col3 = ui.column().classes("w-1/3")
+                columns = [col1, col2, col3]
+                for idx, t in enumerate(rows):
+                    col = columns[idx % 3]
+                    with col:
+                        task_id = t['task_id']
+                        card_id = f"template-{task_id}"
+                        with ui.card().classes("p-2 mb-2 w-full context-menu-card").props(f'id="{card_id}" data-template-id="{task_id}" data-context-menu="template"'):
+                            ui.markdown(f"**{escape_for_display(t['name'])}**").classes("text-xs")
+                            ui.button("Initialize", on_click=lambda tid=task_id: init_quick(tid)).props("dense size=sm").classes("w-full")
+                            ui.button("", on_click=lambda task=t: edit_template(task)).props(f'id="context-btn-template-edit-{task_id}"').style("display: none;")
+                            ui.button("", on_click=lambda task=t: copy_template(task)).props(f'id="context-btn-template-copy-{task_id}"').style("display: none;")
+                            ui.button("", on_click=lambda tid=task_id: delete_template(tid)).props(f'id="context-btn-template-delete-{task_id}"').style("display: none;")
+
     refresh_duration = (time.perf_counter() - refresh_start) * 1000
     if init_perf_logger:
         init_perf_logger.log_timing("refresh_templates_total", refresh_duration, search_query=search_query)
@@ -1715,14 +1733,14 @@ def edit_template(task):
     current_desc = task.get('description', '')
     current_task_type = task.get('task_type', 'Work')
     current_est = task.get('default_estimate_minutes', 0)
-    
+
     # Get routine scheduling fields
     current_routine_frequency = task.get('routine_frequency', 'none') or 'none'
     current_routine_time = task.get('routine_time', '00:00') or '00:00'
     current_routine_days_str = task.get('routine_days_of_week', '[]') or '[]'
     current_completion_window_hours = task.get('completion_window_hours', '') or ''
     current_completion_window_days = task.get('completion_window_days', '') or ''
-    
+
     try:
         current_est = int(current_est) if current_est else 0
     except (TypeError, ValueError):
@@ -1757,7 +1775,7 @@ def edit_template(task):
             value=current_task_type
         ).classes("w-full")
         est_input = ui.number(label='Default estimate minutes', value=current_est).classes("w-full")
-        
+
         # Routine scheduling section
         ui.label("Routine Scheduling (Optional)").classes("text-lg font-semibold mt-4")
         
@@ -2574,7 +2592,6 @@ def render_monitored_metrics_section(container):
     Args:
         container: UI container to render into
     """
-    from datetime import datetime, timedelta
     import json
     from backend.auth import get_current_user
     
@@ -2585,7 +2602,6 @@ def render_monitored_metrics_section(container):
     except: pass
     # #endregion
     
-    metrics_start = time.perf_counter()
     init_perf_logger = get_init_perf_logger()
     init_perf_logger.log_event("render_monitored_metrics_start")
     
@@ -3046,7 +3062,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
     # #endregion
     
     # Track last refresh date to detect midnight crossing
-    from datetime import datetime, date
+    from datetime import date
     _monitored_metrics_state['last_refresh_date'] = date.today()
     
     def refresh_idle_metric():
@@ -3190,7 +3206,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
     import json
     import time
     import pandas as pd
-    from ui.analytics_page import CALCULATED_METRICS, ATTRIBUTE_LABELS
+    from ui.analytics_page import ATTRIBUTE_LABELS
     
     # Use provided metrics or empty dicts
     if relief_summary is None:
@@ -3504,7 +3520,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 history_data = metric_config['get_history']()
                 if history_data is None:
                     history_data = {}
-            except Exception as e:
+            except Exception:
                 history_data = {}
 
             # Calculate baseline (skip for daily productivity score - it resets every day)
@@ -3657,7 +3673,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 history_data = metric_config['get_history']()
                 if history_data is None:
                     history_data = {}
-            except Exception as e:
+            except Exception:
                 history_data = {}
             
             # Create tooltip chart if history available
@@ -3753,10 +3769,9 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
         quality_metrics: Optional dict of quality metrics from get_dashboard_metrics()
         composite_scores: Optional dict of composite scores from get_all_scores_for_composite()
     """
-    from datetime import datetime, timedelta
     import json
     from backend.auth import get_current_user
-    from ui.analytics_page import CALCULATED_METRICS, ATTRIBUTE_LABELS
+    from ui.analytics_page import ATTRIBUTE_LABELS
 
     # Resolve user for data isolation (history/tooltips)
     loaded_user_id = get_current_user()
@@ -4076,7 +4091,6 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
 
 def render_metrics_after_load(container, relief_summary, selected_metrics, coloration_baseline):
     """Render metrics after data is loaded."""
-    from datetime import datetime, timedelta
     import json
     init_perf_logger = get_init_perf_logger()
     
@@ -4103,6 +4117,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
             'chart_title': 'Daily Productivity Score'
         },
     }
+    _ = available_metrics
     
     # Create metrics grid (2x2 layout for 4 metrics)
     with container:
@@ -4664,7 +4679,6 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     # Instance cache is invalidated on create/update/delete in InstanceManager.
     tm._invalidate_task_caches()
     
-    dashboard_start_time = time.perf_counter()
     init_perf_logger = get_init_perf_logger()
     init_perf_logger.log_event("dashboard_build_start")
     
@@ -5431,6 +5445,9 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                           on_click=submit_feedback,
                           icon="feedback",
                           color="green").classes("text-xl py-3 px-6").props('data-tooltip-id="feedback_link"')
+                ui.button("Jobs",
+                          on_click=lambda: ui.navigate.to('/jobs'),
+                          icon="work").classes("text-xl py-3 px-6").props('data-tooltip-id="jobs_link"')
                 ui.button("Settings",
                           on_click=lambda: ui.navigate.to('/settings'),
                           icon="settings").classes("text-xl py-3 px-6").props('data-tooltip-id="settings_link"')
@@ -5485,27 +5502,31 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         with init_perf_logger.operation("render_monitored_metrics_section"):
                             render_monitored_metrics_section(left_half)
                         
-                        # Quick Tasks
+                        # Top Jobs (jobs with completions in last 30 days)
                         with ui.card().classes("w-full p-2"):
-                            ui.markdown("### Quick Tasks (Last 5)")
-                            
-                            recent = tm.get_recent(limit=5, user_id=current_user_id) if hasattr(tm, "get_recent") else []
-                            
-                            if not recent:
-                                # Check if user has any tasks at all
-                                all_tasks = tm.get_all(user_id=current_user_id) if hasattr(tm, "get_all") else None
-                                if all_tasks is not None and len(all_tasks) == 0:
-                                    ui.label("No tasks yet").classes("text-xs text-gray-500")
-                                    ui.label("Create your first task using the + CREATE TASK button above").classes("text-xs text-blue-600 mt-1")
-                                else:
-                                    ui.label("No recent tasks").classes("text-xs text-gray-500")
+                            ui.markdown("### Top Jobs")
+                            try:
+                                from backend.analytics import Analytics
+                                _an = Analytics()
+                                top_jobs = _an.get_top_jobs(days=30, limit=10, user_id=current_user_id) if hasattr(_an, "get_top_jobs") else []
+                            except Exception:
+                                top_jobs = []
+                            if not top_jobs:
+                                ui.label("No job activity in the last 30 days").classes("text-xs text-gray-500")
+                                ui.label("Assign tasks to jobs to see Top Jobs here").classes("text-xs text-blue-600 mt-1")
                             else:
-                                for r in recent:
-                                    with ui.row().classes("justify-between items-center mb-1"):
-                                        ui.label(r['name']).classes("text-sm")
-                                        ui.button("Initialize", 
-                                                  on_click=lambda n=r['name']: init_quick(n)
-                                                  ).props("dense size=sm")
+                                for j in top_jobs:
+                                    job_id = j.get("job_id", "")
+                                    name = j.get("name", "Unnamed")
+                                    count = j.get("completion_count", 0)
+                                    total_mins = j.get("total_time_minutes", 0) or 0
+                                    task_count = j.get("task_count", 0)
+                                    time_str = f"{int(total_mins)}m" if total_mins else "0m"
+                                    with ui.row().classes("justify-between items-center mb-1 w-full gap-2").style("cursor: pointer;").on("click", lambda jid=job_id: ui.navigate.to(f"/job-tasks?job_id={jid}")):
+                                        with ui.column().classes("flex-1 min-w-0"):
+                                            ui.label(name).classes("text-sm font-medium")
+                                            ui.label(f"{count} completions, {time_str}").classes("text-xs text-gray-500")
+                                        ui.icon("chevron_right", size="sm").classes("text-gray-400")
                     
                     # Right half: Recently Completed (scrollable, aligned to end after quick tasks)
                     right_half = ui.column().classes("half-width-right")
@@ -5559,13 +5580,17 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                 # Task Templates section - directly below the row
                 with ui.column().classes("scrollable-section flex-1"):
                     ui.markdown("### Task Templates")
-                    
-                    # Search bar for templates
-                    print("[Dashboard] Creating search bar for task templates")
-                    search_input = ui.input(
-                        label="Search templates",
-                        placeholder="Search by name, description, or type..."
-                    ).classes("w-full mb-2")
+                    template_search_mode = ['task']
+                    with ui.row().classes("w-full items-center gap-2 mb-2"):
+                        search_mode_select = ui.select(
+                            {'task': 'Tasks', 'job': 'Jobs', 'both': 'Tasks + Jobs'},
+                            value='task',
+                            label='Search mode',
+                        ).classes("w-32").props("dense")
+                        search_input = ui.input(
+                            label="Search",
+                            placeholder="Search by name, description, or type..."
+                        ).classes("flex-1")
                     print(f"[Dashboard] Search input created: {search_input}")
                     # #region agent log
                     debug_log('dashboard.py:4494', 'Template search input created', {'input_id': str(id(search_input))}, 'H3')
@@ -5600,8 +5625,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                 search_query = str(current_value).strip() if current_value else None
                                 if search_query == '':
                                     search_query = None
-                                print(f"[Dashboard] Calling refresh_templates with search_query='{search_query}'")
-                                refresh_templates(search_query=search_query)
+                                mode = getattr(search_mode_select, 'value', 'task') or 'task'
+                                template_search_mode[0] = mode
+                                print(f"[Dashboard] Calling refresh_templates with search_query='{search_query}', search_mode='{mode}'")
+                                refresh_templates(search_query=search_query, search_mode=mode)
                             except Exception as ex:
                                 print(f"[Dashboard] Error in debounced template search: {ex}")
                                 import traceback
@@ -5622,7 +5649,8 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         debug_log('dashboard.py:4538', 'Attempting to attach template search handler', {'input_id': str(id(search_input)), 'container_exists': template_col is not None}, 'H2')
                         # #endregion
                         search_input.on('update:model-value', handle_template_search)
-                        print("[Dashboard] Search input event handler attached")
+                        search_mode_select.on('update:model-value', handle_template_search)
+                        print("[Dashboard] Search input and mode handler attached")
                         # #region agent log
                         debug_log('dashboard.py:4540', 'Template search handler attached successfully', {}, 'H2')
                         # #endregion
@@ -5637,11 +5665,13 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                     # #region agent log
                     debug_log('dashboard.py:4546', 'About to call initial refresh_templates', {'container_exists': template_col is not None}, 'H5')
                     # #endregion
+                    def get_initial_mode():
+                        return getattr(search_mode_select, 'value', 'task') or 'task'
                     if init_perf_logger:
                         with init_perf_logger.operation("refresh_templates_initial"):
-                            refresh_templates()
+                            refresh_templates(search_mode=get_initial_mode())
                     else:
-                        refresh_templates()
+                        refresh_templates(search_mode=get_initial_mode())
                     # #region agent log
                     debug_log('dashboard.py:4551', 'Initial refresh_templates completed', {'container_exists': template_col is not None}, 'H5')
                     # #endregion
@@ -5741,36 +5771,57 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                     
                     # Debounce timer for initialized tasks search input
                     initialized_search_debounce_timer = None
-                    
+                    # Hold last value from event so debounced callback gets correct query (ref.value can be stale)
+                    last_initialized_search_value = [None]
+
                     def handle_initialized_search(e):
                         """Handle search input changes with debouncing."""
                         nonlocal initialized_search_debounce_timer
+                        # Capture value from event so we don't rely on ref.value when timer fires (avoids stale ref)
+                        if e is not None and hasattr(e, "args"):
+                            if isinstance(e.args, str):
+                                last_initialized_search_value[0] = e.args
+                            elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
+                                last_initialized_search_value[0] = e.args[0]
+                            elif isinstance(e.args, dict):
+                                last_initialized_search_value[0] = e.args.get("value") or e.args.get("label")
+                        if e is not None and hasattr(e, "sender"):
+                            try:
+                                last_initialized_search_value[0] = getattr(e.sender, "value", last_initialized_search_value[0])
+                            except Exception:
+                                pass
                         # #region agent log
                         debug_log('dashboard.py:4635', 'Initialized tasks search handler triggered', {'has_event': e is not None}, 'H2')
                         # #endregion
-                        
+
                         # Cancel existing timer if any
                         if initialized_search_debounce_timer is not None:
                             initialized_search_debounce_timer.deactivate()
-                        
-                        # Create a debounced function that will execute after user stops typing
+
                         def apply_initialized_search():
                             """Apply the initialized tasks search filter after debounce delay."""
                             try:
-                                # Ensure container exists before proceeding
                                 global initialized_tasks_container
                                 if initialized_tasks_container is None:
                                     print("[Dashboard] initialized_tasks_container is None in search handler, retrying...")
                                     ui.timer(5.0, apply_initialized_search, once=True)
                                     return
-                                
-                                print(f"[Dashboard] Applying initialized tasks search filter")
-                                refresh_initialized_tasks()
+                                # Use value captured from event; fallback to ref if ref exists
+                                q = last_initialized_search_value[0]
+                                if q is not None:
+                                    q = str(q).strip() or None
+                                if q is None and initialized_search_input_ref is not None:
+                                    try:
+                                        q = (initialized_search_input_ref.value or "").strip() or None
+                                    except Exception:
+                                        pass
+                                print(f"[Dashboard] Applying initialized tasks search filter (query={repr(q)})")
+                                refresh_initialized_tasks(search_query=q)
                             except Exception as ex:
                                 print(f"[Dashboard] Error in debounced initialized tasks search: {ex}")
                                 import traceback
                                 traceback.print_exc()
-                        
+
                         # Create a timer that will execute after 300ms of no typing
                         initialized_search_debounce_timer = ui.timer(0.3, apply_initialized_search, once=True)
                     
@@ -5796,7 +5847,15 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         debug_log('dashboard.py:4675', 'Attempting to attach initialized tasks search handler', {'input_id': str(id(initialized_search_input)), 'container_exists': initialized_tasks_container is not None}, 'H2')
                         # #endregion
                         initialized_search_input.on('update:model-value', handle_initialized_search)
-                        initialized_paused_checkbox.on('update:model-value', lambda: refresh_initialized_tasks())
+                        def on_paused_change():
+                            q = (last_initialized_search_value[0] or "").strip() or None
+                            if q is None and initialized_search_input_ref is not None:
+                                try:
+                                    q = (initialized_search_input_ref.value or "").strip() or None
+                                except Exception:
+                                    pass
+                            refresh_initialized_tasks(search_query=q)
+                        initialized_paused_checkbox.on('update:model-value', on_paused_change)
                         print("[Dashboard] Initialized tasks search input event handler attached")
                         # #region agent log
                         debug_log('dashboard.py:4678', 'Initialized tasks search handler attached successfully', {}, 'H2')
@@ -6252,7 +6311,6 @@ def build_summary_section():
                 ui.label("Productivity Efficiency").classes("text-xs text-gray-500")
                 avg_eff = relief_summary.get('avg_efficiency', 0.0)
                 high_eff = relief_summary.get('high_efficiency_count', 0)
-                low_eff = relief_summary.get('low_efficiency_count', 0)
                 ui.label(f"{avg_eff:.1f} High: {high_eff} (low)").classes("text-sm font-bold")
             
             # Relief × Duration Score (per task average)
@@ -6815,22 +6873,7 @@ def build_recommendations_section():
             if search_debounce_timer is not None:
                 search_debounce_timer.deactivate()
             
-            # Get the current value
-            value = None
-            if hasattr(e, 'args'):
-                if isinstance(e.args, str):
-                    value = e.args
-                elif isinstance(e.args, (list, tuple)) and len(e.args) > 0:
-                    value = e.args[0]
-                elif isinstance(e.args, dict):
-                    value = e.args.get('value') or e.args.get('label')
-            elif hasattr(e, 'value'):
-                value = e.value
-            else:
-                try:
-                    value = metric_search_input.value
-                except Exception:
-                    pass
+            # Event payload is intentionally ignored; we always read the input's value in apply_search()
             
             # Create a debounced function that will execute after user stops typing
             def apply_search():
@@ -6854,7 +6897,7 @@ def build_recommendations_section():
                         selected_metrics_state[:] = default_metrics
                     
                     refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
-                except Exception as ex:
+                except Exception:
                     pass
             
             # Create a timer that will execute after 300ms of no typing
