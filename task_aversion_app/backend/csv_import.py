@@ -33,7 +33,8 @@ from pathlib import Path
 
 from backend.database import (
     get_session, init_db, Task, TaskInstance, Emotion,
-    PopupTrigger, PopupResponse, Note, SurveyResponse, engine, DATABASE_URL
+    PopupTrigger, PopupResponse, Note, SurveyResponse,
+    Job, JobTaskMapping, engine, DATABASE_URL
 )
 from backend.user_state import UserStateManager, PREFS_FILE
 from sqlalchemy import inspect, text
@@ -719,6 +720,148 @@ def safe_float(value, default=None):
         return float(str(value))
     except (ValueError, TypeError):
         return default
+
+
+def import_jobs_from_csv(
+    csv_path: str,
+    session,
+    skip_existing: bool = True,
+) -> Tuple[int, int, int]:
+    """
+    Import jobs from CSV file into database.
+    Jobs are app-level (no user_id). Skip existing by job_id.
+    """
+    imported = 0
+    skipped = 0
+    errors = 0
+    try:
+        is_valid_size, size_error = check_file_size(csv_path)
+        if not is_valid_size:
+            print(f"[Import] {size_error}")
+            return 0, 0, 1
+        df = pd.read_csv(csv_path, dtype=str).fillna('')
+        if len(df) > MAX_ROWS_PER_CSV:
+            print(f"[Import] ABUSE PREVENTION: CSV has {len(df)} rows. Truncating to {MAX_ROWS_PER_CSV}.")
+            df = df.head(MAX_ROWS_PER_CSV)
+        existing_job_ids = set()
+        if skip_existing:
+            existing = session.query(Job).all()
+            existing_job_ids = {j.job_id for j in existing}
+        batch: List[Job] = []
+        for idx, row in df.iterrows():
+            job_id = str(safe_get(row, 'job_id', '')).strip()
+            if not job_id:
+                errors += 1
+                continue
+            if skip_existing and job_id in existing_job_ids:
+                skipped += 1
+                continue
+            try:
+                name = str(safe_get(row, 'name', '')).strip()
+                if not name:
+                    errors += 1
+                    continue
+                task_type = str(safe_get(row, 'task_type', 'Work')).strip() or 'Work'
+                description = str(safe_get(row, 'description', '')).strip()
+                created_at = parse_datetime(safe_get(row, 'created_at', '')) or datetime.utcnow()
+                updated_at = parse_datetime(safe_get(row, 'updated_at', '')) or datetime.utcnow()
+                job = Job(
+                    job_id=job_id,
+                    name=name,
+                    task_type=task_type,
+                    description=description,
+                    created_at=created_at,
+                    updated_at=updated_at,
+                )
+                batch.append(job)
+                imported += 1
+                if len(batch) >= IMPORT_BATCH_SIZE:
+                    session.add_all(batch)
+                    batch.clear()
+            except Exception as e:
+                print(f"[Import] Error importing job {job_id}: {e}")
+                errors += 1
+        if batch:
+            session.add_all(batch)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        print(f"[Import] Error reading jobs CSV: {e}")
+        errors += 1
+    return imported, skipped, errors
+
+
+def import_job_task_mapping_from_csv(
+    csv_path: str,
+    session,
+    skip_existing: bool = True,
+) -> Tuple[int, int, int]:
+    """
+    Import job_task_mapping from CSV. Skip existing by (job_id, task_id).
+    Only imports rows where task_id and job_id exist (FK); skips invalid rows.
+    """
+    imported = 0
+    skipped = 0
+    errors = 0
+    try:
+        is_valid_size, size_error = check_file_size(csv_path)
+        if not is_valid_size:
+            print(f"[Import] {size_error}")
+            return 0, 0, 1
+        df = pd.read_csv(csv_path, dtype=str).fillna('')
+        if len(df) > MAX_ROWS_PER_CSV:
+            df = df.head(MAX_ROWS_PER_CSV)
+        existing_pairs = set()
+        if skip_existing:
+            mappings = session.query(JobTaskMapping).all()
+            existing_pairs = {(m.job_id, m.task_id) for m in mappings}
+        task_ids = set()
+        job_ids = set()
+        if DATABASE_URL.startswith('postgresql'):
+            task_ids = {t[0] for t in session.query(Task.task_id).all()}
+            job_ids = {j[0] for j in session.query(Job.job_id).all()}
+        batch: List[JobTaskMapping] = []
+        for idx, row in df.iterrows():
+            job_id = str(safe_get(row, 'job_id', '')).strip()
+            task_id = str(safe_get(row, 'task_id', '')).strip()
+            if not job_id or not task_id:
+                errors += 1
+                continue
+            if skip_existing and (job_id, task_id) in existing_pairs:
+                skipped += 1
+                continue
+            if DATABASE_URL.startswith('postgresql'):
+                if task_id not in task_ids or job_id not in job_ids:
+                    skipped += 1
+                    continue
+            try:
+                created_at = parse_datetime(safe_get(row, 'created_at', '')) or datetime.utcnow()
+                mapping = JobTaskMapping(
+                    job_id=job_id,
+                    task_id=task_id,
+                    created_at=created_at,
+                )
+                batch.append(mapping)
+                imported += 1
+                if len(batch) >= IMPORT_BATCH_SIZE:
+                    session.add_all(batch)
+                    batch.clear()
+            except Exception as e:
+                print(f"[Import] Error importing mapping {job_id}/{task_id}: {e}")
+                errors += 1
+        if batch:
+            session.add_all(batch)
+        session.commit()
+    except IntegrityError as e:
+        session.rollback()
+        raise ValueError(
+            f"Job task mapping import failed: ensure jobs and tasks were imported first. Details: {e}"
+        ) from e
+    except Exception as e:
+        session.rollback()
+        print(f"[Import] Error reading job_task_mapping CSV: {e}")
+        errors += 1
+    return imported, skipped, errors
 
 
 def import_task_instances_from_csv(csv_path: str, session, skip_existing: bool = True, backup_dir: Optional[str] = None, user_id: Optional[int] = None) -> Tuple[int, int, int]:
@@ -1712,6 +1855,8 @@ def import_from_zip(zip_path: str, skip_existing: bool = True, user_id: Optional
     
     Expected files (all must be present or none):
     - tasks.csv
+    - jobs.csv
+    - job_task_mapping.csv
     - task_instances.csv
     - emotions.csv
     - notes.csv
@@ -1755,8 +1900,11 @@ def import_from_zip(zip_path: str, skip_existing: bool = True, user_id: Optional
             return results
         
         # Define whitelist of allowed file names (security: prevent additional files)
+        # Order matters: tasks first, then jobs and job_task_mapping (FKs), then task_instances
         ALLOWED_FILES = {
             'tasks.csv': ('tasks', import_tasks_from_csv),
+            'jobs.csv': ('jobs', import_jobs_from_csv),
+            'job_task_mapping.csv': ('job_task_mapping', import_job_task_mapping_from_csv),
             'task_instances.csv': ('task_instances', import_task_instances_from_csv),
             'emotions.csv': ('emotions', import_emotions_from_csv),
             'notes.csv': ('notes', import_notes_from_csv),
