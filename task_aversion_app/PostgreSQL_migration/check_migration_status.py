@@ -388,9 +388,24 @@ def main():
         print("  [SKIP] task_instances table does not exist (run migration 003 first)")
     
     print()
+    # Check for jobs tables (Migration 014)
+    print("Migration 014: Jobs tables (PostgreSQL)")
+    print("-" * 70)
+    if check_table_exists('jobs'):
+        print("  [OK] jobs table exists")
+    else:
+        print("  [MISSING] jobs table does not exist")
+        print("  -> Run: python PostgreSQL_migration/014_create_jobs_tables.py")
+    if check_table_exists('job_task_mapping'):
+        print("  [OK] job_task_mapping table exists")
+    else:
+        print("  [MISSING] job_task_mapping table does not exist")
+        print("  -> Run: python PostgreSQL_migration/014_create_jobs_tables.py")
+    print()
     print("=" * 70)
-    print("\nSummary: Run migrations in order (001 through 013)")
+    print("\nSummary: Run migrations in order (001 through 014)")
     print("All migrations are idempotent - safe to run multiple times.")
+    print("To reset and re-run everything: python reset_database.py")
     print("=" * 70)
 
 if __name__ == "__main__":

@@ -75,7 +75,8 @@ def migrate():
         print("\nVerifying created tables...")
         expected_tables = [
             'tasks', 'task_instances', 'emotions', 'popup_triggers',
-            'popup_responses', 'notes', 'user_preferences', 'survey_responses', 'users'
+            'popup_responses', 'notes', 'user_preferences', 'survey_responses', 'users',
+            'jobs', 'job_task_mapping',
         ]
         
         all_exist = True

@@ -41,7 +41,7 @@ These scripts will:
 3. Wait for PostgreSQL to be ready
 4. Set DATABASE_URL environment variable automatically
 5. Check current migration status
-6. Run all 13 migrations in order (001-013)
+6. Run all 14 migrations in order (001-014)
 7. Perform final status check
 8. Keep container running for further testing
 
@@ -131,8 +131,11 @@ PostgreSQL migrations are aligned with `SQLite_migration/` so that the same sche
 | 009 | 009 | users table |
 | 010 | 010 | user_id on tasks, task_instances, notes; VARCHAR->INTEGER user_id for user_preferences, survey_responses, popup_triggers, popup_responses |
 | 011 | 011 | user_id on emotions for per-user data isolation |
+| — | 012 | performance indexes (dashboard/analytics hot paths) |
+| — | 013 | serendipity_factor, disappointment_factor on task_instances |
+| — | 014 | jobs, job_task_mapping (PostgreSQL-only; SQLite uses init_db/migrate_add_jobs) |
 
-All tables and columns from the canonical models in `backend/database.py` are created by these migrations (or by init_db in 001). The `emotions` table gains `user_id` in migration 011 for data isolation. Migration 012 adds performance indexes (dashboard/analytics hot paths); migration 013 adds `serendipity_factor` and `disappointment_factor` to `task_instances` if missing.
+All tables and columns from the canonical models in `backend/database.py` are created by these migrations (or by init_db in 001). The `emotions` table gains `user_id` in migration 011 for data isolation. Migration 012 adds performance indexes; migration 013 adds factor columns to `task_instances`; migration 014 creates the jobs tables for PostgreSQL.
 
 ## Key Differences from SQLite
 
@@ -219,6 +222,23 @@ if __name__ == '__main__':
 ### Utility Scripts
 
 - **check_migration_status.py** - Check which migrations have been applied to your PostgreSQL database
+- **reset_database.py** (in `task_aversion_app/`) - Drop all tables and re-run all migrations (clean tables only).
+- **recreate_database.py** (in `task_aversion_app/`) - Drop the database itself, create a new one, then run migrations (full recreate; use when reset is not enough).
+
+## Database Reset (clean slate)
+
+To drop all tables and re-run every migration (e.g. to verify analytics or fix schema issues):
+
+```powershell
+cd task_aversion_app
+python reset_database.py
+```
+
+You will be prompted to type `yes` to confirm. To skip the prompt (e.g. in scripts): `python reset_database.py --yes`.
+
+Requires `DATABASE_URL` in `.env` or in the environment. Resets both PostgreSQL and SQLite depending on `DATABASE_URL`.
+
+**Full recreate (drop DB + create new DB):** If clearing tables is not enough (e.g. schema/state issues persist), run `python recreate_database.py` instead. This drops the PostgreSQL database and creates a new one, then runs all migrations. Stop the app first so connections can be terminated.
 
 ## How to Check Migration Status
 
@@ -263,6 +283,9 @@ python PostgreSQL_migration/008_create_survey_responses_table.py
 python PostgreSQL_migration/009_create_users_table.py
 python PostgreSQL_migration/010_add_user_id_foreign_keys.py
 python PostgreSQL_migration/011_add_user_id_to_emotions.py
+python PostgreSQL_migration/012_add_performance_indexes.py
+python PostgreSQL_migration/013_add_factor_columns.py
+python PostgreSQL_migration/014_create_jobs_tables.py
 ```
 
 **Bash/Linux:**
@@ -280,6 +303,9 @@ python PostgreSQL_migration/008_create_survey_responses_table.py
 python PostgreSQL_migration/009_create_users_table.py
 python PostgreSQL_migration/010_add_user_id_foreign_keys.py
 python PostgreSQL_migration/011_add_user_id_to_emotions.py
+python PostgreSQL_migration/012_add_performance_indexes.py
+python PostgreSQL_migration/013_add_factor_columns.py
+python PostgreSQL_migration/014_create_jobs_tables.py
 ```
 
 ## Important Notes

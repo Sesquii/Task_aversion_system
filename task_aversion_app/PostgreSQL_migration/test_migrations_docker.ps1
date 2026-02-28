@@ -127,7 +127,7 @@ if (-not $?) {
 
 # Step 6: Run migrations in order
 Write-Host ""
-Write-Host "[6/7] Running migrations in order (001-013)..." -ForegroundColor Cyan
+Write-Host "[6/7] Running migrations in order (001-014)..." -ForegroundColor Cyan
 Write-Host ""
 
 $migrations = @(
@@ -143,7 +143,8 @@ $migrations = @(
     "010_add_user_id_foreign_keys.py",
     "011_add_user_id_to_emotions.py",
     "012_add_performance_indexes.py",
-    "013_add_factor_columns.py"
+    "013_add_factor_columns.py",
+    "014_create_jobs_tables.py"
 )
 
 $migrationErrors = 0

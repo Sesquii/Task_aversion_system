@@ -54,12 +54,12 @@ echo "      Migration status (before):"
 python "$MIGRATION_DIR/check_migration_status.py" || true
 echo ""
 
-echo "      Running migrations 001-013 (idempotent)..."
+echo "      Running migrations 001-014 (idempotent)..."
 for m in 001_initial_schema 002_add_routine_scheduling_fields 003_create_task_instances_table \
          004_create_emotions_table 005_add_indexes_and_foreign_keys 006_add_notes_column \
          007_create_user_preferences_table 008_create_survey_responses_table 009_create_users_table \
          010_add_user_id_foreign_keys 011_add_user_id_to_emotions 012_add_performance_indexes \
-         013_add_factor_columns; do
+         013_add_factor_columns 014_create_jobs_tables; do
   f="$MIGRATION_DIR/${m}.py"
   if [ -f "$f" ]; then
     echo "        Running $m..."

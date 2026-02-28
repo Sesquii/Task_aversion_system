@@ -161,7 +161,7 @@ predicted = task_instance.predicted  # Returns Python dict
 
 ### 2. Verify Schema Compatibility
 
-Before syncing, ensure both databases have compatible schemas. Run all migrations (001-013) on each database:
+Before syncing, ensure both databases have compatible schemas. Run all migrations (001-014 on PostgreSQL, SQLite equivalent or init_db) on each database:
 
 ```bash
 # Check PostgreSQL schema

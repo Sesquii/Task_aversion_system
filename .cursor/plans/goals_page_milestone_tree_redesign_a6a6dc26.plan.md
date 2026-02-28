@@ -59,10 +59,10 @@ Task Type (Work, Self care, Play)
 
 ### Phase 1: Database Schema Updates
 
-**File: `task_aversion_app/backend/database.py`**
+**File: `task_aversion_app/backend/database.py**`
 
 1. Add `Milestone` SQLAlchemy model:
-   ```python
+  ```python
    class Milestone(Base):
        __tablename__ = 'milestones'
        milestone_id = Column(String, primary_key=True)
@@ -75,16 +75,13 @@ Task Type (Work, Self care, Play)
        user_id = Column(String, default='default')
        created_at = Column(DateTime, default=datetime.utcnow)
        updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-   ```
-
+  ```
 2. Modify `TaskInstance` model:
-
-   - Add `milestone_id = Column(String, ForeignKey('milestones.milestone_id'), nullable=True)`
-   - Add `instance_notes = Column(JSON, default=dict)` for structured notes
-
+  - Add `milestone_id = Column(String, ForeignKey('milestones.milestone_id'), nullable=True)`
+  - Add `instance_notes = Column(JSON, default=dict)` for structured notes
 3. Update `init_db()` to create new table
 
-**File: `task_aversion_app/SQLite_migration/XXX_add_milestones.py`** (new migration)
+**File: `task_aversion_app/SQLite_migration/XXX_add_milestones.py**` (new migration)
 
 - Create `milestones` table
 - Add `milestone_id` and `instance_notes` columns to `task_instances`
@@ -95,7 +92,7 @@ Task Type (Work, Self care, Play)
 
 ### Phase 2: Backend Managers
 
-**File: `task_aversion_app/backend/milestone_manager.py`** (new)
+**File: `task_aversion_app/backend/milestone_manager.py**` (new)
 
 Create `MilestoneManager` class with dual backend support (database/CSV):
 
@@ -108,19 +105,17 @@ Create `MilestoneManager` class with dual backend support (database/CSV):
 - `get_instances_for_milestone(milestone_id)`
 - `get_milestone_progress(milestone_id)` - count assigned/completed instances
 
-**File: `task_aversion_app/backend/instance_manager.py`**
+**File: `task_aversion_app/backend/instance_manager.py**`
 
 1. Update `create_instance()` to support `milestone_id` parameter
 2. Add `update_instance_notes(instance_id, note_type, note_text)` method:
-
-   - `note_type`: 'initialization', 'pause', 'completion'
-   - For 'pause': append to `instance_notes['pauses']` array
-   - For others: set `instance_notes[note_type]`
-
+  - `note_type`: 'initialization', 'pause', 'completion'
+  - For 'pause': append to `instance_notes['pauses']` array
+  - For others: set `instance_notes[note_type]`
 3. Add `get_instance_notes(instance_id)` method
 4. Update `assign_milestone(instance_id, milestone_id)` method
 
-**File: `task_aversion_app/backend/user_state.py`**
+**File: `task_aversion_app/backend/user_state.py**`
 
 - Keep existing milestone methods for backward compatibility during migration
 - Add deprecation warnings
@@ -128,7 +123,7 @@ Create `MilestoneManager` class with dual backend support (database/CSV):
 
 ### Phase 3: UI - Goals Page Redesign
 
-**File: `task_aversion_app/ui/goals_page.py`** (major rewrite)
+**File: `task_aversion_app/ui/goals_page.py**` (major rewrite)
 
 #### Layout Structure
 
@@ -145,7 +140,6 @@ Create `MilestoneManager` class with dual backend support (database/CSV):
 - Collapsible tree component (use NiceGUI expansion or custom tree)
 - Extra small fonts (`text-xs`)
 - Tree structure:
-
   1. Global Milestones (if any exist)
   2. Task Types (Work, Self care, Play)
   3. Jobs (if jobs system exists, collapsible/optional)
@@ -153,7 +147,6 @@ Create `MilestoneManager` class with dual backend support (database/CSV):
   5. Task Templates (under job or directly under task type)
   6. Template Milestones (under each template)
   7. Task Instances (under milestones, or under template if unassigned)
-
 - Right-click context menu on tree nodes:
   - Templates: Edit, Copy, Initialize New
   - Instances: Edit, Assign to Milestone, View Notes
@@ -196,53 +189,46 @@ Create `MilestoneManager` class with dual backend support (database/CSV):
 #### Key Features
 
 1. **Milestone Assignment UI**
-
-   - Right-click instance → "Assign to Milestone" → dropdown of available milestones
-   - Milestone creation dialog when creating new milestone
-   - Scope selection: Global, Template-specific, Job-specific
-
+  - Right-click instance → "Assign to Milestone" → dropdown of available milestones
+  - Milestone creation dialog when creating new milestone
+  - Scope selection: Global, Template-specific, Job-specific
 2. **Instance Notes Management**
-
-   - Edit initialization notes in Column 2 when viewing instance
-   - Pause notes automatically captured during pause (append to array)
-   - Completion notes editable in completion flow
-
+  - Edit initialization notes in Column 2 when viewing instance
+  - Pause notes automatically captured during pause (append to array)
+  - Completion notes editable in completion flow
 3. **Tree State Persistence**
-
-   - Remember expanded/collapsed state (localStorage or user preferences)
-   - Remember selected node
-
+  - Remember expanded/collapsed state (localStorage or user preferences)
+  - Remember selected node
 4. **Completed Tasks View**
-
-   - When toggle enabled, show counts per milestone/template
-   - Format: "Milestone Name: 5 completed"
-   - Click count to see list of completed instances
+  - When toggle enabled, show counts per milestone/template
+  - Format: "Milestone Name: 5 completed"
+  - Click count to see list of completed instances
 
 ### Phase 4: Integration Points
 
-**File: `task_aversion_app/ui/initialize_task.py`**
+**File: `task_aversion_app/ui/initialize_task.py**`
 
 - Capture initialization notes in `instance_notes['initialization']` field
 - Add optional milestone assignment dropdown during initialization
 
-**File: `task_aversion_app/ui/complete_task.py`**
+**File: `task_aversion_app/ui/complete_task.py**`
 
 - Capture completion notes in `instance_notes['completion']` field
 - Update milestone progress when instance completed
 
-**File: `task_aversion_app/backend/instance_manager.py`**
+**File: `task_aversion_app/backend/instance_manager.py**`
 
 - Update pause tracking to append notes to `instance_notes['pauses']` array
 - Each pause entry: `{"timestamp": "...", "note": "..."}`
 
-**File: `task_aversion_app/ui/dashboard.py`**
+**File: `task_aversion_app/ui/dashboard.py**`
 
 - Update "Recently Completed" to use compact styling (reference for goals page design)
 - Ensure consistency in visual style
 
 ### Phase 5: Migration & Backward Compatibility
 
-**File: `task_aversion_app/migrate_milestones_to_table.py`** (new)
+**File: `task_aversion_app/migrate_milestones_to_table.py**` (new)
 
 1. Read existing milestones from `user_state.get_milestones()`
 2. Find "Task Aversion System" template (or create if missing)
@@ -308,3 +294,4 @@ For global milestones like "complete x tasks":
 - `ui/initialize_task.py` (capture initialization notes, optional milestone assignment)
 - `ui/complete_task.py` (capture completion notes)
 - `backend/user_state.py` (deprecate milestone methods, keep for compatibility)
+
