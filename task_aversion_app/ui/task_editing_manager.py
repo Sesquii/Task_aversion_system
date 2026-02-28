@@ -219,10 +219,30 @@ def _update_actual_data_db(instance_id, actual_data):
         handle_error_with_ui(
             'update_task_actual_data',
             e,
-            user_id=user_id,
+            user_id=get_current_user(),
             context={'instance_id': instance_id}
         )
         return False
+
+
+def _open_delete_confirm(instance_id: str, refresh_callback, user_id: Optional[int]) -> None:
+    """Delete the task instance immediately (no confirmation). Restore warning popup after cleanup."""
+    if user_id is None:
+        user_id = get_current_user()
+    try:
+        if im.delete_instance(instance_id, user_id=user_id):
+            if refresh_callback:
+                refresh_callback()
+            ui.notify("Task instance deleted", color="positive")
+        else:
+            ui.notify("Could not delete task instance", color="negative")
+    except Exception as e:
+        handle_error_with_ui(
+            "delete_task_instance",
+            e,
+            user_id=user_id,
+            context={"instance_id": instance_id},
+        )
 
 
 def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback, user_id: Optional[int] = None):
@@ -400,20 +420,23 @@ def task_editing_manager_page():
                                 
                                 if status == 'cancelled':
                                     ui.button("Edit", on_click=lambda inst_id=instance_id, inst_data=inst, uid=user_id: edit_cancelled_task_dialog(inst_id, inst_data, refresh_view, uid)).classes("text-xs bg-blue-500 text-white mt-2")
+                                    ui.button("Delete", on_click=lambda inst_id=instance_id: _open_delete_confirm(inst_id, refresh_view, user_id)).classes("text-xs bg-red-500 text-white mt-2")
                                 else:  # completed
                                     def edit_initialization(inst_id=instance_id):
                                         """Navigate to edit initialization page."""
                                         mark_instance_as_edited(inst_id)
                                         ui.navigate.to(f"/initialize-task?instance_id={inst_id}&edit=true")
-                                    
+
                                     def edit_completion(inst_id=instance_id):
                                         """Navigate to edit completion page."""
                                         mark_instance_as_edited(inst_id)
                                         ui.navigate.to(f"/complete_task?instance_id={inst_id}&edit=true")
-                                    
+
                                     with ui.row().classes("gap-2 mt-2"):
                                         ui.button("Edit Init", on_click=lambda inst_id=instance_id: edit_initialization(inst_id)).classes("text-xs bg-blue-500 text-white")
                                         ui.button("Edit Completion", on_click=lambda inst_id=instance_id: edit_completion(inst_id)).classes("text-xs bg-green-500 text-white")
+
+                                ui.button("Delete", on_click=lambda inst_id=instance_id: _open_delete_confirm(inst_id, refresh_view, user_id)).classes("text-xs bg-red-500 text-white mt-2")
             
             # Pagination controls
             if total_pages > 1:
