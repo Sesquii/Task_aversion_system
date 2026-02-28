@@ -11913,6 +11913,7 @@ class Analytics:
             'task_type': None,
             'is_recurring': None,
             'categories': None,
+            'include_completed_cancelled': False,
         }
 
     def available_filters(self) -> List[Dict[str, str]]:
@@ -12403,10 +12404,20 @@ class Analytics:
         if user_id is None:
             user_id = self._get_user_id(user_id)
         
-        # Get all active (non-completed) instances
+        # Get all active (non-completed) instances; optionally include completed/cancelled per filter
         instance_manager = InstanceManager()
         active_instances = instance_manager.list_active_instances(user_id=user_id)
-        
+        if filters.get('include_completed_cancelled'):
+            try:
+                active_instances = list(active_instances)
+                active_instances.extend(
+                    instance_manager.list_recent_completed(limit=20, user_id=user_id) or []
+                )
+                active_instances.extend(
+                    instance_manager.list_cancelled_instances(user_id=user_id) or []
+                )
+            except Exception:
+                pass
         if not active_instances:
             return []
         
@@ -12433,6 +12444,16 @@ class Analytics:
         task_type_filter = filters.get('task_type')
         is_recurring_filter = filters.get('is_recurring')
         categories_filter = filters.get('categories')
+        
+        # Task horizon and recommendation weights for urgency
+        try:
+            from .user_state import UserStateManager
+            _user_state = UserStateManager()
+            task_horizon_days = _user_state.get_task_horizon_days(str(user_id))
+            recommendation_weights = _user_state.get_recommendation_weights(str(user_id))
+        except Exception:
+            task_horizon_days = 14
+            recommendation_weights = {}
         
         # Load historical instance data to get averages for relief_score fallback
         instances_df = self._load_instances(user_id=user_id)
@@ -12624,6 +12645,17 @@ class Analytics:
             if not description and task_info:
                 description = task_info.get('description', '') or ''
             
+            # Urgency: score, overdue, stale, due_at_display (for UI and ranking)
+            try:
+                from backend.urgency import compute_urgency
+                urgency_info = compute_urgency(instance, task_horizon_days=task_horizon_days)
+            except Exception:
+                urgency_info = {'score': 0.0, 'overdue': False, 'stale': False, 'due_at_display': None}
+            urgency_score_val = urgency_info.get('score', 0.0)
+            overdue_flag = urgency_info.get('overdue', False)
+            stale_flag = urgency_info.get('stale', False)
+            due_at_display = urgency_info.get('due_at_display')
+            
             candidates.append({
                 'instance_id': instance_id,
                 'task_id': task_id,
@@ -12643,6 +12675,10 @@ class Analytics:
                 'net_relief_proxy': net_relief_proxy,
                 'mental_energy_needed': expected_mental_energy,
                 'task_difficulty': expected_difficulty,
+                'urgency_score': urgency_score_val,
+                'urgency_overdue': overdue_flag,
+                'urgency_stale': stale_flag,
+                'due_at_display': due_at_display,
             })
         
         if not candidates:
@@ -12660,12 +12696,13 @@ class Analytics:
                 return max(0.0, 100.0 - v)
             return v
         
-        # Compute score per instance
+        # Compute score per instance (weighted: urgency_weight capped in user_state)
         scores = []
         for _, row in candidates_df.iterrows():
             score_total = 0.0
             for metric in metrics:
-                score_total += metric_score(metric, row.get(metric))
+                w = recommendation_weights.get(metric, 1.0)
+                score_total += w * metric_score(metric, row.get(metric))
             scores.append(score_total)
         candidates_df['score'] = scores
         
@@ -12723,7 +12760,10 @@ class Analytics:
                     'task_difficulty': row.get('task_difficulty'),
                     'historical_efficiency': row.get('historical_efficiency'),
                     'duration_minutes': row.get('duration_minutes'),
+                    'urgency_score': row.get('urgency_score'),
                 },
+                'urgency_score': row.get('urgency_score'),
+                'due_at_display': row.get('due_at_display'),
                 'duration': row.get('duration_minutes'),
                 'relief': row.get('relief_score'),
                 'cognitive_load': row.get('cognitive_load'),

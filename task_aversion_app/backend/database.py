@@ -249,7 +249,8 @@ class TaskInstance(Base):
     started_at = Column(DateTime, default=None, nullable=True)
     completed_at = Column(DateTime, default=None, nullable=True, index=True)  # Indexed for completed-only queries
     cancelled_at = Column(DateTime, default=None, nullable=True)
-    
+    due_at = Column(DateTime, default=None, nullable=True)  # Optional deadline; overdue when now > due_at (urgency system)
+
     # JSON data (raw data storage)
     # Use JSONB for PostgreSQL (better performance, supports GIN indexes) or JSON for SQLite
     # Application code treats them the same - SQLAlchemy handles conversion automatically
@@ -302,6 +303,7 @@ class TaskInstance(Base):
             'started_at': format_datetime(self.started_at),
             'completed_at': format_datetime(self.completed_at),
             'cancelled_at': format_datetime(self.cancelled_at),
+            'due_at': format_datetime(self.due_at) if self.due_at else '',
             'predicted': json.dumps(self.predicted) if isinstance(self.predicted, dict) else (self.predicted or '{}'),
             'actual': json.dumps(self.actual) if isinstance(self.actual, dict) else (self.actual or '{}'),
             'procrastination_score': str(self.procrastination_score) if self.procrastination_score is not None else '',

@@ -226,23 +226,34 @@ def _update_actual_data_db(instance_id, actual_data):
 
 
 def _open_delete_confirm(instance_id: str, refresh_callback, user_id: Optional[int]) -> None:
-    """Delete the task instance immediately (no confirmation). Restore warning popup after cleanup."""
+    """Open confirmation dialog and delete the task instance on confirm."""
     if user_id is None:
         user_id = get_current_user()
-    try:
-        if im.delete_instance(instance_id, user_id=user_id):
-            if refresh_callback:
-                refresh_callback()
-            ui.notify("Task instance deleted", color="positive")
-        else:
-            ui.notify("Could not delete task instance", color="negative")
-    except Exception as e:
-        handle_error_with_ui(
-            "delete_task_instance",
-            e,
-            user_id=user_id,
-            context={"instance_id": instance_id},
-        )
+    with ui.dialog() as dlg, ui.card().classes("w-full max-w-md p-4 gap-3"):
+        ui.label("Delete task instance?").classes("text-lg font-semibold")
+        ui.label("This cannot be undone. The task instance will be permanently removed.").classes("text-sm text-gray-600")
+        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+            ui.button("Cancel", on_click=dlg.close).classes("bg-gray-500 text-white")
+
+            def do_delete():
+                try:
+                    if im.delete_instance(instance_id, user_id=user_id):
+                        dlg.close()
+                        if refresh_callback:
+                            refresh_callback()
+                        ui.notify("Task instance deleted", color="positive")
+                    else:
+                        ui.notify("Could not delete task instance", color="negative")
+                except Exception as e:
+                    handle_error_with_ui(
+                        "delete_task_instance",
+                        e,
+                        user_id=user_id,
+                        context={"instance_id": instance_id},
+                    )
+
+            ui.button("Delete", on_click=do_delete, color="negative").classes("bg-red-500 text-white")
+    dlg.open()
 
 
 def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback, user_id: Optional[int] = None):

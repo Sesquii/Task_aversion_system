@@ -60,23 +60,6 @@ def create_task_page(task_manager, emotion_manager):
                 value='00:00',
                 placeholder='00:00'
             ).classes("max-w-xs")
-            
-            # Completion window (hours and days)
-            ui.label("Completion Window (Optional)").classes("text-sm font-semibold")
-            ui.label("Time to complete task after initialization without penalty").classes("text-xs text-gray-500")
-            with ui.row().classes("gap-4"):
-                completion_window_hours = ui.number(
-                    label='Hours',
-                    value=None,
-                    placeholder='Hours',
-                    min=0
-                ).classes("flex-1")
-                completion_window_days = ui.number(
-                    label='Days',
-                    value=None,
-                    placeholder='Days',
-                    min=0
-                ).classes("flex-1")
 
             def save_task():
                 if not name.value.strip():
@@ -113,15 +96,6 @@ def create_task_page(task_manager, emotion_manager):
                     # For daily, if no days selected, it means every day (empty list)
                     # If days are selected, it means only on those days
 
-                # Get completion window values (None if empty)
-                completion_window_hours_val = None
-                if completion_window_hours.value is not None and completion_window_hours.value > 0:
-                    completion_window_hours_val = int(completion_window_hours.value)
-                
-                completion_window_days_val = None
-                if completion_window_days.value is not None and completion_window_days.value > 0:
-                    completion_window_days_val = int(completion_window_days.value)
-
                 try:
                     # Re-check authentication (in case session expired)
                     user_id = get_current_user()
@@ -140,8 +114,8 @@ def create_task_page(task_manager, emotion_manager):
                         routine_frequency=routine_frequency.value,
                         routine_days_of_week=selected_days,
                         routine_time=time_str,
-                        completion_window_hours=completion_window_hours_val,
-                        completion_window_days=completion_window_days_val,
+                        completion_window_hours=None,
+                        completion_window_days=None,
                         user_id=user_id,
                     )
 

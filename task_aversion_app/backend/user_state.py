@@ -149,6 +149,59 @@ class UserStateManager:
         return self.update_preference(user_id, "composite_score_weights", weights_json)
 
     # -----------------------------
+    # Task horizon and recommendation weights (urgency system)
+    # -----------------------------
+    DEFAULT_TASK_HORIZON_DAYS = 14
+    DEFAULT_RECOMMENDATION_WEIGHTS = {
+        "relief_score": 1.0,
+        "urgency_score": 0.3,
+        "cognitive_load": 1.0,
+        "emotional_load": 1.0,
+    }
+
+    def get_task_horizon_days(self, user_id: str) -> int:
+        """Get task horizon (days) for stale detection: no-due tasks older than this show yellow."""
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return self.DEFAULT_TASK_HORIZON_DAYS
+        try:
+            val = prefs.get("task_horizon_days", "")
+            if val == "":
+                return self.DEFAULT_TASK_HORIZON_DAYS
+            return int(float(val))
+        except (ValueError, TypeError):
+            return self.DEFAULT_TASK_HORIZON_DAYS
+
+    def set_task_horizon_days(self, user_id: str, days: int) -> Dict[str, Any]:
+        """Set task horizon (days). Used for urgency stale state."""
+        return self.update_preference(user_id, "task_horizon_days", str(max(1, int(days))))
+
+    def get_recommendation_weights(self, user_id: str) -> Dict[str, float]:
+        """Get recommendation score weights (e.g. urgency_score, relief_score). Urgency cap 0.5."""
+        import json as _json
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return dict(self.DEFAULT_RECOMMENDATION_WEIGHTS)
+        weights_json = prefs.get("recommendation_weights", "")
+        if not weights_json:
+            return dict(self.DEFAULT_RECOMMENDATION_WEIGHTS)
+        try:
+            w = _json.loads(weights_json)
+            if "urgency_score" in w and w["urgency_score"] > 0.5:
+                w["urgency_score"] = 0.5
+            return w
+        except (_json.JSONDecodeError, TypeError):
+            return dict(self.DEFAULT_RECOMMENDATION_WEIGHTS)
+
+    def set_recommendation_weights(self, user_id: str, weights: Dict[str, float]) -> Dict[str, Any]:
+        """Persist recommendation weights (urgency_score, relief_score, etc.)."""
+        import json as _json
+        w = dict(weights)
+        if w.get("urgency_score", 0) > 0.5:
+            w["urgency_score"] = 0.5
+        return self.update_preference(user_id, "recommendation_weights", _json.dumps(w))
+
+    # -----------------------------
     # Productivity score preferences
     # -----------------------------
     def get_productivity_settings(self, user_id: str) -> Dict[str, Any]:

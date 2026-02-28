@@ -73,6 +73,7 @@ current_user_id = None
 initialized_tasks_container = None
 initialized_search_input_ref = None
 initialized_paused_checkbox_ref = None
+initialized_postponed_checkbox_ref = None
 
 # #region agent log
 import json
@@ -105,8 +106,10 @@ _monitored_metrics_state = {
     'analytics_instance': None,
     'refresh_timer': None
 }
+_overdue_notified_instance_ids = set()  # Urgency: notify overdue once per instance per session
 RECOMMENDATION_METRICS = [
     {"label": "Relief score (high)", "key": "relief_score"},
+    {"label": "Urgency (high)", "key": "urgency_score"},
     {"label": "Net relief (high)", "key": "net_relief_proxy"},
     {"label": "Mental Energy Needed (low)", "key": "mental_energy_needed"},
     {"label": "Task Difficulty (low)", "key": "task_difficulty"},
@@ -247,6 +250,35 @@ def go_complete(instance_id):
 
 def go_cancel(instance_id):
     ui.navigate.to(f'/cancel_task?instance_id={instance_id}')
+
+
+def open_postpone_dialog(instance_id: str, task_name: str = ""):
+    """Open dialog to capture postpone reason; record and refresh (mirrors cancel flow)."""
+    from backend.auth import get_current_user
+    uid = get_current_user()
+    if uid is None:
+        ui.notify("Please log in", color="negative")
+        return
+    with ui.dialog() as dialog, ui.card().classes("w-full max-w-lg p-4"):
+        ui.label("Postpone Task").classes("text-xl font-bold mb-2")
+        ui.label(escape_for_display(task_name or "Task")).classes("text-sm text-gray-600 mb-2")
+        reason_input = ui.textarea(
+            label="Reason for postponing (optional)",
+            placeholder="e.g. Need to do something else first..."
+        ).classes("w-full")
+        with ui.row().classes("gap-2 mt-4"):
+            def submit():
+                reason = (reason_input.value or "").strip()
+                try:
+                    im.postpone_instance(instance_id, {"postpone_reason": reason}, user_id=uid)
+                    dialog.close()
+                    refresh_initialized_tasks()
+                    ui.notify("Postponed", color="info")
+                except Exception as exc:
+                    handle_error_with_ui("postpone_instance", exc, user_id=uid, context={"instance_id": instance_id})
+            ui.button("Postpone", on_click=submit).props("dense")
+            ui.button("Cancel", on_click=dialog.close).props("dense flat")
+    dialog.open()
 
 
 def open_pause_dialog(instance_id):
@@ -621,7 +653,7 @@ def refresh_initialized_tasks(search_query=None):
     Args:
         search_query: Optional string to filter tasks by name, description, notes, or pause notes
     """
-    global initialized_tasks_container, initialized_search_input_ref, initialized_paused_checkbox_ref, current_user_id
+    global initialized_tasks_container, initialized_search_input_ref, initialized_paused_checkbox_ref, initialized_postponed_checkbox_ref, current_user_id
     
     # CRITICAL: Always get user_id from current session, not global variable
     # This ensures data isolation when users switch accounts
@@ -686,22 +718,22 @@ def refresh_initialized_tasks(search_query=None):
     # Filter out current task from active list
     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
 
-    # Optionally filter to paused only (actual.paused flag; backend clears started_at when pausing)
-    if initialized_paused_checkbox_ref is not None:
+    # Filter by paused/postponed: by default hide paused and postponed; checkboxes include them
+    show_paused = getattr(initialized_paused_checkbox_ref, 'value', False) if initialized_paused_checkbox_ref else False
+    show_postponed = getattr(initialized_postponed_checkbox_ref, 'value', False) if initialized_postponed_checkbox_ref else False
+    filtered_by_deferred = []
+    for a in active_not_current:
+        act = a.get('actual') or '{}'
         try:
-            if getattr(initialized_paused_checkbox_ref, 'value', False):
-                paused_only_list = []
-                for a in active_not_current:
-                    act = a.get('actual') or '{}'
-                    try:
-                        act_d = json.loads(act) if isinstance(act, str) else (act if isinstance(act, dict) else {})
-                    except (json.JSONDecodeError, TypeError):
-                        act_d = {}
-                    if act_d.get('paused', False):
-                        paused_only_list.append(a)
-                active_not_current = paused_only_list
-        except Exception:
-            pass
+            act_d = json.loads(act) if isinstance(act, str) else (act if isinstance(act, dict) else {})
+        except (json.JSONDecodeError, TypeError):
+            act_d = {}
+        is_paused = act_d.get('paused', False)
+        postpone_history = act_d.get('postpone_history') or []
+        is_postponed = bool(isinstance(postpone_history, list) and len(postpone_history) > 0)
+        if (show_paused or not is_paused) and (show_postponed or not is_postponed):
+            filtered_by_deferred.append(a)
+    active_not_current = filtered_by_deferred
 
     print(f"[Dashboard] Total initialized tasks before filtering: {len(active_not_current)}")
 
@@ -762,7 +794,26 @@ def refresh_initialized_tasks(search_query=None):
         print(f"[Dashboard] Initialized tasks after filtering: {len(active_not_current)}")
     else:
         print("[Dashboard] No search query provided, showing all initialized tasks")
-    
+
+    # Sort by urgency: overdue first, then by due date (soonest first), then no-due-date by initialized (older first)
+    try:
+        from datetime import datetime as _dt
+        from backend.urgency import _parse_dt as _parse_dt_urgency
+        _now = _dt.utcnow()
+        _max_dt = _dt.max
+        _min_dt = _dt.min
+
+        def _sort_key(inst):
+            due_at = _parse_dt_urgency(inst.get("due_at"))
+            init_at = _parse_dt_urgency(inst.get("initialized_at"))
+            overdue = due_at is not None and _now > due_at
+            # 0 = overdue first, 1 = not overdue; then by due_at asc (soonest first); then no-due by init asc (older first)
+            return (0 if overdue else 1, due_at or _max_dt, init_at or _min_dt)
+
+        active_not_current = sorted(active_not_current, key=_sort_key)
+    except Exception:
+        pass
+
     # Clear the container
     initialized_tasks_container.clear()
     
@@ -776,6 +827,12 @@ def refresh_initialized_tasks(search_query=None):
         return
     
     print(f"[Dashboard] Rendering {len(active_not_current)} initialized tasks in 2-column layout")
+
+    # Task horizon for urgency (stale = no due, age > N days)
+    try:
+        task_horizon_days = user_state.get_task_horizon_days(str(session_user_id))
+    except Exception:
+        task_horizon_days = 14
 
     # Bulk-fetch previous-task averages and avg_time_estimate to avoid N+1 in format_colored_tooltip
     task_ids = list({i.get('task_id') for i in active_not_current if i.get('task_id')})
@@ -811,18 +868,19 @@ def refresh_initialized_tasks(search_query=None):
                     tooltip_id = f"tooltip-{inst['instance_id']}"
                     instance_id = inst['instance_id']
                     
-                    # Check if this task has pause notes and completion percentage
+                    # Check if this task has pause notes, completion percentage, paused, and postponed
                     actual_str = inst.get("actual") or "{}"
                     has_pause_notes = False
                     completion_pct = None
                     is_paused = False
+                    is_postponed = False
                     try:
                         actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
                         pause_reason = actual_data.get('pause_reason', '')
                         has_pause_notes = bool(pause_reason and pause_reason.strip())
-                        # Check if task is paused (has 'paused' flag in actual_data)
                         is_paused = actual_data.get('paused', False)
-                        # Get completion percentage if available
+                        postpone_hist = actual_data.get('postpone_history') or []
+                        is_postponed = bool(isinstance(postpone_hist, list) and len(postpone_hist) > 0)
                         completion_pct = actual_data.get('pause_completion_percentage')
                         if completion_pct is not None:
                             try:
@@ -831,19 +889,64 @@ def refresh_initialized_tasks(search_query=None):
                                 completion_pct = None
                     except (json.JSONDecodeError, TypeError):
                         pass
-                    
-                    with ui.card().classes("w-full p-2 task-card-hover mb-2 context-menu-card").props(f'data-instance-id="{instance_id}" data-context-menu="instance"').style("position: relative;"):
+
+                    # Urgency: score, overdue, stale, due_at_display
+                    try:
+                        from backend.urgency import compute_urgency
+                        urgency_info = compute_urgency(inst, task_horizon_days=task_horizon_days)
+                    except Exception:
+                        urgency_info = {'score': 0.0, 'overdue': False, 'stale': False, 'due_at_display': None}
+                    is_overdue = urgency_info.get('overdue', False)
+                    is_stale = urgency_info.get('stale', False)
+                    urgency_score_val = urgency_info.get('score', 0.0)
+                    due_at_display = urgency_info.get('due_at_display')
+                    # Label for due today / due this week (not shown when overdue)
+                    due_soon_label = None
+                    if due_at_display and not is_overdue:
+                        try:
+                            from datetime import datetime as _dt, timedelta as _delta
+                            from backend.urgency import _parse_dt as _parse_dt_urgency
+                            due_at = _parse_dt_urgency(inst.get("due_at"))
+                            if due_at is not None:
+                                _now = _dt.utcnow()
+                                _today = _now.date()
+                                _due_date = due_at.date()
+                                if _due_date == _today:
+                                    due_soon_label = "Due today"
+                                elif _due_date < _today + _delta(days=7):
+                                    due_soon_label = "Due this week"
+                        except Exception:
+                            pass
+                    card_style = "position: relative;"
+                    if is_overdue:
+                        card_style += " border-left: 4px solid #ef4444; background-color: #fef2f2;"
+                        if instance_id not in _overdue_notified_instance_ids:
+                            _overdue_notified_instance_ids.add(instance_id)
+                            ui.notify(f"Task overdue: {escape_for_display(inst.get('task_name', '')[:40])}", type="warning")
+                    elif is_stale:
+                        card_style += " border-left: 4px solid #eab308;"
+
+                    with ui.card().classes("w-full p-2 task-card-hover mb-2 context-menu-card").props(f'data-instance-id="{instance_id}" data-context-menu="instance"').style(card_style):
                         # Hidden buttons for context menu actions (initialized tasks: View, Add Note, Complete)
                         ui.button("", on_click=lambda iid=instance_id: view_initialized_instance(iid)).props(f'id="context-btn-instance-view-{instance_id}"').style("display: none;")
                         ui.button("", on_click=lambda iid=instance_id: add_instance_note(iid)).props(f'id="context-btn-instance-addnote-{instance_id}"').style("display: none;")
                         ui.button("", on_click=lambda iid=instance_id: go_complete(iid)).props(f'id="context-btn-instance-complete-{instance_id}"').style("display: none;")
                         with ui.row().classes("w-full items-center gap-2"):
                             ui.label(escape_for_display(inst.get("task_name"))).classes("text-sm font-bold flex-1")
+                            if is_overdue:
+                                ui.label("Overdue").classes("text-xs font-semibold text-red-600")
+                                ui.icon("warning", size="sm").classes("text-red-500").tooltip("Overdue")
+                            if due_soon_label:
+                                ui.label(due_soon_label).classes("text-xs font-medium text-amber-600")
                             # Small indicator icon if task has pause notes (tooltip shows the notes)
                             if has_pause_notes:
                                 pause_tooltip = "Pause notes: " + (escape_for_display(pause_reason.strip()) if pause_reason else "—")
                                 ui.icon("pause_circle", size="sm").classes("text-orange-500").tooltip(pause_tooltip)
                         ui.label(f"{time_estimate} min").classes("text-xs text-gray-600")
+                        # Only show urgency score when task has a deadline (no score for no-due-date tasks)
+                        if due_at_display:
+                            urgency_parts = [f"Urgency: {urgency_score_val:.0f}", f"Due: {due_at_display}"]
+                            ui.label(" · ".join(urgency_parts)).classes("text-xs text-gray-600")
                         
                         # Show completion percentage if task was paused
                         if completion_pct is not None:
@@ -871,6 +974,11 @@ def refresh_initialized_tasks(search_query=None):
                             ui.button("Cancel",
                                       on_click=lambda i=inst['instance_id']: go_cancel(i)
                                       ).props("dense size=sm color=red")
+                            # Hide Postpone for already-postponed tasks to keep UI clean
+                            if not is_postponed:
+                                ui.button("Postpone",
+                                          on_click=lambda i=inst['instance_id'], tn=inst.get('task_name', ''): open_postpone_dialog(i, tn)
+                                          ).props("dense size=sm").classes("text-amber-600")
                         
                         tooltip_html = f'<div id="{tooltip_id}" class="task-tooltip">{formatted_tooltip}</div>'
                         ui.add_body_html(tooltip_html)
@@ -1738,14 +1846,11 @@ def edit_template(task):
     current_routine_frequency = task.get('routine_frequency', 'none') or 'none'
     current_routine_time = task.get('routine_time', '00:00') or '00:00'
     current_routine_days_str = task.get('routine_days_of_week', '[]') or '[]'
-    current_completion_window_hours = task.get('completion_window_hours', '') or ''
-    current_completion_window_days = task.get('completion_window_days', '') or ''
-
     try:
         current_est = int(current_est) if current_est else 0
     except (TypeError, ValueError):
         current_est = 0
-    
+
     # Parse routine days
     try:
         current_routine_days = json.loads(current_routine_days_str) if isinstance(current_routine_days_str, str) else current_routine_days_str
@@ -1753,20 +1858,10 @@ def edit_template(task):
             current_routine_days = []
     except (json.JSONDecodeError, TypeError):
         current_routine_days = []
-    
-    try:
-        current_completion_window_hours = int(current_completion_window_hours) if current_completion_window_hours else None
-    except (TypeError, ValueError):
-        current_completion_window_hours = None
-    
-    try:
-        current_completion_window_days = int(current_completion_window_days) if current_completion_window_days else None
-    except (TypeError, ValueError):
-        current_completion_window_days = None
-    
+
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-4'):
         ui.label("Edit Task Template").classes("text-xl font-bold mb-4")
-        
+
         name_input = ui.input(label="Task Name", value=current_name).classes("w-full")
         desc_input = ui.textarea(label="Description (optional)", value=current_desc).classes("w-full")
         task_type_select = ui.select(
@@ -1778,55 +1873,38 @@ def edit_template(task):
 
         # Routine scheduling section
         ui.label("Routine Scheduling (Optional)").classes("text-lg font-semibold mt-4")
-        
+
         routine_frequency = ui.select(
             ['none', 'daily', 'weekly'],
             label='Routine Frequency',
             value=current_routine_frequency
         ).classes("w-full")
-        
+
         # Day of week selection (for weekly)
         day_labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         day_checkboxes = {}
         day_container = ui.column().classes("gap-2")
-        
+
         def update_day_visibility():
             """Show/hide day selection based on frequency"""
             day_container.set_visibility(routine_frequency.value in ['daily', 'weekly'])
-        
+
         routine_frequency.on('update:model-value', lambda: update_day_visibility())
-        
+
         with day_container:
             ui.label("Select days of week (leave all unchecked for daily to run every day):").classes("text-sm")
             for i, day in enumerate(day_labels):
                 day_checkboxes[i] = ui.checkbox(day, value=(i in current_routine_days))
-        
+
         day_container.set_visibility(current_routine_frequency in ['daily', 'weekly'])
-        
+
         # Time picker
         routine_time = ui.input(
             label='Routine Time (HH:MM, 24-hour format)',
             value=current_routine_time,
             placeholder='00:00'
         ).classes("w-full max-w-xs")
-        
-        # Completion window (hours and days)
-        ui.label("Completion Window (Optional)").classes("text-sm font-semibold")
-        ui.label("Time to complete task after initialization without penalty").classes("text-xs text-gray-500")
-        with ui.row().classes("gap-4"):
-            completion_window_hours = ui.number(
-                label='Hours',
-                value=current_completion_window_hours,
-                placeholder='Hours',
-                min=0
-            ).classes("flex-1")
-            completion_window_days = ui.number(
-                label='Days',
-                value=current_completion_window_days,
-                placeholder='Days',
-                min=0
-            ).classes("flex-1")
-        
+
         def save_edit():
             if not name_input.value.strip():
                 ui.notify("Task name required", color='negative')
@@ -1859,18 +1937,9 @@ def edit_template(task):
                 # For daily, if no days selected, it means every day (empty list)
                 # If days are selected, it means only on those days
 
-            # Get completion window values (None if empty)
-            completion_window_hours_val = None
-            if completion_window_hours.value is not None and completion_window_hours.value > 0:
-                completion_window_hours_val = int(completion_window_hours.value)
-            
-            completion_window_days_val = None
-            if completion_window_days.value is not None and completion_window_days.value > 0:
-                completion_window_days_val = int(completion_window_days.value)
-            
             # Convert selected_days to JSON string for CSV compatibility
             selected_days_json = json.dumps(selected_days)
-            
+
             success = tm.update_task(
                 task_id,
                 user_id=current_user_id,
@@ -1881,8 +1950,6 @@ def edit_template(task):
                 routine_frequency=routine_frequency.value,
                 routine_days_of_week=selected_days_json,
                 routine_time=time_str,
-                completion_window_hours=completion_window_hours_val,
-                completion_window_days=completion_window_days_val
             )
             
             if success:
@@ -1917,14 +1984,12 @@ def copy_template(task):
     current_routine_frequency = task.get('routine_frequency', 'none') or 'none'
     current_routine_time = task.get('routine_time', '00:00') or '00:00'
     current_routine_days_str = task.get('routine_days_of_week', '[]') or '[]'
-    current_completion_window_hours = task.get('completion_window_hours', '') or ''
-    current_completion_window_days = task.get('completion_window_days', '') or ''
-    
+
     try:
         current_est = int(current_est) if current_est else 0
     except (TypeError, ValueError):
         current_est = 0
-    
+
     # Parse default_initial_aversion
     current_default_aversion = None
     if current_default_aversion_str:
@@ -1934,10 +1999,10 @@ def copy_template(task):
                 current_default_aversion = None
         except (ValueError, TypeError):
             current_default_aversion = None
-    
+
     # Parse is_recurring
     is_recurring_bool = str(current_is_recurring).lower() in ('true', '1', 'yes')
-    
+
     # Parse routine days
     try:
         current_routine_days = json.loads(current_routine_days_str) if isinstance(current_routine_days_str, str) else current_routine_days_str
@@ -1945,17 +2010,7 @@ def copy_template(task):
             current_routine_days = []
     except (json.JSONDecodeError, TypeError):
         current_routine_days = []
-    
-    try:
-        current_completion_window_hours = int(current_completion_window_hours) if current_completion_window_hours else None
-    except (TypeError, ValueError):
-        current_completion_window_hours = None
-    
-    try:
-        current_completion_window_days = int(current_completion_window_days) if current_completion_window_days else None
-    except (TypeError, ValueError):
-        current_completion_window_days = None
-    
+
     # Default name with " (Copy)" appended
     default_copy_name = f"{current_name} (Copy)" if current_name else "New Task (Copy)"
     
@@ -2007,24 +2062,7 @@ def copy_template(task):
             value=current_routine_time,
             placeholder='00:00'
         ).classes("w-full max-w-xs")
-        
-        # Completion window (hours and days)
-        ui.label("Completion Window (Optional)").classes("text-sm font-semibold")
-        ui.label("Time to complete task after initialization without penalty").classes("text-xs text-gray-500")
-        with ui.row().classes("gap-4"):
-            completion_window_hours = ui.number(
-                label='Hours',
-                value=current_completion_window_hours,
-                placeholder='Hours',
-                min=0
-            ).classes("flex-1")
-            completion_window_days = ui.number(
-                label='Days',
-                value=current_completion_window_days,
-                placeholder='Days',
-                min=0
-            ).classes("flex-1")
-        
+
         def save_copy():
             if not name_input.value.strip():
                 ui.notify("Task name required", color='negative')
@@ -2060,16 +2098,7 @@ def copy_template(task):
                 # For daily, if no days selected, it means every day (empty list)
                 # If days are selected, it means only on those days
 
-            # Get completion window values (None if empty)
-            completion_window_hours_val = None
-            if completion_window_hours.value is not None and completion_window_hours.value > 0:
-                completion_window_hours_val = int(completion_window_hours.value)
-            
-            completion_window_days_val = None
-            if completion_window_days.value is not None and completion_window_days.value > 0:
-                completion_window_days_val = int(completion_window_days.value)
-            
-            # Create new task with copied data
+            # Create new task with copied data (due date is set per instance at initialization)
             tid = tm.create_task(
                 name_input.value.strip(),
                 description=desc_input.value or '',
@@ -2083,8 +2112,8 @@ def copy_template(task):
                 routine_frequency=routine_frequency.value,
                 routine_days_of_week=selected_days,
                 routine_time=time_str,
-                completion_window_hours=completion_window_hours_val,
-                completion_window_days=completion_window_days_val
+                completion_window_hours=None,
+                completion_window_days=None,
             )
             
             if tid:
@@ -5756,15 +5785,25 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         # Add tooltip using NiceGUI's tooltip feature
                         time_label.tooltip(tooltip_content)
                     
-                    # Search bar for initialized tasks and Paused checkbox
+                    # Search bar for initialized tasks and Paused / Tasks saved for later checkboxes
                     with ui.row().classes("w-full items-center gap-2 mb-2"):
                         initialized_search_input = ui.input(
                             label="Search initialized tasks",
                             placeholder="Search by name, description, or notes..."
                         ).classes("flex-1")
                         initialized_paused_checkbox = ui.checkbox("Paused", value=False).classes("text-sm")
-                    global initialized_paused_checkbox_ref
+                        with ui.row().classes("items-center gap-0"):
+                            initialized_postponed_checkbox = ui.checkbox(
+                                "Postponed", value=False
+                            ).classes("text-sm")
+                            _postpone_info = ui.icon("help", size="sm").classes(
+                                "text-gray-500 cursor-help ml-0.5"
+                            ).tooltip(
+                                "Tasks saved for later. Check this box to include them in the list."
+                            )
+                    global initialized_paused_checkbox_ref, initialized_postponed_checkbox_ref
                     initialized_paused_checkbox_ref = initialized_paused_checkbox
+                    initialized_postponed_checkbox_ref = initialized_postponed_checkbox
                     # #region agent log
                     debug_log('dashboard.py:4629', 'Initialized tasks search input created', {'input_id': str(id(initialized_search_input))}, 'H3')
                     # #endregion
@@ -5847,7 +5886,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         debug_log('dashboard.py:4675', 'Attempting to attach initialized tasks search handler', {'input_id': str(id(initialized_search_input)), 'container_exists': initialized_tasks_container is not None}, 'H2')
                         # #endregion
                         initialized_search_input.on('update:model-value', handle_initialized_search)
-                        def on_paused_change():
+                        def on_paused_or_postponed_change():
                             q = (last_initialized_search_value[0] or "").strip() or None
                             if q is None and initialized_search_input_ref is not None:
                                 try:
@@ -5855,7 +5894,8 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                 except Exception:
                                     pass
                             refresh_initialized_tasks(search_query=q)
-                        initialized_paused_checkbox.on('update:model-value', on_paused_change)
+                        initialized_paused_checkbox.on('update:model-value', on_paused_or_postponed_change)
+                        initialized_postponed_checkbox.on('update:model-value', on_paused_or_postponed_change)
                         print("[Dashboard] Initialized tasks search input event handler attached")
                         # #region agent log
                         debug_log('dashboard.py:4678', 'Initialized tasks search handler attached successfully', {}, 'H2')
@@ -6951,6 +6991,12 @@ def build_recommendations_section():
                 placeholder="Search categories...",
                 value=dash_filters.get('categories', ''),
             ).classes("w-40")
+
+            # Include completed and cancelled (instances mode only)
+            include_completed_cancelled_cb = ui.checkbox(
+                "Include completed and cancelled",
+                value=dash_filters.get('include_completed_cancelled', False),
+            ).classes("text-sm")
             
             def apply_filters():
                 # Min duration
@@ -6982,6 +7028,9 @@ def build_recommendations_section():
                 # Categories
                 categories_val = categories_search.value.strip() if categories_search.value else None
                 dash_filters['categories'] = categories_val
+                
+                # Include completed and cancelled (instances mode only)
+                dash_filters['include_completed_cancelled'] = include_completed_cancelled_cb.value if include_completed_cancelled_cb else False
                 
                 refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
             
@@ -7059,7 +7108,12 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                     ui.label(score_text).classes("text-sm font-semibold text-blue-600 mb-2")
                 else:
                     ui.label("Score: —").classes("text-xs text-gray-400 mb-2")
-                
+                # Urgency and due only when task has a deadline (no score for no-due-date)
+                due_at_display = rec.get('due_at_display')
+                if due_at_display:
+                    urgency_score = rec.get('urgency_score', 0)
+                    urgency_parts = [f"Urgency: {urgency_score:.0f}", f"Due: {due_at_display}"]
+                    ui.label(" · ".join(urgency_parts)).classes("text-xs text-gray-600 mb-2")
                 # Show initialization notes if available
                 if description:
                     with ui.card().classes("bg-gray-50 p-2 mb-2"):
@@ -7164,6 +7218,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
             # Add sub-scores to tooltip
             score_labels = {
                 'relief_score': 'Relief Score',
+                'urgency_score': 'Urgency',
                 'cognitive_load': 'Cognitive Load',
                 'emotional_load': 'Emotional Load',
                 'physical_load': 'Physical Load',

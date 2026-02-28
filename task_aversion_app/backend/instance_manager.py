@@ -107,7 +107,7 @@ class InstanceManager:
         if not os.path.exists(self.file):
             pd.DataFrame(columns=[
                 'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
-                'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
+                'completed_at','cancelled_at','due_at','predicted','actual','procrastination_score','proactive_score',
                 'is_completed','is_deleted','status','delay_minutes'
             ]).to_csv(self.file, index=False)
         self._reload()
@@ -146,7 +146,7 @@ class InstanceManager:
                         # Fallback to empty DataFrame with expected columns
                         self.df = pd.DataFrame(columns=[
                             'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
-                            'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
+                            'completed_at','cancelled_at','due_at','predicted','actual','procrastination_score','proactive_score',
                             'is_completed','is_deleted','status','delay_minutes'
                         ])
                 except Exception as e:
@@ -156,7 +156,7 @@ class InstanceManager:
                     # Fallback to empty DataFrame
                     self.df = pd.DataFrame(columns=[
                         'instance_id','task_id','task_name','task_version','created_at','initialized_at','started_at',
-                        'completed_at','cancelled_at','predicted','actual','procrastination_score','proactive_score',
+                        'completed_at','cancelled_at','due_at','predicted','actual','procrastination_score','proactive_score',
                         'is_completed','is_deleted','status','delay_minutes'
                     ])
                     break
@@ -164,6 +164,7 @@ class InstanceManager:
                 'predicted': '',
                 'actual': '',
                 'cancelled_at': '',
+                'due_at': '',
                 'duration_minutes': '',
                 'delay_minutes': '',
                 'relief_score': '',
@@ -289,7 +290,7 @@ class InstanceManager:
         db_dict = row_dict.copy()
         
         # Convert datetime strings to datetime objects
-        for field in ['created_at', 'initialized_at', 'started_at', 'completed_at', 'cancelled_at']:
+        for field in ['created_at', 'initialized_at', 'started_at', 'completed_at', 'cancelled_at', 'due_at']:
             if field in db_dict:
                 db_dict[field] = self._csv_to_db_datetime(db_dict[field])
         
@@ -379,6 +380,7 @@ class InstanceManager:
             'started_at': '',
             'completed_at': '',
             'cancelled_at': '',
+            'due_at': '',
             'predicted': json.dumps(predicted or {}),
             'actual': json.dumps({}),
             'procrastination_score': '',
@@ -431,6 +433,7 @@ class InstanceManager:
                     started_at=None,
                     completed_at=None,
                     cancelled_at=None,
+                    due_at=None,
                     predicted=predicted or {},
                     actual={},
                     procrastination_score=None,
@@ -1849,6 +1852,83 @@ class InstanceManager:
         # Do this outside the session context to ensure it always runs
         self._invalidate_instance_caches()
 
+    def postpone_instance(self, instance_id: str, actual: dict, user_id: Optional[int] = None):
+        """Record a postpone (capture reason). Instance stays active; feeds into urgency/procrastination.
+
+        Args:
+            instance_id: Instance ID to postpone
+            actual: Dict with at least 'postpone_reason' or 'reason'; stored in actual and postpone_history
+            user_id: User ID for data isolation (required)
+        """
+        if user_id is not None:
+            inst = self.get_instance(instance_id, user_id=user_id)
+            if not inst:
+                raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
+        else:
+            print("[InstanceManager] WARNING: postpone_instance() called without user_id")
+        if self.use_db:
+            self._postpone_instance_db(instance_id, actual, user_id=user_id)
+        else:
+            self._postpone_instance_csv(instance_id, actual)
+        self._invalidate_instance_caches()
+
+    def _postpone_instance_csv(self, instance_id: str, actual: dict):
+        """CSV-specific postpone: append to postpone_history, merge actual."""
+        self._reload()
+        matches = self.df.index[self.df['instance_id'] == instance_id]
+        if len(matches) == 0:
+            raise ValueError(f"Instance {instance_id} not found")
+        idx = matches[0]
+        if str(self.df.at[idx, 'is_completed']).lower() == 'true':
+            raise ValueError(f"Instance {instance_id} is already completed or cancelled")
+        existing = self.df.at[idx, 'actual'] or '{}'
+        try:
+            existing_actual = json.loads(existing) if existing else {}
+        except (json.JSONDecodeError, TypeError):
+            existing_actual = {}
+        history = existing_actual.get('postpone_history') or []
+        if not isinstance(history, list):
+            history = []
+        reason = actual.get('postpone_reason') or actual.get('reason') or ''
+        history.append({'reason': reason, 'at': datetime.now().strftime("%Y-%m-%d %H:%M")})
+        existing_actual['postpone_history'] = history
+        existing_actual['postpone_reason'] = reason
+        self.df.at[idx, 'actual'] = json.dumps(existing_actual)
+        self._save()
+
+    def _postpone_instance_db(self, instance_id: str, actual: dict, user_id: Optional[int] = None):
+        """Database-specific postpone: append to postpone_history, merge actual."""
+        try:
+            with self.db_session() as session:
+                query = session.query(self.TaskInstance).filter(
+                    self.TaskInstance.instance_id == instance_id
+                )
+                if user_id is not None:
+                    query = query.filter(self.TaskInstance.user_id == user_id)
+                instance = query.first()
+                if not instance:
+                    raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
+                if instance.is_completed:
+                    raise ValueError(f"Instance {instance_id} is already completed or cancelled")
+                existing = instance.actual or {}
+                history = existing.get('postpone_history') or []
+                if not isinstance(history, list):
+                    history = []
+                reason = actual.get('postpone_reason') or actual.get('reason') or ''
+                history.append({'reason': reason, 'at': datetime.now().strftime("%Y-%m-%d %H:%M")})
+                existing['postpone_history'] = history
+                existing['postpone_reason'] = reason
+                instance.actual = existing
+                session.commit()
+        except ValueError:
+            raise
+        except Exception as e:
+            if self.strict_mode:
+                raise RuntimeError(f"Database error in postpone_instance: {e}") from e
+            print(f"[InstanceManager] Database error in postpone_instance: {e}, falling back to CSV")
+            self.use_db = False
+            self._postpone_instance_csv(instance_id, actual)
+
     def update_cancelled_instance(self, instance_id, cancellation_data: dict, user_id: Optional[int] = None):
         """Update cancellation data for an already-cancelled instance. Works with both CSV and database.
         
@@ -2017,75 +2097,92 @@ class InstanceManager:
             print(f"[InstanceManager] update_instance_pause_notes DB error: {e}")
             return False
 
-    def add_prediction_to_instance(self, instance_id, predicted: dict, user_id: Optional[int] = None):
+    def add_prediction_to_instance(
+        self,
+        instance_id: str,
+        predicted: dict,
+        user_id: Optional[int] = None,
+        due_at: Optional[datetime] = None,
+    ):
         """Add prediction data to an instance. Works with both CSV and database.
-        
+
         Args:
             instance_id: Instance ID to add prediction to
             predicted: Prediction data dictionary
             user_id: User ID to verify ownership (required for data isolation)
+            due_at: Optional deadline for this instance (set at initialization).
         """
         if self.use_db:
-            return self._add_prediction_to_instance_db(instance_id, predicted, user_id)
-        else:
-            return self._add_prediction_to_instance_csv(instance_id, predicted)
-    
-    def _add_prediction_to_instance_csv(self, instance_id, predicted: dict):
+            return self._add_prediction_to_instance_db(
+                instance_id, predicted, user_id=user_id, due_at=due_at
+            )
+        return self._add_prediction_to_instance_csv(instance_id, predicted, due_at=due_at)
+
+    def _add_prediction_to_instance_csv(
+        self, instance_id: str, predicted: dict, due_at: Optional[datetime] = None
+    ):
         """CSV-specific add_prediction_to_instance."""
         import json
         with perf_logger.operation("_add_prediction_to_instance_csv", instance_id=instance_id):
             self._reload()
             idx = self.df.index[self.df['instance_id'] == instance_id][0]
-            self.df.at[idx,'predicted'] = json.dumps(predicted)
+            self.df.at[idx, 'predicted'] = json.dumps(predicted)
             # Always set initialized_at when prediction is added (initialization happens)
-            if not self.df.at[idx,'initialized_at'] or self.df.at[idx,'initialized_at'] == '':
-                self.df.at[idx,'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            if not self.df.at[idx, 'initialized_at'] or self.df.at[idx, 'initialized_at'] == '':
+                self.df.at[idx, 'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            if due_at is not None:
+                self.df.at[idx, 'due_at'] = due_at.strftime("%Y-%m-%d %H:%M")
             # Extract predicted values to columns (only if columns are empty)
             self._update_attributes_from_payload(idx, predicted)
             self._save()
-    
-    def _add_prediction_to_instance_db(self, instance_id, predicted: dict, user_id: Optional[int] = None):
+
+    def _add_prediction_to_instance_db(
+        self,
+        instance_id: str,
+        predicted: dict,
+        user_id: Optional[int] = None,
+        due_at: Optional[datetime] = None,
+    ):
         """Database-specific add_prediction_to_instance.
-        
+
         Args:
             instance_id: Instance ID to add prediction to
             predicted: Prediction data dictionary
             user_id: User ID to filter by (required for data isolation)
+            due_at: Optional deadline for this instance.
         """
-        # CRITICAL: Require user_id for data isolation
         if user_id is None:
             print("[InstanceManager] WARNING: _add_prediction_to_instance_db() called without user_id - returning False for security")
             return False
-        
+
         try:
             with perf_logger.operation("_add_prediction_to_instance_db", instance_id=instance_id):
                 with self.db_session() as session:
                     query = session.query(self.TaskInstance).filter(
                         self.TaskInstance.instance_id == instance_id
                     )
-                    # CRITICAL: Filter by user_id for data isolation
                     query = query.filter(self.TaskInstance.user_id == user_id)
                     instance = query.first()
                     if not instance:
                         raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
-                    
-                    # Update predicted JSON
+
                     instance.predicted = predicted or {}
-                    
-                    # Always set initialized_at when prediction is added (initialization happens)
+
                     if not instance.initialized_at:
                         instance.initialized_at = datetime.now()
-                    
-                    # Extract predicted values to columns (only if columns are empty)
+
+                    if due_at is not None:
+                        instance.due_at = due_at
+
                     self._update_attributes_from_payload_db(instance, predicted)
-                    
+
                     session.commit()
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in add_prediction_to_instance and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in add_prediction_to_instance: {e}, falling back to CSV")
             self.use_db = False
-            return self._add_prediction_to_instance_csv(instance_id, predicted)
+            return self._add_prediction_to_instance_csv(instance_id, predicted, due_at=due_at)
 
     def ensure_instance_for_task(self, task_id, task_name, predicted: dict = None, user_id: Optional[int] = None):
         # create an instance and return id

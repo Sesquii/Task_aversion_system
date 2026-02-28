@@ -1,6 +1,6 @@
 from typing import Optional
 from nicegui import ui
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import time
 
@@ -430,6 +430,183 @@ def initialize_task_page(task_manager, emotion_manager):
                 min=0
             )
 
+            # Due date (defaults to today); calendar popup + month/day/year dropdowns
+            _today = datetime.now()
+            _today_str = _today.strftime("%Y-%m-%d")
+            existing_due = instance.get("due_at")
+            due_at_value = _today_str  # Default to today
+            if existing_due:
+                if isinstance(existing_due, datetime):
+                    due_at_value = existing_due.strftime("%Y-%m-%d")
+                else:
+                    try:
+                        s = str(existing_due).strip().replace(" ", "T")[:10]
+                        if len(s) >= 10:
+                            due_at_value = s
+                    except (ValueError, TypeError):
+                        pass
+            # Suggest from template completion window if no existing due
+            if due_at_value == _today_str and task:
+                cw_days = task.get("completion_window_days")
+                cw_hours = task.get("completion_window_hours")
+                try:
+                    cw_days = int(cw_days) if cw_days is not None and str(cw_days).strip() else 0
+                except (TypeError, ValueError):
+                    cw_days = 0
+                try:
+                    cw_hours = int(cw_hours) if cw_hours is not None and str(cw_hours).strip() else 0
+                except (TypeError, ValueError):
+                    cw_hours = 0
+                if cw_days or cw_hours:
+                    suggested = datetime.now() + timedelta(days=cw_days, hours=cw_hours)
+                    due_at_value = suggested.strftime("%Y-%m-%d")
+
+            # Store due date as YYYY-MM-DD (no visible text field)
+            due_at_input = ui.input(value=due_at_value).props("type=hidden").classes("hidden").style("display: none;")
+
+            # Month / Day / Year dropdowns (scroll-like) kept in sync with calendar
+            def _parse_due_parts():
+                s = (due_at_input.value if hasattr(due_at_input, "value") else getattr(due_at_input, "value", "")) or ""
+                s = str(s).strip()[:10]
+                if len(s) >= 10:
+                    try:
+                        d = datetime.strptime(s, "%Y-%m-%d")
+                        return d.year, d.month, d.day
+                    except (ValueError, TypeError):
+                        pass
+                y, m, d = _today.year, _today.month, _today.day
+                return y, m, d
+
+            _y, _m, _d = _parse_due_parts()
+            _years = [str(y) for y in range(_today.year, _today.year + 3)]
+
+            def _apply_mdy_to_date():
+                try:
+                    mo = int(due_month_select.value or 1)
+                    dy = int(due_day_select.value or 1)
+                    yr = int(due_year_select.value or _today.year)
+                    if 1 <= mo <= 12 and 1 <= dy <= 31 and _today.year <= yr < _today.year + 3:
+                        from calendar import monthrange
+                        _, last = monthrange(yr, mo)
+                        dy = min(dy, last)
+                        new_val = f"{yr}-{mo:02d}-{dy:02d}"
+                        due_at_input.set_value(new_val)
+                        try:
+                            _calendar_syncing["value"] = True
+                            try:
+                                cal.set_value(new_val)  # keep calendar in sync
+                            finally:
+                                _calendar_syncing["value"] = False
+                        except Exception:
+                            pass
+                except (ValueError, TypeError):
+                    pass
+
+            def _sync_mdy_from_date():
+                y, m, d = _parse_due_parts()
+                due_month_select.set_value(str(m))
+                due_day_select.set_value(str(d))
+                due_year_select.set_value(str(y))
+
+            def _sync_mdy_from_str(date_str: str) -> None:
+                """Sync month/day/year selects from a YYYY-MM-DD string."""
+                try:
+                    d = datetime.strptime(str(date_str).strip()[:10], "%Y-%m-%d")
+                    due_month_select.set_value(str(d.month))
+                    due_day_select.set_value(str(d.day))
+                    due_year_select.set_value(str(d.year))
+                except (ValueError, TypeError):
+                    _sync_mdy_from_date()
+
+            ui.label("Due date").classes("text-sm font-semibold text-gray-700 mt-2")
+
+            # Bottom row: calendar button + month/day/year (keep icon near numbers)
+            with ui.row().classes("w-full items-end gap-2 mt-1"):
+                # Calendar button (opens popup calendar)
+                with ui.dialog() as due_calendar_dialog, ui.card().classes("p-3"):
+                    # Ensure the calendar uses YYYY-MM-DD so parsing stays consistent
+                    cal = ui.date(value=due_at_value).props('minimal mask="YYYY-MM-DD"').classes("w-full")
+                    _calendar_syncing = {"value": False}
+
+                    def _on_cal_change(e):
+                        if _calendar_syncing["value"]:
+                            return
+                        # ui.date may send a string, dict, or list depending on NiceGUI/Quasar versions
+                        args = getattr(e, "args", None) if e is not None else None
+                        if isinstance(args, dict):
+                            selected = str(args.get("value") or args.get("label") or "").strip()
+                        elif isinstance(args, (list, tuple)):
+                            # Observed in runtime: [ "YYYY-MM-DD", "...", {year,month,day} ]
+                            selected = str(args[0] if len(args) > 0 else "").strip()
+                        else:
+                            selected = str(args or "").strip()
+                        selected = selected.replace("/", "-")[:10]
+                        if not selected:
+                            return
+                        # Update hidden date first, then sync selectors from the selected string
+                        due_at_input.set_value(selected)
+                        _sync_mdy_from_str(selected)
+                        # Keep calendar value consistent without re-triggering handler
+                        _calendar_syncing["value"] = True
+                        try:
+                            cal.set_value(selected)
+                        except Exception:
+                            pass
+                        finally:
+                            _calendar_syncing["value"] = False
+                        due_calendar_dialog.close()
+
+                    cal.on("update:model-value", _on_cal_change)
+
+                def _open_due_calendar():
+                    try:
+                        current = str(due_at_input.value or "").strip()[:10]
+                        if current:
+                            _calendar_syncing["value"] = True
+                            try:
+                                cal.set_value(current)
+                            finally:
+                                _calendar_syncing["value"] = False
+                    except Exception:
+                        pass
+                    due_calendar_dialog.open()
+
+                ui.button(icon="event", on_click=_open_due_calendar).props("dense flat round size=sm").classes("text-gray-600").tooltip("Pick a due date")
+
+                due_month_select = ui.select(
+                    options={str(i): f"{i:02d}" for i in range(1, 13)},
+                    value=str(_m),
+                    label="Month"
+                ).classes("w-24")
+                due_day_select = ui.select(
+                    options={str(i): f"{i:02d}" for i in range(1, 32)},
+                    value=str(_d),
+                    label="Day"
+                ).classes("w-20")
+                due_year_select = ui.select(
+                    options=dict((y, y) for y in _years),
+                    value=str(_y),
+                    label="Year"
+                ).classes("w-24")
+
+            due_month_select.on("update:model-value", lambda: _apply_mdy_to_date())
+            due_day_select.on("update:model-value", lambda: _apply_mdy_to_date())
+            due_year_select.on("update:model-value", lambda: _apply_mdy_to_date())
+            def _on_due_hidden_change():
+                _sync_mdy_from_date()
+                try:
+                    current = str(due_at_input.value or "").strip()[:10]
+                    if current:
+                        _calendar_syncing["value"] = True
+                        try:
+                            cal.set_value(current)
+                        finally:
+                            _calendar_syncing["value"] = False
+                except Exception:
+                    pass
+
+            due_at_input.on("update:model-value", lambda: _on_due_hidden_change())
+
             def save():
                 # Check if sliders were adjusted (compare current values to defaults)
                 sliders_adjusted = False
@@ -635,10 +812,41 @@ def initialize_task_page(task_manager, emotion_manager):
                     "expected_cognitive_load": (mental_energy.value + task_difficulty.value) / 2,
                 }
 
+                # Parse optional due date (set at initialization for urgency)
+                # Support date-only (e.g. "2025-02-28") as end of that day
+                due_at_parsed = None
+                raw = due_at_input.value
+                if hasattr(raw, "strftime"):
+                    due_str = raw.strftime("%Y-%m-%d")
+                else:
+                    due_str = (raw or "").strip().rstrip("T")
+                if due_str:
+                    # Try date+time formats first, then date-only (treat as end of day 23:59)
+                    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+                        try:
+                            s = due_str[: len(fmt)].strip()
+                            if len(s) >= len(fmt):
+                                due_at_parsed = datetime.strptime(s, fmt)
+                                break
+                        except (ValueError, TypeError):
+                            continue
+                    if due_at_parsed is None and len(due_str) >= 10:
+                        try:
+                            due_at_parsed = datetime.strptime(due_str[:10], "%Y-%m-%d")
+                            # Date only: treat as end of that day (23:59)
+                            due_at_parsed = due_at_parsed.replace(hour=23, minute=59, second=59, microsecond=0)
+                        except (ValueError, TypeError):
+                            pass
+
                 try:
-                    # This will set initialized_at if not already set
+                    # This will set initialized_at if not already set; due_at is set when provided
                     with perf_logger.operation("add_prediction_to_instance", instance_id=instance_id):
-                        im.add_prediction_to_instance(instance_id, predicted_payload, user_id=current_user_id)
+                        im.add_prediction_to_instance(
+                            instance_id,
+                            predicted_payload,
+                            user_id=current_user_id,
+                            due_at=due_at_parsed,
+                        )
                     
                     # If editing a completed task, mark it as edited
                     if edit_mode and is_completed_task:
