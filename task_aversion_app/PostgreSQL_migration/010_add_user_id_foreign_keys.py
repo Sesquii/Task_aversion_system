@@ -208,6 +208,12 @@ def migrate():
                     skipped_count += 1
                     continue
                 
+                # If user_id_new already exists (e.g. from a previous partial run), skip adding it
+                if column_exists(table_name, 'user_id_new'):
+                    print(f"   [SKIP] Column 'user_id_new' already exists in '{table_name}' (idempotent)")
+                    skipped_count += 1
+                    continue
+
                 # Check if user_id exists and what type it is
                 if not column_exists(table_name, 'user_id'):
                     print(f"   [SKIP] Column 'user_id' does not exist in '{table_name}' (will be added as INTEGER)")
@@ -253,6 +259,7 @@ def migrate():
                         errors.append(f"Primary key conversion needed for {table_name}")
                         continue
                     
+                    # user_id_new already-exists check is done at start of loop
                     # For non-primary key columns, add new INTEGER column
                     try:
                         # Add new INTEGER column (nullable, no foreign key initially)
