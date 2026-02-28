@@ -5,6 +5,7 @@ from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 from backend.auth import get_current_user
 from backend.security_utils import escape_for_display
+from backend.app_time import format_for_display
 from ui.error_reporting import handle_error_with_ui
 import json
 import re
@@ -132,17 +133,17 @@ def cancelled_tasks_page():
                             
                             cancelled_at = inst.get('cancelled_at', '')
                             if cancelled_at:
-                                ui.label(f"Cancelled: {cancelled_at}").classes("text-xs text-gray-500 mt-1")
+                                ui.label(f"Cancelled: {format_for_display(cancelled_at)}").classes("text-xs text-gray-500 mt-1")
                         
                         # Show task details
                         with ui.column().classes("text-right gap-1 items-end"):
                             created_at = inst.get('created_at', '')
                             if created_at:
-                                ui.label(f"Created: {created_at}").classes("text-xs text-gray-400")
+                                ui.label(f"Created: {format_for_display(created_at)}").classes("text-xs text-gray-400")
                             
                             initialized_at = inst.get('initialized_at', '')
                             if initialized_at:
-                                ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-400")
+                                ui.label(f"Initialized: {format_for_display(initialized_at)}").classes("text-xs text-gray-400")
                             
                             def edit_cancelled_task(inst_id=instance_id, inst_data=inst):
                                 """Open dialog to edit cancelled task category and notes."""

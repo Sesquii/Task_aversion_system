@@ -16,6 +16,7 @@ from backend.user_state import UserStateManager
 from backend.performance_logger import get_perf_logger as get_init_perf_logger
 from backend.recommendation_logger import recommendation_logger
 from backend.security_utils import escape_for_display
+from backend.app_time import format_for_display
 from ui.error_reporting import handle_error_with_ui
 
 # Setup performance logging for monitored metrics
@@ -4684,7 +4685,14 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     # CRITICAL: Update global variable so other functions can use it
     current_user_id = session_user_id
     print(f"[Dashboard] build_dashboard: Set current_user_id={current_user_id} (session_user_id={session_user_id})")
-    
+
+    # Send browser timezone to server so "Use my device" in Settings works
+    ui.run_javascript(
+        '(function(){ try { var tz = Intl.DateTimeFormat().resolvedOptions().timeZone; '
+        'if (tz) fetch("/api/detected-timezone", { method: "POST", headers: { "Content-Type": "application/json" }, '
+        'body: JSON.stringify({ timezone: tz }), credentials: "include" }).catch(function(){}); } catch(e) {} })();'
+    )
+
     # Batch 3: Warm instances cache once so all later _load_instances in this request hit cache (avoids N+1)
     try:
         if hasattr(an, '_load_instances'):
@@ -5600,7 +5608,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                                     time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                                                     ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                                                 else:
-                                                    ui.label(timestamp_str).classes("text-xs text-gray-400")
+                                                    ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                                             # Hidden buttons for context menu actions (Edit, Delete only)
                                             if instance_id_completed:
                                                 ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6462,7 +6470,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6518,7 +6526,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6574,7 +6582,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6630,7 +6638,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6686,7 +6694,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6742,7 +6750,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6798,7 +6806,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")
@@ -6854,7 +6862,7 @@ def build_recently_completed_panel():
                             time_part = parts[1][:5] if len(parts[1]) >= 5 else parts[1]
                             ui.label(f"{date_part} {time_part}").classes("text-xs text-gray-400")
                         else:
-                            ui.label(timestamp_str).classes("text-xs text-gray-400")
+                            ui.label(format_for_display(timestamp_str)).classes("text-xs text-gray-400")
                     # Hidden buttons for context menu actions (Edit, Delete only)
                     if instance_id_completed:
                         ui.button("", on_click=lambda iid=instance_id_completed: edit_instance(iid)).props(f'id="context-btn-completed-edit-{instance_id_completed}"').style("display: none;")

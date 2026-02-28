@@ -401,9 +401,23 @@ def main():
     else:
         print("  [MISSING] job_task_mapping table does not exist")
         print("  -> Run: python PostgreSQL_migration/014_create_jobs_tables.py")
+
+    # Check for Migration 016: timezone columns on user_preferences
+    print("\nMigration 016: Timezone on user_preferences (PostgreSQL)")
+    if check_table_exists('user_preferences'):
+        inspector = inspect(engine)
+        cols = [c['name'] for c in inspector.get_columns('user_preferences')]
+        if 'timezone' in cols and 'detected_tz' in cols:
+            print("  [OK] user_preferences has timezone and detected_tz columns")
+        else:
+            print("  [MISSING] user_preferences missing timezone/detected_tz columns")
+            print("  -> Run: python PostgreSQL_migration/016_add_timezone_to_user_preferences.py")
+    else:
+        print("  [SKIP] user_preferences table does not exist (run migration 007 first)")
+
     print()
     print("=" * 70)
-    print("\nSummary: Run migrations in order (001 through 014)")
+    print("\nSummary: Run migrations in order (001 through 016)")
     print("All migrations are idempotent - safe to run multiple times.")
     print("To reset and re-run everything: python reset_database.py")
     print("=" * 70)

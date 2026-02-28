@@ -345,7 +345,29 @@ if __name__ in {"__main__", "__mp_main__"}:
             "timestamp": time.time(),
             "message": "Server is running. If you see this, the server has the latest code."
         }
-    
+
+    # Timezone: store browser-detected timezone for the current user (so "Use my device" works)
+    from fastapi import Request, Response
+    @app.post('/api/detected-timezone')
+    async def api_detected_timezone(request: Request):
+        """Accept browser timezone. Body: { timezone: string, use_auto?: boolean }."""
+        user_id = get_current_user()
+        if user_id is None:
+            return Response(status_code=401)
+        try:
+            body = await request.json()
+            tz = (body.get('timezone') or '').strip()
+            if not tz:
+                return Response(status_code=400)
+            from backend.user_state import UserStateManager
+            um = UserStateManager()
+            um.set_detected_timezone(str(user_id), tz)
+            if body.get('use_auto') is True:
+                um.set_timezone(str(user_id), 'auto')
+            return Response(status_code=200)
+        except Exception:
+            return Response(status_code=500)
+
     # Add query logging middleware (lightweight, can be disabled via env var)
     if os.getenv('ENABLE_QUERY_LOGGING', '1').lower() in ('1', 'true', 'yes'):
         try:

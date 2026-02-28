@@ -117,6 +117,97 @@ def _build_settings_content(user_id):
         ui.label(f"Current: {current_mode.capitalize()}").classes("text-xs text-gray-500")
         ui.label("Click a button to switch and go to the dashboard.").classes("text-xs text-gray-500")
 
+    # Timezone: per-user setting for displaying times and "today"
+    with ui.card().classes("w-full max-w-xl p-4 gap-3 mb-4"):
+        ui.label("Timezone").classes("text-lg font-semibold")
+        ui.label("Used to show dates and times in your local time. Choose \"Use my device\" to auto-detect from this browser.").classes("text-sm text-gray-600")
+        user_id_str = str(user_id) if user_id is not None else DEFAULT_USER_ID
+        current_tz = user_state.get_timezone(user_id_str)
+        detected_tz = user_state.get_detected_timezone(user_id_str)
+
+        # Send browser timezone to server on load
+        ui.run_javascript('''
+            (function() {
+                try {
+                    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    if (tz) {
+                        fetch("/api/detected-timezone", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ timezone: tz }),
+                            credentials: "include"
+                        }).catch(function() {});
+                    }
+                } catch (e) {}
+            })();
+        ''')
+
+        def use_device_tz():
+            ui.run_javascript('''
+                (function() {
+                    try {
+                        var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                        if (tz) {
+                            fetch("/api/detected-timezone", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ timezone: tz, use_auto: true }),
+                                credentials: "include"
+                            }).then(function() { window.location.reload(); }).catch(function() { window.location.reload(); });
+                        } else { window.location.reload(); }
+                    } else { window.location.reload(); }
+                })();
+            ''')
+
+        with ui.row().classes("gap-2 items-center flex-wrap"):
+            ui.button("Use my device timezone", icon="schedule", on_click=use_device_tz).classes("bg-blue-500 text-white")
+            if detected_tz:
+                ui.label(f"Device reports: {detected_tz}").classes("text-xs text-gray-500")
+        if current_tz and current_tz.lower() == "auto":
+            ui.label("Current: Use my device (auto)").classes("text-xs text-gray-600 mt-1")
+        elif current_tz:
+            ui.label(f"Current: {current_tz}").classes("text-xs text-gray-600 mt-1")
+
+        # Manual timezone select: options dict is value -> label (NiceGUI expects keys = stored value)
+        COMMON_TIMEZONES = [
+            ("auto", "Use my device (auto)"),
+            ("America/New_York", "Eastern (US)"),
+            ("America/Chicago", "Central (US)"),
+            ("America/Denver", "Mountain (US)"),
+            ("America/Los_Angeles", "Pacific (US)"),
+            ("America/Phoenix", "Arizona"),
+            ("America/Anchorage", "Alaska"),
+            ("Pacific/Honolulu", "Hawaii"),
+            ("UTC", "UTC"),
+            ("Europe/London", "London"),
+            ("Europe/Paris", "Paris"),
+            ("Europe/Berlin", "Berlin"),
+            ("Europe/Amsterdam", "Amsterdam"),
+            ("Asia/Tokyo", "Tokyo"),
+            ("Asia/Shanghai", "Shanghai"),
+            ("Australia/Sydney", "Sydney"),
+        ]
+        select_value = current_tz if current_tz else "auto"
+        tz_options = list(COMMON_TIMEZONES)
+        if select_value and not any(v[0] == select_value for v in tz_options):
+            tz_options.insert(0, (select_value, select_value))
+        options = {val: label for val, label in tz_options}
+        tz_select = ui.select(
+            options=options,
+            value=select_value or "auto",
+            label="Or choose a timezone",
+        ).classes("w-full max-w-md mt-2").props("outlined dense")
+
+        def on_tz_change():
+            val = tz_select.value
+            if val is None:
+                return
+            user_state.set_timezone(user_id_str, val if val else "auto")
+            ui.notify("Timezone saved.", color="positive")
+            ui.navigate.reload()
+
+        tz_select.on("change", on_tz_change)
+
     with ui.card().classes("w-full max-w-xl p-4 gap-3"):
         ui.label("Surveys").classes("text-lg font-semibold")
         ui.button("Take Mental Health Survey", on_click=go_survey)

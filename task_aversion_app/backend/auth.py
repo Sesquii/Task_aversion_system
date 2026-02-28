@@ -567,7 +567,9 @@ def migrate_user_preferences(old_string_user_id: str, new_integer_user_id: int) 
                 survey_completed=prefs.get('survey_completed', 'False').lower() == 'true',
                 created_at=datetime.fromisoformat(prefs.get('created_at', datetime.utcnow().isoformat())) if prefs.get('created_at') else datetime.utcnow(),
                 last_active=datetime.fromisoformat(prefs.get('last_active', datetime.utcnow().isoformat())) if prefs.get('last_active') else datetime.utcnow(),
-                gap_handling=prefs.get('gap_handling') or None
+                gap_handling=prefs.get('gap_handling') or None,
+                timezone=prefs.get('timezone') or None,
+                detected_tz=prefs.get('detected_tz') or None,
             )
             
             # Handle JSON fields

@@ -7,7 +7,7 @@ analytics/data behavior). All data will be permanently deleted.
 For a full DROP DATABASE + CREATE DATABASE (not just tables), use recreate_database.py.
 
 Supports:
-- PostgreSQL: drops all tables, then runs migrations 001-015 (includes jobs).
+- PostgreSQL: drops all tables, then runs migrations 001-016 (includes jobs).
 - SQLite: drops all tables, then runs init_db() and migrate_add_jobs.
 
 Requires DATABASE_URL in environment (set in .env or export/set before running).
@@ -62,7 +62,7 @@ def run_script(script_path: Path, description: str) -> bool:
 
 
 def reset_postgres() -> bool:
-    """Drop all tables and run PostgreSQL migrations 001-015 (includes jobs)."""
+    """Drop all tables and run PostgreSQL migrations 001-016 (includes jobs)."""
     from backend.database import Base, engine
 
     print("Dropping all tables...")
@@ -89,6 +89,7 @@ def reset_postgres() -> bool:
         ("013_add_factor_columns.py", "013 Factor columns"),
         ("014_create_jobs_tables.py", "014 Jobs tables"),
         ("015_add_due_at_to_task_instances.py", "015 Add due_at to task_instances"),
+        ("016_add_timezone_to_user_preferences.py", "016 Add timezone to user_preferences"),
     ]
     mig_dir = _APP_ROOT / "PostgreSQL_migration"
     for filename, desc in migrations:

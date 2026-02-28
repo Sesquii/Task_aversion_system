@@ -109,6 +109,49 @@ class UserStateManager:
     def mark_survey_completed(self, user_id: str):
         return self.update_preference(user_id, "survey_completed", True)
 
+    # -----------------------------
+    # Timezone preferences (for display and "today" logic)
+    # -----------------------------
+    def get_timezone(self, user_id: str) -> str:
+        """
+        Get the user's timezone: either explicit (e.g. America/Chicago) or 'auto'.
+        When 'auto', the app uses detected_tz (from browser). Returns '' if not set.
+        """
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return ""
+        return (prefs.get("timezone") or "").strip()
+
+    def get_detected_timezone(self, user_id: str) -> str:
+        """Get the last browser-detected timezone for this user (IANA name)."""
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return ""
+        return (prefs.get("detected_tz") or "").strip()
+
+    def get_resolved_timezone(self, user_id: str) -> Optional[str]:
+        """
+        Get the IANA timezone string to use for this user.
+        Uses explicit timezone if set and not 'auto'; otherwise detected_tz; otherwise None.
+        """
+        tz = self.get_timezone(user_id)
+        if tz and tz.lower() != "auto":
+            return tz
+        detected = self.get_detected_timezone(user_id)
+        return detected if detected else None
+
+    def set_timezone(self, user_id: str, value: str) -> Dict[str, Any]:
+        """
+        Set user timezone. Use 'auto' for device-detected, or an IANA name (e.g. America/Chicago).
+        """
+        self.ensure_user(user_id)
+        return self.update_preference(user_id, "timezone", (value or "").strip())
+
+    def set_detected_timezone(self, user_id: str, iana_name: str) -> Dict[str, Any]:
+        """Store the browser-detected timezone (called by API when client sends it)."""
+        self.ensure_user(user_id)
+        return self.update_preference(user_id, "detected_tz", (iana_name or "").strip())
+
     def should_auto_show_tutorial(self, prefs: Dict[str, Any]) -> bool:
         auto_show = str(prefs.get("tutorial_auto_show", "True")).lower() == "true"
         completed = str(prefs.get("tutorial_completed", "False")).lower() == "true"

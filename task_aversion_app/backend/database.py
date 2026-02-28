@@ -536,7 +536,11 @@ class UserPreferences(Base):
     
     # Gap handling preference
     gap_handling = Column(String, default=None, nullable=True)  # 'continue_as_is' or 'fresh_start'
-    
+
+    # Timezone: 'auto' for device-detected, or IANA name (e.g. America/Chicago)
+    timezone = Column(String, default=None, nullable=True)
+    detected_tz = Column(String, default=None, nullable=True)  # Browser-reported IANA name
+
     # JSON fields for complex preferences
     json_type = get_json_type()
     persistent_emotion_values = Column(json_type, default=dict)  # JSONB for PostgreSQL, JSON for SQLite
@@ -567,6 +571,8 @@ class UserPreferences(Base):
             'created_at': format_datetime(self.created_at),
             'last_active': format_datetime(self.last_active),
             'gap_handling': self.gap_handling or '',
+            'timezone': self.timezone or '',
+            'detected_tz': self.detected_tz or '',
             'persistent_emotion_values': json.dumps(self.persistent_emotion_values) if isinstance(self.persistent_emotion_values, dict) else (self.persistent_emotion_values or '{}'),
             'productivity_history': json.dumps(self.productivity_history) if isinstance(self.productivity_history, list) else (self.productivity_history or '[]'),
             'productivity_goal_settings': json.dumps(self.productivity_goal_settings) if isinstance(self.productivity_goal_settings, dict) else (self.productivity_goal_settings or '{}'),

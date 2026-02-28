@@ -5,6 +5,7 @@ from backend.user_state import UserStateManager
 from backend.task_manager import TaskManager
 from backend.auth import get_current_user
 from backend.security_utils import escape_for_display
+from backend.app_time import format_for_display
 from ui.error_reporting import handle_error_with_ui
 import json
 from datetime import datetime
@@ -417,17 +418,17 @@ def task_editing_manager_page():
                                     
                                     if actual_data.get('is_edited'):
                                         edited_at = actual_data.get('edited_at', 'Unknown')
-                                        ui.label(f"[EDITED] Last edited: {edited_at}").classes("text-xs text-orange-600 font-semibold mt-1")
+                                        ui.label(f"[EDITED] Last edited: {format_for_display(edited_at) if edited_at != 'Unknown' else edited_at}").classes("text-xs text-orange-600 font-semibold mt-1")
                             
                             # Edit buttons
                             with ui.column().classes("text-right gap-1 items-end"):
                                 created_at = inst.get('created_at', '')
                                 if created_at:
-                                    ui.label(f"Created: {created_at}").classes("text-xs text-gray-400")
+                                    ui.label(f"Created: {format_for_display(created_at)}").classes("text-xs text-gray-400")
                                 
                                 initialized_at = inst.get('initialized_at', '')
                                 if initialized_at:
-                                    ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-400")
+                                    ui.label(f"Initialized: {format_for_display(initialized_at)}").classes("text-xs text-gray-400")
                                 
                                 if status == 'cancelled':
                                     ui.button("Edit", on_click=lambda inst_id=instance_id, inst_data=inst, uid=user_id: edit_cancelled_task_dialog(inst_id, inst_data, refresh_view, uid)).classes("text-xs bg-blue-500 text-white mt-2")

@@ -7,7 +7,7 @@ extensions, or permissions). All data and the database itself are removed,
 then a new empty database is created and all migrations are run.
 
 - PostgreSQL: connects to the 'postgres' DB, terminates connections to the
-  target DB, DROP DATABASE, CREATE DATABASE, then runs migrations 001-015.
+  target DB, DROP DATABASE, CREATE DATABASE, then runs migrations 001-016.
 - SQLite: deletes the .db file from disk, then runs init_db and migrate_add_jobs.
 
 Requires DATABASE_URL in .env or environment. Stop the app (and any other
@@ -154,7 +154,7 @@ def recreate_postgres() -> bool:
 
 
 def _run_postgres_migrations() -> bool:
-    """Run PostgreSQL migrations 001-015. Used after create or with --migrate-only."""
+    """Run PostgreSQL migrations 001-016. Used after create or with --migrate-only."""
     migrations = [
         ("001_initial_schema.py", "001 Initial schema"),
         ("002_add_routine_scheduling_fields.py", "002 Routine scheduling fields"),
@@ -171,6 +171,7 @@ def _run_postgres_migrations() -> bool:
         ("013_add_factor_columns.py", "013 Factor columns"),
         ("014_create_jobs_tables.py", "014 Jobs tables"),
         ("015_add_due_at_to_task_instances.py", "015 Add due_at to task_instances"),
+        ("016_add_timezone_to_user_preferences.py", "016 Add timezone to user_preferences"),
     ]
     mig_dir = _APP_ROOT / "PostgreSQL_migration"
     for filename, desc in migrations:
@@ -186,7 +187,7 @@ def _run_postgres_migrations() -> bool:
 
 
 def migrate_only_postgres() -> bool:
-    """Run only migrations 001-015 (no drop/create). Use after creating DB as postgres."""
+    """Run only migrations 001-016 (no drop/create). Use after creating DB as postgres."""
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url or not database_url.startswith("postgresql"):
         print("[ERROR] DATABASE_URL must be set and point to PostgreSQL.")
