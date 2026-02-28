@@ -9,7 +9,7 @@ no-ops when already applied).
 - PostgreSQL: runs 001, 002, ... N in PostgreSQL_migration/ (auto-discovered).
 - SQLite: runs init_db(), migrate_add_jobs, then cross-DB migrations (e.g. 015).
 
-Requires DATABASE_URL in .env or environment.
+Requires DATABASE_URL in .env, .env.production (VPS), or environment.
 
 Usage:
   cd task_aversion_app
@@ -28,6 +28,9 @@ try:
     from dotenv import load_dotenv
     load_dotenv(_APP_ROOT / ".env")
     load_dotenv()
+    # On VPS, env is often in .env.production (loaded by systemd for the app, not for CLI)
+    if not os.getenv("DATABASE_URL"):
+        load_dotenv(_APP_ROOT / ".env.production")
 except ImportError:
     pass
 

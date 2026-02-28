@@ -32,11 +32,13 @@ _APP_ROOT = Path(__file__).resolve().parent
 if str(_APP_ROOT) not in sys.path:
     sys.path.insert(0, str(_APP_ROOT))
 
-# Load .env so DATABASE_URL is set
+# Load .env so DATABASE_URL is set; on VPS also try .env.production
 try:
     from dotenv import load_dotenv
     load_dotenv(_APP_ROOT / ".env")
     load_dotenv()
+    if not os.getenv("DATABASE_URL"):
+        load_dotenv(_APP_ROOT / ".env.production")
 except ImportError:
     pass
 

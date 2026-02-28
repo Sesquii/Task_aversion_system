@@ -36,6 +36,8 @@ try:
     from dotenv import load_dotenv
     load_dotenv(_APP_ROOT / ".env")
     load_dotenv()
+    if not os.getenv("DATABASE_URL"):
+        load_dotenv(_APP_ROOT / ".env.production")
 except ImportError:
     pass
 

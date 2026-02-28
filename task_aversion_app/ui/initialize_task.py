@@ -433,36 +433,42 @@ def initialize_task_page(task_manager, emotion_manager):
             # Due date (defaults to today); calendar popup + month/day/year dropdowns
             _today = datetime.now()
             _today_str = _today.strftime("%Y-%m-%d")
-            existing_due = instance.get("due_at")
             due_at_value = _today_str  # Default to today
-            if existing_due:
-                if isinstance(existing_due, datetime):
-                    due_at_value = existing_due.strftime("%Y-%m-%d")
-                else:
-                    try:
+            try:
+                existing_due = instance.get("due_at")
+                if existing_due:
+                    if isinstance(existing_due, datetime):
+                        due_at_value = existing_due.strftime("%Y-%m-%d")
+                    else:
                         s = str(existing_due).strip().replace(" ", "T")[:10]
                         if len(s) >= 10:
-                            due_at_value = s
-                    except (ValueError, TypeError):
-                        pass
-            # Suggest from template completion window if no existing due
-            if due_at_value == _today_str and task:
-                cw_days = task.get("completion_window_days")
-                cw_hours = task.get("completion_window_hours")
-                try:
-                    cw_days = int(cw_days) if cw_days is not None and str(cw_days).strip() else 0
-                except (TypeError, ValueError):
-                    cw_days = 0
-                try:
-                    cw_hours = int(cw_hours) if cw_hours is not None and str(cw_hours).strip() else 0
-                except (TypeError, ValueError):
-                    cw_hours = 0
-                if cw_days or cw_hours:
-                    suggested = datetime.now() + timedelta(days=cw_days, hours=cw_hours)
-                    due_at_value = suggested.strftime("%Y-%m-%d")
+                            try:
+                                datetime.strptime(s, "%Y-%m-%d")
+                                due_at_value = s
+                            except (ValueError, TypeError):
+                                pass
+                if due_at_value == _today_str and task:
+                    cw_days = task.get("completion_window_days")
+                    cw_hours = task.get("completion_window_hours")
+                    try:
+                        cw_days = int(cw_days) if cw_days is not None and str(cw_days).strip() else 0
+                    except (TypeError, ValueError):
+                        cw_days = 0
+                    try:
+                        cw_hours = int(cw_hours) if cw_hours is not None and str(cw_hours).strip() else 0
+                    except (TypeError, ValueError):
+                        cw_hours = 0
+                    if cw_days or cw_hours:
+                        suggested = datetime.now() + timedelta(days=cw_days, hours=cw_hours)
+                        due_at_value = suggested.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                due_at_value = _today_str
+            # Ensure we never pass None or invalid format to ui (avoids 502 on VPS)
+            if not due_at_value or len(str(due_at_value).strip()) < 10:
+                due_at_value = _today_str
 
             # Store due date as YYYY-MM-DD (no visible text field)
-            due_at_input = ui.input(value=due_at_value).props("type=hidden").classes("hidden").style("display: none;")
+            due_at_input = ui.input(value=str(due_at_value)[:10]).props("type=hidden").classes("hidden").style("display: none;")
 
             # Month / Day / Year dropdowns (scroll-like) kept in sync with calendar
             def _parse_due_parts():
@@ -491,14 +497,15 @@ def initialize_task_page(task_manager, emotion_manager):
                         dy = min(dy, last)
                         new_val = f"{yr}-{mo:02d}-{dy:02d}"
                         due_at_input.set_value(new_val)
-                        try:
-                            _calendar_syncing["value"] = True
+                        if cal is not None:
                             try:
-                                cal.set_value(new_val)  # keep calendar in sync
-                            finally:
-                                _calendar_syncing["value"] = False
-                        except Exception:
-                            pass
+                                _calendar_syncing["value"] = True
+                                try:
+                                    cal.set_value(new_val)  # keep calendar in sync
+                                finally:
+                                    _calendar_syncing["value"] = False
+                            except Exception:
+                                pass
                 except (ValueError, TypeError):
                     pass
 
@@ -521,12 +528,16 @@ def initialize_task_page(task_manager, emotion_manager):
             ui.label("Due date").classes("text-sm font-semibold text-gray-700 mt-2")
 
             # Bottom row: calendar button + month/day/year (keep icon near numbers)
+            cal = None
+            _calendar_syncing = {"value": False}
             with ui.row().classes("w-full items-end gap-2 mt-1"):
                 # Calendar button (opens popup calendar)
                 with ui.dialog() as due_calendar_dialog, ui.card().classes("p-3"):
-                    # Ensure the calendar uses YYYY-MM-DD so parsing stays consistent
-                    cal = ui.date(value=due_at_value).props('minimal mask="YYYY-MM-DD"').classes("w-full")
-                    _calendar_syncing = {"value": False}
+                    # Ensure the calendar uses YYYY-MM-DD so parsing stays consistent (safe value avoids 502)
+                    try:
+                        cal = ui.date(value=str(due_at_value)[:10]).props('minimal mask="YYYY-MM-DD"').classes("w-full")
+                    except Exception:
+                        cal = None
 
                     def _on_cal_change(e):
                         if _calendar_syncing["value"]:
@@ -547,18 +558,22 @@ def initialize_task_page(task_manager, emotion_manager):
                         due_at_input.set_value(selected)
                         _sync_mdy_from_str(selected)
                         # Keep calendar value consistent without re-triggering handler
-                        _calendar_syncing["value"] = True
-                        try:
-                            cal.set_value(selected)
-                        except Exception:
-                            pass
-                        finally:
-                            _calendar_syncing["value"] = False
+                        if cal is not None:
+                            _calendar_syncing["value"] = True
+                            try:
+                                cal.set_value(selected)
+                            except Exception:
+                                pass
+                            finally:
+                                _calendar_syncing["value"] = False
                         due_calendar_dialog.close()
 
-                    cal.on("update:model-value", _on_cal_change)
+                    if cal is not None:
+                        cal.on("update:model-value", _on_cal_change)
 
                 def _open_due_calendar():
+                    if cal is None:
+                        return
                     try:
                         current = str(due_at_input.value or "").strip()[:10]
                         if current:
