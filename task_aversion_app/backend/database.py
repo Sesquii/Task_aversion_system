@@ -263,6 +263,7 @@ class TaskInstance(Base):
     proactive_score = Column(Float, default=None, nullable=True)
     behavioral_score = Column(Float, default=None, nullable=True)
     net_relief = Column(Float, default=None, nullable=True)
+    net_emotional = Column(Float, default=None, nullable=True)  # actual_emotional - expected_emotional_load
     behavioral_deviation = Column(Float, default=None, nullable=True)
     
     # Emotional factors (calculated from net_relief)
@@ -310,6 +311,7 @@ class TaskInstance(Base):
             'proactive_score': str(self.proactive_score) if self.proactive_score is not None else '',
             'behavioral_score': str(self.behavioral_score) if self.behavioral_score is not None else '',
             'net_relief': str(self.net_relief) if self.net_relief is not None else '',
+            'net_emotional': str(self.net_emotional) if self.net_emotional is not None else '',
             'behavioral_deviation': str(self.behavioral_deviation) if self.behavioral_deviation is not None else '',
             'is_completed': str(bool(self.is_completed)),
             'is_deleted': str(bool(self.is_deleted)),

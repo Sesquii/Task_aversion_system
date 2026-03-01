@@ -5,6 +5,7 @@ import json
 import time
 
 from fastapi import Request
+from backend.app_time import now as app_now
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
@@ -103,7 +104,10 @@ def initialize_task_page(task_manager, emotion_manager):
         
         page_load_duration = (time.perf_counter() - page_start_time) * 1000
         perf_logger.log_timing("initialize_task_page_load_total", page_load_duration, instance_id=instance_id, task_id=task_id)
-        
+
+        # Time tracking: when user landed on this page (for form fill duration on save)
+        init_page_entered_at = app_now(current_user_id)
+
         # Check if task has a default_initial_aversion from template
         template_default_aversion = None
         if task:
@@ -283,8 +287,8 @@ def initialize_task_page(task_manager, emotion_manager):
                 prev_val = previous_averages['expected_cognitive_load']
                 ui.label(f"Previous average (from old data): {prev_val}").classes("text-xs text-gray-500")
             
-            ui.label("Expected Distress").classes("text-lg font-semibold")
-            ui.label("How much stress or emotional activation do you expect?").classes("text-xs text-gray-500")
+            ui.label("Expected Emotional intensity").classes("text-lg font-semibold")
+            ui.label("How much emotional intensity or activation do you expect? (One input to overall stress.)").classes("text-xs text-gray-500")
             emotional_load = progress_slider(0, 100, 1, default_emotional)
             if 'expected_emotional_load' in previous_averages:
                 prev_val = previous_averages['expected_emotional_load']
@@ -300,6 +304,11 @@ def initialize_task_page(task_manager, emotion_manager):
                     ui.label(f"Previous average: {prev_val} (current: {default_physical})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
+
+            default_stress = get_default_value('expected_stress', 50)
+            ui.label("Expected overall stress").classes("text-lg font-semibold")
+            ui.label("How much overall stress do you expect? (Compare later with calculated stress for misperception.)").classes("text-xs text-gray-500")
+            expected_stress = progress_slider(0, 100, 1, default_stress)
 
             ui.label("Current Emotional State").classes("text-lg font-semibold")
 
@@ -623,45 +632,29 @@ def initialize_task_page(task_manager, emotion_manager):
             due_at_input.on("update:model-value", lambda: _on_due_hidden_change())
 
             def save():
-                # Check if sliders were adjusted (compare current values to defaults)
-                sliders_adjusted = False
-                
-                # Check aversion slider
+                # Count how many sliders were adjusted (for analytics)
+                init_sliders_adjusted_count = 0
                 current_aversion = max(0, int(aversion_slider.value or 0))
                 if current_aversion != default_aversion:
-                    sliders_adjusted = True
-                
-                # Check relief slider
+                    init_sliders_adjusted_count += 1
                 current_relief = int(predicted_relief.value) if predicted_relief.value is not None else 0
                 if current_relief != default_relief:
-                    sliders_adjusted = True
-                
-                # Check mental energy slider
+                    init_sliders_adjusted_count += 1
                 current_mental_energy = int(mental_energy.value) if mental_energy.value is not None else 0
                 if current_mental_energy != default_mental_energy:
-                    sliders_adjusted = True
-                
-                # Check difficulty slider
+                    init_sliders_adjusted_count += 1
                 current_difficulty = int(task_difficulty.value) if task_difficulty.value is not None else 0
                 if current_difficulty != default_difficulty:
-                    sliders_adjusted = True
-                
-                # Check emotional slider
+                    init_sliders_adjusted_count += 1
                 current_emotional = int(emotional_load.value) if emotional_load.value is not None else 0
                 if current_emotional != default_emotional:
-                    sliders_adjusted = True
-                
-                # Check physical slider
+                    init_sliders_adjusted_count += 1
                 current_physical = int(physical_load.value) if physical_load.value is not None else 0
                 if current_physical != default_physical:
-                    sliders_adjusted = True
-                
-                # Check motivation slider
+                    init_sliders_adjusted_count += 1
                 current_motivation = int(motivation.value) if motivation.value is not None else 0
                 if current_motivation != default_motivation:
-                    sliders_adjusted = True
-                
-                # Check emotion sliders
+                    init_sliders_adjusted_count += 1
                 for emotion in emotion_sliders.keys():
                     current_val = int(emotion_sliders[emotion].value)
                     default_val = emotion_values_dict.get(emotion, 50)
@@ -672,8 +665,8 @@ def initialize_task_page(task_manager, emotion_manager):
                     except (ValueError, TypeError):
                         default_val = 50
                     if current_val != default_val:
-                        sliders_adjusted = True
-                        break
+                        init_sliders_adjusted_count += 1
+                sliders_adjusted = init_sliders_adjusted_count > 0
                 
                 # Skip popup evaluation if editing a completed task
                 if edit_mode and is_completed_task:
@@ -781,7 +774,41 @@ def initialize_task_page(task_manager, emotion_manager):
                 # Get aversion value: always use slider value (slider is now always shown)
                 # Ensure it's at least 0 (or 1 if using 1-100 scale - but we use 0-100, so 0 is fine)
                 current_aversion = max(0, int(aversion_slider.value or 0))
-                
+
+                # Time spent on initialization form (seconds)
+                init_form_duration_seconds = max(
+                    0.0,
+                    (app_now(current_user_id) - init_page_entered_at).total_seconds(),
+                )
+
+                # Count sliders adjusted (for analytics; must match save() logic)
+                init_sliders_adjusted_count = 0
+                if current_aversion != default_aversion:
+                    init_sliders_adjusted_count += 1
+                if int(predicted_relief.value or 0) != default_relief:
+                    init_sliders_adjusted_count += 1
+                if int(mental_energy.value or 0) != default_mental_energy:
+                    init_sliders_adjusted_count += 1
+                if int(task_difficulty.value or 0) != default_difficulty:
+                    init_sliders_adjusted_count += 1
+                if int(emotional_load.value or 0) != default_emotional:
+                    init_sliders_adjusted_count += 1
+                if int(physical_load.value or 0) != default_physical:
+                    init_sliders_adjusted_count += 1
+                if int(motivation.value or 0) != default_motivation:
+                    init_sliders_adjusted_count += 1
+                for emotion in emotion_sliders.keys():
+                    current_val = int(emotion_sliders[emotion].value)
+                    default_val = emotion_values_dict.get(emotion, 50)
+                    try:
+                        default_val = int(float(default_val))
+                        if default_val < 0 or default_val > 100:
+                            default_val = 50
+                    except (ValueError, TypeError):
+                        default_val = 50
+                    if current_val != default_val:
+                        init_sliders_adjusted_count += 1
+
                 # If this is the first time, set initial_aversion; otherwise use expected_aversion
                 predicted_payload = {
                     "time_estimate_minutes": estimate_val,
@@ -792,6 +819,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     "expected_difficulty": task_difficulty.value,
                     "expected_physical_load": physical_load.value,
                     "expected_emotional_load": emotional_load.value,  # Keep internal name for formulas
+                    "expected_stress": expected_stress.value,  # Direct overall stress (for stress misperception)
                     "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or '',
@@ -807,6 +835,8 @@ def initialize_task_page(task_manager, emotion_manager):
                 # Always store the initialization value separately so it can be preserved
                 # This allows the completion page to always show the original initialization value
                 predicted_payload["initialization_expected_aversion"] = current_aversion
+                predicted_payload["init_form_duration_seconds"] = round(init_form_duration_seconds, 1)
+                predicted_payload["init_sliders_adjusted_count"] = init_sliders_adjusted_count
 
                 entry = {
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),

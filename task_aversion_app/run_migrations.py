@@ -14,7 +14,10 @@ Requires DATABASE_URL in .env, .env.production (VPS), or environment.
 Usage:
   cd task_aversion_app
   python run_migrations.py
+  python run_migrations.py --only 017
+  python run_migrations.py --only 017_add_net_emotional_to_task_instances.py
 """
+import argparse
 import os
 import re
 import sys
@@ -75,12 +78,38 @@ def _discover_postgres_migrations() -> list[tuple[Path, str]]:
     return out
 
 
-def run_postgres_migrations() -> bool:
-    """Run all discovered PostgreSQL migrations in order. Idempotent."""
+def _find_one_migration(only: str) -> tuple[Path, str] | None:
+    """Find a single migration by number (e.g. '017') or script name (e.g. '017_add_net_emotional...')."""
+    migrations = _discover_postgres_migrations()
+    only_stripped = only.strip()
+    # Match by 3-digit number
+    if re.match(r"^\d{3}$", only_stripped):
+        for path, desc in migrations:
+            if path.name.startswith(only_stripped + "_"):
+                return (path, desc)
+        return None
+    # Match by full script name
+    for path, desc in migrations:
+        if path.name == only_stripped or path.name == only_stripped + ".py":
+            return (path, desc)
+    return None
+
+
+def run_postgres_migrations(only: str | None = None) -> bool:
+    """Run PostgreSQL migrations. If only is set, run just that migration (e.g. '017'). Idempotent."""
     migrations = _discover_postgres_migrations()
     if not migrations:
         print("[WARNING] No migration scripts found in PostgreSQL_migration/")
         return True
+    if only:
+        found = _find_one_migration(only)
+        if not found:
+            print(f"[ERROR] No migration matching '{only}' found in PostgreSQL_migration/")
+            print("Use a 3-digit number (e.g. 017) or script name (e.g. 017_add_net_emotional_to_task_instances.py)")
+            return False
+        path, desc = found
+        print(f"\nRunning only: {desc}...")
+        return _run_script(path, desc)
     for path, desc in migrations:
         print(f"\nRunning {desc}...")
         if not _run_script(path, desc):
@@ -123,20 +152,38 @@ def run_sqlite_migrations() -> bool:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Run database migrations (idempotent). Use --only to run a single migration (PostgreSQL only)."
+    )
+    parser.add_argument(
+        "--only",
+        metavar="NNN",
+        help="Run only this migration: 3-digit number (e.g. 017) or script name (e.g. 017_add_net_emotional_to_task_instances.py). PostgreSQL only.",
+    )
+    args = parser.parse_args()
+
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url:
         print("[ERROR] DATABASE_URL is not set.")
         print("Set it in .env or: $env:DATABASE_URL = '...'  (PowerShell)")
         return 1
 
+    if args.only and not database_url.lower().startswith("postgresql"):
+        print("[ERROR] --only is supported only for PostgreSQL. For SQLite, run the script directly, e.g.:")
+        print("  python PostgreSQL_migration/017_add_net_emotional_to_task_instances.py")
+        return 1
+
     print("=" * 70)
     print("Run migrations (idempotent)")
     print("=" * 70)
     print(f"Database: {database_url}")
-    print("Each migration is safe to run multiple times.\n")
+    if args.only:
+        print(f"Running only: {args.only}\n")
+    else:
+        print("Each migration is safe to run multiple times.\n")
 
     if database_url.lower().startswith("postgresql"):
-        ok = run_postgres_migrations()
+        ok = run_postgres_migrations(only=args.only)
     else:
         ok = run_sqlite_migrations()
 

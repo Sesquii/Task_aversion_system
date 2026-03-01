@@ -2,6 +2,7 @@
 from typing import Optional
 from nicegui import ui
 from fastapi import Request
+from backend.app_time import now as app_now
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
@@ -64,7 +65,10 @@ def complete_task_page(task_manager, emotion_manager):
                     current_actual_data = json.loads(actual_raw) if actual_raw else {}
                 except json.JSONDecodeError:
                     current_actual_data = {}
-        
+
+        # Time tracking: when user landed on this page (for form fill duration on submit)
+        complete_page_entered_at = app_now(current_user_id)
+
         # Display task description at the top if available
         task_description = predicted_data.get('description', '')
         if task_description and task_description.strip():
@@ -126,6 +130,7 @@ def complete_task_page(task_manager, emotion_manager):
         default_difficulty = get_default_value('actual_difficulty', 'expected_difficulty', 0)
         default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 0)
         default_physical = get_default_value('actual_physical', 'expected_physical_load', 0)
+        default_stress = get_default_value('actual_stress', 'expected_stress', 50)
 
         # Get the initialization aversion value (the value set when this instance was initialized)
         # Only use initialization_expected_aversion (preserved from initialization of this specific instance)
@@ -223,8 +228,8 @@ def complete_task_page(task_manager, emotion_manager):
             except (ValueError, TypeError):
                 pass
 
-        ui.label("Actual Distress").classes("text-lg font-semibold")
-        ui.label("How much stress or emotional activation did you experience?").classes("text-xs text-gray-500")
+        ui.label("Actual Emotional intensity").classes("text-lg font-semibold")
+        ui.label("How much emotional intensity or activation did you experience? (One input to overall stress.)").classes("text-xs text-gray-500")
         actual_emotional = progress_slider(0, 100, 1, default_emotional)
         # Show predicted value from initialization if available
         if 'expected_emotional_load' in predicted_data:
@@ -249,6 +254,21 @@ def complete_task_page(task_manager, emotion_manager):
                 pred_val = int(round(pred_num))
                 if pred_val != default_physical:
                     ui.label(f"Initialized: {pred_val} (current: {default_physical})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
+            except (ValueError, TypeError):
+                pass
+
+        ui.label("Actual overall stress").classes("text-lg font-semibold")
+        ui.label("How much overall stress did you feel? (Compared with calculated stress for misperception.)").classes("text-xs text-gray-500")
+        actual_stress = progress_slider(0, 100, 1, default_stress)
+        if 'expected_stress' in predicted_data:
+            pred_val = predicted_data.get('expected_stress')
+            try:
+                pred_num = float(pred_val)
+                pred_val = int(round(pred_num))
+                if pred_val != default_stress:
+                    ui.label(f"Initialized: {pred_val} (current: {default_stress})").classes("text-xs text-gray-500")
                 else:
                     ui.label(f"Initialized: {pred_val}").classes("text-xs text-gray-500")
             except (ValueError, TypeError):
@@ -714,17 +734,51 @@ def complete_task_page(task_manager, emotion_manager):
                 physical_val = int(actual_physical.value) if actual_physical.value is not None else 0
             except (AttributeError, TypeError, ValueError):
                 physical_val = 0
-            
+            try:
+                stress_val = int(actual_stress.value) if actual_stress.value is not None else None
+            except (AttributeError, TypeError, ValueError):
+                stress_val = None
+
+            # Time spent on completion form (seconds)
+            completion_form_duration_seconds = max(
+                0.0,
+                (app_now(current_user_id) - complete_page_entered_at).total_seconds(),
+            )
+
+            # Count sliders adjusted (for analytics)
+            completion_sliders_adjusted_count = 0
+            if relief_val != default_relief:
+                completion_sliders_adjusted_count += 1
+            if mental_energy_val != default_mental_energy:
+                completion_sliders_adjusted_count += 1
+            if difficulty_val != default_difficulty:
+                completion_sliders_adjusted_count += 1
+            if emotional_val != default_emotional:
+                completion_sliders_adjusted_count += 1
+            if physical_val != default_physical:
+                completion_sliders_adjusted_count += 1
+            for emotion in emotion_sliders.keys():
+                current_val = int(emotion_sliders[emotion].value)
+                if current_val != get_emotion_default_value(emotion):
+                    completion_sliders_adjusted_count += 1
+            if aversion_slider is not None:
+                current_aversion_val = int(aversion_slider.value or 0)
+                if current_aversion_val != current_expected_aversion:
+                    completion_sliders_adjusted_count += 1
+
             actual = {
                 'actual_relief': relief_val,
                 'actual_mental_energy': mental_energy_val,
                 'actual_difficulty': difficulty_val,
                 'actual_emotional': emotional_val,  # Keep internal name for formulas
                 'actual_physical': physical_val,
+                'actual_stress': stress_val,  # Direct overall stress (for stress misperception)
                 'completion_percent': int(round(completion_value)),
                 'time_actual_minutes': int(actual_time.value or 0),
                 'completion_notes': combined_completion_notes,  # Instance-specific completion notes
                 'emotion_values': emotion_values,  # Store actual emotion values
+                'completion_form_duration_seconds': round(completion_form_duration_seconds, 1),
+                'completion_sliders_adjusted_count': completion_sliders_adjusted_count,
                 # Backward compatibility: also include old cognitive field
                 'actual_cognitive': int((mental_energy_val + difficulty_val) / 2),
             }

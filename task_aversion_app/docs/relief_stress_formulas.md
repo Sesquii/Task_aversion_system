@@ -19,27 +19,38 @@ This document describes the formulas for measuring relief, stress, and their rel
 - Higher values = more relief
 - This is the raw input metric, not a calculated composite
 
-### 2. Stress Level
-**Definition:** Combined measure of cognitive, emotional, physical, and aversion stress
+### 2. Emotional Load (Emotional intensity)
+**Definition:** Direct user-reported measure of emotional activation or intensity (0-100 scale). Shown in the UI as "Expected Emotional intensity" / "Actual Emotional intensity."
+
+**Source:**
+- **Expected:** `expected_emotional_load` in `predicted_dict` (set at initialization)
+- **Actual:** `actual_emotional` in `actual_dict` (set at completion); persisted to `emotional_load` column
+
+**Key Points:**
+- This is a **direct** measure (one slider), not a derived composite.
+- It is **one input** to the derived **stress_level** metric (see below). "Stress" in the app means the derived stress_level; emotional intensity is the emotional component of that.
+
+### 3. Stress Level (derived)
+**Definition:** Derived combined measure of cognitive, emotional, physical, and aversion load
 
 **Calculation:**
 ```python
 stress_level = (
     (mental_energy_needed * 0.5 + task_difficulty * 0.5) +  # Cognitive
-    emotional_load +                                          # Emotional
+    emotional_load +                                          # Emotional (emotional intensity)
     physical_load +                                           # Physical
     expected_aversion * 2.0                                    # Aversion (weighted 2x)
 ) / 5.0
 ```
 
 **Key Points:**
-- Weighted average of stress components
-- Aversion is weighted 2x to reflect its importance
+- **Derived** metric: computed from multiple inputs, not a single slider.
+- Weighted average of stress components; aversion is weighted 2x.
 - Range: 0-100
 
 ## Relationship Metrics
 
-### 3. Net Wellbeing
+### 4. Net Wellbeing
 **Definition:** Net benefit/cost of a task (relief minus stress)
 
 **Formula:**
@@ -58,7 +69,7 @@ net_wellbeing = relief_score - stress_level
   - A task with high relief (80) but high stress (90) = -10 net wellbeing (costly)
   - A task with moderate relief (60) but low stress (30) = +30 net wellbeing (beneficial)
 
-### 4. Net Wellbeing (Normalized)
+### 5. Net Wellbeing (Normalized)
 **Definition:** Net wellbeing normalized to 0-100 scale with 50 as neutral
 
 **Formula:**
@@ -71,7 +82,7 @@ net_wellbeing_normalized = 50.0 + (net_wellbeing / 2.0)
 - **>50:** Beneficial (relief > stress)
 - **<50:** Costly (stress > relief)
 
-### 5. Stress Efficiency
+### 6. Stress Efficiency
 **Definition:** Relief per unit of stress (efficiency ratio)
 
 **Formula:**
@@ -90,7 +101,7 @@ stress_efficiency = relief_score / stress_level
 
 **Note:** This is the preferred ratio metric. The inverse (stress/relief) was removed to avoid redundancy.
 
-### 6. Expected Relief
+### 7. Expected Relief
 **Definition:** Relief predicted before task completion (from initialization)
 
 **Source:**
@@ -104,7 +115,7 @@ stress_efficiency = relief_score / stress_level
 - Compare with actual relief to measure prediction accuracy
 - Identify tasks where expectations don't match reality
 
-### 7. Net Relief
+### 8. Net Relief
 **Definition:** Difference between actual and expected relief
 
 **Formula:**
@@ -124,7 +135,7 @@ net_relief = actual_relief - expected_relief
 - **Small negative (-5 to -20):** Slightly worse than expected
 - **Large negative (<-20):** Disappointment - task was less rewarding than expected
 
-### 8. Serendipity Factor
+### 9. Serendipity Factor
 **Definition:** Measures pleasant surprise when actual relief exceeds expectations
 
 **Formula:**
@@ -149,7 +160,7 @@ serendipity_factor = max(0, net_relief)
 - Track positive prediction errors
 - See `factors_concept.md` for formula integration patterns
 
-### 9. Disappointment Factor
+### 10. Disappointment Factor
 **Definition:** Measures disappointment when actual relief falls short of expectations
 
 **Formula:**
@@ -175,7 +186,44 @@ disappointment_factor = max(0, -net_relief)
 - Track negative prediction errors
 - See `factors_concept.md` for formula integration patterns
 
-### 10. Stress-Relief Correlation Score
+### 11. Net Emotional
+**Definition:** Difference between actual and expected emotional intensity (emotional misperception)
+
+**Formula:**
+```python
+net_emotional = actual_emotional - expected_emotional_load
+```
+
+**Range:** -100 to +100
+- **Positive:** Actual emotional intensity was higher than expected
+- **Negative:** Actual emotional intensity was lower than expected
+- **Zero:** Accurate prediction
+
+**Source:** Stored in `net_emotional` column when available; otherwise computed from `emotional_load` and `expected_emotional_load` in analytics.
+
+### 12. Direct Stress (actual_stress / expected_stress)
+**Definition:** User-reported overall stress (0-100) at completion and optionally at initialization. Separate from the **derived** stress_level.
+
+**Source:**
+- **Expected:** `expected_stress` in `predicted_dict` (set at initialization)
+- **Actual:** `actual_stress` in `actual_dict` (set at completion)
+
+**Use:** Enables comparison with derived stress_level for stress misperception (see below).
+
+### 13. Stress Misperception
+**Definition:** Difference between direct (reported) overall stress and derived stress_level. Gateway metric for a broader misperception concept.
+
+**Formula:**
+```python
+stress_misperception = actual_stress - stress_level  # when actual_stress is present
+```
+
+**Interpretation:**
+- **Positive:** You reported more stress than the model’s derived stress (overestimation)
+- **Negative:** You reported less stress than derived (underestimation)
+- **NaN:** No direct stress reported (actual_stress not set)
+
+### 14. Stress-Relief Correlation Score
 **Definition:** Measures how well relief and stress are inversely correlated
 
 **Formula:**

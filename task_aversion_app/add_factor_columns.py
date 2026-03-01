@@ -28,8 +28,9 @@ print(f"\nExisting columns: {', '.join(columns)}")
 
 needs_serendipity = 'serendipity_factor' not in columns
 needs_disappointment = 'disappointment_factor' not in columns
+needs_net_emotional = 'net_emotional' not in columns
 
-if not needs_serendipity and not needs_disappointment:
+if not needs_serendipity and not needs_disappointment and not needs_net_emotional:
     print("\n[INFO] Columns already exist. No migration needed.")
     sys.exit(0)
 
@@ -48,6 +49,12 @@ with engine.connect() as conn:
         conn.execute(text("ALTER TABLE task_instances ADD COLUMN disappointment_factor REAL"))
         conn.commit()
         print("   [OK] disappointment_factor added")
+    
+    if needs_net_emotional:
+        print("   Adding net_emotional column...")
+        conn.execute(text("ALTER TABLE task_instances ADD COLUMN net_emotional REAL"))
+        conn.commit()
+        print("   [OK] net_emotional added")
 
 print("\n[SUCCESS] Columns added successfully!")
 print("=" * 70)

@@ -14,7 +14,7 @@ Whenever you **create a new migration script** in `task_aversion_app/PostgreSQL_
 
 - In `_run_postgres_migrations()`, add a new entry to the `migrations` list:
   - `("NNN_new_script_name.py", "NNN Short description")`
-- Update every comment/docstring that mentions the migration range from `001-016` (or current max) to `001-NNN` (new number).
+- Update every comment/docstring that mentions the migration range from `001-017` (or current max) to `001-NNN` (new number).
 
 ### 2. `task_aversion_app/reset_database.py`
 
@@ -31,7 +31,7 @@ Whenever you **create a new migration script** in `task_aversion_app/PostgreSQL_
 - Add a new section that checks whether the new migration’s effects are present (e.g. new table, new columns, new index).
 - Use the same style as existing checks: `if check_table_exists(...)` or `inspector.get_columns(...)` as appropriate.
 - If the check fails, print the run instruction: `"  -> Run: python PostgreSQL_migration/NNN_script_name.py"`.
-- Update the final summary line from `"001 through 016"` (or current max) to `"001 through NNN"`.
+- Update the final summary line from `"001 through 017"` (or current max) to `"001 through NNN"`.
 
 ## Checklist
 

@@ -2363,56 +2363,57 @@ class InstanceManager:
                                 pass
 
     def _calculate_and_store_factors_db(self, instance):
-        """Calculate and store serendipity_factor and disappointment_factor from expected/actual relief.
+        """Calculate and store serendipity_factor, disappointment_factor, and net_emotional.
         
-        Formula:
+        Relief factors:
         - net_relief = actual_relief - expected_relief
         - serendipity_factor = max(0, net_relief)  # Positive net relief (pleasant surprise)
         - disappointment_factor = max(0, -net_relief)  # Negative net relief (disappointment)
         
-        Also stores net_relief if not already set.
+        Emotional (misperception):
+        - net_emotional = actual_emotional - expected_emotional_load
         """
         try:
-            # Get expected and actual relief from JSON
             predicted = instance.predicted or {}
             actual = instance.actual or {}
-            
-            expected_relief = predicted.get('expected_relief')
-            actual_relief = actual.get('actual_relief')
-            
-            # Note: All inputs now use 0-100 scale natively.
-            # Old data may have 0-10 scale values, but we use them as-is (no scaling).
-            def normalize_relief(val):
+
+            def normalize_val(val):
                 if val is None:
                     return None
                 try:
                     return float(val)
                 except (ValueError, TypeError):
                     return None
-            
-            expected_relief = normalize_relief(expected_relief)
-            actual_relief = normalize_relief(actual_relief)
-            
-            # If we have both values, calculate factors
+
+            # --- Relief factors ---
+            expected_relief = normalize_val(predicted.get('expected_relief'))
+            actual_relief = normalize_val(actual.get('actual_relief'))
             if expected_relief is not None and actual_relief is not None:
                 net_relief = actual_relief - expected_relief
-                
-                # Store net_relief if not already set
                 if instance.net_relief is None:
                     instance.net_relief = net_relief
-                
-                # Calculate factors
-                instance.serendipity_factor = max(0.0, net_relief)  # Positive net relief
-                instance.disappointment_factor = max(0.0, -net_relief)  # Negative net relief (as positive value)
+                instance.serendipity_factor = max(0.0, net_relief)
+                instance.disappointment_factor = max(0.0, -net_relief)
             else:
-                # If we don't have both values, set factors to None
                 instance.serendipity_factor = None
                 instance.disappointment_factor = None
+
+            # --- Net emotional (expected vs actual emotional intensity) ---
+            expected_emotional = normalize_val(
+                predicted.get('expected_emotional_load') or predicted.get('expected_emotional')
+            )
+            actual_emotional = normalize_val(
+                actual.get('actual_emotional') or actual.get('emotional_load')
+            )
+            if expected_emotional is not None and actual_emotional is not None:
+                instance.net_emotional = actual_emotional - expected_emotional
+            else:
+                instance.net_emotional = None
         except Exception as e:
             print(f"[InstanceManager] Error calculating factors: {e}")
-            # Set to None on error
             instance.serendipity_factor = None
             instance.disappointment_factor = None
+            instance.net_emotional = None
 
     def list_recent_completed(self, limit=20, user_id: Optional[int] = None):
         """List recently completed instances. Works with both CSV and database.

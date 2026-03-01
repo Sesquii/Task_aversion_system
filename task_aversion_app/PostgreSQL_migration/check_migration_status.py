@@ -415,9 +415,22 @@ def main():
     else:
         print("  [SKIP] user_preferences table does not exist (run migration 007 first)")
 
+    # Check for Migration 017: net_emotional on task_instances
+    print("\nMigration 017: net_emotional on task_instances (PostgreSQL)")
+    if check_table_exists('task_instances'):
+        inspector = inspect(engine)
+        cols = [c['name'] for c in inspector.get_columns('task_instances')]
+        if 'net_emotional' in cols:
+            print("  [OK] task_instances has net_emotional column")
+        else:
+            print("  [MISSING] task_instances missing net_emotional column")
+            print("  -> Run: python PostgreSQL_migration/017_add_net_emotional_to_task_instances.py")
+    else:
+        print("  [SKIP] task_instances table does not exist (run migration 003 first)")
+
     print()
     print("=" * 70)
-    print("\nSummary: Run migrations in order (001 through 016)")
+    print("\nSummary: Run migrations in order (001 through 017)")
     print("All migrations are idempotent - safe to run multiple times.")
     print("To reset and re-run everything: python reset_database.py")
     print("=" * 70)

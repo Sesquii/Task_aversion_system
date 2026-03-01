@@ -2,17 +2,34 @@
 """
 Login page with Google OAuth authentication.
 """
+import json
+import time
 from nicegui import ui, app
 from backend.auth import get_current_user, login_with_google, logout
 from backend.security_utils import escape_for_display
 from ui.error_reporting import handle_error_with_ui
 
+LOG_PATH = r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log'
+
+def _login_debug(location: str, message: str, data: dict = None, hypothesis_id: str = None):
+    try:
+        with open(LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({
+                'location': location, 'message': message, 'data': data or {},
+                'timestamp': int(time.time() * 1000), 'hypothesisId': hypothesis_id or 'LOGIN'
+            }) + '\n')
+    except Exception:
+        pass
+
 
 @ui.page('/login')
 def login_page():
     """Login page with Google OAuth button."""
+    t0 = time.perf_counter()
+    _login_debug('login.py:entry', 'login_page entry', {'ts': t0}, 'LOGIN_ENTRY')
     user_id = get_current_user()
-    
+    t1 = time.perf_counter()
+    _login_debug('login.py:after_get_current_user', 'after get_current_user', {'ts': t1, 'elapsed_s': round(t1 - t0, 3), 'user_id': user_id}, 'LOGIN_AUTH')
     if user_id:
         # User is already logged in
         with ui.column().classes('w-full max-w-md mx-auto mt-8 gap-4'):
@@ -104,6 +121,8 @@ def login_page():
                         </p>
                     </div>
                 ''', sanitize=False).classes('text-gray-700')
+    t2 = time.perf_counter()
+    _login_debug('login.py:render_done', 'login_page render done', {'ts': t2, 'elapsed_since_auth_s': round(t2 - t1, 3), 'total_s': round(t2 - t0, 3)}, 'LOGIN_DONE')
 
 
 def _set_ui_mode(mode: str):

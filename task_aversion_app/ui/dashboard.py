@@ -114,7 +114,7 @@ RECOMMENDATION_METRICS = [
     {"label": "Net relief (high)", "key": "net_relief_proxy"},
     {"label": "Mental Energy Needed (low)", "key": "mental_energy_needed"},
     {"label": "Task Difficulty (low)", "key": "task_difficulty"},
-    {"label": "Distress (low)", "key": "emotional_load"},
+    {"label": "Emotional intensity (low)", "key": "emotional_load"},
     {"label": "Net load (low)", "key": "net_load"},
     {"label": "Efficiency (high)", "key": "historical_efficiency"},
     {"label": "Stress level (low)", "key": "stress_level"},
@@ -183,10 +183,16 @@ def get_current_task():
     session_user_id = get_current_user()
     if session_user_id is None:
         return None
-    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'id': 'get_current_task_call', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.get_current_task', 'message': 'get_current_task invoked', 'data': {'perf': time.perf_counter()}, 'hypothesisId': 'H_CALLS'}) + '\n')
+    except Exception:
+        pass
+    # #endregion
     # Update global for backward compatibility
     current_user_id = session_user_id
-    
+
     active = im.list_active_instances(user_id=current_user_id)
     for inst in active:
         if inst.get('started_at') and inst.get('started_at').strip():
@@ -684,13 +690,20 @@ def refresh_initialized_tasks(search_query=None):
     
     refresh_start = time.perf_counter()
     print(f"[Dashboard] refresh_initialized_tasks() called with search_query='{search_query}'")
-    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'id': 'init_start', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.refresh_initialized_tasks', 'message': 'refresh_initialized_tasks start', 'data': {'perf': refresh_start}, 'hypothesisId': 'H_INIT_START'}) + '\n')
+    except Exception:
+        pass
+    # #endregion
+
     try:
         init_perf_logger = get_init_perf_logger()
         init_perf_logger.log_event("refresh_initialized_tasks_start", search_query=search_query)
-    except:
+    except Exception:
         init_perf_logger = None
-    
+
     # Check if container exists
     if initialized_tasks_container is None:
         print("[Dashboard] ERROR: initialized_tasks_container is None, cannot refresh. Will retry after delay.")
@@ -705,6 +718,14 @@ def refresh_initialized_tasks(search_query=None):
     # Get active instances (excluding current task)
     # Always use session_user_id (from current session) not global current_user_id
     print(f"[Dashboard] refresh_initialized_tasks: session_user_id={session_user_id}")
+    # #region agent log
+    _t_list0 = time.perf_counter()
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'id': 'init_list_call', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.refresh_initialized_tasks', 'message': 'list_active_instances call', 'data': {'caller': 'refresh_initialized_tasks'}, 'hypothesisId': 'H_CALLS'}) + '\n')
+    except Exception:
+        pass
+    # #endregion
     if init_perf_logger:
         with init_perf_logger.operation("list_active_instances"):
             active = im.list_active_instances(user_id=session_user_id)
@@ -713,16 +734,26 @@ def refresh_initialized_tasks(search_query=None):
     else:
         active = im.list_active_instances(user_id=session_user_id)
         current_task = get_current_task()
-    
+    # #region agent log
+    _t_list1 = time.perf_counter()
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'id': 'init_list_current', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.refresh_initialized_tasks', 'message': 'after list_active + get_current_task', 'data': {'list_get_current_ms': round((_t_list1 - _t_list0) * 1000, 1), 'active_count': len(active)}, 'hypothesisId': 'H_INIT_LIST'}) + '\n')
+    except Exception:
+        pass
+    # #endregion
+
     print(f"[Dashboard] refresh_initialized_tasks: found {len(active)} active instances")
     
     # Filter out current task from active list
     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
 
-    # Filter by paused/postponed: by default hide paused and postponed; checkboxes include them
+    # Split into separate lists: in-progress, paused, postponed (so they render in separate sections when selected)
     show_paused = getattr(initialized_paused_checkbox_ref, 'value', False) if initialized_paused_checkbox_ref else False
     show_postponed = getattr(initialized_postponed_checkbox_ref, 'value', False) if initialized_postponed_checkbox_ref else False
-    filtered_by_deferred = []
+    in_progress_list = []
+    paused_list = []
+    postponed_list = []
     for a in active_not_current:
         act = a.get('actual') or '{}'
         try:
@@ -732,71 +763,56 @@ def refresh_initialized_tasks(search_query=None):
         is_paused = act_d.get('paused', False)
         postpone_history = act_d.get('postpone_history') or []
         is_postponed = bool(isinstance(postpone_history, list) and len(postpone_history) > 0)
-        if (show_paused or not is_paused) and (show_postponed or not is_postponed):
-            filtered_by_deferred.append(a)
-    active_not_current = filtered_by_deferred
+        if is_paused:
+            paused_list.append(a)
+        elif is_postponed:
+            postponed_list.append(a)
+        else:
+            in_progress_list.append(a)
+    print(f"[Dashboard] Initialized tasks: in_progress={len(in_progress_list)} paused={len(paused_list)} postponed={len(postponed_list)}")
 
-    print(f"[Dashboard] Total initialized tasks before filtering: {len(active_not_current)}")
-
-    # Apply search filter if provided
-    if search_query:
-        search_query = str(search_query).strip().lower()
-        print(f"[Dashboard] Applying search filter: '{search_query}'")
-
-        # Bulk-fetch task notes (1 query) instead of get_task_notes per instance (N+1)
-        task_ids = [inst.get('task_id') for inst in active_not_current if inst.get('task_id')]
-        notes_map: dict = {}
-        if task_ids:
-            try:
-                notes_map = tm.get_task_notes_bulk(task_ids, user_id=session_user_id)
-            except Exception:
-                pass
-
-        filtered_instances = []
-        for inst in active_not_current:
-            # Parse predicted data for description
+    # Apply search filter to each list when search_query is provided
+    def _filter_by_search(instances: list, query: str, notes_map: dict) -> list:
+        out = []
+        for inst in instances:
             predicted_str = inst.get("predicted") or "{}"
             try:
                 predicted_data = json.loads(predicted_str) if isinstance(predicted_str, str) else predicted_str
             except (json.JSONDecodeError, TypeError):
                 predicted_data = {}
-
-            # Parse actual data for pause notes
             actual_str = inst.get("actual") or "{}"
             try:
                 actual_data = json.loads(actual_str) if isinstance(actual_str, str) else (actual_str if isinstance(actual_str, dict) else {})
             except (json.JSONDecodeError, TypeError):
                 actual_data = {}
-
-            # Get task name from instance
             task_name = str(inst.get("task_name", "")).lower()
-
-            # Get description from predicted data
             description = str(predicted_data.get('description', '')).lower()
-
-            # Get pause notes from actual data
             pause_reason = str(actual_data.get('pause_reason', '')).lower()
-
-            # Get task-level notes from pre-fetched map
             task_id = inst.get('task_id')
             task_notes = str(notes_map.get(task_id, '') or '').lower()
+            if (query in task_name or query in description or query in pause_reason or query in task_notes):
+                out.append(inst)
+        return out
 
-            # Check if search query matches any field
-            matches_name = search_query in task_name
-            matches_description = search_query in description
-            matches_pause_notes = search_query in pause_reason
-            matches_task_notes = search_query in task_notes
-
-            if matches_name or matches_description or matches_pause_notes or matches_task_notes:
-                filtered_instances.append(inst)
-                print(f"[Dashboard] Instance '{inst.get('task_name')}' matched search (name={matches_name}, desc={matches_description}, pause={matches_pause_notes}, notes={matches_task_notes})")
-
-        active_not_current = filtered_instances
-        print(f"[Dashboard] Initialized tasks after filtering: {len(active_not_current)}")
+    if search_query:
+        search_query = str(search_query).strip().lower()
+        print(f"[Dashboard] Applying search filter: '{search_query}'")
+        combined_for_notes = in_progress_list + (paused_list if show_paused else []) + (postponed_list if show_postponed else [])
+        task_ids = list({inst.get('task_id') for inst in combined_for_notes if inst.get('task_id')})
+        try:
+            notes_map = tm.get_task_notes_bulk(task_ids, user_id=session_user_id) if task_ids else {}
+        except Exception:
+            notes_map = {}
+        in_progress_list = _filter_by_search(in_progress_list, search_query, notes_map)
+        if show_paused:
+            paused_list = _filter_by_search(paused_list, search_query, notes_map)
+        if show_postponed:
+            postponed_list = _filter_by_search(postponed_list, search_query, notes_map)
+        print(f"[Dashboard] After search: in_progress={len(in_progress_list)} paused={len(paused_list)} postponed={len(postponed_list)}")
     else:
         print("[Dashboard] No search query provided, showing all initialized tasks")
 
-    # Sort by urgency: overdue first, then by due date (soonest first), then no-due-date by initialized (older first)
+    # Sort each list by urgency
     try:
         from datetime import datetime as _dt
         from backend.urgency import _parse_dt as _parse_dt_urgency
@@ -808,17 +824,26 @@ def refresh_initialized_tasks(search_query=None):
             due_at = _parse_dt_urgency(inst.get("due_at"))
             init_at = _parse_dt_urgency(inst.get("initialized_at"))
             overdue = due_at is not None and _now > due_at
-            # 0 = overdue first, 1 = not overdue; then by due_at asc (soonest first); then no-due by init asc (older first)
             return (0 if overdue else 1, due_at or _max_dt, init_at or _min_dt)
 
-        active_not_current = sorted(active_not_current, key=_sort_key)
+        in_progress_list = sorted(in_progress_list, key=_sort_key)
+        paused_list = sorted(paused_list, key=_sort_key)
+        postponed_list = sorted(postponed_list, key=_sort_key)
     except Exception:
         pass
 
+    # Sections to show: (section_title, list); show Paused/Postponed sections when checkbox is on (separate lists)
+    sections = [("In progress", in_progress_list)]
+    if show_paused:
+        sections.append(("Paused", paused_list))
+    if show_postponed:
+        sections.append(("Postponed", postponed_list))
+
     # Clear the container
     initialized_tasks_container.clear()
-    
-    if not active_not_current:
+
+    total_to_show = sum(len(lst) for _, lst in sections)
+    if total_to_show == 0:
         print("[Dashboard] No initialized tasks to display after filtering")
         with initialized_tasks_container:
             if search_query:
@@ -826,8 +851,8 @@ def refresh_initialized_tasks(search_query=None):
             else:
                 ui.markdown("_No initialized tasks available_")
         return
-    
-    print(f"[Dashboard] Rendering {len(active_not_current)} initialized tasks in 2-column layout")
+
+    print(f"[Dashboard] Rendering {total_to_show} initialized tasks in separate sections (in_progress/paused/postponed)")
 
     # Task horizon for urgency (stale = no due, age > N days)
     try:
@@ -836,17 +861,27 @@ def refresh_initialized_tasks(search_query=None):
         task_horizon_days = 14
 
     # Bulk-fetch previous-task averages and avg_time_estimate to avoid N+1 in format_colored_tooltip
-    task_ids = list({i.get('task_id') for i in active_not_current if i.get('task_id')})
+    # #region agent log
+    _t_bulk0 = time.perf_counter()
+    # #endregion
+    all_instances = [inst for _, lst in sections for inst in lst]
+    task_ids = list({i.get('task_id') for i in all_instances if i.get('task_id')})
     bulk = im.get_previous_task_averages_bulk(task_ids, user_id=session_user_id) if task_ids else {}
+    # #region agent log
+    _t_bulk1 = time.perf_counter()
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'id': 'init_bulk', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.refresh_initialized_tasks', 'message': 'after get_previous_task_averages_bulk', 'data': {'bulk_ms': round((_t_bulk1 - _t_bulk0) * 1000, 1), 'task_ids_len': len(task_ids)}, 'hypothesisId': 'H_INIT_BULK'}) + '\n')
+    except Exception:
+        pass
+    # #endregion
 
-    # Render initialized tasks in 2 columns
-    with initialized_tasks_container:
-        # Split into 2 columns
+    def _render_task_cards(task_list: list, section_label: str):
+        """Render a list of task instances in 2-column layout (used for In progress / Paused / Postponed)."""
         with ui.row().classes("w-full gap-2"):
             col1 = ui.column().classes("w-1/2")
             col2 = ui.column().classes("w-1/2")
-
-            for idx, inst in enumerate(active_not_current):
+            for idx, inst in enumerate(task_list):
                 col = col1 if idx % 2 == 0 else col2
                 with col:
                     # Parse predicted data
@@ -983,12 +1018,22 @@ def refresh_initialized_tasks(search_query=None):
                         
                         tooltip_html = f'<div id="{tooltip_id}" class="task-tooltip">{formatted_tooltip}</div>'
                         ui.add_body_html(tooltip_html)
-        
-        # Re-initialize tooltips and context menus
+
+    with initialized_tasks_container:
+        for section_title, task_list in sections:
+            ui.label(section_title).classes("text-sm font-bold mt-2 mb-1 text-gray-700")
+            _render_task_cards(task_list, section_title)
         ui.run_javascript('setTimeout(initTaskTooltips, 200);')
         ui.run_javascript("setTimeout(initContextMenus, 100);")
-    
+
     refresh_duration = (time.perf_counter() - refresh_start) * 1000
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'id': 'init_end', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.refresh_initialized_tasks', 'message': 'refresh_initialized_tasks end', 'data': {'total_ms': round(refresh_duration, 1)}, 'hypothesisId': 'H_INIT_END'}) + '\n')
+    except Exception:
+        pass
+    # #endregion
     if init_perf_logger:
         init_perf_logger.log_timing("refresh_initialized_tasks_total", refresh_duration, search_query=search_query)
     print(f"[Dashboard] refresh_initialized_tasks() completed successfully in {refresh_duration:.2f}ms")
@@ -1150,7 +1195,14 @@ def refresh_templates(search_query=None, search_mode='task'):
     if init_perf_logger:
         init_perf_logger.log_timing("refresh_templates_total", refresh_duration, search_query=search_query)
     print(f"[Dashboard] refresh_templates() completed successfully in {refresh_duration:.2f}ms")
-    
+    # #region agent log
+    try:
+        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'id': 'templates_done', 'location': 'dashboard.refresh_templates', 'message': 'refresh_templates done', 'data': {'ms': round(refresh_duration, 1)}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+    except Exception:
+        pass
+    # #endregion
+
     # Clear refresh flag after successful refresh
     if app.storage.general.get('refresh_templates', False):
         print("[Dashboard] Clearing refresh_templates flag after successful refresh")
@@ -1733,7 +1785,7 @@ def view_initialized_instance(instance_id):
                 expected_emotional = int(float(expected_emotional))
             except (ValueError, TypeError):
                 expected_emotional = 0
-            ui.label(f"Expected Emotional Load: {expected_emotional}/100").classes("text-sm mb-2")
+            ui.label(f"Expected Emotional intensity: {expected_emotional}/100").classes("text-sm mb-2")
             
             # Expected physical load
             expected_physical = predicted_data.get('expected_physical_load', 0)
@@ -2322,7 +2374,7 @@ def format_colored_tooltip(predicted_data, task_id, averages_and_time=None):
         except (ValueError, TypeError):
             pass
     
-    # Expected Distress (0-100 scale, old data may have 0-10 values but we use as-is)
+    # Expected Emotional intensity (0-100 scale, old data may have 0-10 values but we use as-is)
     emo_load = predicted_data.get('expected_emotional_load')
     if emo_load is not None:
         try:
@@ -2330,7 +2382,7 @@ def format_colored_tooltip(predicted_data, task_id, averages_and_time=None):
             avg_emo = averages.get('expected_emotional_load')
             emo_color = get_value_with_deviation_color(emo_load, avg_emo, higher_is_worse=True)
             avg_text = f" (avg: {avg_emo:.1f})" if avg_emo else ""
-            lines.append(f'<div><strong>Expected Distress:</strong> <span style="color: {emo_color}; font-weight: bold;">{emo_load:.1f}</span>{avg_text}</div>')
+            lines.append(f'<div><strong>Expected Emotional intensity:</strong> <span style="color: {emo_color}; font-weight: bold;">{emo_load:.1f}</span>{avg_text}</div>')
         except (ValueError, TypeError):
             pass
     
@@ -2709,64 +2761,149 @@ def render_monitored_metrics_section(container):
     def get_targeted_metric_values(metrics_list, an, uid):
         """Get only the specific metric values needed, without calculating all metrics.
         
-        This is much faster than calling get_relief_summary(), get_dashboard_metrics(), etc.
-        which calculate everything. Only calls the full functions if absolutely necessary.
-        
-        Args:
-            metrics_list: List of metric keys to load
-            an: Analytics instance
-            uid: Current user ID (int or None) for data isolation
+        Loads instances once and passes to relief_summary, weekly_productivity_history,
+        and dashboard_metrics to avoid repeated _load_instances (fixes timeout / stuck graph).
         
         Returns:
-            dict with keys: 'relief_summary', 'quality_metrics', 'composite_scores'
-            Each contains only the values needed for the selected metrics.
+            dict with keys: 'relief_summary', 'quality_metrics', 'composite_scores', 'weekly_productivity_history'
         """
         result = {
             'relief_summary': {},
             'quality_metrics': {},
-            'composite_scores': {}
+            'composite_scores': {},
+            'weekly_productivity_history': None,
+            'weekly_hours_history': None,
+            'stress_level_history': None,
+            'net_relief_history': None,
         }
         
-        # Metrics that come from relief_summary
         relief_metrics = {'productivity_time', 'productivity_score'}
         needs_productivity_time = 'productivity_time' in metrics_list
         needs_productivity_score = 'productivity_score' in metrics_list
-        
+        quality_metric_keys = [
+            m for m in metrics_list
+            if m not in relief_metrics and m != 'execution_score'
+            and (m.startswith('avg_') or m.startswith('thoroughness_') or m in [
+                'adjusted_wellbeing', 'adjusted_wellbeing_normalized', 'general_aversion_score', 'expected_relief',
+                'stress_level', 'relief_score', 'net_wellbeing', 'net_wellbeing_normalized',
+                'cognitive_load', 'emotional_load', 'physical_load'
+            ])
+        ]
+        needs_relief_or_quality = (needs_productivity_time or needs_productivity_score or bool(quality_metric_keys))
+        has_load_once = hasattr(an, 'load_instances_once')
+        # #region agent log
+        try:
+            _log_path = r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log'
+            with open(_log_path, 'a', encoding='utf-8') as _f:
+                _f.write(json.dumps({'hypothesisId': 'BATCH', 'location': 'dashboard.get_targeted_metric_values', 'message': 'path check', 'data': {'needs_relief_or_quality': needs_relief_or_quality, 'has_load_instances_once': has_load_once, 'taking_batched': needs_relief_or_quality and has_load_once}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except Exception:
+            pass
+        # #endregion
+        if needs_relief_or_quality and has_load_once:
+            _t_gtv = time.perf_counter()
+            df_all, df_completed = an.load_instances_once(user_id=uid)
+            _t1 = time.perf_counter()
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                    _f.write(json.dumps({'id': 'targeted_segment', 'location': 'dashboard.get_targeted_metric_values', 'message': 'after load_instances_once', 'data': {'ms': round((_t1 - _t_gtv) * 1000, 1)}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+            except Exception:
+                pass
+            if needs_productivity_time or needs_productivity_score:
+                _t_relief = time.perf_counter()
+                relief = an.get_relief_summary(user_id=uid, instances_completed_df=df_completed)
+                result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
+                result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
+                _t2 = time.perf_counter()
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                        _f.write(json.dumps({'id': 'targeted_segment', 'location': 'dashboard.get_targeted_metric_values', 'message': 'after relief_summary', 'data': {'ms': round((_t2 - _t_relief) * 1000, 1)}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+                except Exception:
+                    pass
+                if needs_productivity_score:
+                    result['weekly_productivity_history'] = an.get_weekly_productivity_history(
+                        user_id=uid, instances_df=df_all
+                    )
+                    # #region agent log
+                    try:
+                        _h = result.get('weekly_productivity_history')
+                        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                            _f.write(json.dumps({'hypothesisId': 'BATCH', 'location': 'dashboard.get_targeted_metric_values', 'message': 'weekly_productivity_history set', 'data': {'is_none': _h is None, 'keys': list(_h.keys()) if _h else [], 'len_dates': len(_h.get('dates', [])) if _h else 0}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except Exception:
+                        pass
+                    # #endregion
+            if quality_metric_keys:
+                dashboard_metric_keys = []
+                for key in quality_metric_keys:
+                    if key.startswith('avg_'):
+                        dashboard_metric_keys.append(f'quality.{key}')
+                    elif key in ['adjusted_wellbeing', 'adjusted_wellbeing_normalized', 'thoroughness_score', 'thoroughness_factor']:
+                        dashboard_metric_keys.append(f'quality.{key}')
+                    elif key == 'general_aversion_score':
+                        dashboard_metric_keys.append(f'aversion.{key}')
+                    elif key == 'expected_relief':
+                        dashboard_metric_keys.append('quality.avg_expected_relief')
+                    elif key == 'relief_score':
+                        dashboard_metric_keys.append('quality.avg_relief')
+                    elif key in ['stress_level', 'net_wellbeing', 'net_wellbeing_normalized', 'cognitive_load', 'emotional_load', 'physical_load']:
+                        dashboard_metric_keys.append(f'quality.avg_{key}')
+                _t_dm = time.perf_counter()
+                metrics_data = an.get_dashboard_metrics(metrics=dashboard_metric_keys, user_id=uid, instances_df=df_all) if hasattr(an, 'get_dashboard_metrics') else {}
+                quality = metrics_data.get('quality', {})
+                aversion = metrics_data.get('aversion', {})
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                        _f.write(json.dumps({'id': 'targeted_segment', 'location': 'dashboard.get_targeted_metric_values', 'message': 'after get_dashboard_metrics', 'data': {'ms': round((time.perf_counter() - _t_dm) * 1000, 1)}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+                except Exception:
+                    pass
+                for key in quality_metric_keys:
+                    if key in quality:
+                        result['quality_metrics'][key] = quality[key]
+                    elif f'avg_{key}' in quality:
+                        result['quality_metrics'][key] = quality[f'avg_{key}']
+                    elif key in aversion:
+                        result['quality_metrics'][key] = aversion[key]
+                    elif key == 'expected_relief' and 'avg_expected_relief' in quality:
+                        result['quality_metrics'][key] = quality['avg_expected_relief']
+                    elif key == 'relief_score' and 'avg_relief' in quality:
+                        result['quality_metrics'][key] = quality['avg_relief']
+            known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score',
+                                       'work_volume_score', 'work_consistency_score', 'life_balance_score',
+                                       'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
+            composite_metric_keys = [m for m in metrics_list if m in known_composite_metrics and m != 'execution_score']
+            if composite_metric_keys and hasattr(an, 'get_all_scores_for_composite'):
+                all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys), user_id=uid)
+                for key in composite_metric_keys:
+                    if key in all_composite:
+                        result['composite_scores'][key] = all_composite[key]
+            # Pre-fetch chart histories from same df so _update_metric_cards_incremental does not trigger more loads
+            if needs_productivity_time and hasattr(an, 'get_weekly_hours_history'):
+                result['weekly_hours_history'] = an.get_weekly_hours_history(user_id=uid, instances_df=df_all)
+            if 'stress_level' in metrics_list and hasattr(an, 'get_generic_metric_history'):
+                result['stress_level_history'] = an.get_generic_metric_history('stress_level', days=90, user_id=uid, instances_completed_df=df_completed)
+            if 'net_relief' in metrics_list and hasattr(an, 'get_generic_metric_history'):
+                result['net_relief_history'] = an.get_generic_metric_history('net_relief', days=90, user_id=uid, instances_completed_df=df_completed)
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                    _f.write(json.dumps({'id': 'targeted_total', 'location': 'dashboard.get_targeted_metric_values', 'message': 'get_targeted_metric_values done', 'data': {'total_ms': round((time.perf_counter() - _t_gtv) * 1000, 1)}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+            except Exception:
+                pass
+            return result
+
+        # Fallback: no batching (e.g. old analytics or no relief/quality needed)
         if needs_productivity_time or needs_productivity_score:
-            # Use lightweight function for productivity_time
             if needs_productivity_time:
                 if hasattr(an, 'get_productivity_time_minutes'):
                     result['relief_summary']['productivity_time_minutes'] = an.get_productivity_time_minutes(user_id=uid)
                 else:
-                    # Fallback: get from relief_summary (cached, so not too expensive)
                     relief = an.get_relief_summary(user_id=uid)
                     result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
-            
             if needs_productivity_score:
-                # For productivity_score, always call get_relief_summary() to ensure fresh calculation
-                # Don't rely on cache - force recalculation to ensure accuracy
-                # The cache might be stale, especially if data was just updated
                 relief = an.get_relief_summary(user_id=uid)
                 result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
-                # Also get productivity_time_minutes if we didn't already
                 if needs_productivity_time and 'productivity_time_minutes' not in result['relief_summary']:
                     result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
-        
-        # Metrics that come from quality_metrics (dashboard_metrics)
-        # Only get the specific metrics we need, not all dashboard metrics
-        quality_metric_keys = []
-        for metric in metrics_list:
-            if metric not in relief_metrics and metric != 'execution_score':
-                # Check if this metric is likely in quality_metrics
-                # Common quality metrics: avg_*, thoroughness_*, adjusted_wellbeing, etc.
-                if (metric.startswith('avg_') or 
-                    metric.startswith('thoroughness_') or 
-                    metric in ['adjusted_wellbeing', 'adjusted_wellbeing_normalized', 
-                              'general_aversion_score', 'expected_relief'] or
-                    metric in ['stress_level', 'relief_score', 'net_wellbeing', 'net_wellbeing_normalized',
-                               'cognitive_load', 'emotional_load', 'physical_load']):
-                    quality_metric_keys.append(metric)
 
+        # Quality metrics (dashboard_metrics) - quality_metric_keys already computed above
         if quality_metric_keys:
             # Build list of dashboard metric keys to request (format: 'category.key')
             dashboard_metric_keys = []
@@ -2868,6 +3005,11 @@ def render_monitored_metrics_section(container):
         
         Uses targeted loading to only calculate the specific metrics displayed, not all available metrics.
         """
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                _f.write(json.dumps({'id': 'timer_fired', 'location': 'dashboard', 'message': 'timer phase', 'data': {'phase': 'load_and_render', 'perf': time.perf_counter()}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+        except Exception:
+            pass
         # State for incremental loading - persists between timer calls.
         # Capture user_id once (from request context) so timer callbacks don't rely on get_current_user().
         load_state = {
@@ -2875,6 +3017,10 @@ def render_monitored_metrics_section(container):
             'relief_summary': None,
             'quality_metrics': None,
             'composite_scores': None,
+            'weekly_productivity_history': None,
+            'weekly_hours_history': None,
+            'stress_level_history': None,
+            'net_relief_history': None,
             'timer': None,
             'current_user_id': current_user_id,
             'user_id_str': user_id_str,
@@ -2903,6 +3049,10 @@ def render_monitored_metrics_section(container):
                             load_state['relief_summary'] = targeted_data.get('relief_summary', {})
                             load_state['quality_metrics'] = targeted_data.get('quality_metrics', {})
                             load_state['composite_scores'] = targeted_data.get('composite_scores', {})
+                            load_state['weekly_productivity_history'] = targeted_data.get('weekly_productivity_history')
+                            load_state['weekly_hours_history'] = targeted_data.get('weekly_hours_history')
+                            load_state['stress_level_history'] = targeted_data.get('stress_level_history')
+                            load_state['net_relief_history'] = targeted_data.get('net_relief_history')
                     except Exception as e:
                         print(f"[Dashboard] Error getting targeted metric values: {e}")
                         import traceback
@@ -2923,6 +3073,13 @@ def render_monitored_metrics_section(container):
                         load_state['step'] = 2
                     
                     # Update metrics with loaded data (before execution_score if needed)
+                    _pre_fetched = {}
+                    if load_state.get('weekly_hours_history'):
+                        _pre_fetched['productivity_time'] = load_state['weekly_hours_history']
+                    if load_state.get('stress_level_history'):
+                        _pre_fetched['stress_level'] = load_state['stress_level_history']
+                    if load_state.get('net_relief_history'):
+                        _pre_fetched['net_relief'] = load_state['net_relief_history']
                     _update_metric_cards_incremental(
                         metric_cards,
                         selected_metrics,
@@ -2932,7 +3089,9 @@ def render_monitored_metrics_section(container):
                         coloration_baseline,
                         an,
                         init_perf_logger,
-                        current_user_id
+                        current_user_id,
+                        weekly_productivity_history=load_state.get('weekly_productivity_history'),
+                        pre_fetched_histories=_pre_fetched,
                     )
                     
                     # Schedule next step
@@ -2965,6 +3124,13 @@ def render_monitored_metrics_section(container):
                                 avg_score = load_state['execution_score_state'].get('avg_execution_score', 50.0)
                                 load_state['composite_scores']['execution_score'] = avg_score
                                 # Update metrics that depend on execution_score
+                                _pre_fetched = {}
+                                if load_state.get('weekly_hours_history'):
+                                    _pre_fetched['productivity_time'] = load_state['weekly_hours_history']
+                                if load_state.get('stress_level_history'):
+                                    _pre_fetched['stress_level'] = load_state['stress_level_history']
+                                if load_state.get('net_relief_history'):
+                                    _pre_fetched['net_relief'] = load_state['net_relief_history']
                                 _update_metric_cards_incremental(
                                     metric_cards,
                                     selected_metrics,
@@ -2974,7 +3140,9 @@ def render_monitored_metrics_section(container):
                                     coloration_baseline,
                                     an,
                                     init_perf_logger,
-                                    step_user_id
+                                    step_user_id,
+                                    weekly_productivity_history=load_state.get('weekly_productivity_history'),
+                                    pre_fetched_histories=_pre_fetched,
                                 )
                                 load_state['step'] = 2
                             else:
@@ -2995,7 +3163,8 @@ def render_monitored_metrics_section(container):
                         load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
                     
                 elif load_state['step'] == 2:
-                    # Step 3: Final render - all data loaded
+                    # Step 3: Final render - all data loaded (values + charts)
+                    print("[Dashboard] monitored metrics phase done (values + charts)")
                     # #region agent log
                     try:
                         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -3010,6 +3179,13 @@ def render_monitored_metrics_section(container):
                     # Final update of all metric cards (relief_summary already from step 0)
                     final_user_id = load_state.get('current_user_id')
                     try:
+                        _pre_fetched = {}
+                        if load_state.get('weekly_hours_history'):
+                            _pre_fetched['productivity_time'] = load_state['weekly_hours_history']
+                        if load_state.get('stress_level_history'):
+                            _pre_fetched['stress_level'] = load_state['stress_level_history']
+                        if load_state.get('net_relief_history'):
+                            _pre_fetched['net_relief'] = load_state['net_relief_history']
                         _update_metric_cards_incremental(
                             metric_cards,
                             selected_metrics,
@@ -3019,7 +3195,9 @@ def render_monitored_metrics_section(container):
                             coloration_baseline,
                             an,
                             init_perf_logger,
-                            final_user_id
+                            final_user_id,
+                            weekly_productivity_history=load_state.get('weekly_productivity_history'),
+                            pre_fetched_histories=_pre_fetched,
                         )
                         
                         # Store state for periodic refresh
@@ -3227,19 +3405,11 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
     _monitored_metrics_state['refresh_timer'] = refresh_timer
 
 
-def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger, current_user_id=None):
+def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger, current_user_id=None, weekly_productivity_history=None, pre_fetched_histories=None):
     """Update metric cards incrementally as data becomes available.
     
-    Args:
-        metric_cards: Dict of metric_key -> {card, value_label, baseline_label, tooltip_id, rendered}
-        selected_metrics: List of metric keys to render
-        relief_summary: Dict with relief summary data (may be None/partial)
-        quality_metrics: Dict with quality metrics (may be None/partial)
-        composite_scores: Dict with composite scores (may be None/partial)
-        coloration_baseline: Baseline type for coloration
-        an: Analytics instance
-        init_perf_logger: Performance logger
-        current_user_id: Current user ID (int or None) for data isolation in analytics calls
+    When weekly_productivity_history or pre_fetched_histories are provided, uses them
+    instead of calling get_history() to avoid extra _load_instances (faster load).
     """
     import json
     import time
@@ -3260,7 +3430,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             'label': 'Productivity Time',
             'get_value': lambda: relief_summary.get('productivity_time_minutes', 0) / 60.0,
             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
-            'get_history': lambda: an.get_weekly_hours_history(),
+            'get_history': lambda: an.get_weekly_hours_history(user_id=current_user_id),
             'history_key': 'hours',
             'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
@@ -3269,7 +3439,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             'label': 'Productivity Score',
             'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
             'history_key': 'productivity_scores',
             'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
@@ -3395,7 +3565,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
     # #region agent log
     try:
         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'update function called', 'data': {'selected_metrics': selected_metrics, 'metric_cards_keys': list(metric_cards.keys()), 'available_metrics_keys': list(available_metrics.keys()), 'has_relief': bool(relief_summary), 'has_quality': bool(quality_metrics), 'has_composite': bool(composite_scores)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'update function called', 'data': {'selected_metrics': selected_metrics, 'metric_cards_keys': list(metric_cards.keys()), 'available_metrics_keys': list(available_metrics.keys()), 'has_relief': bool(relief_summary), 'has_quality': bool(quality_metrics), 'has_composite': bool(composite_scores), 'has_weekly_productivity_history': weekly_productivity_history is not None, 'weekly_productivity_history_len_dates': len(weekly_productivity_history.get('dates', [])) if weekly_productivity_history else 0}, 'timestamp': int(time.time() * 1000)}) + '\n')
     except: pass
     # #endregion
     
@@ -3476,15 +3646,62 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
         
         # Get history for baseline (only once, when fully rendered)
         if not card_info.get('rendered', False):
-            # Defer expensive history for productivity_score so initial load stays fast (avoids VPS timeout / page reset)
+            # Productivity score: use pre-fetched history when available so graph shows immediately
             if metric_key == 'productivity_score' and hasattr(an, 'get_weekly_productivity_history'):
                 _ps_baseline_label = {
                     'last_3_months': '3mo avg', 'last_month': '1mo avg', 'last_week': '1wk avg',
                     'average': 'avg', 'all_data': 'all avg'
                 }.get(coloration_baseline, 'avg')
+                _ps_current_value = current_value
+                _h = weekly_productivity_history
+
+                if _h and _h.get('dates') and _h.get('productivity_scores'):
+                    # Render graph immediately when we have pre-fetched history (batched path)
+                    try:
+                        _bdaily = get_baseline_value(_h, coloration_baseline, 'productivity_scores')
+                        _bval = _bdaily * 7.0 if _bdaily > 0 else _ps_current_value
+                        card_info['baseline_label'].text = f"{_ps_baseline_label}: {_bval:.1f}"
+                        card_info['baseline_value'] = _bval
+                        _bg_class, _line_color = get_metric_bg_class(_ps_current_value, _bval)
+                        _bg_color = {'metric-bg-green': '#d1fae5', 'metric-bg-yellow': '#fef3c7', 'metric-bg-red': '#fee2e2', '': '#f3f4f6'}.get(_bg_class, '#f3f4f6')
+                        try:
+                            card_info['card'].style(f"min-width: 0; background-color: {_bg_color} !important;")
+                        except Exception:
+                            pass
+                        try:
+                            card_info['card'].props(f'data-tooltip-id="{metric_config["tooltip_id"]}"')
+                        except Exception:
+                            pass
+                        _cur_line = _ps_current_value / 7.0 if _ps_current_value > 0 else 0.0
+                        _wk_avg = _bval / 7.0 if _bval > 0 else 0.0
+                        _fig = create_metric_tooltip_chart(
+                            _h['dates'], _h['productivity_scores'],
+                            _cur_line, _wk_avg, _wk_avg,
+                            metric_config['chart_title'], _line_color
+                        )
+                        if _fig:
+                            _tid = metric_config['tooltip_id']
+                            with ui.element('div').props(f'id="chart-temp-{_tid}"').style("position: absolute; left: -9999px; top: -9999px; visibility: hidden;"):
+                                ui.plotly(_fig)
+                            ui.run_javascript(f'''
+                                setTimeout(function() {{
+                                    var tempDiv = document.getElementById("chart-temp-{_tid}");
+                                    var tooltipDiv = document.getElementById("tooltip-{_tid}");
+                                    if (tempDiv && tooltipDiv) {{
+                                        var plotlyDiv = tempDiv.querySelector(".plotly");
+                                        if (plotlyDiv) {{ tooltipDiv.innerHTML = plotlyDiv.outerHTML; }}
+                                        tempDiv.remove();
+                                    }}
+                                }}, 500);
+                            ''')
+                    except Exception as e:
+                        print(f"[Dashboard] Productivity score immediate chart error: {e}")
+                    card_info['rendered'] = True
+                    continue
+                # No pre-fetched history: defer expensive get_weekly_productivity_history()
                 card_info['baseline_label'].text = f"{_ps_baseline_label}: ..."
-                card_info['baseline_value'] = current_value
-                _bg_class, _ = get_metric_bg_class(current_value, current_value)
+                card_info['baseline_value'] = _ps_current_value
+                _bg_class, _ = get_metric_bg_class(_ps_current_value, _ps_current_value)
                 _bg_color = {'metric-bg-green': '#d1fae5', 'metric-bg-yellow': '#fef3c7', 'metric-bg-red': '#fee2e2', '': '#f3f4f6'}.get(_bg_class, '#f3f4f6')
                 try:
                     card_info['card'].style(f"min-width: 0; background-color: {_bg_color} !important;")
@@ -3499,14 +3716,21 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 _ps_card = card_info
                 _ps_an = an
                 _ps_coloration_baseline = coloration_baseline
-                _ps_current_value = current_value
                 _ps_config = metric_config
+                _ps_pre_fetched = weekly_productivity_history
+                # #region agent log
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                        _f.write(json.dumps({'hypothesisId': 'PS_DEFER', 'location': 'dashboard._update_metric_cards_incremental', 'message': 'productivity_score deferred setup', 'data': {'has_pre_fetched': _ps_pre_fetched is not None, 'pre_fetched_len_dates': len(_ps_pre_fetched.get('dates', [])) if _ps_pre_fetched else 0, 'current_value': _ps_current_value}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                except Exception:
+                    pass
+                # #endregion
 
                 def _deferred_ps_baseline():
                     try:
                         if not _ps_card:
                             return
-                        _h = _ps_an.get_weekly_productivity_history()
+                        _h = _ps_pre_fetched if _ps_pre_fetched else (_ps_an.get_weekly_productivity_history() if hasattr(_ps_an, 'get_weekly_productivity_history') else None)
                         if not _h or not _h.get('dates') or not _h.get('productivity_scores'):
                             try:
                                 _ps_card['baseline_label'].text = f"{_ps_baseline_label}: N/A"
@@ -3554,12 +3778,17 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 ui.timer(0.5, _deferred_ps_baseline, once=True)
                 continue
 
-            try:
-                history_data = metric_config['get_history']()
-                if history_data is None:
+            # Use pre-fetched history when available to avoid extra _load_instances
+            history_data = (pre_fetched_histories or {}).get(metric_key)
+            if history_data is None:
+                try:
+                    history_data = metric_config['get_history']()
+                    if history_data is None:
+                        history_data = {}
+                except Exception:
                     history_data = {}
-            except Exception:
-                history_data = {}
+            else:
+                history_data = history_data if isinstance(history_data, dict) else {}
 
             # Calculate baseline (skip for daily productivity score - it resets every day)
             if metric_key == 'daily_productivity_score_idle_refresh':
@@ -3833,7 +4062,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             'label': 'Productivity Time',
             'get_value': lambda: relief_summary.get('productivity_time_minutes', 0) / 60.0,
             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
-            'get_history': lambda: an.get_weekly_hours_history(),
+            'get_history': lambda: an.get_weekly_hours_history(user_id=current_user_id),
             'history_key': 'hours',
             'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
@@ -3842,7 +4071,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             'label': 'Productivity Score',
             'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
             'history_key': 'productivity_scores',
             'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
@@ -4140,7 +4369,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
             'label': 'Productivity Time',
             'get_value': lambda: relief_summary.get('productivity_time_minutes', 0) / 60.0,
             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{relief_summary.get('productivity_time_minutes', 0):.0f} min",
-            'get_history': lambda: an.get_weekly_hours_history(),
+            'get_history': lambda: an.get_weekly_hours_history(user_id=current_user_id),
             'history_key': 'hours',
             'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
@@ -4149,7 +4378,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
             'label': 'Productivity Score',
             'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
             'history_key': 'productivity_scores',
             'tooltip_id': 'monitored-productivity_score',
             'chart_title': 'Daily Productivity Score'
@@ -4252,7 +4481,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
                             'label': 'Productivity Time',
                             'get_value': lambda: loaded_summary.get('productivity_time_minutes', 0) / 60.0,
                             'format_value': lambda v: f"{v:.1f} hrs" if v >= 1 else f"{loaded_summary.get('productivity_time_minutes', 0):.0f} min",
-                            'get_history': lambda: an.get_weekly_hours_history(),
+                            'get_history': lambda: an.get_weekly_hours_history(user_id=current_user_id),
                             'history_key': 'hours',
                             'tooltip_id': 'monitored-productivity_time',
                             'chart_title': 'Daily Hours'
@@ -4261,7 +4490,7 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
                             'label': 'Productivity Score',
                             'get_value': lambda: loaded_summary.get('weekly_productivity_score', 0.0),
                             'format_value': lambda v: f"{v:.1f}",
-                            'get_history': lambda: an.get_weekly_productivity_history() if hasattr(an, 'get_weekly_productivity_history') else None,
+                            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
                             'history_key': 'productivity_scores',
                             'tooltip_id': 'monitored-productivity_score',
                             'chart_title': 'Daily Productivity Score'
@@ -4693,6 +4922,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     # CRITICAL: Update global variable so other functions can use it
     current_user_id = session_user_id
     print(f"[Dashboard] build_dashboard: Set current_user_id={current_user_id} (session_user_id={session_user_id})")
+    _t_dash_start = time.perf_counter()
+    # #region agent log
+    debug_log('dashboard.py:build_dashboard', 'build_dashboard start', {'ts': _t_dash_start}, 'DASH_START')
+    # #endregion
 
     # Send browser timezone to server so "Use my device" in Settings works
     ui.run_javascript(
@@ -4701,24 +4934,34 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
         'body: JSON.stringify({ timezone: tz }), credentials: "include" }).catch(function(){}); } catch(e) {} })();'
     )
 
-    # Batch 3: Warm instances cache once so all later _load_instances in this request hit cache (avoids N+1)
-    try:
-        if hasattr(an, '_load_instances'):
-            an._load_instances(user_id=current_user_id)
-            an._load_instances(completed_only=True, user_id=current_user_id)
-    except Exception as e:
-        print(f"[Dashboard] Warning: Could not warm instances cache: {e}")
-    
-    # Debug: Check if user has any data
-    try:
-        task_count = len(tm.get_all(user_id=current_user_id)) if hasattr(tm, 'get_all') else 0
-        instance_count = len(im.list_active_instances(user_id=current_user_id)) if hasattr(im, 'list_active_instances') else 0
-        print(f"[Dashboard] User {current_user_id} data check: {task_count} tasks, {instance_count} active instances")
-        if task_count == 0 and instance_count == 0:
-            print(f"[Dashboard] WARNING: User {current_user_id} appears to have no data. This may be a new user or data migration issue.")
-    except Exception as e:
-        print(f"[Dashboard] Error checking user data: {e}")
-    
+    # Defer cache warming so first paint is instant (was blocking ~5s and causing 8s dashboard load)
+    def _warm_instances_cache():
+        try:
+            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                _f.write(json.dumps({'id': 'timer_fired', 'location': 'dashboard', 'message': 'timer phase', 'data': {'phase': 'warm_cache', 'perf': time.perf_counter()}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+        except Exception:
+            pass
+        try:
+            if hasattr(an, 'load_instances_once'):
+                an.load_instances_once(user_id=current_user_id)
+            elif hasattr(an, '_load_instances'):
+                an._load_instances(user_id=current_user_id)
+                an._load_instances(completed_only=True, user_id=current_user_id)
+        except Exception as e:
+            print(f"[Dashboard] Warning: Could not warm instances cache: {e}")
+    ui.timer(0.1, _warm_instances_cache, once=True)
+
+    def _deferred_user_data_check():
+        try:
+            task_count = len(tm.get_all(user_id=current_user_id)) if hasattr(tm, 'get_all') else 0
+            instance_count = len(im.list_active_instances(user_id=current_user_id)) if hasattr(im, 'list_active_instances') else 0
+            print(f"[Dashboard] User {current_user_id} data check: {task_count} tasks, {instance_count} active instances")
+            if task_count == 0 and instance_count == 0:
+                print(f"[Dashboard] WARNING: User {current_user_id} appears to have no data. This may be a new user or data migration issue.")
+        except Exception as e:
+            print(f"[Dashboard] Error checking user data: {e}")
+    ui.timer(0.15, _deferred_user_data_check, once=True)
+
     # Invalidate task cache when dashboard is built (in case user switched).
     # Do NOT invalidate instance cache here: it causes every _load_instances in this request to miss and refetch.
     # Instance cache is invalidated on create/update/delete in InstanceManager.
@@ -5705,25 +5948,36 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         debug_log('dashboard.py:4542', 'Error attaching template search handler', {'error': str(e)}, 'H2')
                         # #endregion
                     
-                    # Call refresh - it will retry automatically if container not ready
-                    # Note: refresh_templates() will check for refresh flag and invalidate cache if needed
-                    # #region agent log
-                    debug_log('dashboard.py:4546', 'About to call initial refresh_templates', {'container_exists': template_col is not None}, 'H5')
-                    # #endregion
+                    # Defer refresh so first paint is instant (was blocking dashboard load)
                     def get_initial_mode():
                         return getattr(search_mode_select, 'value', 'task') or 'task'
-                    if init_perf_logger:
-                        with init_perf_logger.operation("refresh_templates_initial"):
+                    def _deferred_refresh_templates():
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                                _f.write(json.dumps({'id': 'timer_fired', 'location': 'dashboard', 'message': 'timer phase', 'data': {'phase': 'refresh_templates', 'perf': time.perf_counter()}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+                        except Exception:
+                            pass
+                        debug_log('dashboard.py:4546', 'About to call initial refresh_templates', {'container_exists': template_col is not None}, 'H5')
+                        if init_perf_logger:
+                            with init_perf_logger.operation("refresh_templates_initial"):
+                                refresh_templates(search_mode=get_initial_mode())
+                        else:
                             refresh_templates(search_mode=get_initial_mode())
-                    else:
-                        refresh_templates(search_mode=get_initial_mode())
-                    # #region agent log
-                    debug_log('dashboard.py:4551', 'Initial refresh_templates completed', {'container_exists': template_col is not None}, 'H5')
-                    # #endregion
+                        debug_log('dashboard.py:4551', 'Initial refresh_templates completed', {'container_exists': template_col is not None}, 'H5')
+                    ui.timer(0.1, _deferred_refresh_templates, once=True)
 
             # ====================================================================
             # COLUMN 2 — Middle Column
             # ====================================================================
+            # #region agent log
+            _t_mid_start = time.perf_counter()
+            debug_log('dashboard.py:middle_column', 'middle column sync block start', {'ts': _t_mid_start}, 'DASH_MID')
+            try:
+                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                    _f.write(json.dumps({'id': 'dash_mid_list', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.middle_column', 'message': 'middle column list_active_instances call', 'data': {'perf': time.perf_counter(), 'caller': 'middle_column'}, 'hypothesisId': 'H_CALLS'}) + '\n')
+            except Exception:
+                pass
+            # #endregion
             with ui.column().classes("dashboard-column column-middle gap-2"):
                 # Top half: Active Tasks in 2 nested columns
                 with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;").props('id="tas-active-tasks" data-tooltip-id="active_tasks"'):
@@ -5735,6 +5989,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                     else:
                         active = im.list_active_instances(user_id=current_user_id)
                         current_task = get_current_task()
+                    # #region agent log
+                    _t_after_active = time.perf_counter()
+                    debug_log('dashboard.py:middle_column', 'after list_active_instances + get_current_task', {'ts': _t_after_active, 'elapsed_s': round(_t_after_active - _t_mid_start, 3)}, 'DASH_MID')
+                    # #endregion
                     # Filter out current task from active list
                     active_not_current = [a for a in active if a.get('instance_id') != (current_task.get('instance_id') if current_task else None)]
                     
@@ -5745,6 +6003,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         task_map = {r['task_id']: r for r in tasks_df.to_dict('records')} if tasks_df is not None and not tasks_df.empty else {}
                     except Exception:
                         task_map = {}
+                    # #region agent log
+                    _t_after_get_all = time.perf_counter()
+                    debug_log('dashboard.py:middle_column', 'after get_all (middle column done)', {'ts': _t_after_get_all, 'elapsed_since_active_s': round(_t_after_get_all - _t_after_active, 3), 'total_mid_s': round(_t_after_get_all - _t_mid_start, 3)}, 'DASH_MID')
+                    # #endregion
 
                     total_time_by_type = {'Work': 0, 'Play': 0, 'Self care': 0, 'Sleep': 0}
                     total_time = 0
@@ -5922,14 +6184,17 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         debug_log('dashboard.py:4681', 'Error attaching initialized tasks search handler', {'error': str(e)}, 'H2')
                         # #endregion
                     
-                    # Call refresh - it will retry automatically if container not ready
-                    # #region agent log
-                    debug_log('dashboard.py:4686', 'About to call initial refresh_initialized_tasks', {'container_exists': initialized_tasks_container is not None}, 'H5')
-                    # #endregion
-                    refresh_initialized_tasks()
-                    # #region agent log
-                    debug_log('dashboard.py:4688', 'Initial refresh_initialized_tasks completed', {'container_exists': initialized_tasks_container is not None}, 'H5')
-                    # #endregion
+                    # Defer refresh so first paint is instant
+                    def _deferred_refresh_initialized():
+                        try:
+                            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                                _f.write(json.dumps({'id': 'timer_fired', 'location': 'dashboard', 'message': 'timer phase', 'data': {'phase': 'refresh_initialized', 'perf': time.perf_counter()}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
+                        except Exception:
+                            pass
+                        debug_log('dashboard.py:4686', 'About to call initial refresh_initialized_tasks', {'container_exists': initialized_tasks_container is not None}, 'H5')
+                        refresh_initialized_tasks()
+                        debug_log('dashboard.py:4688', 'Initial refresh_initialized_tasks completed', {'container_exists': initialized_tasks_container is not None}, 'H5')
+                    ui.timer(0.15, _deferred_refresh_initialized, once=True)
                 
                 # Bottom half: Current Task
                 with ui.column().classes("scrollable-section").style("height: 50%; max-height: 50%;"):
@@ -6064,7 +6329,23 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
             # ====================================================================
             with ui.column().classes("dashboard-column column-right gap-2"):
                 # Recommendations Section
+                # #region agent log
+                _t_rec0 = time.perf_counter()
+                # #endregion
                 build_recommendations_section()
+                # #region agent log
+                _t_rec1 = time.perf_counter()
+                try:
+                    with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
+                        _f.write(json.dumps({'id': 'dash_rec', 'timestamp': int(time.time() * 1000), 'location': 'dashboard.build_dashboard', 'message': 'build_recommendations_section done', 'data': {'rec_s': round(_t_rec1 - _t_rec0, 2)}, 'hypothesisId': 'DASH_REC'}) + '\n')
+                except Exception:
+                    pass
+                # #endregion
+    _sync_build_s = time.perf_counter() - _t_dash_start
+    print(f"[Dashboard] sync build done: {_sync_build_s:.2f}s (login -> first paint)")
+    # #region agent log
+    debug_log('dashboard.py:build_dashboard', 'build_dashboard layout done', {'ts': time.perf_counter(), 'sync_build_s': round(_sync_build_s, 2)}, 'DASH_END')
+    # #endregion
 
 
 def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
@@ -7062,8 +7343,7 @@ def build_recommendations_section():
         
         # Recommendations container
         rec_container = ui.column().classes("w-full")
-        
-        # Initial render
+        # Initial render (sync so client gets full page and does not timeout waiting for deferred updates)
         refresh_recommendations(rec_container, selected_metrics_state, metric_key_map, recommendation_mode['value'])
 
 
@@ -7237,7 +7517,7 @@ def refresh_recommendations(target_container, selected_metrics=None, metric_key_
                 'relief_score': 'Relief Score',
                 'urgency_score': 'Urgency',
                 'cognitive_load': 'Cognitive Load',
-                'emotional_load': 'Emotional Load',
+                'emotional_load': 'Emotional intensity',
                 'physical_load': 'Physical Load',
                 'stress_level': 'Stress Level',
                 'behavioral_score': 'Behavioral Score',

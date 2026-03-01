@@ -3109,43 +3109,88 @@ class Analytics:
         except Exception as e:
             print(f"[Analytics] WARNING: Could not get user_id from auth: {e}")
             return None
-    
+
+    def load_instances_once(
+        self, user_id: Optional[int] = None
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Load instances once and return (df_all, df_completed). Use for batched metric calls to avoid repeated loads."""
+        user_id = self._get_user_id(user_id)
+        df_all = self._load_instances(user_id=user_id)
+        if df_all.empty:
+            return df_all, pd.DataFrame()
+        completed_mask = df_all['completed_at'].astype(str).str.len() > 0
+        df_completed = df_all.loc[completed_mask].copy() if completed_mask.any() else pd.DataFrame()
+        return df_all, df_completed
+
     def _load_instances(self, completed_only: bool = False, user_id: Optional[int] = None) -> pd.DataFrame:
         """Load instances from database or CSV.
-        
+
         Uses caching to avoid repeated database queries. Cache is TTL-based (5 minutes)
         and can be invalidated by calling _invalidate_instances_cache().
-        
+
         Args:
             completed_only: If True, only load completed instances (optimization for relief_summary)
             user_id: User ID to filter by (required for data isolation)
         """
+        # #region agent log
+        import time as _time
+        _load_start = _time.perf_counter()
+        _log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cursor', 'debug.log')
+        try:
+            with open(_log_path, 'a', encoding='utf-8') as _f:
+                _f.write(json.dumps({'hypothesisId': 'H1', 'location': 'analytics._load_instances.entry', 'message': 'load_instances called', 'data': {'completed_only': completed_only, 'user_id': user_id}, 'timestamp': int(_time.time() * 1000)}) + '\n')
+        except Exception:
+            pass
+        # #endregion
         try:
             from backend.n1_debug import log_load_instances
             log_load_instances(completed_only, user_id)
         except Exception:
             pass
         import time
-        
+
         # Check cache first - cache is now user-specific, keyed by user_id.
         # Normalize to str so int and str same value (e.g. 1 and "1") hit the same cache.
         cache_key = str(user_id) if user_id is not None else "default"
         current_time = time.time()
-        
+
         if completed_only:
             # Check completed instances cache for this user
             if (cache_key in self._instances_cache_completed and 
                 cache_key in self._instances_cache_completed_time and
                 (current_time - self._instances_cache_completed_time[cache_key]) < self._cache_ttl_seconds):
+                # #region agent log
+                try:
+                    _dur = (_time.perf_counter() - _load_start) * 1000
+                    with open(_log_path, 'a', encoding='utf-8') as _f:
+                        _f.write(json.dumps({'hypothesisId': 'H1', 'location': 'analytics._load_instances.return', 'message': 'cache hit', 'data': {'cache_hit': True, 'duration_ms': round(_dur, 2), 'completed_only': completed_only}, 'timestamp': int(_time.time() * 1000)}) + '\n')
+                except Exception:
+                    pass
+                # #endregion
                 return self._instances_cache_completed[cache_key].copy()
         else:
             # Check all instances cache for this user
             if (cache_key in self._instances_cache_all and 
                 cache_key in self._instances_cache_all_time and
                 (current_time - self._instances_cache_all_time[cache_key]) < self._cache_ttl_seconds):
+                # #region agent log
+                try:
+                    _dur = (_time.perf_counter() - _load_start) * 1000
+                    with open(_log_path, 'a', encoding='utf-8') as _f:
+                        _f.write(json.dumps({'hypothesisId': 'H1', 'location': 'analytics._load_instances.return', 'message': 'cache hit', 'data': {'cache_hit': True, 'duration_ms': round(_dur, 2), 'completed_only': completed_only}, 'timestamp': int(_time.time() * 1000)}) + '\n')
+                except Exception:
+                    pass
+                # #endregion
                 return self._instances_cache_all[cache_key].copy()
-        
+
         # Cache miss or expired - load from database/CSV
+        # #region agent log
+        try:
+            with open(_log_path, 'a', encoding='utf-8') as _f:
+                _f.write(json.dumps({'hypothesisId': 'H1', 'location': 'analytics._load_instances.miss', 'message': 'cache miss', 'data': {'cache_hit': False, 'completed_only': completed_only}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except Exception:
+            pass
+        # #endregion
         # Default to database (SQLite) unless USE_CSV is explicitly set
         use_csv = os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes')
         
@@ -3361,6 +3406,23 @@ class Analytics:
                             df.loc[missing_net_relief, 'expected_relief']
                         )
                     
+                    # Net emotional: actual emotional intensity minus expected (misperception)
+                    if 'net_emotional' in df.columns:
+                        df['net_emotional'] = pd.to_numeric(df['net_emotional'], errors='coerce')
+                    else:
+                        df['net_emotional'] = None
+                    expected_emotional_series = df['predicted_dict'].apply(
+                        lambda r: (r.get('expected_emotional_load') or r.get('expected_emotional'))
+                        if isinstance(r, dict) else None
+                    )
+                    expected_emotional_series = pd.to_numeric(expected_emotional_series, errors='coerce')
+                    missing_net_emotional = df['net_emotional'].isna()
+                    if missing_net_emotional.any():
+                        df.loc[missing_net_emotional, 'net_emotional'] = (
+                            df.loc[missing_net_emotional, 'emotional_load_numeric']
+                            - expected_emotional_series.loc[missing_net_emotional]
+                        )
+                    
                     # Positive = actual relief exceeded expectations (pleasant surprise)
                     # Negative = actual relief fell short of expectations (disappointment)
                     # Zero = actual relief matched expectations (accurate prediction)
@@ -3400,6 +3462,18 @@ class Analytics:
                     relief_norm = pd.to_numeric(df['relief_score_numeric'], errors='coerce').fillna(50.0)
                     correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
                     df['stress_relief_correlation_score'] = correlation_raw.clip(0.0, 100.0).round(2)
+                    
+                    # Stress misperception: direct (actual_stress) minus derived (stress_level)
+                    actual_stress_series = df['actual_dict'].apply(
+                        lambda r: r.get('actual_stress') if isinstance(r, dict) else None
+                    )
+                    actual_stress_series = pd.to_numeric(actual_stress_series, errors='coerce')
+                    df['actual_stress'] = actual_stress_series
+                    df['stress_misperception'] = np.where(
+                        actual_stress_series.notna(),
+                        actual_stress_series - df['stress_level'],
+                        np.nan
+                    )
                     
                     # Calculate behavioral_score (simplified version - full version is in CSV path)
                     # Vectorized: directly convert existing column if present
@@ -3442,7 +3516,15 @@ class Analytics:
                             if completed_mask.any():
                                 self._instances_cache_completed[write_key] = df.loc[completed_mask].copy()
                                 self._instances_cache_completed_time[write_key] = time.time()
-                    
+
+                    # #region agent log
+                    try:
+                        _dur_ms = (_time.perf_counter() - _load_start) * 1000
+                        with open(_log_path, 'a', encoding='utf-8') as _f:
+                            _f.write(json.dumps({'hypothesisId': 'H1', 'location': 'analytics._load_instances.return_db', 'message': 'cache miss load done (DB)', 'data': {'cache_hit': False, 'duration_ms': round(_dur_ms, 2), 'completed_only': completed_only, 'n_rows': len(df)}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                    except Exception:
+                        pass
+                    # #endregion
                     return df
                 finally:
                     session.close()
@@ -3653,6 +3735,23 @@ class Analytics:
                 df.loc[missing_net_relief, 'expected_relief']
             )
         
+        # Net emotional: actual emotional intensity minus expected (misperception)
+        if 'net_emotional' in df.columns:
+            df['net_emotional'] = pd.to_numeric(df['net_emotional'], errors='coerce')
+        else:
+            df['net_emotional'] = None
+        expected_emotional_main = df['predicted_dict'].apply(
+            lambda r: (r.get('expected_emotional_load') or r.get('expected_emotional'))
+            if isinstance(r, dict) else None
+        )
+        expected_emotional_main = pd.to_numeric(expected_emotional_main, errors='coerce')
+        missing_net_emotional_main = df['net_emotional'].isna()
+        if missing_net_emotional_main.any():
+            df.loc[missing_net_emotional_main, 'net_emotional'] = (
+                df.loc[missing_net_emotional_main, 'emotional_load_numeric']
+                - expected_emotional_main.loc[missing_net_emotional_main]
+            )
+        
         # Positive = actual relief exceeded expectations (pleasant surprise)
         # Negative = actual relief fell short of expectations (disappointment)
         # Zero = actual relief matched expectations (accurate prediction)
@@ -3702,6 +3801,18 @@ class Analytics:
         correlation_raw = (relief_norm - stress_norm + 100.0) / 2.0
         # Normalize to 0-100 range (theoretical range is 0-100, but clamp for safety)
         df['stress_relief_correlation_score'] = correlation_raw.clip(0.0, 100.0).round(2)
+        
+        # Stress misperception: direct (actual_stress) minus derived (stress_level)
+        actual_stress_main = df['actual_dict'].apply(
+            lambda r: r.get('actual_stress') if isinstance(r, dict) else None
+        )
+        actual_stress_main = pd.to_numeric(actual_stress_main, errors='coerce')
+        df['actual_stress'] = actual_stress_main
+        df['stress_misperception'] = np.where(
+            actual_stress_main.notna(),
+            actual_stress_main - df['stress_level'],
+            np.nan
+        )
         
         # Auto-calculate behavioral_score: how well you adhered to planned behaviour
         # Now includes obstacles overcome component for significant bonus
@@ -4357,22 +4468,22 @@ class Analytics:
             # Calculate ratio: actual / estimate (1.0 = perfect, >1 = took longer, <1 = took less)
             time_accuracy = _avg(valid_time_comparisons['time_actual_num'] / valid_time_comparisons['time_estimate_num'])
         
-        # Calculate life balance (only if needed)
+        # Calculate life balance (only if needed). Pass completed df to avoid extra _load_instances.
         life_balance = {}
         if needs_metric('life_balance_score') or needs_metric('balance_score'):
-            life_balance = self.get_life_balance()
+            life_balance = self.get_life_balance(user_id=user_id, instances_completed_df=completed)
         else:
             life_balance = {'balance_score': 50.0}  # Default value
-        
-        # Calculate daily work volume metrics (only if needed)
+
+        # Calculate daily work volume metrics (only if needed). Pass df when we have it to avoid extra _load_instances.
         work_volume_metrics = {}
         avg_daily_work_time = 0.0
         work_volume_score = 0.0
         work_consistency_score = 50.0
-        if (needs_metric('work_volume_score') or needs_metric('work_consistency_score') or 
+        if (needs_metric('work_volume_score') or needs_metric('work_consistency_score') or
             needs_metric('avg_daily_work_time') or needs_metric('productivity_potential_score') or
             needs_metric('composite_productivity_score') or needs_metric('volumetric_productivity_score')):
-            work_volume_metrics = self.get_daily_work_volume_metrics(days=30)
+            work_volume_metrics = self.get_daily_work_volume_metrics(days=30, user_id=user_id, instances_df=df)
             avg_daily_work_time = work_volume_metrics.get('avg_daily_work_time', 0.0)
             work_volume_score = work_volume_metrics.get('work_volume_score', 0.0)
             work_consistency_score = work_volume_metrics.get('work_consistency_score', 50.0)
@@ -4709,14 +4820,19 @@ class Analytics:
         print(f"[Analytics] get_dashboard_metrics: {duration:.2f}ms")
         return result
 
-    def get_life_balance(self, user_id: Optional[int] = None) -> Dict[str, Any]:
+    def get_life_balance(
+        self,
+        user_id: Optional[int] = None,
+        instances_completed_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, Any]:
         """Calculate life balance metric comparing work and play task amounts.
 
-        Optimized: loads only completed instances, uses single-pass aggregation,
-        and caches result for TTL to reduce repeated work from get_dashboard_metrics.
+        Optimized: loads only completed instances (or uses instances_completed_df when provided),
+        uses single-pass aggregation, and caches result for TTL.
 
         Args:
             user_id: Optional user_id. If None, gets from authenticated session.
+            instances_completed_df: Optional pre-loaded completed instances. When provided, skips _load_instances.
 
         Returns:
             Dict with work_count, play_count, work_time_minutes, play_time_minutes,
@@ -4742,8 +4858,10 @@ class Analytics:
             'work_play_ratio': 0.0,
         }
 
-        # Load only completed instances (avoids loading all instances + slow completed_at filter)
-        df = self._load_instances(completed_only=True, user_id=user_id)
+        if instances_completed_df is not None:
+            df = instances_completed_df
+        else:
+            df = self._load_instances(completed_only=True, user_id=user_id)
         if df.empty:
             return empty_result
 
@@ -4800,16 +4918,22 @@ class Analytics:
         Analytics._life_balance_cache_time[cache_key] = time_module.time()
         return result
 
-    def get_daily_work_volume_metrics(self, days: int = 30, user_id: Optional[int] = None) -> Dict[str, any]:
+    def get_daily_work_volume_metrics(
+        self,
+        days: int = 30,
+        user_id: Optional[int] = None,
+        instances_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, any]:
         """Calculate daily work volume metrics including average work time, volume score, and consistency.
-        
-        Uses work time history data to calculate metrics. Includes all days in the period
-        (with 0 for days with no work) for accurate consistency calculation.
-        
+
+        Uses work time history data to calculate metrics. When instances_df is provided (e.g. from
+        get_analytics_page_data batch), skips _load_instances to avoid redundant load.
+
         Args:
             days: Number of days to analyze (default 30)
             user_id: Optional user_id. If None, gets from authenticated session.
-            
+            instances_df: Optional pre-loaded instances (all). When provided, skips _load_instances.
+
         Returns:
             Dict with:
             - avg_daily_work_time: Average work time per day (only counting days with work)
@@ -4823,8 +4947,11 @@ class Analytics:
             - days_with_work: Same as work_days_count
         """
         user_id = self._get_user_id(user_id)
-        df = self._load_instances(user_id=user_id)
-        
+        if instances_df is not None:
+            df = instances_df
+        else:
+            df = self._load_instances(user_id=user_id)
+
         # Calculate date range for history (needed for all return cases)
         cutoff_date = datetime.now() - timedelta(days=days)
         date_range = pd.date_range(start=cutoff_date.date(), end=datetime.now().date(), freq='D')
@@ -5456,76 +5583,85 @@ class Analytics:
         
         return round(float(composite), 1)
 
-    def get_all_scores_for_composite(self, days: int = 7, metrics: Optional[List[str]] = None, user_id: Optional[int] = None) -> Dict[str, float]:
+    def get_all_scores_for_composite(
+        self,
+        days: int = 7,
+        metrics: Optional[List[str]] = None,
+        user_id: Optional[int] = None,
+        metrics_data: Optional[Dict] = None,
+        relief_summary: Optional[Dict] = None,
+        time_tracking_data: Optional[Dict] = None,
+    ) -> Dict[str, float]:
         """Get all available scores, bonuses, and penalties for composite score calculation.
         
         Returns a dictionary of component_name -> score_value that can be used
         with calculate_composite_score().
         
         Cached for 5 minutes to improve performance (this is an expensive operation).
+        When metrics_data, relief_summary, and time_tracking_data are provided, uses them
+        instead of fetching (for batched calls like get_analytics_page_data).
         
         Args:
             days: Number of days to analyze for time-based metrics
             metrics: Optional list of metric keys to calculate. If None, calculates all metrics.
-                    Examples: ['avg_stress_level', 'work_volume_score', 'completion_rate']
             user_id: Optional user_id. If None, gets from authenticated session.
+            metrics_data: Optional pre-fetched dashboard metrics (from get_dashboard_metrics).
+            relief_summary: Optional pre-fetched relief summary.
+            time_tracking_data: Optional pre-fetched time tracking consistency result.
             
         Returns:
             Dict with component_name -> score_value (0-100 range where applicable)
         """
         user_id = self._get_user_id(user_id)
         import time as time_module
-        
+
         start = time_module.perf_counter()
-        
+        use_prefetched = (
+            metrics_data is not None
+            and relief_summary is not None
+            and time_tracking_data is not None
+        )
+
         # Determine which metrics to calculate
         if metrics is not None:
             requested_metrics = set(metrics)
-            
-            # Helper function to check if a metric is needed
+
             def needs_metric(key: str) -> bool:
                 return key in requested_metrics
         else:
             requested_metrics = None
-            
-            # Helper function that always returns True when calculating all
+
             def needs_metric(key: str) -> bool:
                 return True
-        
-        # Check cache (only if calculating all metrics)
-        # Cache is now user-specific, keyed by user_id. Normalize to str for consistent hits.
-        if requested_metrics is None:
+
+        # Check cache (only if calculating all metrics and not using pre-fetched data)
+        if requested_metrics is None and not use_prefetched:
             current_time = time_module.time()
             cache_key = str(user_id) if user_id is not None else "default"
-            if (cache_key in Analytics._composite_scores_cache and 
+            if (cache_key in Analytics._composite_scores_cache and
                 cache_key in Analytics._composite_scores_cache_time and
                 (current_time - Analytics._composite_scores_cache_time[cache_key]) < Analytics._cache_ttl_seconds):
                 duration = (time_module.perf_counter() - start) * 1000
                 print(f"[Analytics] get_all_scores_for_composite (cached): {duration:.2f}ms")
-                return Analytics._composite_scores_cache[cache_key].copy()  # Return copy to prevent mutation
-        
+                return Analytics._composite_scores_cache[cache_key].copy()
+
         scores = {}
-        
-        # Determine which dashboard metrics we need
-        dashboard_metric_keys = []
-        if requested_metrics is None:
-            # Need all dashboard metrics
+
+        if not use_prefetched:
             dashboard_metric_keys = None
-        else:
-            # Map composite metric names to dashboard metric names
-            if needs_metric('avg_stress_level') or needs_metric('avg_net_wellbeing') or needs_metric('avg_stress_efficiency') or needs_metric('avg_relief'):
-                dashboard_metric_keys = ['quality.avg_stress_level', 'quality.avg_net_wellbeing_normalized', 'quality.avg_stress_efficiency', 'quality.avg_relief']
-            if needs_metric('work_volume_score') or needs_metric('work_consistency_score'):
-                dashboard_metric_keys.extend(['productivity_volume.work_volume_score', 'productivity_volume.work_consistency_score'])
-            if needs_metric('life_balance_score'):
-                dashboard_metric_keys.append('life_balance_score')
-            if needs_metric('completion_rate'):
-                dashboard_metric_keys.append('counts.completion_rate')
-            if needs_metric('self_care_frequency'):
-                dashboard_metric_keys.append('counts.avg_daily_self_care_tasks')
-        
-        # Get dashboard metrics (selectively if requested)
-        metrics_data = self.get_dashboard_metrics(metrics=dashboard_metric_keys, user_id=user_id)
+            if requested_metrics is not None:
+                dashboard_metric_keys = []
+                if needs_metric('avg_stress_level') or needs_metric('avg_net_wellbeing') or needs_metric('avg_stress_efficiency') or needs_metric('avg_relief'):
+                    dashboard_metric_keys = ['quality.avg_stress_level', 'quality.avg_net_wellbeing_normalized', 'quality.avg_stress_efficiency', 'quality.avg_relief']
+                if needs_metric('work_volume_score') or needs_metric('work_consistency_score'):
+                    dashboard_metric_keys.extend(['productivity_volume.work_volume_score', 'productivity_volume.work_consistency_score'])
+                if needs_metric('life_balance_score'):
+                    dashboard_metric_keys.append('life_balance_score')
+                if needs_metric('completion_rate'):
+                    dashboard_metric_keys.append('counts.completion_rate')
+                if needs_metric('self_care_frequency'):
+                    dashboard_metric_keys.append('counts.avg_daily_self_care_tasks')
+            metrics_data = self.get_dashboard_metrics(metrics=dashboard_metric_keys, user_id=user_id)
         
         # Quality scores (0-100 range)
         if needs_metric('avg_stress_level') or needs_metric('avg_net_wellbeing') or needs_metric('avg_stress_efficiency') or needs_metric('avg_relief'):
@@ -5554,15 +5690,14 @@ class Analytics:
         
         # Relief summary (only if needed)
         if needs_metric('weekly_relief_score'):
-            relief_summary = self.get_relief_summary(user_id=user_id)
-            # Normalize weekly relief to 0-100 (assuming typical range 0-1000)
-            weekly_relief = float(relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0))
+            rel_summary = relief_summary if use_prefetched else self.get_relief_summary(user_id=user_id)
+            weekly_relief = float(rel_summary.get('weekly_relief_score_with_bonus_robust', 0.0))
             scores['weekly_relief_score'] = min(100.0, weekly_relief / 10.0)  # Scale down if needed
-        
+
         # Time tracking consistency score (only if needed)
         if needs_metric('tracking_consistency_score'):
-            tracking_data = self.calculate_time_tracking_consistency_score(days=days, user_id=user_id)
-            scores['tracking_consistency_score'] = float(tracking_data.get('tracking_consistency_score', 0.0))
+            ttd = time_tracking_data if use_prefetched else self.calculate_time_tracking_consistency_score(days=days, user_id=user_id)
+            scores['tracking_consistency_score'] = float(ttd.get('tracking_consistency_score', 0.0))
         
         # Counts (normalize to 0-100)
         if needs_metric('completion_rate') or needs_metric('self_care_frequency'):
@@ -8755,9 +8890,12 @@ class Analytics:
         
         return result
 
-    def get_weekly_hours_history(self) -> Dict[str, any]:
+    def get_weekly_hours_history(
+        self, user_id: Optional[int] = None, instances_df: Optional[pd.DataFrame] = None
+    ) -> Dict[str, any]:
         """Get historical daily productivity hours data for trend analysis (last 90 days).
         
+        When instances_df is provided (e.g. from batched load), skips _load_instances.
         Productivity includes only Work and Self care tasks, not Play tasks.
         
         Returns:
@@ -8784,8 +8922,11 @@ class Analytics:
         except: pass
         # #endregion
         
-        user_id = self._get_user_id(None)
-        df = self._load_instances(user_id=user_id)
+        user_id = self._get_user_id(user_id)
+        if instances_df is not None and not instances_df.empty:
+            df = instances_df
+        else:
+            df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9036,8 +9177,13 @@ class Analytics:
             'days_with_data': days_with_data,
         }
 
-    def get_weekly_productivity_history(self) -> Dict[str, any]:
+    def get_weekly_productivity_history(
+        self, user_id: Optional[int] = None, instances_df: Optional[pd.DataFrame] = None
+    ) -> Dict[str, any]:
         """Get historical daily productivity score data for trend analysis (last 90 days).
+
+        When instances_df is provided (e.g. from get_targeted_metric_values batching),
+        skips _load_instances to avoid redundant load and timeout.
 
         Returns:
             Dict with 'dates' (list of date strings), 'productivity_scores' (list of scores per day),
@@ -9045,8 +9191,11 @@ class Analytics:
         """
         from datetime import timedelta
 
-        user_id = self._get_user_id(None)
-        df = self._load_instances(user_id=user_id)
+        user_id = self._get_user_id(user_id)
+        if instances_df is not None and not instances_df.empty:
+            df = instances_df
+        else:
+            df = self._load_instances(user_id=user_id)
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
@@ -9409,23 +9558,12 @@ class Analytics:
         
         return result
 
-    def get_generic_metric_history(self, metric_key: str, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
-        """Get historical daily data for a generic metric (e.g., stress_level, net_wellbeing).
-        
-        Extracts metric values from completed task instances and groups by date.
-        
-        For stored metrics (stress_level, net_wellbeing, etc.), extracts from actual_dict.
-        For calculated metrics (execution_score, grit_score, etc.), returns empty history
-        to avoid expensive recalculation during initial load.
-        
-        Args:
-            metric_key: The metric key to extract (e.g., 'stress_level', 'net_wellbeing')
-            days: Number of days to look back (default 90)
-            user_id: Optional user ID for data isolation; uses auth context if None
-            
-        Returns:
-            Dict with 'dates' (list of date strings), 'values' (list of values per day),
-            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+    def get_generic_metric_history(
+        self, metric_key: str, days: int = 90, user_id: Optional[int] = None,
+        instances_completed_df: Optional[pd.DataFrame] = None
+    ) -> Dict[str, any]:
+        """Get historical daily data for a generic metric.
+        When instances_completed_df is provided, passes to routed methods / skips _load_instances.
         """
         from datetime import datetime, timedelta
         import time as time_module
@@ -9438,9 +9576,6 @@ class Analytics:
         except: pass
         # #endregion
         
-        # Metrics that have optimized history methods
-        # Route to specific methods instead of generic extraction for better performance
-        # This avoids expensive JSON parsing for each row and uses direct dataframe column access
         metric_routes = {
             'execution_score': self.get_execution_score_history,
             'grit_score': self.get_grit_score_history,
@@ -9469,21 +9604,21 @@ class Analytics:
         }
         
         if metric_key in metric_routes:
-            # Use provided user_id or fall back to auth context
             uid = user_id if user_id is not None else self._get_user_id(None)
-            # Route to specific method with user_id if it accepts it
             routed_method = metric_routes[metric_key]
-            # Check if method accepts user_id parameter
             import inspect
             sig = inspect.signature(routed_method)
-            if 'user_id' in sig.parameters:
-                return routed_method(days=days, user_id=uid)
-            else:
-                return routed_method(days=days)
+            kwargs = {'days': days, 'user_id': uid} if 'user_id' in sig.parameters else {'days': days}
+            if 'instances_completed_df' in sig.parameters and instances_completed_df is not None:
+                kwargs['instances_completed_df'] = instances_completed_df
+            return routed_method(**kwargs)
         
         uid = user_id if user_id is not None else self._get_user_id(None)
-        df = self._load_instances(completed_only=True, user_id=uid)
-        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if instances_completed_df is not None and not instances_completed_df.empty:
+            completed = instances_completed_df.copy()
+        else:
+            df = self._load_instances(completed_only=True, user_id=uid)
+            completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
             return {
@@ -9953,25 +10088,22 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_stress_level_history(self, days: int = 90, user_id: Optional[int] = None) -> Dict[str, any]:
+    def get_stress_level_history(
+        self, days: int = 90, user_id: Optional[int] = None,
+        instances_completed_df: Optional[pd.DataFrame] = None
+    ) -> Dict[str, any]:
         """Get historical daily stress_level data for trend analysis.
         
-        Optimized method that extracts stress_level directly from dataframe columns
-        instead of parsing JSON, providing significant performance improvement.
-        
-        Args:
-            days: Number of days to look back (default 90)
-            user_id: Optional user ID for data isolation
-            
-        Returns:
-            Dict with 'dates' (list of date strings), 'values' (list of values per day),
-            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        When instances_completed_df is provided, skips _load_instances.
         """
         from datetime import datetime, timedelta
         
         user_id = self._get_user_id(user_id)
-        df = self._load_instances(completed_only=True, user_id=user_id)
-        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        if instances_completed_df is not None and not instances_completed_df.empty:
+            completed = instances_completed_df.copy()
+        else:
+            df = self._load_instances(completed_only=True, user_id=user_id)
+            completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty or 'stress_level' not in completed.columns:
             return {
@@ -10609,23 +10741,21 @@ class Analytics:
             'three_month_average': three_month_average,
         }
     
-    def get_net_relief_history(self, days: int = 90) -> Dict[str, any]:
+    def get_net_relief_history(
+        self, days: int = 90, user_id: Optional[int] = None,
+        instances_completed_df: Optional[pd.DataFrame] = None
+    ) -> Dict[str, any]:
         """Get historical daily net_relief data for trend analysis.
-        
-        Optimized method that extracts net_relief directly from dataframe columns.
-        
-        Args:
-            days: Number of days to look back (default 90)
-            
-        Returns:
-            Dict with 'dates' (list of date strings), 'values' (list of values per day),
-            'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
+        When instances_completed_df is provided, skips _load_instances.
         """
         from datetime import datetime, timedelta
         
-        user_id = self._get_user_id(None)
-        df = self._load_instances(completed_only=True, user_id=user_id)
-        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        user_id = self._get_user_id(user_id)
+        if instances_completed_df is not None and not instances_completed_df.empty:
+            completed = instances_completed_df.copy()
+        else:
+            df = self._load_instances(completed_only=True, user_id=user_id)
+            completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         
         if completed.empty:
             return {
@@ -14013,6 +14143,112 @@ class Analytics:
             result['time_data'] = time_data
         return result
 
+    def _compute_form_fill_and_slider_stats_from_df(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Compute form fill and slider stats from an existing completed instances DataFrame.
+        Used by get_analytics_page_data to avoid an extra _load_instances call.
+        """
+        if df.empty:
+            return {
+                'avg_init_form_seconds': 0.0,
+                'avg_completion_form_seconds': 0.0,
+                'avg_init_sliders_adjusted': 0.0,
+                'avg_completion_sliders_adjusted': 0.0,
+                'n': 0,
+                'by_task': [],
+            }
+
+        def _float(val, default: float = 0.0) -> float:
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return default
+
+        def _int(val, default: int = 0) -> int:
+            if val is None:
+                return default
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return default
+
+        init_seconds = []
+        completion_seconds = []
+        init_sliders = []
+        completion_sliders = []
+        by_task: Dict[str, Dict[str, Any]] = {}
+
+        for _, row in df.iterrows():
+            pred = row.get('predicted_dict') or {}
+            actual = row.get('actual_dict') or {}
+            if not isinstance(pred, dict):
+                pred = {}
+            if not isinstance(actual, dict):
+                actual = {}
+            task_id = str(row.get('task_id', ''))
+            task_name = str(row.get('task_name', 'Unknown'))
+
+            init_sec = _float(pred.get('init_form_duration_seconds'))
+            comp_sec = _float(actual.get('completion_form_duration_seconds'))
+            init_sl = _int(pred.get('init_sliders_adjusted_count'))
+            comp_sl = _int(actual.get('completion_sliders_adjusted_count'))
+
+            init_seconds.append(init_sec)
+            completion_seconds.append(comp_sec)
+            init_sliders.append(init_sl)
+            completion_sliders.append(comp_sl)
+
+            key = task_id or task_name
+            if key not in by_task:
+                by_task[key] = {
+                    'task_id': task_id,
+                    'task_name': task_name,
+                    'init_seconds': [],
+                    'completion_seconds': [],
+                    'init_sliders': [],
+                    'completion_sliders': [],
+                }
+            by_task[key]['init_seconds'].append(init_sec)
+            by_task[key]['completion_seconds'].append(comp_sec)
+            by_task[key]['init_sliders'].append(init_sl)
+            by_task[key]['completion_sliders'].append(comp_sl)
+
+        n = len(init_seconds)
+        by_task_list = []
+        for k, v in by_task.items():
+            inits = v['init_seconds']
+            comps = v['completion_seconds']
+            isl = v['init_sliders']
+            csl = v['completion_sliders']
+            count = len(inits)
+            by_task_list.append({
+                'task_id': v['task_id'],
+                'task_name': v['task_name'],
+                'count': count,
+                'avg_init_form_seconds': sum(inits) / count if count else 0.0,
+                'avg_completion_form_seconds': sum(comps) / count if count else 0.0,
+                'avg_init_sliders_adjusted': sum(isl) / count if count else 0.0,
+                'avg_completion_sliders_adjusted': sum(csl) / count if count else 0.0,
+            })
+
+        return {
+            'avg_init_form_seconds': sum(init_seconds) / n if n else 0.0,
+            'avg_completion_form_seconds': sum(completion_seconds) / n if n else 0.0,
+            'avg_init_sliders_adjusted': sum(init_sliders) / n if n else 0.0,
+            'avg_completion_sliders_adjusted': sum(completion_sliders) / n if n else 0.0,
+            'n': n,
+            'by_task': by_task_list,
+        }
+
+    def get_form_fill_and_slider_stats(self, user_id: Optional[int] = None) -> Dict[str, Any]:
+        """Get form fill time and slider-adjustment stats from completed instances.
+        Prefer using form_fill_slider_stats from get_analytics_page_data() to avoid an extra load.
+        """
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
+        return self._compute_form_fill_and_slider_stats_from_df(df)
+
     def get_emotional_flow_data(self, user_id: Optional[int] = None) -> Dict[str, any]:
         """Get comprehensive emotional flow data for analytics.
         
@@ -14244,31 +14480,49 @@ class Analytics:
     
     def get_analytics_page_data(self, days: int = 7, user_id: Optional[int] = None) -> Dict[str, any]:
         """Batched method to get all main analytics page data in one call.
-        
+
         Combines:
         - get_dashboard_metrics()
         - get_relief_summary()
         - calculate_time_tracking_consistency_score()
-        
+
         This reduces multiple sequential calls to a single batched call.
-        
+
         Args:
             days: Number of days for time tracking consistency (default 7)
             user_id: User ID for data isolation
-        
+
         Returns:
             Dict with keys: 'dashboard_metrics', 'relief_summary', 'time_tracking'
         """
         import time
         start = time.perf_counter()
+        # #region agent log
+        _log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cursor', 'debug.log')
+        try:
+            with open(_log_path, 'a', encoding='utf-8') as _f:
+                _f.write(json.dumps({'hypothesisId': 'H3', 'location': 'analytics.get_analytics_page_data.entry', 'message': 'get_analytics_page_data started', 'data': {}, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except Exception:
+            pass
+        # #endregion
 
         # Get user_id if not provided
         user_id = self._get_user_id(user_id)
+        if user_id is None:
+            # Avoid _load_instances(None) which bypasses cache and can cause slow/missing data
+            return {
+                'dashboard_metrics': {},
+                'relief_summary': {},
+                'time_tracking': {},
+                'form_fill_slider_stats': {},
+                'composite_components': {},
+                '_timing_breakdown': {'load_instances_ms': 0, 'total_ms': 0},
+            }
 
-        # Load instances once and pass to all three sub-calls to avoid redundant _load_instances
-        # (reduces I/O and helps stay under NiceGUI connection timeout)
-        df_all = self._load_instances(user_id=user_id)
-        df_completed = self._load_instances(completed_only=True, user_id=user_id)
+        # Single load then pass to sub-calls (avoids two ~2.4s DB hits and reduces timeout risk)
+        t0 = time.perf_counter()
+        df_all, df_completed = self.load_instances_once(user_id=user_id)
+        load_ms = (time.perf_counter() - t0) * 1000
 
         t0 = time.perf_counter()
         dashboard_metrics = self.get_dashboard_metrics(user_id=user_id, instances_df=df_all)
@@ -14281,21 +14535,61 @@ class Analytics:
             days=days, user_id=user_id, instances_df=df_all
         )
         tt_ms = (time.perf_counter() - t0) * 1000
+        t0 = time.perf_counter()
+        form_fill_slider_stats = self._compute_form_fill_and_slider_stats_from_df(df_completed)
+        ff_ms = (time.perf_counter() - t0) * 1000
+
+        # Composite score components from same batch (so one dataset, consistent value; no extra load)
+        t0 = time.perf_counter()
+        composite_components = self.get_all_scores_for_composite(
+            days=days,
+            user_id=user_id,
+            metrics_data=dashboard_metrics,
+            relief_summary=relief_summary,
+            time_tracking_data=time_tracking,
+        )
+        comp_ms = (time.perf_counter() - t0) * 1000
 
         duration = (time.perf_counter() - start) * 1000
-        print(f"[Analytics] get_analytics_page_data (batched): {duration:.2f}ms")
+        timing_breakdown = {
+            'load_instances_ms': round(load_ms, 1),
+            'dashboard_metrics_ms': round(dm_ms, 1),
+            'relief_summary_ms': round(rs_ms, 1),
+            'time_tracking_ms': round(tt_ms, 1),
+            'form_fill_ms': round(ff_ms, 1),
+            'composite_components_ms': round(comp_ms, 1),
+            'total_ms': round(duration, 1),
+        }
+        print(
+            "[Analytics] get_analytics_page_data breakdown: "
+            f"load={timing_breakdown['load_instances_ms']}ms "
+            f"dashboard_metrics={timing_breakdown['dashboard_metrics_ms']}ms "
+            f"relief={timing_breakdown['relief_summary_ms']}ms "
+            f"time_tracking={timing_breakdown['time_tracking_ms']}ms "
+            f"form_fill={timing_breakdown['form_fill_ms']}ms "
+            f"composite={timing_breakdown['composite_components_ms']}ms "
+            f"total={timing_breakdown['total_ms']}ms"
+        )
+        # #region agent log
+        try:
+            with open(_log_path, 'a', encoding='utf-8') as _f:
+                _f.write(json.dumps({'hypothesisId': 'H3', 'location': 'analytics.get_analytics_page_data.end', 'message': 'get_analytics_page_data done', 'data': timing_breakdown, 'timestamp': int(time.time() * 1000)}) + '\n')
+        except Exception:
+            pass
+        # #endregion
         try:
             from backend.instrumentation import log_analytics_event
-            log_analytics_event('get_analytics_page_data_breakdown', duration_ms=duration,
-                               dashboard_metrics_ms=round(dm_ms, 2), relief_summary_ms=round(rs_ms, 2),
-                               time_tracking_ms=round(tt_ms, 2))
+            log_analytics_event('get_analytics_page_data_breakdown', **timing_breakdown)
         except ImportError:
             pass
-        
+
         return {
             'dashboard_metrics': dashboard_metrics,
             'relief_summary': relief_summary,
             'time_tracking': time_tracking,
+            'form_fill_slider_stats': form_fill_slider_stats,
+            'composite_components': composite_components,
+            '_timing_breakdown': timing_breakdown,
         }
     
     def get_chart_data(self, user_id: Optional[int] = None) -> Dict[str, any]:

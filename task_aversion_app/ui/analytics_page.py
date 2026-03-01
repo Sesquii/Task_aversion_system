@@ -1,6 +1,7 @@
 from nicegui import ui
 import json
 import os
+import threading
 import time
 
 import pandas as pd
@@ -953,7 +954,54 @@ def _build_analytics_main_content(
                 "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
                 "Higher tracking consistency means more of your day is logged."
             ).classes("text-sm text-gray-600")
-    
+
+        # Task data entry: time spent filling forms and sliders adjusted (from batched page_data)
+        form_stats = page_data.get('form_fill_slider_stats') or {}
+        with ui.card().classes("p-4 mb-4 bg-slate-50 border border-slate-200"):
+            ui.label("Task data entry").classes("text-xl font-bold mb-2")
+            ui.label(
+                "Time spent on initialization and completion forms; how many sliders you adjust per task."
+            ).classes("text-sm text-gray-600 mb-3")
+            with ui.row().classes("gap-4 flex-wrap"):
+                with ui.card().classes("p-3 min-w-[180px]"):
+                    ui.label("Avg init form time").classes("text-xs text-gray-500")
+                    sec = form_stats.get("avg_init_form_seconds", 0) or 0
+                    ui.label(f"{sec:.1f} s").classes("text-lg font-semibold")
+                    ui.label("(time to fill initialization)").classes("text-xs text-gray-600")
+                with ui.card().classes("p-3 min-w-[180px]"):
+                    ui.label("Avg completion form time").classes("text-xs text-gray-500")
+                    sec = form_stats.get("avg_completion_form_seconds", 0) or 0
+                    ui.label(f"{sec:.1f} s").classes("text-lg font-semibold")
+                    ui.label("(time to fill completion)").classes("text-xs text-gray-600")
+                with ui.card().classes("p-3 min-w-[180px]"):
+                    ui.label("Avg sliders adjusted (init)").classes("text-xs text-gray-500")
+                    val = form_stats.get("avg_init_sliders_adjusted", 0) or 0
+                    ui.label(f"{val:.1f}").classes("text-lg font-semibold")
+                    ui.label("per task (0 = use defaults)").classes("text-xs text-gray-600")
+                with ui.card().classes("p-3 min-w-[180px]"):
+                    ui.label("Avg sliders adjusted (complete)").classes("text-xs text-gray-500")
+                    val = form_stats.get("avg_completion_sliders_adjusted", 0) or 0
+                    ui.label(f"{val:.1f}").classes("text-lg font-semibold")
+                    ui.label("per task").classes("text-xs text-gray-600")
+            n_form = form_stats.get("n", 0) or 0
+            if n_form > 0:
+                ui.label(f"Based on {n_form} completed task(s).").classes("text-xs text-gray-500 mt-2")
+            by_task = form_stats.get("by_task") or []
+            if by_task:
+                ui.label("By task").classes("text-sm font-semibold mt-3 mb-1")
+                with ui.row().classes("w-full gap-2 flex-wrap"):
+                    for row in by_task:
+                        with ui.card().classes("p-2 min-w-[200px]"):
+                            ui.label(escape_for_display(row["task_name"])).classes("text-xs font-semibold")
+                            ui.label(
+                                f"Init: {row['avg_init_form_seconds']:.1f}s, "
+                                f"Complete: {row['avg_completion_form_seconds']:.1f}s"
+                            ).classes("text-xs text-gray-600")
+                            ui.label(
+                                f"Sliders init: {row['avg_init_sliders_adjusted']:.1f}, "
+                                f"complete: {row['avg_completion_sliders_adjusted']:.1f} (n={row['count']})"
+                            ).classes("text-xs text-gray-500")
+
         life_balance = metrics.get('life_balance', {})
         with ui.row().classes("gap-3 flex-wrap mb-4"):
             for title, value in [
@@ -987,6 +1035,10 @@ def _build_analytics_main_content(
                 ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
                 ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
                 ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
+                ("Avg Init Form Time", f"{(form_stats.get('avg_init_form_seconds', 0) or 0):.1f}s"),
+                ("Avg Completion Form Time", f"{(form_stats.get('avg_completion_form_seconds', 0) or 0):.1f}s"),
+                ("Avg Sliders Adjusted (Init)", f"{(form_stats.get('avg_init_sliders_adjusted', 0) or 0):.1f}"),
+                ("Avg Sliders Adjusted (Complete)", f"{(form_stats.get('avg_completion_sliders_adjusted', 0) or 0):.1f}"),
             ]:
                 with ui.card().classes("p-3 min-w-[150px]"):
                     ui.label(title).classes("text-xs text-gray-500")
@@ -1321,52 +1373,7 @@ def build_analytics_page():
             ui.button("View Details", on_click=lambda: ui.navigate.to('/summary')).classes("bg-indigo-500 text-white")
             ui.button("Configure Weights", on_click=lambda: ui.navigate.to('/settings')).classes("bg-gray-500 text-white")
     
-    def load_composite_score():
-        """Load composite score asynchronously."""
-        try:
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('load_composite_score_start')
-            except ImportError:
-                pass
-
-            get_scores_start = time.perf_counter()
-            all_scores = analytics_service.get_all_scores_for_composite(days=7, user_id=current_user_id)
-            get_scores_duration = (time.perf_counter() - get_scores_start) * 1000
-
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('get_all_scores_for_composite', duration_ms=get_scores_duration, score_count=len(all_scores))
-            except ImportError:
-                pass
-            
-            composite_result = analytics_service.calculate_composite_score(
-                components=all_scores,
-                weights=current_weights,
-                normalize_components=True
-            )
-            
-            # Update UI
-            loading_label.style("display: none;")
-            composite_row.style("display: flex;")
-            score_label.text = f"{composite_result['composite_score']:.1f}"
-
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('load_composite_score_complete', duration_ms=(time.perf_counter() - get_scores_start) * 1000)
-            except ImportError:
-                pass
-        except Exception as e:
-            handle_error_with_ui(
-                'load_composite_score',
-                e,
-                user_id=get_current_user()
-            )
-            loading_label.text = "Error loading composite score"
-            loading_label.classes("text-red-500")
-    
-    # Load composite score asynchronously
-    ui.timer(0.1, load_composite_score, once=True)
+    # Composite score: loaded with main analytics in one batch (same data, consistent value; no extra thread/timeout)
 
     # Defer heavy analytics data load so page shell returns in ~1s (avoids NiceGUI connection timeout)
     try:
@@ -1378,68 +1385,105 @@ def build_analytics_page():
     error_row = ui.row().classes("items-center gap-2 mb-4").style("display: none;")
     content_container = ui.column().classes("w-full")
 
-    # Capture in defaults so timer callback has them even if page scope is gone
-    def load_analytics_content(
+    # Result from background thread: list of ('ok', page_data) or ('err', exception)
+    page_data_result = []
+
+    def apply_page_data(page_data, _c=content_container, _loading=loading_analytics_label,
+                        _uid_str=user_id_str, _ustate=user_state, _uid=current_user_id,
+                        _rtc=_render_time_chart, _rab=_render_attribute_box, _rts=_render_trends_section,
+                        _rsms=_render_stress_metrics_section, _rtr=_render_task_rankings,
+                        _rsel=_render_stress_efficiency_leaderboard, _rmc=_render_metric_comparison,
+                        _rce=_render_correlation_explorer,
+                        _comp_loading=loading_label, _comp_row=composite_row, _comp_score=score_label,
+                        _weights=current_weights):
+        _loading.style("display: none;")
+        # Composite score from same batch (consistent with rest of analytics)
+        comp_components = page_data.get('composite_components')
+        if comp_components is not None:
+            try:
+                comp_result = analytics_service.calculate_composite_score(
+                    components=comp_components,
+                    weights=_weights,
+                    normalize_components=True,
+                )
+                _comp_loading.style("display: none;")
+                _comp_row.style("display: flex;")
+                _comp_score.text = f"{comp_result['composite_score']:.1f}"
+            except Exception as e:
+                _comp_loading.text = "Error loading composite score"
+                _comp_loading.classes("text-red-500")
+        _build_analytics_main_content(
+            _c, page_data, _uid_str, _ustate, _uid,
+            render_time_chart=_rtc, render_attribute_box=_rab, render_trends_section=_rts,
+            render_stress_metrics_section=_rsms, render_task_rankings=_rtr,
+            render_stress_efficiency_leaderboard=_rsel, render_metric_comparison=_rmc,
+            render_correlation_explorer=_rce,
+        )
+
+    def show_error(e, _err_row=error_row, _container=content_container, _loading=loading_analytics_label):
+        import traceback
+        traceback.print_exc()
+        try:
+            handle_error_with_ui('load_analytics_content', e, user_id=current_user_id)
+        except Exception:
+            pass
+        _loading.style("display: none;")
+        _container.clear()
+        _err_row.clear()
+        with _err_row:
+            err_msg = str(e) if str(e) else type(e).__name__
+            ui.label(f"Error: {type(e).__name__}: {err_msg}").classes("text-red-500 text-sm")
+            ui.button("Retry", on_click=start_analytics_load).classes("text-sm")
+        _err_row.style("display: flex;")
+
+    def start_analytics_load(
         _container=content_container,
         _loading=loading_analytics_label,
         _err_row=error_row,
         _uid=current_user_id,
-        _uid_str=user_id_str,
-        _ustate=user_state,
-        _rtc=_render_time_chart,
-        _rab=_render_attribute_box,
-        _rts=_render_trends_section,
-        _rsms=_render_stress_metrics_section,
-        _rtr=_render_task_rankings,
-        _rsel=_render_stress_efficiency_leaderboard,
-        _rmc=_render_metric_comparison,
-        _rce=_render_correlation_explorer,
     ):
-        import traceback
         _err_row.style("display: none;")
         _loading.style("display: block;")
         _loading.text = "Loading analytics..."
         _loading.classes("text-sm text-gray-500 mb-4")
-        try:
-            page_data_start = time.perf_counter()
-            page_data = analytics_service.get_analytics_page_data(days=7, user_id=_uid)
-            try:
-                from backend.instrumentation import log_analytics_event
-                log_analytics_event('get_analytics_page_data', duration_ms=(time.perf_counter() - page_data_start) * 1000)
-            except ImportError:
-                pass
-            _loading.style("display: none;")
-            _build_analytics_main_content(
-                _container,
-                page_data,
-                _uid_str,
-                _ustate,
-                _uid,
-                render_time_chart=_rtc,
-                render_attribute_box=_rab,
-                render_trends_section=_rts,
-                render_stress_metrics_section=_rsms,
-                render_task_rankings=_rtr,
-                render_stress_efficiency_leaderboard=_rsel,
-                render_metric_comparison=_rmc,
-                render_correlation_explorer=_rce,
-            )
-        except Exception as e:
-            traceback.print_exc()
-            try:
-                handle_error_with_ui('load_analytics_content', e, user_id=_uid)
-            except Exception:
-                pass
-            _loading.style("display: none;")
-            _container.clear()
-            _err_row.clear()
-            with _err_row:
-                err_msg = str(e) if str(e) else type(e).__name__
-                ui.label(f"Error: {type(e).__name__}: {err_msg}").classes("text-red-500 text-sm")
-                ui.button("Retry", on_click=load_analytics_content).classes("text-sm")
-            _err_row.style("display: flex;")
+        page_data_result.clear()
 
-    ui.timer(0.1, load_analytics_content, once=True)
+        def fetch():
+            # Run in thread so the request handler returns immediately (avoids timeout);
+            # on single-CPU VPS this does not add a core, but still prevents blocking the connection.
+            try:
+                page_data_start = time.perf_counter()
+                data = analytics_service.get_analytics_page_data(days=7, user_id=_uid)
+                try:
+                    from backend.instrumentation import log_analytics_event
+                    log_analytics_event('get_analytics_page_data', duration_ms=(time.perf_counter() - page_data_start) * 1000)
+                except ImportError:
+                    pass
+                page_data_result.append(('ok', data))
+            except Exception as e:
+                page_data_result.append(('err', e))
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+        timer_ref = []
+
+        def poll():
+            if not page_data_result:
+                return
+            status, value = page_data_result[0]
+            if timer_ref:
+                try:
+                    timer_ref[0].cancel()
+                except Exception:
+                    pass
+            if status == 'ok':
+                apply_page_data(value)
+            else:
+                show_error(value)
+
+        timer_ref.append(ui.timer(0.4, poll))
+
+    ui.timer(0.1, start_analytics_load, once=True)
 
     try:
         from backend.instrumentation import log_analytics_event
@@ -1600,14 +1644,14 @@ def _render_emotion_transitions(flow_data):
 
 
 def _render_emotional_load_vs_relief(flow_data):
-    """Scatter plot of emotional load vs relief."""
+    """Scatter plot of emotional intensity vs relief."""
     with ui.card().classes("p-4 w-full mb-4"):
-        ui.label("Emotional Load vs Relief").classes("text-xl font-bold mb-2")
+        ui.label("Emotional intensity vs Relief").classes("text-xl font-bold mb-2")
         ui.label("How emotional intensity relates to relief after completion").classes("text-sm text-gray-500 mb-3")
         
         scatter_data = flow_data.get('load_relief_scatter', {})
         if not scatter_data or not scatter_data.get('x'):
-            ui.label("No data yet. Complete tasks to see emotional load vs relief patterns.").classes("text-xs text-gray-500")
+            ui.label("No data yet. Complete tasks to see emotional intensity vs relief patterns.").classes("text-xs text-gray-500")
             return
         
         df = pd.DataFrame({
@@ -1621,8 +1665,8 @@ def _render_emotional_load_vs_relief(flow_data):
             x='emotional_load',
             y='relief',
             hover_data=['task_name'],
-            labels={'emotional_load': 'Emotional Load (0-100)', 'relief': 'Relief (0-100)'},
-            title="Emotional Load vs Relief"
+            labels={'emotional_load': 'Emotional intensity (0-100)', 'relief': 'Relief (0-100)'},
+            title="Emotional intensity vs Relief"
         )
         fig.update_layout(margin=dict(l=20, r=20, t=40, b=20))
         ui.plotly(fig)
@@ -1636,9 +1680,9 @@ def _render_emotional_load_vs_relief(flow_data):
 
 
 def _render_expected_vs_actual_emotional(flow_data):
-    """Compare expected vs actual emotional load."""
+    """Compare expected vs actual emotional intensity."""
     with ui.card().classes("p-4 w-full mb-4"):
-        ui.label("Expected vs Actual Emotional Load").classes("text-xl font-bold mb-2")
+        ui.label("Expected vs Actual Emotional intensity").classes("text-xl font-bold mb-2")
         ui.label("How well you predict emotional intensity").classes("text-sm text-gray-500 mb-3")
         
         comparison_data = flow_data.get('expected_actual_comparison', {})
@@ -1658,8 +1702,8 @@ def _render_expected_vs_actual_emotional(flow_data):
             x='expected',
             y='actual',
             hover_data=['task_name'],
-            labels={'expected': 'Expected Emotional Load', 'actual': 'Actual Emotional Load'},
-            title="Expected vs Actual Emotional Load"
+            labels={'expected': 'Expected Emotional intensity', 'actual': 'Actual Emotional intensity'},
+            title="Expected vs Actual Emotional intensity"
         )
         # Add diagonal line (perfect prediction)
         import plotly.graph_objects as go

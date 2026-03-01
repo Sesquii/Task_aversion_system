@@ -59,6 +59,27 @@ disappointment_factor = max(0, -net_relief)
 - Reduce scores for disappointments
 - Track negative prediction errors
 
+## Misperception (Expected vs Actual)
+
+The system supports a **misperception** concept: comparing what you predicted (expected) with what you experienced (actual). This enables tracking prediction accuracy and can feed into a more robust misperception factor in the future.
+
+### Relief misperception (existing)
+- **net_relief** = actual_relief - expected_relief
+- **Serendipity factor** = max(0, net_relief); **Disappointment factor** = max(0, -net_relief)
+- See Core Emotional Factors above.
+
+### Emotional intensity misperception
+- **net_emotional** = actual_emotional - expected_emotional_load
+- Stored in `net_emotional` column when available; otherwise computed in analytics.
+- Positive = you felt more emotional intensity than expected; negative = less than expected.
+- Complements net_relief: one is about relief (outcome), the other about emotional activation (intensity).
+
+### Stress misperception (direct vs derived)
+- **Direct stress:** User-reported "overall stress" at completion (`actual_stress`) and optionally at init (`expected_stress`). One slider, 0-100.
+- **Derived stress:** `stress_level` = weighted combination of cognitive, emotional_load, physical, and aversion (see relief_stress_formulas.md).
+- **stress_misperception** = actual_stress - stress_level (when actual_stress is present).
+- Positive = you reported more stress than the model’s derived stress; negative = less. Use as a gateway towards a broader misperception factor (e.g. combining relief, emotional, and stress prediction errors).
+
 ## Design Principles
 
 ### 1. Sign Separation
