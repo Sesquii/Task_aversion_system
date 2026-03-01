@@ -429,13 +429,13 @@ if __name__ in {"__main__", "__mp_main__"}:
     print("[Backend] Storage: " + _backend_label())
     print("---")
     print("")
-    # timeout_keep_alive=5: allow slower analytics page load without connection drop (default ~3s can trigger "Response not ready")
+    # timeout_keep_alive=30: avoid client reconnect after heavy analytics UI update (was 5; large apply_page_data burst was causing refresh loop on VPS)
     ui.run(
         title='Task Aversion System',
         port=8080,
         host=host,
         reload=False,
         storage_secret=storage_secret,
-        timeout_keep_alive=5,
+        timeout_keep_alive=30,
     )
 

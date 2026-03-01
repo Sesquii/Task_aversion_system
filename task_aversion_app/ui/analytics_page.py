@@ -1451,16 +1451,20 @@ def build_analytics_page():
             except Exception as e:
                 _comp_loading.text = "Error loading composite score"
                 _comp_loading.classes("text-red-500")
-        _build_analytics_main_content(
-            _c, page_data, _uid_str, _ustate, _uid,
-            render_time_chart=_rtc, render_attribute_box=_rab, render_trends_section=_rts,
-            render_stress_metrics_section=_rsms, render_task_rankings=_rtr,
-            render_stress_efficiency_leaderboard=_rsel, render_metric_comparison=_rmc,
-            render_correlation_explorer=_rce,
-        )
-        # #region agent log
-        _debug_log('analytics_page:apply_page_data', 'apply_page_data end', {}, 'H2')
-        # #endregion
+        # Defer main content build to next event-loop tick to avoid single-stack UI burst
+        # that was causing client reconnect and analytics page refresh loop on VPS.
+        def _deferred_build():
+            _build_analytics_main_content(
+                _c, page_data, _uid_str, _ustate, _uid,
+                render_time_chart=_rtc, render_attribute_box=_rab, render_trends_section=_rts,
+                render_stress_metrics_section=_rsms, render_task_rankings=_rtr,
+                render_stress_efficiency_leaderboard=_rsel, render_metric_comparison=_rmc,
+                render_correlation_explorer=_rce,
+            )
+            # #region agent log
+            _debug_log('analytics_page:apply_page_data', 'apply_page_data end', {}, 'H2')
+            # #endregion
+        ui.timer(0.05, _deferred_build, once=True)
 
     def show_error(e, _err_row=error_row, _container=content_container, _loading=loading_analytics_label):
         import traceback
