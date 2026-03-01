@@ -8068,8 +8068,8 @@ class Analytics:
         ]
         relief_data['default_relief_points'] = relief_data['default_relief_points'] * relief_data['aversion_mult']
         
-        # Calculate net relief points (vectorized)
-        relief_data['net_relief_points'] = relief_data['default_relief_points'].clip(lower=0.0)
+        # Calculate net relief points (vectorized) - signed: can be negative
+        relief_data['net_relief_points'] = relief_data['default_relief_points']
         relief_data['negative_relief_points'] = relief_data['default_relief_points'].clip(upper=0.0)
         multiplier_time = (time_module.time() - multiplier_start) * 1000
         print(f"[Analytics] get_relief_summary: apply multipliers: {multiplier_time:.2f}ms")

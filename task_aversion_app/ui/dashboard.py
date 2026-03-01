@@ -2412,9 +2412,10 @@ def create_metric_tooltip_chart(dates, values, current_daily_avg, weekly_avg, th
             return False
     
     # Determine which lines to show (hide overlapping ones, prioritize current value line)
-    show_current = current_daily_avg > 0
-    show_weekly = weekly_avg > 0 and not values_overlap(weekly_avg, current_daily_avg)
-    show_three_month = three_month_avg > 0 and not values_overlap(three_month_avg, current_daily_avg)
+    # For metrics that can be negative (e.g. net relief), show ref lines when not zero
+    show_current = current_daily_avg != 0 and current_daily_avg is not None
+    show_weekly = weekly_avg != 0 and weekly_avg is not None and not values_overlap(weekly_avg, current_daily_avg)
+    show_three_month = three_month_avg != 0 and three_month_avg is not None and not values_overlap(three_month_avg, current_daily_avg)
     
     # Also check if weekly and 3-month overlap (but not with current)
     if show_weekly and show_three_month and values_overlap(weekly_avg, three_month_avg):
@@ -2457,26 +2458,33 @@ def create_metric_tooltip_chart(dates, values, current_daily_avg, weekly_avg, th
     
     # Calculate min and max for y-axis (include all values and reference lines)
     all_y_values = values.copy()
-    if current_daily_avg > 0:
+    if current_daily_avg is not None:
         all_y_values.append(current_daily_avg)
-    if weekly_avg > 0:
+    if weekly_avg is not None:
         all_y_values.append(weekly_avg)
-    if three_month_avg > 0:
+    if three_month_avg is not None:
         all_y_values.append(three_month_avg)
     
     y_min = min(all_y_values) if all_y_values else 0
     y_max = max(all_y_values) if all_y_values else 1
     
+    # Allow negative scale when data contains negative values (e.g. net relief)
+    allow_negative_scale = (all_y_values and min(all_y_values) < 0)
+    
     # Add small padding (5% of range)
     y_range = y_max - y_min
     if y_range > 0:
         y_padding = y_range * 0.05
-        y_min = max(0, y_min - y_padding)  # Don't go below 0
+        y_min = y_min - y_padding
         y_max = y_max + y_padding
+        if not allow_negative_scale:
+            y_min = max(0, y_min)
     else:
         # If all values are the same, add some padding
-        y_min = max(0, y_min - y_min * 0.1)
-        y_max = y_max + y_max * 0.1
+        y_min = y_min - abs(y_min) * 0.1 if y_min != 0 else -0.1
+        y_max = y_max + abs(y_max) * 0.1 if y_max != 0 else 0.1
+        if not allow_negative_scale:
+            y_min = max(0, y_min)
     
     fig.update_layout(
         title=f'{metric_name} Over Time (Last 90 Days)',
@@ -6339,7 +6347,8 @@ def build_summary_section():
             with ui.card().classes("p-2 w-full"):
                 ui.label("Net Relief Points").classes("text-xs text-gray-500")
                 net_points = relief_summary['net_relief_points']
-                ui.label(f"{net_points:.2f} (calibrated, a)").classes("text-sm font-bold text-green-600")
+                color_class = "text-green-600" if net_points >= 0 else "text-red-600"
+                ui.label(f"{net_points:+.2f} (calibrated, a)").classes(f"text-sm font-bold {color_class}")
             
             # Positive Relief Stats
             with ui.card().classes("p-2 w-full"):
