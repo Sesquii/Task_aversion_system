@@ -514,13 +514,14 @@ class Analytics:
         else:
             return 1.0
     
-    def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0, 
+    def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0,
                                      work_play_time_per_day: Optional[Dict[str, Dict[str, float]]] = None,
                                      play_penalty_threshold: float = 2.0,
                                      productivity_settings: Optional[Dict[str, any]] = None,
                                      weekly_work_summary: Optional[Dict[str, float]] = None,
                                      goal_hours_per_week: Optional[float] = None,
-                                     weekly_productive_hours: Optional[float] = None) -> float:
+                                     weekly_productive_hours: Optional[float] = None,
+                                     sleep_scores_by_date: Optional[Dict[str, float]] = None) -> float:
         """Calculate productivity score based on completion percentage vs time ratio.
         
         Version: 1.1 (2025-12-27)
@@ -695,8 +696,21 @@ class Analytics:
                 score = base_score * multiplier
             
             elif task_type_lower == 'sleep':
-                # Sleep: neutral for productivity (completion_pct); sleep score can be integrated later
-                score = completion_pct
+                # Sleep: use per-day sleep score when available (from get_sleep_metrics), else completion_pct
+                if sleep_scores_by_date:
+                    try:
+                        completed_at = row.get('completed_at')
+                        if completed_at is not None and str(completed_at):
+                            from datetime import datetime as dt
+                            d = pd.to_datetime(completed_at).date()
+                            date_str = str(d)
+                            score = float(sleep_scores_by_date.get(date_str, completion_pct))
+                        else:
+                            score = completion_pct
+                    except (ValueError, TypeError):
+                        score = completion_pct
+                else:
+                    score = completion_pct
             elif task_type_lower == 'play':
                 # Productivity penalty from play: only applies when play exceeds work by threshold
                 # Check if play time exceeds work time by the threshold
@@ -807,16 +821,18 @@ class Analytics:
         productivity_settings: Optional[Dict[str, any]] = None,
         weekly_work_summary: Optional[Dict[str, float]] = None,
         goal_hours_per_week: Optional[float] = None,
-        weekly_productive_hours: Optional[float] = None
+        weekly_productive_hours: Optional[float] = None,
+        sleep_scores_by_date: Optional[Dict[str, float]] = None
     ) -> np.ndarray:
         """Vectorized batch calculation of productivity scores. 5-10x faster than row-by-row.
-        
+
         This is the optimized production version. For formula logic reference,
         see calculate_productivity_score() which has the same calculation but is easier to read/modify.
-        
+
         Args:
             df: DataFrame with columns: actual_dict, predicted_dict, task_type, completed_at, status
             self_care_tasks_per_day: Dict mapping date strings to self care task counts
+            sleep_scores_by_date: Optional dict date_str -> per-day sleep score (0-100) for sleep tasks
             weekly_avg_time: Weekly average productivity time in minutes
             work_play_time_per_day: Dict mapping date strings to {work_time, play_time}
             play_penalty_threshold: Threshold for play penalty (default 2.0)
@@ -953,10 +969,17 @@ class Analytics:
         play_penalty_multiplier = -0.003 * time_percentage
         play_scores = np.where(apply_play_penalty, completion_pct * play_penalty_multiplier, completion_pct)
         
-        # --- Sleep tasks (neutral for productivity; sleep score can be integrated later) ---
+        # --- Sleep tasks: use per-day sleep score when available, else completion_pct ---
         is_sleep = (task_types == 'sleep') & ~is_cancelled
-        sleep_scores = completion_pct
-        
+        if sleep_scores_by_date:
+            sleep_score_arr = np.array(
+                [float(sleep_scores_by_date.get(d, completion_pct[i])) for i, d in enumerate(completed_dates)],
+                dtype=np.float64
+            )
+            sleep_scores = np.where(is_sleep, sleep_score_arr, completion_pct)
+        else:
+            sleep_scores = completion_pct
+
         # --- Default (other task types) ---
         is_other = ~is_work & ~is_self_care & ~is_play & ~is_sleep & ~is_cancelled
         other_scores = completion_pct
@@ -1320,7 +1343,153 @@ class Analytics:
         )
         
         return grit_scores
-    
+
+    def get_grit_breakdown_df(
+        self,
+        user_id: Optional[int] = None,
+        days: int = 90
+    ) -> pd.DataFrame:
+        """Get per-instance grit scores and factor breakdown for charting.
+
+        Loads completed instances for the user, runs the same vectorized grit calculation
+        as calculate_grit_scores_batch, and returns a DataFrame with completed_at_dt,
+        grit_score, and the five factor columns (persistence, focus, passion, time_bonus,
+        disappointment_resilience) for aggregation in overview charts.
+
+        Returns:
+            DataFrame with columns: completed_at_dt, grit_score, persistence_factor_scaled,
+            focus_factor_scaled, passion_factor, time_bonus, disappointment_resilience.
+            Empty DataFrame if no data.
+        """
+        from datetime import datetime, timedelta
+        from collections import Counter
+
+        user_id = self._get_user_id(user_id)
+        df = self._load_instances(completed_only=True, user_id=user_id)
+        completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+
+        if completed.empty:
+            return pd.DataFrame(columns=[
+                'completed_at_dt', 'grit_score', 'persistence_factor_scaled',
+                'focus_factor_scaled', 'passion_factor', 'time_bonus',
+                'disappointment_resilience'
+            ])
+
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()].copy()
+        cutoff_date = datetime.now() - timedelta(days=days)
+        completed = completed[completed['completed_at_dt'] >= cutoff_date].copy()
+
+        if completed.empty:
+            return pd.DataFrame(columns=[
+                'completed_at_dt', 'grit_score', 'persistence_factor_scaled',
+                'focus_factor_scaled', 'passion_factor', 'time_bonus',
+                'disappointment_resilience'
+            ])
+
+        task_completion_counts = dict(Counter(completed['task_id'].tolist()))
+        grit_scores = self.calculate_grit_scores_batch(
+            completed, task_completion_counts, instances_df=df
+        )
+        n = len(completed)
+
+        # Recompute factor arrays for breakdown (same extraction as batch)
+        actual_dicts = completed['actual_dict'].tolist() if 'actual_dict' in completed.columns else [{}] * n
+        predicted_dicts = completed['predicted_dict'].tolist() if 'predicted_dict' in completed.columns else [{}] * n
+        task_ids = completed['task_id'].tolist() if 'task_id' in completed.columns else [''] * n
+
+        completion_pct = np.zeros(n)
+        time_actual = np.zeros(n)
+        time_estimate = np.zeros(n)
+        task_difficulty = np.full(n, 50.0)
+        relief = np.zeros(n)
+        emotional = np.zeros(n)
+        expected_relief = np.zeros(n)
+        actual_relief_arr = np.zeros(n)
+        cognitive_load = np.zeros(n)
+        emotional_load = np.zeros(n)
+        initial_aversion = np.zeros(n)
+        completion_counts = np.ones(n)
+
+        for i in range(n):
+            ad = actual_dicts[i] if isinstance(actual_dicts[i], dict) else {}
+            pd_dict = predicted_dicts[i] if isinstance(predicted_dicts[i], dict) else {}
+            completion_pct[i] = float(ad.get('completion_percent', 100) or 100)
+            time_actual[i] = float(ad.get('time_actual_minutes', 0) or 0)
+            time_estimate[i] = float(pd_dict.get('time_estimate_minutes', 0) or pd_dict.get('estimate', 0) or 0)
+            task_difficulty[i] = float(ad.get('task_difficulty', pd_dict.get('task_difficulty', 50)) or 50)
+            relief[i] = float(ad.get('actual_relief', ad.get('relief_score', 0)) or 0)
+            emotional[i] = float(ad.get('actual_emotional', ad.get('emotional_load', 0)) or 0)
+            expected_relief[i] = float(pd_dict.get('expected_relief', 0) or 0)
+            actual_relief_arr[i] = float(ad.get('actual_relief', ad.get('relief_score', 0)) or 0)
+            initial_aversion[i] = float(pd_dict.get('initial_aversion', pd_dict.get('aversion', 0)) or 0)
+            tid = task_ids[i]
+            completion_counts[i] = max(1, int(task_completion_counts.get(tid, 1) or 1))
+
+        if 'cognitive_load' in completed.columns:
+            cognitive_load = pd.to_numeric(completed['cognitive_load'], errors='coerce').fillna(0).values
+        if 'emotional_load' in completed.columns:
+            emotional_load = pd.to_numeric(completed['emotional_load'], errors='coerce').fillna(0).values
+        if 'disappointment_factor' in completed.columns:
+            disappointment_factor = pd.to_numeric(completed['disappointment_factor'], errors='coerce').fillna(0).values
+        else:
+            net_relief = actual_relief_arr - expected_relief
+            disappointment_factor = np.where(net_relief < 0, -net_relief, 0.0)
+
+        raw_multiplier = 1.0 + 0.015 * np.maximum(0, completion_counts - 1) ** 1.001
+        decay = np.where(completion_counts > 100, 1.0 / (1.0 + (completion_counts - 100) / 200.0), 1.0)
+        time_ratio = np.where(time_estimate > 0, time_actual / time_estimate, 0.0)
+        excess = np.maximum(0, time_ratio - 1.0)
+        base_time_bonus = np.where(excess <= 1.0, 1.0 + excess * 0.8, 1.8 + (excess - 1.0) * 0.2)
+        base_time_bonus = np.minimum(3.0, base_time_bonus)
+        difficulty_factor = np.clip(task_difficulty / 100.0, 0.0, 1.0)
+        weighted_time_bonus = 1.0 + (base_time_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)
+        fade = 1.0 / (1.0 + np.maximum(0, completion_counts - 10) / 40.0)
+        time_bonus = np.where(
+            (time_estimate > 0) & (time_actual > 0) & (time_ratio > 1.0),
+            1.0 + (weighted_time_bonus - 1.0) * fade,
+            1.0
+        )
+        relief_norm = np.clip(relief / 100.0, 0.0, 1.0)
+        emotional_norm = np.clip(emotional / 100.0, 0.0, 1.0)
+        passion_delta = relief_norm - emotional_norm
+        passion_factor = 1.0 + passion_delta * 0.5
+        passion_factor = np.where(completion_pct < 100, passion_factor * 0.9, passion_factor)
+        passion_factor = np.clip(passion_factor, 0.5, 1.5)
+        combined_load = (cognitive_load + emotional_load) / 2.0
+        obstacle_score = np.where(combined_load <= 50, combined_load / 100.0, 0.5 + ((combined_load - 50) / 50.0) * 0.5)
+        obstacle_score = np.where(combined_load > 0, obstacle_score, 0.5)
+        aversion_score = np.where(initial_aversion <= 50, initial_aversion / 100.0, 0.5 + ((initial_aversion - 50) / 50.0) * 0.5)
+        aversion_score = np.where(initial_aversion > 0, aversion_score, 0.5)
+        repetition_score = np.where(
+            completion_counts <= 1, 0.5,
+            np.where(completion_counts <= 5, 0.5 + (completion_counts - 1) / 4.0 * 0.3,
+                np.where(completion_counts <= 10, 0.8 + (completion_counts - 5) / 5.0 * 0.2, 1.0))
+        )
+        consistency_score = np.full(n, 0.5)
+        persistence_factor = obstacle_score * 0.4 + aversion_score * 0.3 + repetition_score * 0.2 + consistency_score * 0.1
+        persistence_factor_scaled = 0.5 + persistence_factor * 1.0
+        focus_factor_scaled = np.full(n, 1.0)
+        disappointment_resilience = np.where(
+            disappointment_factor > 0,
+            np.where(
+                completion_pct >= 100.0,
+                np.minimum(1.5, 1.0 + disappointment_factor / 200.0),
+                np.maximum(0.67, 1.0 - disappointment_factor / 300.0)
+            ),
+            1.0
+        )
+
+        return pd.DataFrame({
+            'completed_at_dt': completed['completed_at_dt'].values,
+            'grit_score': grit_scores,
+            'persistence_factor_scaled': persistence_factor_scaled,
+            'focus_factor_scaled': focus_factor_scaled,
+            'passion_factor': passion_factor,
+            'time_bonus': time_bonus,
+            'disappointment_resilience': disappointment_resilience,
+        })
+
     def _calculate_grit_score_base(
         self,
         row: pd.Series,
@@ -4475,6 +4644,13 @@ class Analytics:
         else:
             life_balance = {'balance_score': 50.0}  # Default value
 
+        # Sleep metrics (7-day sleep score and components); add sleep_score_7d_avg to life_balance (copy to avoid mutating cache).
+        sleep_metrics = {}
+        if (requested_metrics is None or needs_metric('life_balance_score') or needs_metric('balance_score') or
+                needs_metric('sleep_score') or needs_metric('sleep_score_7d_avg')):
+            sleep_metrics = self.get_sleep_metrics(days=7, user_id=user_id, instances_df=df)
+            life_balance = {**life_balance, 'sleep_score_7d_avg': sleep_metrics.get('sleep_score_7d_avg', 50.0)}
+
         # Calculate daily work volume metrics (only if needed). Pass df when we have it to avoid extra _load_instances.
         work_volume_metrics = {}
         avg_daily_work_time = 0.0
@@ -4548,6 +4724,11 @@ class Analytics:
                         'play_time': float(play_time)
                     }
             
+            # Build sleep_scores_by_date for sleep task productivity scoring (per-day sleep score)
+            sleep_scores_by_date = {}
+            if sleep_metrics and sleep_metrics.get('daily_scores'):
+                sleep_scores_by_date = {str(d['date']): float(d['score']) for d in sleep_metrics['daily_scores']}
+
             # Calculate productivity scores for completed tasks
             productivity_scores = []
             for _, row in completed.iterrows():
@@ -4555,7 +4736,8 @@ class Analytics:
                     prod_score = self.calculate_productivity_score(
                         row=row,
                         self_care_tasks_per_day=self_care_tasks_per_day,
-                        work_play_time_per_day=work_play_time_per_day
+                        work_play_time_per_day=work_play_time_per_day,
+                        sleep_scores_by_date=sleep_scores_by_date if sleep_scores_by_date else None
                     )
                     if prod_score > 0:  # Only include positive scores
                         productivity_scores.append(prod_score)
@@ -4777,10 +4959,14 @@ class Analytics:
             if needs_metric('estimation_accuracy'):
                 result['time']['estimation_accuracy'] = round(time_accuracy, 2)
         
-        # Life balance
+        # Life balance (includes sleep_score_7d_avg when sleep_metrics was computed)
         if needs_metric('life_balance_score') or needs_metric('balance_score'):
             result['life_balance'] = life_balance
-        
+
+        # Sleep metrics (for Sleep card and sleep_score monitored metric)
+        if sleep_metrics:
+            result['sleep_metrics'] = sleep_metrics
+
         # Aversion
         if needs_metric('general_aversion_score'):
             result['aversion'] = {
@@ -4917,6 +5103,189 @@ class Analytics:
         Analytics._life_balance_cache[cache_key] = result
         Analytics._life_balance_cache_time[cache_key] = time_module.time()
         return result
+
+    def get_target_sleep_hours(self, user_id: Optional[int] = None) -> float:
+        """Get target sleep hours per day from user settings (for sleep score)."""
+        uid = str(self._get_user_id(user_id)) if user_id is not None else "default_user"
+        settings = UserStateManager().get_target_hours_settings(uid)
+        return float(settings.get('sleep', 8.0))
+
+    def get_sleep_metrics(
+        self,
+        days: int = 7,
+        user_id: Optional[int] = None,
+        instances_df: Optional[pd.DataFrame] = None,
+        variant: str = 'default',
+    ) -> Dict[str, Any]:
+        """Compute sleep score and component factors from completed sleep tasks.
+
+        Scale 0-100; 100 = target hours consistently. Components: duration vs target (outlier-robust),
+        consistency/fragmentation (weighted by relief-per-hour), variation, relief-per-hour bonus.
+
+        Args:
+            days: Number of days to analyze (default 7).
+            user_id: User ID. If None, uses session.
+            instances_df: Optional pre-loaded instances (avoids _load_instances).
+            variant: 'default' | 'insomnia' (debt/credit) | 'hypersomnia' (stricter over + cap).
+
+        Returns:
+            Dict with: sleep_score_7d_avg, daily_scores, daily_sleep_minutes, duration_vs_target_avg,
+            variation_max_hrs, variation_avg_hrs, fragmentation_avg, relief_per_hour_avg,
+            target_sleep_hours, sleep_count, sleep_time_minutes_total.
+        """
+        user_id = self._get_user_id(user_id)
+        target_sleep_hours = self.get_target_sleep_hours(user_id)
+
+        empty = {
+            'sleep_score_7d_avg': 50.0,
+            'daily_scores': [],
+            'daily_sleep_minutes': {},
+            'duration_vs_target_avg': 0.0,
+            'variation_max_hrs': 0.0,
+            'variation_avg_hrs': 0.0,
+            'fragmentation_avg': 0.0,
+            'relief_per_hour_avg': 0.0,
+            'target_sleep_hours': target_sleep_hours,
+            'sleep_count': 0,
+            'sleep_time_minutes_total': 0.0,
+            'sleep_emotion_counts': {},
+        }
+
+        if instances_df is not None:
+            df = instances_df
+        else:
+            df = self._load_instances(user_id=user_id)
+        if df.empty or user_id is None:
+            return empty
+
+        from .task_manager import TaskManager
+        tasks_df = TaskManager().get_all(user_id=user_id)
+        if tasks_df.empty or 'task_type' not in tasks_df.columns:
+            return empty
+
+        merged = df.merge(
+            tasks_df[['task_id', 'task_type']],
+            on='task_id',
+            how='left'
+        )
+        merged['task_type_norm'] = merged['task_type'].fillna('Work').astype(str).str.strip().str.lower()
+        sleep_mask = merged['task_type_norm'] == 'sleep'
+        if not sleep_mask.any():
+            return empty
+
+        completed = merged[merged['completed_at'].astype(str).str.len() > 0].copy()
+        completed = completed[completed['task_type_norm'] == 'sleep']
+        if completed.empty:
+            return empty
+
+        completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+        completed = completed[completed['completed_at_dt'].notna()]
+        completed['date'] = completed['completed_at_dt'].dt.date
+        cutoff_date = (datetime.now() - timedelta(days=days)).date()
+        completed = completed[completed['date'] >= cutoff_date].copy()
+        if completed.empty:
+            return empty
+        completed['duration_numeric'] = pd.to_numeric(completed['duration_minutes'], errors='coerce').fillna(0.0)
+        completed['relief_numeric'] = pd.to_numeric(completed.get('relief_score', 0), errors='coerce').fillna(50.0)
+        if 'actual_dict' in completed.columns:
+            def _relief_from_actual(x):
+                if isinstance(x, dict):
+                    return float(x.get('actual_relief') or x.get('relief_score') or 50.0)
+                return 50.0
+            completed['relief_numeric'] = completed['actual_dict'].apply(_relief_from_actual)
+
+        # Daily total sleep (minutes)
+        daily_totals = completed.groupby('date')['duration_numeric'].sum()
+        daily_totals_dict = {str(d): float(t) for d, t in daily_totals.items()}
+        sorted_dates = sorted(daily_totals.index)
+
+        # Relief per hour: per task (relief/60 * (duration_min/60)) -> relief per hour of sleep; aggregate
+        completed['hours'] = completed['duration_numeric'] / 60.0
+        completed['relief_per_hour'] = np.where(
+            completed['hours'] > 0,
+            completed['relief_numeric'] / completed['hours'],
+            0.0
+        )
+        relief_per_hour_overall = float(completed['relief_per_hour'].mean()) if completed['hours'].sum() > 0 else 0.0
+        def _rph_agg(g: pd.DataFrame) -> float:
+            total_min = g['duration_numeric'].sum()
+            if total_min <= 0:
+                return 0.0
+            return float(g['relief_numeric'].sum() / (total_min / 60.0))
+        rph_series = completed.groupby('date', group_keys=False).apply(_rph_agg)
+        relief_per_hour_by_date = rph_series.to_dict() if hasattr(rph_series, 'to_dict') else {}
+
+        # Fragmentation: segments (tasks) per day; weight by inverse of relief-per-hour (low relief = fragmentation hurts more)
+        segments_per_day = completed.groupby('date').size()
+        fragmentation_scores = []
+        for d in sorted_dates:
+            n_seg = int(segments_per_day.get(d, 0))
+            rph = relief_per_hour_by_date.get(d, 50.0)
+            weight = 1.0 - min(1.0, rph / 100.0)
+            frag_penalty = min(1.0, (n_seg - 1) * 0.15 * (0.5 + 0.5 * weight))
+            fragmentation_scores.append(1.0 - frag_penalty)
+        fragmentation_avg = float(np.mean(fragmentation_scores)) if fragmentation_scores else 1.0
+
+        # Variation: max and average day-to-day change in total sleep hours
+        if len(sorted_dates) < 2:
+            variation_max_hrs = 0.0
+            variation_avg_hrs = 0.0
+        else:
+            hours_list = [float(daily_totals.get(d, 0)) / 60.0 for d in sorted_dates]
+            deltas = [abs(hours_list[i] - hours_list[i - 1]) for i in range(1, len(hours_list))]
+            variation_max_hrs = float(max(deltas)) if deltas else 0.0
+            variation_avg_hrs = float(np.mean(deltas)) if deltas else 0.0
+
+        # Per-day duration vs target component (0-100); outlier-robust: soft penalties
+        def _duration_component(actual_min: float) -> float:
+            actual_hr = actual_min / 60.0
+            if actual_hr <= 0:
+                return 0.0
+            diff_hr = actual_hr - target_sleep_hours
+            if abs(diff_hr) < 0.25:
+                return 100.0
+            if diff_hr < 0:
+                under_penalty = min(100.0, abs(diff_hr) * 15.0)
+                return max(0.0, 100.0 - under_penalty)
+            over_penalty = min(30.0, diff_hr * 10.0)
+            return max(0.0, 100.0 - over_penalty)
+
+        daily_scores_list = []
+        for d in sorted_dates:
+            total_min = daily_totals.get(d, 0)
+            dur_comp = _duration_component(total_min)
+            n_seg = int(segments_per_day.get(d, 0))
+            rph = relief_per_hour_by_date.get(d, 50.0)
+            weight = 1.0 - min(1.0, rph / 100.0)
+            frag_penalty = min(1.0, (n_seg - 1) * 0.15 * (0.5 + 0.5 * weight))
+            frag_comp = (1.0 - frag_penalty) * 100.0
+            relief_bonus = min(10.0, rph / 10.0)
+            day_score = 0.5 * dur_comp + 0.35 * frag_comp + 0.15 * min(100.0, 50.0 + relief_bonus)
+            day_score = max(0.0, min(100.0, day_score))
+            daily_scores_list.append({'date': str(d), 'score': round(day_score, 1), 'sleep_minutes': total_min})
+
+        duration_components = [_duration_component(daily_totals.get(d, 0)) for d in sorted_dates]
+        duration_vs_target_avg = float(np.median(duration_components)) if duration_components else 0.0
+
+        scores_only = [x['score'] for x in daily_scores_list]
+        sleep_score_7d_avg = float(np.median(scores_only)) if scores_only else 50.0
+
+        total_sleep_min = float(completed['duration_numeric'].sum())
+
+        return {
+            'sleep_score_7d_avg': round(sleep_score_7d_avg, 1),
+            'daily_scores': daily_scores_list,
+            'daily_sleep_minutes': daily_totals_dict,
+            'duration_vs_target_avg': round(duration_vs_target_avg, 1),
+            'variation_max_hrs': round(variation_max_hrs, 2),
+            'variation_avg_hrs': round(variation_avg_hrs, 2),
+            'fragmentation_avg': round(fragmentation_avg, 3),
+            'relief_per_hour_avg': round(relief_per_hour_overall, 1),
+            'target_sleep_hours': target_sleep_hours,
+            'sleep_count': int(len(completed)),
+            'sleep_time_minutes_total': round(total_sleep_min, 1),
+            'sleep_emotion_counts': {},
+        }
 
     def get_daily_work_volume_metrics(
         self,
@@ -5657,6 +6026,8 @@ class Analytics:
                     dashboard_metric_keys.extend(['productivity_volume.work_volume_score', 'productivity_volume.work_consistency_score'])
                 if needs_metric('life_balance_score'):
                     dashboard_metric_keys.append('life_balance_score')
+                if needs_metric('sleep_score'):
+                    dashboard_metric_keys.append('sleep_score')
                 if needs_metric('completion_rate'):
                     dashboard_metric_keys.append('counts.completion_rate')
                 if needs_metric('self_care_frequency'):
@@ -5687,6 +6058,15 @@ class Analytics:
         if needs_metric('life_balance_score'):
             life_balance = metrics_data.get('life_balance', {})
             scores['life_balance_score'] = float(life_balance.get('balance_score', 50.0))
+
+        # Sleep score (7d avg from sleep metrics)
+        if needs_metric('sleep_score'):
+            sleep_metrics = metrics_data.get('sleep_metrics', {})
+            if sleep_metrics:
+                scores['sleep_score'] = float(sleep_metrics.get('sleep_score_7d_avg', 50.0))
+            else:
+                life_balance = metrics_data.get('life_balance', {})
+                scores['sleep_score'] = float(life_balance.get('sleep_score_7d_avg', 50.0))
         
         # Relief summary (only if needed)
         if needs_metric('weekly_relief_score'):

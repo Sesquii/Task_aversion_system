@@ -358,6 +358,50 @@ class UserStateManager:
             _productivity_goal_cache.pop(user_id, None)
             _productivity_goal_cache_time.pop(user_id, None)
         return result
+
+    def get_target_hours_settings(self, user_id: str) -> Dict[str, float]:
+        """Get target hours per day for work, sleep, play, self_care (used for sleep score and life balance).
+        
+        Returns:
+            Dict with keys work, sleep, play, self_care (hours per day). Defaults: work from
+            goal_hours_per_week/5, sleep 8, play 2, self_care 1.
+        """
+        import json
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return self._default_target_hours(user_id)
+        raw = prefs.get("target_hours_settings", "")
+        if not raw:
+            return self._default_target_hours(user_id)
+        try:
+            data = json.loads(raw)
+            out = self._default_target_hours(user_id)
+            for key in ('work', 'sleep', 'play', 'self_care'):
+                if key in data and data[key] is not None:
+                    out[key] = max(0.0, min(24.0, float(data[key])))
+            return out
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return self._default_target_hours(user_id)
+
+    def _default_target_hours(self, user_id: str) -> Dict[str, float]:
+        """Default target hours: work from goal/5, sleep 8, play 2, self_care 1."""
+        goal = self.get_productivity_goal_settings(user_id)
+        work = (float(goal.get('goal_hours_per_week', 30.0)) / 5.0) if goal else 6.0
+        return {
+            'work': work,
+            'sleep': 8.0,
+            'play': 2.0,
+            'self_care': 1.0,
+        }
+
+    def set_target_hours_settings(self, user_id: str, settings: Dict[str, float]) -> Dict[str, Any]:
+        """Persist target hours for work, sleep, play, self_care (hours per day)."""
+        import json
+        normalized = {}
+        for key in ('work', 'sleep', 'play', 'self_care'):
+            if key in settings and settings[key] is not None:
+                normalized[key] = max(0.0, min(24.0, float(settings[key])))
+        return self.update_preference(user_id, "target_hours_settings", json.dumps(normalized))
     
     def get_productivity_history(self, user_id: str) -> List[Dict[str, Any]]:
         """Get historical productivity tracking data (weekly snapshots).

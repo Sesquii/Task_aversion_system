@@ -2868,7 +2868,7 @@ def render_monitored_metrics_section(container):
                         result['quality_metrics'][key] = quality['avg_relief']
             known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score',
                                        'work_volume_score', 'work_consistency_score', 'life_balance_score',
-                                       'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
+                                       'sleep_score', 'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
             composite_metric_keys = [m for m in metrics_list if m in known_composite_metrics and m != 'execution_score']
             if composite_metric_keys and hasattr(an, 'get_all_scores_for_composite'):
                 all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys), user_id=uid)
@@ -2942,9 +2942,9 @@ def render_monitored_metrics_section(container):
                     result['quality_metrics'][key] = quality['avg_relief']
         
         # Metrics that come from composite_scores
-        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score', 
+        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score',
                                    'work_volume_score', 'work_consistency_score', 'life_balance_score',
-                                   'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
+                                   'sleep_score', 'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
         composite_metric_keys = [m for m in metrics_list if m in known_composite_metrics and m != 'execution_score']
         
         if composite_metric_keys:
@@ -2970,9 +2970,9 @@ def render_monitored_metrics_section(container):
         needs_relief = any(m in relief_metrics for m in metrics_list)
         
         # Metrics that are known to be in composite_scores
-        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score', 
+        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score',
                                    'work_volume_score', 'work_consistency_score', 'life_balance_score',
-                                   'completion_rate', 'self_care_frequency'}
+                                   'sleep_score', 'completion_rate', 'self_care_frequency'}
         needs_quality = False
         needs_composite = False
         needs_execution_score = False

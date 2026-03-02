@@ -258,6 +258,30 @@ def _build_settings_content(user_id):
             
             ui.button("Save Goal Hours", on_click=save_goal_hours).classes("bg-green-500 text-white mt-2 w-full")
             ui.label("This setting is used throughout the system for productivity potential calculations and volume targets.").classes("text-xs text-gray-500 mt-1")
+
+        # Target hours for work, sleep, play, self care (sleep score and life balance)
+        target_hours = user_state.get_target_hours_settings(current_user_id_str)
+        with ui.card().classes("p-3 mt-2 bg-gray-50"):
+            ui.label("Target Hours (per day)").classes("text-sm font-semibold mb-2")
+            ui.label("Target hours for work, sleep, play, and self care. Used for sleep score and life balance.").classes("text-xs text-gray-600 mb-2")
+            with ui.row().classes("gap-4 flex-wrap w-full"):
+                th_work = ui.number(label="Work (hrs)", value=float(target_hours.get('work', 6)), min=0, max=24, step=0.5).props("dense outlined").classes("min-w-[80px]")
+                th_sleep = ui.number(label="Sleep (hrs)", value=float(target_hours.get('sleep', 8)), min=0, max=24, step=0.5).props("dense outlined").classes("min-w-[80px]")
+                th_play = ui.number(label="Play (hrs)", value=float(target_hours.get('play', 2)), min=0, max=24, step=0.5).props("dense outlined").classes("min-w-[80px]")
+                th_self_care = ui.number(label="Self care (hrs)", value=float(target_hours.get('self_care', 1)), min=0, max=24, step=0.5).props("dense outlined").classes("min-w-[80px]")
+
+            def save_target_hours():
+                new_settings = {
+                    'work': float(th_work.value or 6),
+                    'sleep': float(th_sleep.value or 8),
+                    'play': float(th_play.value or 2),
+                    'self_care': float(th_self_care.value or 1),
+                }
+                user_state.set_target_hours_settings(current_user_id_str, new_settings)
+                ui.notify("Target hours saved!", color="positive")
+                ui.navigate.reload()
+
+            ui.button("Save Target Hours", on_click=save_target_hours).classes("bg-green-500 text-white mt-2 w-full")
         
         ui.separator()
         ui.label("Data & Export").classes("text-lg font-semibold")
