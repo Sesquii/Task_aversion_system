@@ -920,162 +920,169 @@ def _build_analytics_main_content(
     render_stress_efficiency_leaderboard,
     render_metric_comparison,
     render_correlation_explorer,
+    part_2: bool = False,
 ):
     """Build main analytics content into container (called from deferred timer).
-    Render functions are passed in so the timer callback does not rely on module globals."""
+    Render functions are passed in so the timer callback does not rely on module globals.
+    When part_2 is False, builds first chunk then schedules part_2 after a delay to avoid
+    a single large UI burst that can trigger client reconnect on VPS."""
     # #region agent log
-    _analytics_debug_log('analytics_page.py:_build_analytics_main_content', 'build_main_content start', hypothesis_id='H4')
+    _analytics_debug_log('analytics_page.py:_build_analytics_main_content', 'build_main_content start', data={'part_2': part_2}, hypothesis_id='H4')
     # #endregion
     metrics = page_data['dashboard_metrics']
     relief_summary = page_data['relief_summary']
     tracking_data = page_data['time_tracking']
-    with container:
-        # Time Tracking Consistency Section
-        with ui.card().classes("p-4 mb-4 bg-teal-50 border border-teal-200"):
-            ui.label("Time Tracking Consistency").classes("text-xl font-bold mb-2")
-            ui.label("Measures how well you track your time. Sleep up to 8 hours is rewarded. Untracked time is penalized.").classes(
-                "text-sm text-gray-600 mb-3"
-            )
-        
-            with ui.row().classes("gap-4 flex-wrap"):
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Tracking Score").classes("text-xs text-gray-500")
-                    ui.label(f"{tracking_data['tracking_consistency_score']:.1f}").classes(
-                        "text-2xl font-bold"
-                    )
-                    ui.label("/ 100").classes("text-xs text-gray-600")
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Avg Tracked Time").classes("text-xs text-gray-500")
-                    tracked_hours = tracking_data['avg_tracked_time_minutes'] / 60.0
-                    ui.label(f"{tracked_hours:.1f} hrs").classes("text-lg font-semibold")
-                    ui.label(f"({tracking_data['avg_tracked_time_minutes']:.0f} min)").classes(
-                        "text-xs text-gray-600"
-                    )
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Avg Untracked Time").classes("text-xs text-gray-500")
-                    untracked_hours = tracking_data['avg_untracked_time_minutes'] / 60.0
-                    ui.label(f"{untracked_hours:.1f} hrs").classes("text-lg font-semibold text-orange-600")
-                    ui.label(f"({tracking_data['avg_untracked_time_minutes']:.0f} min)").classes(
-                        "text-xs text-gray-600"
-                    )
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Avg Sleep Time").classes("text-xs text-gray-500")
-                    sleep_hours = tracking_data['avg_sleep_time_minutes'] / 60.0
-                    ui.label(f"{sleep_hours:.1f} hrs").classes("text-lg font-semibold")
-                    ui.label(f"({tracking_data['avg_sleep_time_minutes']:.0f} min)").classes(
-                        "text-xs text-gray-600"
-                    )
-            
-                with ui.card().classes("p-3 min-w-[200px]"):
-                    ui.label("Tracking Coverage").classes("text-xs text-gray-500")
-                    coverage_pct = tracking_data['tracking_coverage'] * 100.0
-                    ui.label(f"{coverage_pct:.1f}%").classes("text-lg font-semibold")
-                    ui.label("of day tracked").classes("text-xs text-gray-600")
-        
-            ui.separator().classes("my-3")
-            ui.label(
-                "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
-                "Higher tracking consistency means more of your day is logged."
-            ).classes("text-sm text-gray-600")
-
-        # Task data entry: time spent filling forms and sliders adjusted (from batched page_data)
-        form_stats = page_data.get('form_fill_slider_stats') or {}
-        with ui.card().classes("p-4 mb-4 bg-slate-50 border border-slate-200"):
-            ui.label("Task data entry").classes("text-xl font-bold mb-2")
-            ui.label(
-                "Time spent on initialization and completion forms; how many sliders you adjust per task."
-            ).classes("text-sm text-gray-600 mb-3")
-            with ui.row().classes("gap-4 flex-wrap"):
-                with ui.card().classes("p-3 min-w-[180px]"):
-                    ui.label("Avg init form time").classes("text-xs text-gray-500")
-                    sec = form_stats.get("avg_init_form_seconds", 0) or 0
-                    ui.label(f"{sec:.1f} s").classes("text-lg font-semibold")
-                    ui.label("(time to fill initialization)").classes("text-xs text-gray-600")
-                with ui.card().classes("p-3 min-w-[180px]"):
-                    ui.label("Avg completion form time").classes("text-xs text-gray-500")
-                    sec = form_stats.get("avg_completion_form_seconds", 0) or 0
-                    ui.label(f"{sec:.1f} s").classes("text-lg font-semibold")
-                    ui.label("(time to fill completion)").classes("text-xs text-gray-600")
-                with ui.card().classes("p-3 min-w-[180px]"):
-                    ui.label("Avg sliders adjusted (init)").classes("text-xs text-gray-500")
-                    val = form_stats.get("avg_init_sliders_adjusted", 0) or 0
-                    ui.label(f"{val:.1f}").classes("text-lg font-semibold")
-                    ui.label("per task (0 = use defaults)").classes("text-xs text-gray-600")
-                with ui.card().classes("p-3 min-w-[180px]"):
-                    ui.label("Avg sliders adjusted (complete)").classes("text-xs text-gray-500")
-                    val = form_stats.get("avg_completion_sliders_adjusted", 0) or 0
-                    ui.label(f"{val:.1f}").classes("text-lg font-semibold")
-                    ui.label("per task").classes("text-xs text-gray-600")
-            n_form = form_stats.get("n", 0) or 0
-            if n_form > 0:
-                ui.label(f"Based on {n_form} completed task(s).").classes("text-xs text-gray-500 mt-2")
-            by_task = form_stats.get("by_task") or []
-            if by_task:
-                ui.label("By task").classes("text-sm font-semibold mt-3 mb-1")
-                with ui.row().classes("w-full gap-2 flex-wrap"):
-                    for row in by_task:
-                        with ui.card().classes("p-2 min-w-[200px]"):
-                            ui.label(escape_for_display(row["task_name"])).classes("text-xs font-semibold")
-                            ui.label(
-                                f"Init: {row['avg_init_form_seconds']:.1f}s, "
-                                f"Complete: {row['avg_completion_form_seconds']:.1f}s"
-                            ).classes("text-xs text-gray-600")
-                            ui.label(
-                                f"Sliders init: {row['avg_init_sliders_adjusted']:.1f}, "
-                                f"complete: {row['avg_completion_sliders_adjusted']:.1f} (n={row['count']})"
-                            ).classes("text-xs text-gray-500")
-
-        life_balance = metrics.get('life_balance', {})
-        with ui.row().classes("gap-3 flex-wrap mb-4"):
-            for title, value in [
-                ("Active", metrics['counts']['active']),
-                ("Completed 7d", metrics['counts']['completed_7d']),
-                ("Completion Rate", f"{metrics['counts']['completion_rate']}%"),
-                ("Today's self care tasks", metrics['counts']['daily_self_care_tasks']),
-                ("Avg Daily Self Care Tasks", f"{metrics['counts']['avg_daily_self_care_tasks']:.1f}"),
-                ("Time Est. Accuracy", f"{metrics['time']['estimation_accuracy']:.2f}x" if metrics['time']['estimation_accuracy'] > 0 else "N/A"),
-                ("Avg Relief", metrics['quality']['avg_relief']),
-                ("Avg Mental Energy", metrics['quality'].get('avg_mental_energy_needed', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
-                ("Avg Difficulty", metrics['quality'].get('avg_task_difficulty', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
-                ("Avg Stress Level", metrics['quality']['avg_stress_level']),
-                ("Avg Net Wellbeing", metrics['quality']['avg_net_wellbeing']),
-                ("Avg Net Wellbeing (Norm)", metrics['quality']['avg_net_wellbeing_normalized']),
-                ("Adjusted Wellbeing", f"{metrics['quality'].get('adjusted_wellbeing', 0.0):.1f}"),
-                ("Adjusted Wellbeing (Norm)", f"{metrics['quality'].get('adjusted_wellbeing_normalized', 50.0):.1f}"),
-                ("Avg Stress Efficiency", metrics['quality']['avg_stress_efficiency'] if metrics['quality']['avg_stress_efficiency'] is not None else "N/A"),
-                ("Avg Aversion", f"{metrics['quality'].get('avg_aversion', 0.0):.1f}"),
-                ("General Aversion Score", f"{metrics.get('aversion', {}).get('general_aversion_score', 0.0):.1f}"),
-                ("Avg Relief Score (No Mult)", f"{relief_summary.get('avg_relief_score_no_mult', 0.0):.1f}"),
-                ("Avg Relief Score (With Mult)", f"{relief_summary.get('avg_relief_duration_score', 0.0):.1f}"),
-                ("Total Relief Score (No Mult)", f"{relief_summary.get('total_relief_score_no_mult', 0.0):.1f}"),
-                ("Total Relief Score (With Mult)", f"{relief_summary.get('total_relief_score', 0.0):.1f}"),
-                ("Weekly Relief (Base)", f"{relief_summary.get('weekly_relief_score', 0.0):.1f}"),
-                ("Weekly Relief + Bonus (Robust)", f"{relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0):.1f}"),
-                ("Weekly Relief + Bonus (Sensitive)", f"{relief_summary.get('weekly_relief_score_with_bonus_sensitive', 0.0):.1f}"),
-                ("Total Productivity Score", f"{relief_summary.get('total_productivity_score', 0.0):.1f}"),
-                ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
-                ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
-                ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
-                ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
-                ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
-                ("Avg Init Form Time", f"{(form_stats.get('avg_init_form_seconds', 0) or 0):.1f}s"),
-                ("Avg Completion Form Time", f"{(form_stats.get('avg_completion_form_seconds', 0) or 0):.1f}s"),
-                ("Avg Sliders Adjusted (Init)", f"{(form_stats.get('avg_init_sliders_adjusted', 0) or 0):.1f}"),
-                ("Avg Sliders Adjusted (Complete)", f"{(form_stats.get('avg_completion_sliders_adjusted', 0) or 0):.1f}"),
-            ]:
-                with ui.card().classes("p-3 min-w-[150px]"):
-                    ui.label(title).classes("text-xs text-gray-500")
-                    ui.label(value).classes("text-xl font-bold")
-                    # Add link to thoroughness glossary for thoroughness metrics
-                    if title in ["Thoroughness Score", "Thoroughness Factor"]:
-                        ui.button("📚 Learn More", 
-                                on_click=lambda: ui.navigate.to('/analytics/glossary/thoroughness_factor')).classes(
-                            "text-xs bg-teal-500 text-white mt-1"
+    if not part_2:
+        with container:
+            # Time Tracking Consistency Section
+            with ui.card().classes("p-4 mb-4 bg-teal-50 border border-teal-200"):
+                ui.label("Time Tracking Consistency").classes("text-xl font-bold mb-2")
+                ui.label("Measures how well you track your time. Sleep up to 8 hours is rewarded. Untracked time is penalized.").classes(
+                    "text-sm text-gray-600 mb-3"
+                )
+                with ui.row().classes("gap-4 flex-wrap"):
+                    with ui.card().classes("p-3 min-w-[200px]"):
+                        ui.label("Tracking Score").classes("text-xs text-gray-500")
+                        ui.label(f"{tracking_data['tracking_consistency_score']:.1f}").classes(
+                            "text-2xl font-bold"
                         )
-    
+                        ui.label("/ 100").classes("text-xs text-gray-600")
+                    with ui.card().classes("p-3 min-w-[200px]"):
+                        ui.label("Avg Tracked Time").classes("text-xs text-gray-500")
+                        tracked_hours = tracking_data['avg_tracked_time_minutes'] / 60.0
+                        ui.label(f"{tracked_hours:.1f} hrs").classes("text-lg font-semibold")
+                        ui.label(f"({tracking_data['avg_tracked_time_minutes']:.0f} min)").classes(
+                            "text-xs text-gray-600"
+                        )
+                    with ui.card().classes("p-3 min-w-[200px]"):
+                        ui.label("Avg Untracked Time").classes("text-xs text-gray-500")
+                        untracked_hours = tracking_data['avg_untracked_time_minutes'] / 60.0
+                        ui.label(f"{untracked_hours:.1f} hrs").classes("text-lg font-semibold text-orange-600")
+                        ui.label(f"({tracking_data['avg_untracked_time_minutes']:.0f} min)").classes(
+                            "text-xs text-gray-600"
+                        )
+                    with ui.card().classes("p-3 min-w-[200px]"):
+                        ui.label("Avg Sleep Time").classes("text-xs text-gray-500")
+                        sleep_hours = tracking_data['avg_sleep_time_minutes'] / 60.0
+                        ui.label(f"{sleep_hours:.1f} hrs").classes("text-lg font-semibold")
+                        ui.label(f"({tracking_data['avg_sleep_time_minutes']:.0f} min)").classes(
+                            "text-xs text-gray-600"
+                        )
+                    with ui.card().classes("p-3 min-w-[200px]"):
+                        ui.label("Tracking Coverage").classes("text-xs text-gray-500")
+                        coverage_pct = tracking_data['tracking_coverage'] * 100.0
+                        ui.label(f"{coverage_pct:.1f}%").classes("text-lg font-semibold")
+                        ui.label("of day tracked").classes("text-xs text-gray-600")
+                ui.separator().classes("my-3")
+                ui.label(
+                    "Note: Sleep up to 8 hours is rewarded. Untracked time is penalized. "
+                    "Higher tracking consistency means more of your day is logged."
+                ).classes("text-sm text-gray-600")
+            # Task data entry: time spent filling forms and sliders adjusted (from batched page_data)
+            form_stats = page_data.get('form_fill_slider_stats') or {}
+            with ui.card().classes("p-4 mb-4 bg-slate-50 border border-slate-200"):
+                ui.label("Task data entry").classes("text-xl font-bold mb-2")
+                ui.label(
+                    "Time spent on initialization and completion forms; how many sliders you adjust per task."
+                ).classes("text-sm text-gray-600 mb-3")
+                with ui.row().classes("gap-4 flex-wrap"):
+                    with ui.card().classes("p-3 min-w-[180px]"):
+                        ui.label("Avg init form time").classes("text-xs text-gray-500")
+                        sec = form_stats.get("avg_init_form_seconds", 0) or 0
+                        ui.label(f"{sec:.1f} s").classes("text-lg font-semibold")
+                        ui.label("(time to fill initialization)").classes("text-xs text-gray-600")
+                    with ui.card().classes("p-3 min-w-[180px]"):
+                        ui.label("Avg completion form time").classes("text-xs text-gray-500")
+                        sec = form_stats.get("avg_completion_form_seconds", 0) or 0
+                        ui.label(f"{sec:.1f} s").classes("text-lg font-semibold")
+                        ui.label("(time to fill completion)").classes("text-xs text-gray-600")
+                    with ui.card().classes("p-3 min-w-[180px]"):
+                        ui.label("Avg sliders adjusted (init)").classes("text-xs text-gray-500")
+                        val = form_stats.get("avg_init_sliders_adjusted", 0) or 0
+                        ui.label(f"{val:.1f}").classes("text-lg font-semibold")
+                        ui.label("per task (0 = use defaults)").classes("text-xs text-gray-600")
+                    with ui.card().classes("p-3 min-w-[180px]"):
+                        ui.label("Avg sliders adjusted (complete)").classes("text-xs text-gray-500")
+                        val = form_stats.get("avg_completion_sliders_adjusted", 0) or 0
+                        ui.label(f"{val:.1f}").classes("text-lg font-semibold")
+                        ui.label("per task").classes("text-xs text-gray-600")
+                n_form = form_stats.get("n", 0) or 0
+                if n_form > 0:
+                    ui.label(f"Based on {n_form} completed task(s).").classes("text-xs text-gray-500 mt-2")
+                by_task = form_stats.get("by_task") or []
+                if by_task:
+                    ui.label("By task").classes("text-sm font-semibold mt-3 mb-1")
+                    with ui.row().classes("w-full gap-2 flex-wrap"):
+                        for row in by_task:
+                            with ui.card().classes("p-2 min-w-[200px]"):
+                                ui.label(escape_for_display(row["task_name"])).classes("text-xs font-semibold")
+                                ui.label(
+                                    f"Init: {row['avg_init_form_seconds']:.1f}s, "
+                                    f"Complete: {row['avg_completion_form_seconds']:.1f}s"
+                                ).classes("text-xs text-gray-600")
+                                ui.label(
+                                    f"Sliders init: {row['avg_init_sliders_adjusted']:.1f}, "
+                                    f"complete: {row['avg_completion_sliders_adjusted']:.1f} (n={row['count']})"
+                                ).classes("text-xs text-gray-500")
+            life_balance = metrics.get('life_balance', {})
+            with ui.row().classes("gap-3 flex-wrap mb-4"):
+                for title, value in [
+                    ("Active", metrics['counts']['active']),
+                    ("Completed 7d", metrics['counts']['completed_7d']),
+                    ("Completion Rate", f"{metrics['counts']['completion_rate']}%"),
+                    ("Today's self care tasks", metrics['counts']['daily_self_care_tasks']),
+                    ("Avg Daily Self Care Tasks", f"{metrics['counts']['avg_daily_self_care_tasks']:.1f}"),
+                    ("Time Est. Accuracy", f"{metrics['time']['estimation_accuracy']:.2f}x" if metrics['time']['estimation_accuracy'] > 0 else "N/A"),
+                    ("Avg Relief", metrics['quality']['avg_relief']),
+                    ("Avg Mental Energy", metrics['quality'].get('avg_mental_energy_needed', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
+                    ("Avg Difficulty", metrics['quality'].get('avg_task_difficulty', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
+                    ("Avg Stress Level", metrics['quality']['avg_stress_level']),
+                    ("Avg Net Wellbeing", metrics['quality']['avg_net_wellbeing']),
+                    ("Avg Net Wellbeing (Norm)", metrics['quality']['avg_net_wellbeing_normalized']),
+                    ("Adjusted Wellbeing", f"{metrics['quality'].get('adjusted_wellbeing', 0.0):.1f}"),
+                    ("Adjusted Wellbeing (Norm)", f"{metrics['quality'].get('adjusted_wellbeing_normalized', 50.0):.1f}"),
+                    ("Avg Stress Efficiency", metrics['quality']['avg_stress_efficiency'] if metrics['quality']['avg_stress_efficiency'] is not None else "N/A"),
+                    ("Avg Aversion", f"{metrics['quality'].get('avg_aversion', 0.0):.1f}"),
+                    ("General Aversion Score", f"{metrics.get('aversion', {}).get('general_aversion_score', 0.0):.1f}"),
+                    ("Avg Relief Score (No Mult)", f"{relief_summary.get('avg_relief_score_no_mult', 0.0):.1f}"),
+                    ("Avg Relief Score (With Mult)", f"{relief_summary.get('avg_relief_duration_score', 0.0):.1f}"),
+                    ("Total Relief Score (No Mult)", f"{relief_summary.get('total_relief_score_no_mult', 0.0):.1f}"),
+                    ("Total Relief Score (With Mult)", f"{relief_summary.get('total_relief_score', 0.0):.1f}"),
+                    ("Weekly Relief (Base)", f"{relief_summary.get('weekly_relief_score', 0.0):.1f}"),
+                    ("Weekly Relief + Bonus (Robust)", f"{relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0):.1f}"),
+                    ("Weekly Relief + Bonus (Sensitive)", f"{relief_summary.get('weekly_relief_score_with_bonus_sensitive', 0.0):.1f}"),
+                    ("Total Productivity Score", f"{relief_summary.get('total_productivity_score', 0.0):.1f}"),
+                    ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
+                    ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
+                    ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
+                    ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
+                    ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
+                    ("Avg Init Form Time", f"{(form_stats.get('avg_init_form_seconds', 0) or 0):.1f}s"),
+                    ("Avg Completion Form Time", f"{(form_stats.get('avg_completion_form_seconds', 0) or 0):.1f}s"),
+                    ("Avg Sliders Adjusted (Init)", f"{(form_stats.get('avg_init_sliders_adjusted', 0) or 0):.1f}"),
+                    ("Avg Sliders Adjusted (Complete)", f"{(form_stats.get('avg_completion_sliders_adjusted', 0) or 0):.1f}"),
+                ]:
+                    with ui.card().classes("p-3 min-w-[150px]"):
+                        ui.label(title).classes("text-xs text-gray-500")
+                        ui.label(value).classes("text-xl font-bold")
+                        # Add link to thoroughness glossary for thoroughness metrics
+                        if title in ["Thoroughness Score", "Thoroughness Factor"]:
+                            ui.button("📚 Learn More",
+                                    on_click=lambda: ui.navigate.to('/analytics/glossary/thoroughness_factor')).classes(
+                                "text-xs bg-teal-500 text-white mt-1"
+                            )
+        # End of part 1: schedule second chunk after delay to avoid single large UI burst (reconnect loop on VPS)
+        ui.timer(0.2, lambda: _build_analytics_main_content(
+            container, page_data, user_id_str, user_state, current_user_id,
+            render_time_chart, render_attribute_box, render_trends_section, render_stress_metrics_section,
+            render_task_rankings, render_stress_efficiency_leaderboard, render_metric_comparison,
+            render_correlation_explorer, part_2=True,
+        ), once=True)
+        return
+
+    # Part 2: remaining sections (productivity volume, charts, rankings)
+    form_stats = page_data.get('form_fill_slider_stats') or {}
+    with container:
         # Get target hours from settings for display
         goal_settings = user_state.get_productivity_goal_settings(user_id_str)
         goal_hours_per_week = goal_settings.get('goal_hours_per_week', 30.0)
