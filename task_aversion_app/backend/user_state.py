@@ -268,7 +268,28 @@ class UserStateManager:
         import json
         settings_json = json.dumps(settings)
         return self.update_preference(user_id, "productivity_settings", settings_json)
-    
+
+    def get_analytics_section_prefs(self, user_id: str) -> Dict[str, bool]:
+        """Get which analytics sections the user wants to load (section_id -> True/False). Missing => True."""
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return {}
+        raw = prefs.get("analytics_section_prefs", "")
+        if not raw:
+            return {}
+        try:
+            import json
+            out = json.loads(raw)
+            return {k: bool(v) for k, v in out.items()}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_analytics_section_prefs(self, user_id: str, prefs: Dict[str, bool]) -> Dict[str, Any]:
+        """Save which analytics sections the user wants to load."""
+        import json
+        out = {k: bool(v) for k, v in prefs.items()}
+        return self.update_preference(user_id, "analytics_section_prefs", json.dumps(out))
+
     def get_productivity_goal_settings(self, user_id: str) -> Dict[str, Any]:
         """Get productivity goal tracking settings.
         
