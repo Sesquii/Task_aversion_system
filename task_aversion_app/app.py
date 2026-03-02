@@ -523,7 +523,9 @@ if __name__ in {"__main__", "__mp_main__"}:
     print("[Backend] Storage: " + _backend_label())
     print("---")
     print("")
-    # timeout_keep_alive=30: avoid client reconnect after heavy analytics UI update (was 5; large apply_page_data burst was causing refresh loop on VPS)
+    # timeout_keep_alive=30: allow time for server to send keepalives during heavy UI updates.
+    # reconnect_timeout=60: keep Client alive when connection drops so browser can reconnect to same
+    # session instead of server destroying client (default 3s) and forcing full page re-execution on "reconnect".
     ui.run(
         title='Task Aversion System',
         port=8080,
@@ -531,5 +533,6 @@ if __name__ in {"__main__", "__mp_main__"}:
         reload=False,
         storage_secret=storage_secret,
         timeout_keep_alive=30,
+        reconnect_timeout=60,
     )
 

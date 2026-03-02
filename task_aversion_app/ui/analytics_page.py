@@ -1339,7 +1339,8 @@ def _build_analytics_main_content(
 
 
 def register_analytics_page():
-    @ui.page('/analytics')
+    # Longer reconnect_timeout so dropped connection during heavy load can resume same session instead of full reload
+    @ui.page('/analytics', reconnect_timeout=90)
     def analytics_dashboard():
         # #region agent log
         _analytics_debug_log('analytics_page.py:analytics_dashboard', 'analytics route entered', hypothesis_id='H1')
