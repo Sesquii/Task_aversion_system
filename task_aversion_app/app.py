@@ -1,5 +1,19 @@
 # app.py
+import os
+from pathlib import Path
+
 from nicegui import ui, app
+
+# Load .env early so DATABASE_URL etc. are set before backend/migration check
+try:
+    from dotenv import load_dotenv
+    _app_dir = Path(__file__).resolve().parent
+    load_dotenv(_app_dir / ".env")
+    load_dotenv()
+    if not os.getenv("DATABASE_URL"):
+        load_dotenv(_app_dir / ".env.production")
+except ImportError:
+    pass
 
 # Instrument navigation/cache/analytics early (before any pages use ui.navigate)
 try:
@@ -323,6 +337,14 @@ if __name__ in {"__main__", "__mp_main__"}:
     print("[Backend] Storage: " + _backend_label())
     print("")
     register_pages()
+
+    # Check migration status once at startup (used by health route and redirect)
+    from backend.migration_status import get_migration_status
+    _migration_status = get_migration_status()
+    if hasattr(app, "state"):
+        app.state.migration_status = _migration_status
+    if not _migration_status.ok:
+        print("[App] Migrations behind - app will show 'Run migrations' until applied.")
     
     # Set up static file serving for graphic aids
     from fastapi.staticfiles import StaticFiles
@@ -346,6 +368,58 @@ if __name__ in {"__main__", "__mp_main__"}:
             "message": "Server is running. If you see this, the server has the latest code."
         }
 
+    # Health/readiness: report migration status (503 if migrations behind)
+    @app.get('/api/health')
+    async def health():
+        """Health check; returns 503 if migrations are behind."""
+        status = getattr(app.state, "migration_status", None)
+        if status is None:
+            from backend.migration_status import get_migration_status
+            status = get_migration_status()
+        if status.ok:
+            return {"status": "ok", "migrations_ok": True}
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "migrations_required",
+                "migrations_ok": False,
+                "message": status.message,
+                "command": status.command,
+                "details": status.details,
+            },
+        )
+
+    # Migrations-required page: shown when DB is behind (blocking screen)
+    @ui.page('/migrations-required')
+    def migrations_required_page():
+        status = getattr(app.state, "migration_status", None)
+        if status is None:
+            from backend.migration_status import get_migration_status
+            status = get_migration_status()
+        ui.html('<meta name="viewport" content="width=device-width, initial-scale=1">')
+        ui.label("Database migrations required").classes(
+            "text-2xl font-bold text-amber-700 mt-8"
+        )
+        ui.label(status.message or "Migrations are behind. Apply them to continue.").classes(
+            "text-lg text-gray-700 mt-2"
+        )
+        with ui.card().classes("w-full max-w-2xl mt-6 p-6 bg-amber-50 border border-amber-200"):
+            ui.label("Run this command in the app directory (task_aversion_app):").classes(
+                "font-semibold text-gray-800"
+            )
+            ui.code(status.command).classes(
+                "block mt-2 p-4 bg-gray-900 text-green-300 rounded text-sm font-mono"
+            )
+            if status.details:
+                with ui.expansion("Details", icon="info").classes("w-full mt-4"):
+                    for d in status.details:
+                        ui.label(d).classes("text-sm text-gray-700")
+        ui.label(
+            "After running migrations, reload this page or restart the app."
+        ).classes("text-sm text-gray-600 mt-4")
+        ui.button("Reload page", on_click=lambda: ui.navigate.reload()).classes("mt-4")
+
     # Timezone: store browser-detected timezone for the current user (so "Use my device" works)
     from fastapi import Request, Response
     @app.post('/api/detected-timezone')
@@ -367,6 +441,29 @@ if __name__ in {"__main__", "__mp_main__"}:
             return Response(status_code=200)
         except Exception:
             return Response(status_code=500)
+
+    # Redirect to migrations-required when DB is behind (skip API/static/NiceGUI)
+    _skip_migration_redirect_paths = (
+        '/api/health', '/api/version', '/api/detected-timezone',
+        '/migrations-required', '/auth/callback',
+    )
+
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import RedirectResponse
+
+    class MigrationRedirectMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            if getattr(app.state, "migration_status", None) and not app.state.migration_status.ok:
+                path = request.url.path
+                if path in _skip_migration_redirect_paths:
+                    pass
+                elif path.startswith(('/static/', '/_nicegui/', '/api/')):
+                    pass
+                else:
+                    return RedirectResponse(url='/migrations-required', status_code=302)
+            return await call_next(request)
+
+    app.add_middleware(MigrationRedirectMiddleware)
 
     # Add query logging middleware (lightweight, can be disabled via env var)
     if os.getenv('ENABLE_QUERY_LOGGING', '1').lower() in ('1', 'true', 'yes'):
