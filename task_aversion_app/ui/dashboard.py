@@ -5726,9 +5726,6 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                 ui.button("Glossary",
                           on_click=lambda: ui.navigate.to('/analytics/glossary'),
                           icon="menu_book").classes("text-xl py-3 px-6").props('data-tooltip-id="glossary_link"')
-                ui.button("Known Issues",
-                          on_click=lambda: ui.navigate.to('/known-issues'),
-                          icon="bug_report").classes("text-xl py-3 px-6").props('data-tooltip-id="known_issues_link"')
                 ui.button("Feedback",
                           on_click=submit_feedback,
                           icon="feedback",

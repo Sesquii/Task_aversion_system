@@ -51,33 +51,6 @@ ATTRIBUTE_OPTIONS_DICT = {opt['value']: opt['label'] for opt in ATTRIBUTE_OPTION
 # Module-level timing for analytics page build (so finally block can read it regardless of scope)
 _analytics_build_start: list = []
 
-# Debug log path for instrumentation (refresh/build/poll/apply tracing)
-_DEBUG_LOG = os.path.join(os.path.dirname(__file__), '..', '..', '.cursor', 'debug.log')
-
-
-def _debug_log(location: str, message: str, data: dict, hypothesis_id: str = '') -> None:
-    """Append one NDJSON line to .cursor/debug.log for debugging analytics refresh."""
-    try:
-        log_dir = os.path.dirname(_DEBUG_LOG)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-        payload = {
-            'id': f"log_{int(time.time() * 1000)}",
-            'timestamp': int(time.time() * 1000),
-            'location': location,
-            'message': message,
-            'data': data,
-            'hypothesisId': hypothesis_id,
-        }
-        with open(_DEBUG_LOG, 'a', encoding='utf-8') as _f:
-            _f.write(json.dumps(payload) + '\n')
-    except Exception:
-        pass
-
-
-# Build counter to detect multiple page builds (refresh loop)
-_analytics_build_count = 0
-
 
 def _render_time_chart(df=None, user_id=None):
     """Render time chart. If df is provided, use it (batched), otherwise fetch."""
@@ -1324,9 +1297,6 @@ def _build_analytics_main_content(
 def register_analytics_page():
     @ui.page('/analytics')
     def analytics_dashboard():
-        # #region agent log
-        _debug_log('analytics_page:analytics_dashboard', 'page handler entered', {}, 'H1')
-        # #endregion
         try:
             from backend.instrumentation import log_page_visit
             log_page_visit('/analytics')
@@ -1345,12 +1315,6 @@ def register_analytics_page():
 
 
 def build_analytics_page():
-    global _analytics_build_count
-    _analytics_build_count += 1
-    build_id = _analytics_build_count
-    # #region agent log
-    _debug_log('analytics_page:build_analytics_page', 'build_analytics_page entered', {'build_id': build_id}, 'H1')
-    # #endregion
     page_start = time.perf_counter()
     _analytics_build_start.append(page_start)
     t_phase = time.perf_counter()
@@ -1432,9 +1396,6 @@ def build_analytics_page():
                         _rce=_render_correlation_explorer,
                         _comp_loading=loading_label, _comp_row=composite_row, _comp_score=score_label,
                         _weights=current_weights):
-        # #region agent log
-        _debug_log('analytics_page:apply_page_data', 'apply_page_data start', {}, 'H2')
-        # #endregion
         _loading.style("display: none;")
         # Composite score from same batch (consistent with rest of analytics)
         comp_components = page_data.get('composite_components')
@@ -1461,9 +1422,6 @@ def build_analytics_page():
                 render_stress_efficiency_leaderboard=_rsel, render_metric_comparison=_rmc,
                 render_correlation_explorer=_rce,
             )
-            # #region agent log
-            _debug_log('analytics_page:apply_page_data', 'apply_page_data end', {}, 'H2')
-            # #endregion
         ui.timer(0.05, _deferred_build, once=True)
 
     def show_error(e, _err_row=error_row, _container=content_container, _loading=loading_analytics_label):
@@ -1488,9 +1446,6 @@ def build_analytics_page():
         _err_row=error_row,
         _uid=current_user_id,
     ):
-        # #region agent log
-        _debug_log('analytics_page:start_analytics_load', 'start_analytics_load called', {'build_id': build_id}, 'H4')
-        # #endregion
         _err_row.style("display: none;")
         _loading.style("display: block;")
         _loading.text = "Loading analytics..."
@@ -1520,9 +1475,6 @@ def build_analytics_page():
             if not page_data_result:
                 return
             status, value = page_data_result[0]
-            # #region agent log
-            _debug_log('analytics_page:poll', 'poll got data, cancelling timer', {'status': status, 'build_id': build_id}, 'H3')
-            # #endregion
             if timer_ref:
                 try:
                     timer_ref[0].cancel()
@@ -1548,9 +1500,6 @@ def build_analytics_page():
             total_ms = (time.perf_counter() - _analytics_build_start.pop()) * 1000
         else:
             total_ms = 0.0
-        # #region agent log
-        _debug_log('analytics_page:build_analytics_page', 'build_analytics_page complete', {'build_id': build_id, 'total_ms': round(total_ms, 2)}, 'H1')
-        # #endregion
         # Always log total page load time (even if an exception occurred during UI build)
         try:
             from backend.instrumentation import log_analytics_event, is_analytics_enabled

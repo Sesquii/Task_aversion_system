@@ -46,7 +46,6 @@ from ui.cancel_task import cancel_task_page
 from ui.analytics_page import register_analytics_page
 from ui.analytics_glossary import register_analytics_glossary
 from ui.relief_comparison_analytics import register_relief_comparison_page
-from ui.known_issues_page import register_known_issues_page
 from ui.gap_handling import gap_handling_page, check_and_redirect_to_gap_handling
 # Import pages - these will auto-register via @ui.page() decorators
 # Import order matters - login page should be imported first
@@ -169,9 +168,7 @@ def register_pages():
     register_analytics_glossary()
     register_relief_comparison_page()
     register_formula_baseline_charts()
-    register_known_issues_page()
-    
-    
+
     # Diagnostic endpoint to check backend mode
     @ui.page('/diagnostic/backend')
     def backend_diagnostic():
