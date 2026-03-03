@@ -1174,6 +1174,19 @@ def refresh_templates(search_query=None, search_mode='task'):
             if not rows:
                 ui.markdown("_No templates match your search_" if q_lower else "_No templates available_").classes("text-sm text-gray-500")
             else:
+                # Build task_id -> list of job names for cards (one pass over jobs)
+                task_job_names = {}
+                try:
+                    from backend.job_manager import JobManager
+                    jm = JobManager()
+                    for job in jm.get_all_jobs():
+                        jname = job.get('name') or 'Unnamed'
+                        for task in jm.get_tasks_for_job(job.get('job_id'), user_id=session_user_id):
+                            tid = task.get('task_id')
+                            if tid:
+                                task_job_names.setdefault(tid, []).append(jname)
+                except Exception:
+                    task_job_names = {}
                 ui.markdown("**Tasks**").classes("text-sm font-semibold w-full mb-2")
                 col1 = ui.column().classes("w-1/3")
                 col2 = ui.column().classes("w-1/3")
@@ -1186,6 +1199,11 @@ def refresh_templates(search_query=None, search_mode='task'):
                         card_id = f"template-{task_id}"
                         with ui.card().classes("p-2 mb-2 w-full context-menu-card").props(f'id="{card_id}" data-template-id="{task_id}" data-context-menu="template"'):
                             ui.markdown(f"**{escape_for_display(t['name'])}**").classes("text-xs")
+                            job_names = task_job_names.get(task_id, [])
+                            if job_names:
+                                ui.label(", ".join(escape_for_display(n) for n in job_names)).classes("text-xs text-gray-500")
+                            else:
+                                ui.label("No job").classes("text-xs text-gray-400")
                             ui.button("Initialize", on_click=lambda tid=task_id: init_quick(tid)).props("dense size=sm").classes("w-full")
                             ui.button("", on_click=lambda task=t: edit_template(task)).props(f'id="context-btn-template-edit-{task_id}"').style("display: none;")
                             ui.button("", on_click=lambda task=t: copy_template(task)).props(f'id="context-btn-template-copy-{task_id}"').style("display: none;")
