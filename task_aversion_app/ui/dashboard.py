@@ -4967,8 +4967,10 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                     body: JSON.stringify(payload),
                     credentials: "include"
                 }).then(function(r) {
-                    if (debug) console.log("[locale] detected-timezone", r.status, payload, "Applied-Defaults:", r.headers.get("X-Applied-Locale-Defaults"));
-                    if (r.ok && r.headers.get("X-Applied-Locale-Defaults") === "true" && !sessionStorage.getItem("locale_defaults_reload_done")) {
+                    if (debug) console.log("[locale] detected-timezone", r.status, payload);
+                    return r.ok ? r.json() : null;
+                }).then(function(body) {
+                    if (body && body.applied_defaults && !sessionStorage.getItem("locale_defaults_reload_done")) {
                         sessionStorage.setItem("locale_defaults_reload_done", "1");
                         window.location.reload();
                     }

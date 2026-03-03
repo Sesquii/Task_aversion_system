@@ -419,11 +419,13 @@ if __name__ in {"__main__", "__mp_main__"}:
 
     # Timezone + locale: store browser-detected timezone and 12/24h preference
     from fastapi import Request, Response
+    import json as _json
     @app.post('/api/detected-timezone')
     async def api_detected_timezone(request: Request):
         """Accept browser timezone and/or hour12. Body: { timezone?: string, use_auto?: boolean, hour12?: boolean }.
         If timezone is sent and user has no timezone set, we set timezone to 'auto' so browser TZ is used by default.
-        Returns header X-Applied-Locale-Defaults: true when we just set timezone to auto (client can reload once)."""
+        Returns JSON { "applied_defaults": true } when we just set timezone to auto (client can reload once).
+        Also sends header X-Applied-Locale-Defaults for backwards compatibility."""
         user_id = get_current_user()
         if user_id is None:
             return Response(status_code=401)
@@ -451,7 +453,9 @@ if __name__ in {"__main__", "__mp_main__"}:
 
             if not tz and 'hour12' not in body:
                 return Response(status_code=400)  # need at least one of timezone or hour12
-            response = Response(status_code=200)
+            payload = _json.dumps({"applied_defaults": applied_defaults})
+            response = Response(content=payload, media_type="application/json", status_code=200)
+            response.headers["Access-Control-Expose-Headers"] = "X-Applied-Locale-Defaults"
             if applied_defaults:
                 response.headers["X-Applied-Locale-Defaults"] = "true"
             return response
