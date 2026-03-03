@@ -71,7 +71,10 @@ def login_page():
                 
                 ui.label(
                     'Sign in with your Google account to access your tasks and data.'
-                ).classes('text-gray-700 mb-6')
+                ).classes('text-gray-700 mb-2')
+                ui.label(
+                    'Core features beta-ready; full product (incl. AI) in development—early access. Feedback welcome.'
+                ).classes('text-sm text-gray-500 mb-6')
                 
                 ui.button(
                     'Sign in with Google',
