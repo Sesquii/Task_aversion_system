@@ -2773,15 +2773,6 @@ class Analytics:
         Returns:
             Thoroughness factor (0.5 to 1.3), where 1.0 = baseline thoroughness
         """
-        # #region agent log
-        import time as time_module
-        thoroughness_func_start = time_module.perf_counter()
-        try:
-            import json as json_module
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor entry', 'data': {'user_id': user_id, 'days': days}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
         try:
             from .task_manager import TaskManager
             from .database import get_session, PopupTrigger
@@ -2885,28 +2876,11 @@ class Analytics:
             
             # Clamp to reasonable range (0.5 to 1.3)
             thoroughness_factor = max(0.5, min(1.3, thoroughness_factor))
-            
-            # #region agent log
-            thoroughness_func_duration = time_module.perf_counter() - thoroughness_func_start
-            try:
-                import json as json_module
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor exit', 'data': {'duration_seconds': thoroughness_func_duration, 'factor_value': thoroughness_factor}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
-            
+
             return float(thoroughness_factor)
         
         except Exception as e:
             print(f"[Analytics] Error calculating thoroughness factor: {e}")
-            # #region agent log
-            thoroughness_func_duration = time_module.perf_counter() - thoroughness_func_start
-            try:
-                import json as json_module
-                with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'H1', 'location': 'analytics.py:calculate_thoroughness_factor', 'message': 'calculate_thoroughness_factor error', 'data': {'duration_seconds': thoroughness_func_duration, 'error': str(e)}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
-            except: pass
-            # #endregion
             return 1.0  # Default neutral factor on error
     
     def calculate_thoroughness_score(self, user_id: str = 'default', days: int = 30) -> float:
@@ -5285,6 +5259,45 @@ class Analytics:
             'sleep_count': int(len(completed)),
             'sleep_time_minutes_total': round(total_sleep_min, 1),
             'sleep_emotion_counts': {},
+        }
+
+    def get_sleep_score_history(
+        self,
+        days: int = 90,
+        user_id: Optional[int] = None,
+        instances_completed_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, Any]:
+        """Get historical daily sleep score for monitored metrics chart.
+
+        Uses get_sleep_metrics daily_scores; returns the same shape as other
+        get_*_history methods (dates, values, current_value, weekly_average, three_month_average).
+        """
+        sleep_metrics = self.get_sleep_metrics(
+            days=days,
+            user_id=user_id,
+            instances_df=instances_completed_df,
+        )
+        daily_scores = sleep_metrics.get('daily_scores', [])
+        if not daily_scores:
+            return {
+                'dates': [],
+                'values': [],
+                'current_value': 50.0,
+                'weekly_average': 50.0,
+                'three_month_average': 50.0,
+            }
+        dates = [d['date'] for d in daily_scores]
+        values = [float(d['score']) for d in daily_scores]
+        current_value = values[-1] if values else 50.0
+        weekly_values = values[-7:] if len(values) >= 7 else values
+        weekly_average = sum(weekly_values) / len(weekly_values) if weekly_values else 50.0
+        three_month_average = sum(values) / len(values) if values else 50.0
+        return {
+            'dates': dates,
+            'values': values,
+            'current_value': current_value,
+            'weekly_average': weekly_average,
+            'three_month_average': three_month_average,
         }
 
     def get_daily_work_volume_metrics(
@@ -9947,18 +9960,11 @@ class Analytics:
         """
         from datetime import datetime, timedelta
         import time as time_module
-        
-        # #region agent log
-        try:
-            import json as json_module
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'HIST', 'location': 'analytics.py:get_generic_metric_history', 'message': 'get_generic_metric_history called', 'data': {'metric_key': metric_key, 'days': days}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
+
         metric_routes = {
             'execution_score': self.get_execution_score_history,
             'grit_score': self.get_grit_score_history,
+            'sleep_score': self.get_sleep_score_history,
             'thoroughness_score': self.get_thoroughness_score_history,
             'thoroughness_factor': self.get_thoroughness_factor_history,
             'stress_level': self.get_stress_level_history,
@@ -10095,15 +10101,7 @@ class Analytics:
         
         # Three month average (last 90 days)
         three_month_average = sum(values) / len(values) if values else 0.0
-        
-        # #region agent log
-        try:
-            import json as json_module
-            with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json_module.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'HIST', 'location': 'analytics.py:get_generic_metric_history', 'message': 'get_generic_metric_history completed', 'data': {'metric_key': metric_key, 'dates_count': len(dates), 'values_count': len(values), 'current_value': current_value}, 'timestamp': int(time_module.time() * 1000)}) + '\n')
-        except: pass
-        # #endregion
-        
+
         return {
             'dates': dates,
             'values': values,
