@@ -49,6 +49,7 @@ Replace `datetime.now()` with `app_time.now()` (and `datetime.utcnow()` with `ap
 - **Cause**: When `TIMEZONE` is not set in `.env` and the user has no timezone/detected_tz in preferences, the app falls back to **system local time**. On most Linux VPS hosts the system timezone is UTC, so all times display in UTC.
 - **Fix**: Set `TIMEZONE` in `.env` on the VPS to your IANA timezone (e.g. `TIMEZONE=America/New_York`) as fallback. In addition, the app **auto-applies browser timezone by default**: when the client sends a timezone to `/api/detected-timezone` and the user has no timezone set, the server sets the preference to `auto` so the browser’s zone is used. So once the dashboard (or any page that sends detected timezone) loads, times should show in the user’s zone.
 - **If still UTC**: Ensure the browser can reach `POST /api/detected-timezone` with credentials (session cookie). If the request returns 401, check session/cookie domain and CORS.
+- **Debug**: Open the dashboard (or settings) with `?locale_debug=1` (e.g. `/dashboard?locale_debug=1`). In the browser console you'll see `[locale] detected-timezone <status> <payload> Applied-Defaults: <header>`. Use the Network tab to confirm the POST returns 200 and inspect the response header `X-Applied-Locale-Defaults` when the server applied timezone defaults. If you see 401, the session is not being sent with the request.
 
 ### 12-hour vs 24-hour display
 

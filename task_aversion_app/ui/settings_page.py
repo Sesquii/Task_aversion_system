@@ -125,21 +125,27 @@ def _build_settings_content(user_id):
         current_tz = user_state.get_timezone(user_id_str)
         detected_tz = user_state.get_detected_timezone(user_id_str)
 
-        # Send browser timezone and 12/24h preference on load
+        # Send browser timezone and 12/24h preference (hourCycle fallback when hour12 missing)
         ui.run_javascript('''
             (function() {
                 try {
                     var ro = Intl.DateTimeFormat().resolvedOptions();
                     var payload = {};
                     if (ro.timeZone) payload.timezone = ro.timeZone;
-                    if (typeof ro.hour12 !== "undefined") payload.hour12 = ro.hour12;
+                    var hour12 = ro.hour12;
+                    if (typeof hour12 === "undefined" && ro.hourCycle)
+                        hour12 = (ro.hourCycle === "h11" || ro.hourCycle === "h12");
+                    if (typeof hour12 !== "undefined") payload.hour12 = !!hour12;
+                    var debug = window.location.search.indexOf("locale_debug=1") !== -1;
                     if (payload.timezone || payload.hour12) {
                         fetch("/api/detected-timezone", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify(payload),
                             credentials: "include"
-                        }).catch(function() {});
+                        }).then(function(r) {
+                            if (debug) console.log("[locale] detected-timezone", r.status, payload, "Applied-Defaults:", r.headers.get("X-Applied-Locale-Defaults"));
+                        }).catch(function(e) { if (debug) console.warn("[locale] detected-timezone failed", e); });
                     }
                 } catch (e) {}
             })();
@@ -152,7 +158,10 @@ def _build_settings_content(user_id):
                         var ro = Intl.DateTimeFormat().resolvedOptions();
                         var payload = { use_auto: true };
                         if (ro.timeZone) payload.timezone = ro.timeZone;
-                        if (typeof ro.hour12 !== "undefined") payload.hour12 = ro.hour12;
+                        var hour12 = ro.hour12;
+                        if (typeof hour12 === "undefined" && ro.hourCycle)
+                            hour12 = (ro.hourCycle === "h11" || ro.hourCycle === "h12");
+                        if (typeof hour12 !== "undefined") payload.hour12 = !!hour12;
                         fetch("/api/detected-timezone", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },

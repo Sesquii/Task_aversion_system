@@ -4948,16 +4948,34 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     debug_log('dashboard.py:build_dashboard', 'build_dashboard start', {'ts': _t_dash_start}, 'DASH_START')
     # #endregion
 
-    # Send browser timezone and 12/24h preference so display uses them by default
-    ui.run_javascript(
-        '(function(){ try { var ro = Intl.DateTimeFormat().resolvedOptions(); '
-        'var payload = {}; '
-        'if (ro.timeZone) payload.timezone = ro.timeZone; '
-        'if (typeof ro.hour12 !== "undefined") payload.hour12 = ro.hour12; '
-        'if (payload.timezone || payload.hour12) fetch("/api/detected-timezone", { method: "POST", '
-        'headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "include" }).catch(function(){}); '
-        '} catch(e) {} })();'
-    )
+    # Send browser timezone and 12/24h preference; reload once if server applied defaults
+    ui.run_javascript('''
+        (function(){
+            try {
+                var ro = Intl.DateTimeFormat().resolvedOptions();
+                var payload = {};
+                if (ro.timeZone) payload.timezone = ro.timeZone;
+                var hour12 = ro.hour12;
+                if (typeof hour12 === "undefined" && ro.hourCycle)
+                    hour12 = (ro.hourCycle === "h11" || ro.hourCycle === "h12");
+                if (typeof hour12 !== "undefined") payload.hour12 = !!hour12;
+                var debug = window.location.search.indexOf("locale_debug=1") !== -1;
+                if (!payload.timezone && !payload.hour12) return;
+                fetch("/api/detected-timezone", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                    credentials: "include"
+                }).then(function(r) {
+                    if (debug) console.log("[locale] detected-timezone", r.status, payload, "Applied-Defaults:", r.headers.get("X-Applied-Locale-Defaults"));
+                    if (r.ok && r.headers.get("X-Applied-Locale-Defaults") === "true" && !sessionStorage.getItem("locale_defaults_reload_done")) {
+                        sessionStorage.setItem("locale_defaults_reload_done", "1");
+                        window.location.reload();
+                    }
+                }).catch(function(e) { if (debug) console.warn("[locale] detected-timezone failed", e); });
+            } catch (e) {}
+        })();
+    ''')
 
     # Defer cache warming so first paint is instant (was blocking ~5s and causing 8s dashboard load)
     def _warm_instances_cache():

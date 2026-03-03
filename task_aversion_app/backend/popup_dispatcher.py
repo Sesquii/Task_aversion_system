@@ -191,7 +191,7 @@ class PopupDispatcher:
             # Repeats: slightly more direct
             title = "Sliders Not Adjusted"
             message = (
-                f"It looks like you haven't adjusted any sliders before {action_ing} this task. "
+                f"You have not adjusted any sliders before {action_ing} this task. "
                 f"Taking a moment to set accurate values helps with emotional regulation and provides "
                 f"better insights into your task patterns."
             )
