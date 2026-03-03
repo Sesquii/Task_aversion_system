@@ -387,7 +387,7 @@ class InstanceManager:
             'proactive_score': '',
             'is_completed': 'False',
             'is_deleted': 'False',
-            'status': 'active',
+            'status': 'draft',  # Only show in Initialized Tasks after user saves the initialization form
             'duration_minutes': '',
             'delay_minutes': '',
             'relief_score': '',
@@ -442,7 +442,7 @@ class InstanceManager:
                     net_relief=None,
                     is_completed=False,
                     is_deleted=False,
-                    status='active',
+                    status='draft',  # Only show in Initialized Tasks after user saves the initialization form
                     duration_minutes=None,
                     delay_minutes=None,
                     relief_score=None,
@@ -895,7 +895,7 @@ class InstanceManager:
         df = self.df[
             (self.df['is_completed'] != 'True') &
             (self.df['is_deleted'] != 'True') &
-            (~status_series.isin(['completed', 'cancelled']))
+            (~status_series.isin(['completed', 'cancelled', 'draft']))
         ]
         
         # CRITICAL: Filter by user_id for data isolation
@@ -923,7 +923,7 @@ class InstanceManager:
                 query = session.query(self.TaskInstance).filter(
                     self.TaskInstance.is_completed == False,
                     self.TaskInstance.is_deleted == False,
-                    ~self.TaskInstance.status.in_(['completed', 'cancelled'])
+                    ~self.TaskInstance.status.in_(['completed', 'cancelled', 'draft'])
                 )
                 
                 # Add user_id filter if provided
@@ -2132,9 +2132,12 @@ class InstanceManager:
                 self.df.at[idx, 'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
             if due_at is not None:
                 self.df.at[idx, 'due_at'] = due_at.strftime("%Y-%m-%d %H:%M")
+            # Move from draft to initialized so task appears in Initialized Tasks list
+            self.df.at[idx, 'status'] = 'initialized'
             # Extract predicted values to columns (only if columns are empty)
             self._update_attributes_from_payload(idx, predicted)
             self._save()
+            self._invalidate_instance_caches()
 
     def _add_prediction_to_instance_db(
         self,
@@ -2174,9 +2177,13 @@ class InstanceManager:
                     if due_at is not None:
                         instance.due_at = due_at
 
+                    # Move from draft to initialized so task appears in Initialized Tasks list
+                    instance.status = 'initialized'
+
                     self._update_attributes_from_payload_db(instance, predicted)
 
                     session.commit()
+            self._invalidate_instance_caches()
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in add_prediction_to_instance and CSV fallback is disabled: {e}") from e
