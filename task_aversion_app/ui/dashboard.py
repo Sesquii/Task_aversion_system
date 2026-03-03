@@ -832,12 +832,15 @@ def refresh_initialized_tasks(search_query=None):
     except Exception:
         pass
 
-    # Sections to show: (section_title, list); show Paused/Postponed sections when checkbox is on (separate lists)
-    sections = [("In progress", in_progress_list)]
-    if show_paused:
-        sections.append(("Paused", paused_list))
-    if show_postponed:
-        sections.append(("Postponed", postponed_list))
+    # Sections to show: when either checkbox is checked, show only checked sections; when neither, show In progress + Paused (not Postponed)
+    if show_paused or show_postponed:
+        sections = []
+        if show_paused:
+            sections.append(("Paused", paused_list))
+        if show_postponed:
+            sections.append(("Postponed", postponed_list))
+    else:
+        sections = [("In progress", in_progress_list), ("Paused", paused_list)]
 
     # Clear the container
     initialized_tasks_container.clear()
