@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Any
 from nicegui import ui
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
@@ -8,7 +8,7 @@ from backend.security_utils import escape_for_display
 from backend.app_time import format_for_display
 from ui.error_reporting import handle_error_with_ui
 import json
-from datetime import datetime
+from datetime import datetime, date
 
 im = InstanceManager()
 user_state = UserStateManager()
@@ -152,8 +152,59 @@ def get_all_tasks_chronologically(user_id: Optional[int] = None):
         return timestamp
     
     all_tasks.sort(key=sort_key, reverse=True)
-    
+
     return all_tasks
+
+
+def _parse_timestamp_to_date(ts: Any) -> Optional[date]:
+    """Parse completed_at/cancelled_at string to date for range comparison. Returns None if invalid."""
+    if not ts or (isinstance(ts, str) and not ts.strip()):
+        return None
+    try:
+        s = str(ts).strip()
+        # Handle "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD"
+        if " " in s:
+            s = s.split(" ")[0]
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _task_matches_search(task: dict, query: str) -> bool:
+    """Return True if task name or notes (actual JSON) contain the search query (case-insensitive)."""
+    if not query or not query.strip():
+        return True
+    q = query.strip().lower()
+    name = (task.get("task_name") or "")
+    if q in name.lower():
+        return True
+    actual_raw = task.get("actual") or "{}"
+    if isinstance(actual_raw, dict):
+        actual_data = actual_raw
+    else:
+        try:
+            actual_data = json.loads(actual_raw) if actual_raw else {}
+        except json.JSONDecodeError:
+            actual_data = {}
+    # Search in common text fields
+    for key in ("reason_for_canceling", "notes", "note", "description"):
+        val = actual_data.get(key)
+        if val and isinstance(val, str) and q in val.lower():
+            return True
+    return False
+
+
+def _task_in_date_range(task: dict, date_from: Optional[date], date_to: Optional[date]) -> bool:
+    """Return True if task timestamp falls within [date_from, date_to] (inclusive)."""
+    ts = task.get("_timestamp")
+    d = _parse_timestamp_to_date(ts)
+    if d is None:
+        return True  # Include tasks with no date when filtering by range
+    if date_from is not None and d < date_from:
+        return False
+    if date_to is not None and d > date_to:
+        return False
+    return True
 
 
 def mark_instance_as_edited(instance_id):
@@ -274,7 +325,7 @@ def edit_cancelled_task_dialog(instance_id, inst_data, refresh_callback, user_id
     if isinstance(actual_data, str):
         try:
             actual_data = json.loads(actual_data)
-        except:
+        except json.JSONDecodeError:
             actual_data = {}
     
     current_category = actual_data.get('cancellation_category', 'other')
@@ -393,7 +444,7 @@ def task_editing_manager_page():
                                     if isinstance(actual_data, str):
                                         try:
                                             actual_data = json.loads(actual_data)
-                                        except:
+                                        except json.JSONDecodeError:
                                             actual_data = {}
                                     
                                     category = actual_data.get('cancellation_category', 'other')
@@ -413,7 +464,7 @@ def task_editing_manager_page():
                                     if isinstance(actual_data, str):
                                         try:
                                             actual_data = json.loads(actual_data)
-                                        except:
+                                        except json.JSONDecodeError:
                                             actual_data = {}
                                     
                                     if actual_data.get('is_edited'):
@@ -458,7 +509,7 @@ def task_editing_manager_page():
                     else:
                         ui.button("← Previous", on_click=lambda: None).classes("bg-gray-300 text-gray-500").props("disabled")
                     
-                    page_info_label = ui.label(f"Page {page_num} of {total_pages}").classes("text-sm text-gray-600")
+                    ui.label(f"Page {page_num} of {total_pages}").classes("text-sm text-gray-600")
                     
                     if page_num < total_pages:
                         ui.button("Next →", on_click=lambda: change_page(1)).classes("bg-gray-500 text-white")
@@ -471,19 +522,65 @@ def task_editing_manager_page():
         label='Filter by Status',
         value='all'
     ).classes("mb-4").props("dense outlined")
-    
+
+    # Date range filter
+    with ui.row().classes("items-end gap-2 flex-wrap mb-4"):
+        date_from_input = ui.input(
+            label="From date",
+            placeholder="YYYY-MM-DD"
+        ).classes("min-w-[140px]").props("dense outlined")
+        date_to_input = ui.input(
+            label="To date",
+            placeholder="YYYY-MM-DD"
+        ).classes("min-w-[140px]").props("dense outlined")
+        ui.label("Leave empty for no date limit.").classes("text-xs text-gray-500 self-center")
+
+    # Semantic search: task name and notes
+    search_input = ui.input(
+        label="Search in task names and notes",
+        placeholder="Type to search..."
+    ).classes("w-full max-w-md mb-4").props("dense outlined clearable")
+
     def get_filtered_tasks():
-        """Get tasks based on current filter."""
+        """Get tasks based on current filter, date range, and search query."""
         selected_type = task_type_filter.value
         all_tasks = get_all_tasks_chronologically(user_id=user_id)
-        
+
         if selected_type == 'all':
-            return all_tasks
+            tasks = all_tasks
         elif selected_type == 'completed':
-            return [t for t in all_tasks if t.get('_status') == 'completed']
+            tasks = [t for t in all_tasks if t.get('_status') == 'completed']
         elif selected_type == 'cancelled':
-            return [t for t in all_tasks if t.get('_status') == 'cancelled']
-        return all_tasks
+            tasks = [t for t in all_tasks if t.get('_status') == 'cancelled']
+        else:
+            tasks = all_tasks
+
+        # Date range filter
+        date_from_val = None
+        date_to_val = None
+        try:
+            if date_from_input.value and str(date_from_input.value).strip():
+                date_from_val = datetime.strptime(
+                    str(date_from_input.value).strip()[:10], "%Y-%m-%d"
+                ).date()
+        except (ValueError, TypeError):
+            pass
+        try:
+            if date_to_input.value and str(date_to_input.value).strip():
+                date_to_val = datetime.strptime(
+                    str(date_to_input.value).strip()[:10], "%Y-%m-%d"
+                ).date()
+        except (ValueError, TypeError):
+            pass
+        if date_from_val is not None or date_to_val is not None:
+            tasks = [t for t in tasks if _task_in_date_range(t, date_from_val, date_to_val)]
+
+        # Semantic search filter
+        query = (search_input.value or "").strip()
+        if query:
+            tasks = [t for t in tasks if _task_matches_search(t, query)]
+
+        return tasks
     
     def refresh_view():
         """Refresh the view with current filter and page."""

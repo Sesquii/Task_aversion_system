@@ -436,9 +436,7 @@ def _build_settings_content(user_id):
                 "• **ZIP files**: Maximum 20 files per archive\n"
                 "• **Column names**: Must be alphanumeric with underscores only"
             ).classes("text-xs text-gray-600")
-        
-        ui.markdown("- **Data Guide**: Currently missing - documentation for local setup, data backup, and troubleshooting is planned but not yet implemented").classes("text-sm text-gray-600 mt-2")
-    
+
     # Task Editing Management Section
     ui.separator().classes("my-4")
     with ui.card().classes("w-full max-w-xl p-4 gap-3"):
