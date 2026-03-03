@@ -6,11 +6,11 @@ from typing import Optional, Dict, Any, Callable
 from backend.security_utils import escape_for_display
 
 
-def show_popup_modal(popup_data: Dict[str, Any], 
+def show_popup_modal(popup_data: Dict[str, Any],
                      on_response: Optional[Callable[[str, Optional[bool], Optional[str]], None]] = None) -> None:
     """
     Display a popup modal with title, message, options, and helpful toggle.
-    
+
     Args:
         popup_data: Dict with 'title', 'message', 'options', 'trigger_id', etc.
         on_response: Callback function(response_value, helpful, comment) called when user responds
@@ -20,25 +20,25 @@ def show_popup_modal(popup_data: Dict[str, Any],
     message = popup_data.get('message', '')
     options = popup_data.get('options', [])
     show_helpful = popup_data.get('show_helpful_toggle', True)
-    
+
     # Create modal dialog
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-md'):
         ui.label(escape_for_display(title)).classes('text-xl font-bold mb-4')
         ui.label(escape_for_display(message)).classes('text-sm mb-6 whitespace-pre-wrap')
-        
+
         # Options buttons
         with ui.row().classes('w-full gap-2'):
             for option in options:
                 option_value = option.get('value', '')
                 option_label = option.get('label', option_value)
                 option_color = option.get('color', 'primary')
-                
+
                 def make_handler(val):
                     def handler():
                         handle_response(val)
                     return handler
-                
-                ui.button(escape_for_display(option_label), on_click=make_handler(option_value)).classes(f'flex-1').props(f'color={option_color}')
+
+                ui.button(escape_for_display(option_label), on_click=make_handler(option_value)).classes('flex-1').props(f'color={option_color}')
         
         # Helpful toggle and comment (optional)
         if show_helpful:

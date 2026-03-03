@@ -199,7 +199,7 @@ class PopupDispatcher:
             # Habitual: supportive but clear
             title = "Remember to Track Emotions"
             message = (
-                f"You're about to {action} this task without adjusting sliders. "
+                f"You are about to {action} this task without adjusting sliders. "
                 f"Tracking your emotional state is an important part of emotional regulation. "
                 f"Even if values seem similar, small adjustments help maintain awareness."
             )
