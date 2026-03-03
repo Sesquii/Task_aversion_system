@@ -4948,11 +4948,15 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
     debug_log('dashboard.py:build_dashboard', 'build_dashboard start', {'ts': _t_dash_start}, 'DASH_START')
     # #endregion
 
-    # Send browser timezone to server so "Use my device" in Settings works
+    # Send browser timezone and 12/24h preference so display uses them by default
     ui.run_javascript(
-        '(function(){ try { var tz = Intl.DateTimeFormat().resolvedOptions().timeZone; '
-        'if (tz) fetch("/api/detected-timezone", { method: "POST", headers: { "Content-Type": "application/json" }, '
-        'body: JSON.stringify({ timezone: tz }), credentials: "include" }).catch(function(){}); } catch(e) {} })();'
+        '(function(){ try { var ro = Intl.DateTimeFormat().resolvedOptions(); '
+        'var payload = {}; '
+        'if (ro.timeZone) payload.timezone = ro.timeZone; '
+        'if (typeof ro.hour12 !== "undefined") payload.hour12 = ro.hour12; '
+        'if (payload.timezone || payload.hour12) fetch("/api/detected-timezone", { method: "POST", '
+        'headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "include" }).catch(function(){}); '
+        '} catch(e) {} })();'
     )
 
     # Defer cache warming so first paint is instant (was blocking ~5s and causing 8s dashboard load)

@@ -41,3 +41,15 @@ The app uses datetimes for due dates, "today", cutoffs (e.g. "last 7 days"), and
 - **Other**: `backend/task_manager.py`, `backend/job_manager.py`, `ui/complete_task.py`, `backend/csv_export.py`, `backend/instrumentation.py`, `backend/profiling.py`, `ui/plotly_data_charts.py`, `ui/task_editing_manager.py`.
 
 Replace `datetime.now()` with `app_time.now()` (and `datetime.utcnow()` with `app_time.utc_now()` where UTC is intended), and use `app_time.today()` where you need "today" as a date.
+
+## Troubleshooting
+
+### VPS shows UTC instead of local time
+
+- **Cause**: When `TIMEZONE` is not set in `.env` and the user has no timezone/detected_tz in preferences, the app falls back to **system local time**. On most Linux VPS hosts the system timezone is UTC, so all times display in UTC.
+- **Fix**: Set `TIMEZONE` in `.env` on the VPS to your IANA timezone (e.g. `TIMEZONE=America/New_York`) as fallback. In addition, the app **auto-applies browser timezone by default**: when the client sends a timezone to `/api/detected-timezone` and the user has no timezone set, the server sets the preference to `auto` so the browser’s zone is used. So once the dashboard (or any page that sends detected timezone) loads, times should show in the user’s zone.
+- **If still UTC**: Ensure the browser can reach `POST /api/detected-timezone` with credentials (session cookie). If the request returns 401, check session/cookie domain and CORS.
+
+### 12-hour vs 24-hour display
+
+- **Current behavior**: The app sends the browser’s `Intl.DateTimeFormat().resolvedOptions().hour12` to `/api/detected-timezone` on dashboard/settings load and stores it per user. `format_for_display()` uses that preference (12-hour: `%I:%M %p`, 24-hour: `%H:%M`).

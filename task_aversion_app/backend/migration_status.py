@@ -137,9 +137,9 @@ def get_migration_status() -> MigrationStatus:
             failures.append("emotions.user_id missing (migration 011)")
 
     if _check_table_exists(inspector, "user_preferences"):
-        for col in ("timezone", "detected_tz"):
+        for col in ("timezone", "detected_tz", "hour12"):
             if not _check_column_exists(inspector, "user_preferences", col):
-                failures.append(f"user_preferences.{col} missing (migration 016)")
+                failures.append(f"user_preferences.{col} missing (migration 016/018)")
                 break
 
     # User ID on main tables (010)

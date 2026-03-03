@@ -125,16 +125,19 @@ def _build_settings_content(user_id):
         current_tz = user_state.get_timezone(user_id_str)
         detected_tz = user_state.get_detected_timezone(user_id_str)
 
-        # Send browser timezone to server on load
+        # Send browser timezone and 12/24h preference on load
         ui.run_javascript('''
             (function() {
                 try {
-                    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                    if (tz) {
+                    var ro = Intl.DateTimeFormat().resolvedOptions();
+                    var payload = {};
+                    if (ro.timeZone) payload.timezone = ro.timeZone;
+                    if (typeof ro.hour12 !== "undefined") payload.hour12 = ro.hour12;
+                    if (payload.timezone || payload.hour12) {
                         fetch("/api/detected-timezone", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ timezone: tz }),
+                            body: JSON.stringify(payload),
                             credentials: "include"
                         }).catch(function() {});
                     }
@@ -146,16 +149,17 @@ def _build_settings_content(user_id):
             ui.run_javascript('''
                 (function() {
                     try {
-                        var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-                        if (tz) {
-                            fetch("/api/detected-timezone", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ timezone: tz, use_auto: true }),
-                                credentials: "include"
-                            }).then(function() { window.location.reload(); }).catch(function() { window.location.reload(); });
-                        } else { window.location.reload(); }
-                    } else { window.location.reload(); }
+                        var ro = Intl.DateTimeFormat().resolvedOptions();
+                        var payload = { use_auto: true };
+                        if (ro.timeZone) payload.timezone = ro.timeZone;
+                        if (typeof ro.hour12 !== "undefined") payload.hour12 = ro.hour12;
+                        fetch("/api/detected-timezone", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(payload),
+                            credentials: "include"
+                        }).then(function() { window.location.reload(); }).catch(function() { window.location.reload(); });
+                    } catch (e) { window.location.reload(); }
                 })();
             ''')
 

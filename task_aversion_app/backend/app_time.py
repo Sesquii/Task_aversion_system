@@ -124,10 +124,13 @@ def format_for_display(
     user_id: Optional[Union[int, str]] = None,
 ) -> str:
     """
-    Convert a stored timestamp string for display in the user's timezone (24-hour).
+    Convert a stored timestamp string for display in the user's timezone.
 
     Use this wherever created_at, completed_at, started_at, etc. are shown
     in the UI. Pass user_id to use that user's timezone (or omit to use current user / env).
+
+    Display format respects the user's 12/24-hour preference (from browser, stored via
+    /api/detected-timezone). Pass fmt to override when needed.
 
     Args:
         stored: Value from DB/CSV (e.g. "2026-02-28 23:23").
@@ -156,7 +159,20 @@ def format_for_display(
         dt = dt.replace(tzinfo=timezone.utc).astimezone(tz)
     elif assume_utc and tz is False:
         dt = dt.replace(tzinfo=timezone.utc).astimezone()
+    # Use 12-hour format if user preference is set (from browser), else caller's fmt (default 24h)
+    effective_fmt = fmt
     try:
-        return dt.strftime(fmt)
+        _uid = user_id
+        if _uid is None:
+            from backend.auth import get_current_user
+            _uid = get_current_user()
+        if _uid is not None:
+            from backend.user_state import UserStateManager
+            if UserStateManager().get_hour12_preference(str(_uid)):
+                effective_fmt = "%Y-%m-%d %I:%M %p"
+    except Exception:
+        pass
+    try:
+        return dt.strftime(effective_fmt)
     except (ValueError, TypeError):
         return s

@@ -542,6 +542,8 @@ class UserPreferences(Base):
     # Timezone: 'auto' for device-detected, or IANA name (e.g. America/Chicago)
     timezone = Column(String, default=None, nullable=True)
     detected_tz = Column(String, default=None, nullable=True)  # Browser-reported IANA name
+    # 12/24-hour display (from browser Intl; default False = 24-hour)
+    hour12 = Column(Boolean, default=False, nullable=True)
 
     # JSON fields for complex preferences
     json_type = get_json_type()
@@ -575,6 +577,7 @@ class UserPreferences(Base):
             'gap_handling': self.gap_handling or '',
             'timezone': self.timezone or '',
             'detected_tz': self.detected_tz or '',
+            'hour12': str(bool(self.hour12)) if self.hour12 is not None else 'false',
             'persistent_emotion_values': json.dumps(self.persistent_emotion_values) if isinstance(self.persistent_emotion_values, dict) else (self.persistent_emotion_values or '{}'),
             'productivity_history': json.dumps(self.productivity_history) if isinstance(self.productivity_history, list) else (self.productivity_history or '[]'),
             'productivity_goal_settings': json.dumps(self.productivity_goal_settings) if isinstance(self.productivity_goal_settings, dict) else (self.productivity_goal_settings or '{}'),

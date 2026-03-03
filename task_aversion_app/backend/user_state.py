@@ -84,8 +84,30 @@ class UserStateManager:
             return None
         return rows.iloc[0].to_dict()
 
+    def _sync_locale_to_db(self, user_id: str, key: str, value: Any) -> None:
+        """When using PostgreSQL, sync timezone/detected_tz/hour12 to user_preferences table."""
+        if key not in ("timezone", "detected_tz", "hour12"):
+            return
+        database_url = (os.getenv("DATABASE_URL") or "").strip()
+        if not database_url.lower().startswith("postgresql"):
+            return
+        try:
+            from backend.database import get_session, UserPreferences
+            with get_session() as session:
+                row = session.query(UserPreferences).filter(
+                    UserPreferences.user_id == str(user_id)
+                ).first()
+                if row:
+                    if key == "hour12":
+                        setattr(row, key, str(value).lower() in ("true", "1", "yes"))
+                    else:
+                        setattr(row, key, (value or "").strip() or None)
+                    session.commit()
+        except Exception:
+            pass  # Don't fail CSV path if DB sync fails
+
     def update_preference(self, user_id: str, key: str, value: Any) -> Dict[str, Any]:
-        """Update a single preference; creates the user row if needed."""
+        """Update a single preference; creates the user row if needed. Syncs timezone/hour12 to DB when using PostgreSQL."""
         self.ensure_user(user_id)
         self._reload()
         if key not in self.df.columns:
@@ -94,6 +116,7 @@ class UserStateManager:
         self.df.loc[self.df["user_id"] == user_id, key] = str(value)
         self.df.loc[self.df["user_id"] == user_id, "last_active"] = datetime.utcnow().isoformat()
         self._save()
+        self._sync_locale_to_db(user_id, key, value)
         return self.get_user_preferences(user_id) or {}
 
     def is_new_user(self, user_id: str) -> bool:
@@ -151,6 +174,18 @@ class UserStateManager:
         """Store the browser-detected timezone (called by API when client sends it)."""
         self.ensure_user(user_id)
         return self.update_preference(user_id, "detected_tz", (iana_name or "").strip())
+
+    def get_hour12_preference(self, user_id: str) -> bool:
+        """Get whether the user prefers 12-hour clock (from browser). Default False (24-hour)."""
+        prefs = self.get_user_preferences(user_id)
+        if not prefs:
+            return False
+        return str(prefs.get("hour12", "false")).lower() in ("true", "1", "yes")
+
+    def set_hour12_preference(self, user_id: str, value: bool) -> Dict[str, Any]:
+        """Store the user's 12/24-hour clock preference (from browser Intl)."""
+        self.ensure_user(user_id)
+        return self.update_preference(user_id, "hour12", "true" if value else "false")
 
     def should_auto_show_tutorial(self, prefs: Dict[str, Any]) -> bool:
         auto_show = str(prefs.get("tutorial_auto_show", "True")).lower() == "true"

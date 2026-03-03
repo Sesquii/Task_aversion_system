@@ -417,24 +417,37 @@ if __name__ in {"__main__", "__mp_main__"}:
         ).classes("text-sm text-gray-600 mt-4")
         ui.button("Reload page", on_click=lambda: ui.navigate.reload()).classes("mt-4")
 
-    # Timezone: store browser-detected timezone for the current user (so "Use my device" works)
+    # Timezone + locale: store browser-detected timezone and 12/24h preference
     from fastapi import Request, Response
     @app.post('/api/detected-timezone')
     async def api_detected_timezone(request: Request):
-        """Accept browser timezone. Body: { timezone: string, use_auto?: boolean }."""
+        """Accept browser timezone and/or hour12. Body: { timezone?: string, use_auto?: boolean, hour12?: boolean }.
+        If timezone is sent and user has no timezone set, we set timezone to 'auto' so browser TZ is used by default."""
         user_id = get_current_user()
         if user_id is None:
             return Response(status_code=401)
         try:
             body = await request.json()
-            tz = (body.get('timezone') or '').strip()
-            if not tz:
-                return Response(status_code=400)
             from backend.user_state import UserStateManager
             um = UserStateManager()
-            um.set_detected_timezone(str(user_id), tz)
-            if body.get('use_auto') is True:
-                um.set_timezone(str(user_id), 'auto')
+            uid_str = str(user_id)
+
+            tz = (body.get('timezone') or '').strip()
+            if tz:
+                um.set_detected_timezone(uid_str, tz)
+                if body.get('use_auto') is True:
+                    um.set_timezone(uid_str, 'auto')
+                else:
+                    # Auto-apply browser timezone by default when user has no preference set
+                    current_tz = um.get_timezone(uid_str)
+                    if not current_tz or not current_tz.strip():
+                        um.set_timezone(uid_str, 'auto')
+
+            if 'hour12' in body:
+                um.set_hour12_preference(uid_str, bool(body.get('hour12')))
+
+            if not tz and 'hour12' not in body:
+                return Response(status_code=400)  # need at least one of timezone or hour12
             return Response(status_code=200)
         except Exception:
             return Response(status_code=500)

@@ -91,6 +91,7 @@ def reset_postgres() -> bool:
         ("015_add_due_at_to_task_instances.py", "015 Add due_at to task_instances"),
         ("016_add_timezone_to_user_preferences.py", "016 Add timezone to user_preferences"),
         ("017_add_net_emotional_to_task_instances.py", "017 Add net_emotional to task_instances"),
+        ("018_add_hour12_to_user_preferences.py", "018 Add hour12 to user_preferences"),
     ]
     mig_dir = _APP_ROOT / "PostgreSQL_migration"
     for filename, desc in migrations:

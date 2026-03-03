@@ -428,6 +428,19 @@ def main():
     else:
         print("  [SKIP] task_instances table does not exist (run migration 003 first)")
 
+    # Check for Migration 018: hour12 on user_preferences
+    print("\nMigration 018: hour12 on user_preferences (PostgreSQL)")
+    if check_table_exists('user_preferences'):
+        inspector = inspect(engine)
+        cols = [c['name'] for c in inspector.get_columns('user_preferences')]
+        if 'hour12' in cols:
+            print("  [OK] user_preferences has hour12 column")
+        else:
+            print("  [MISSING] user_preferences missing hour12 column")
+            print("  -> Run: python PostgreSQL_migration/018_add_hour12_to_user_preferences.py")
+    else:
+        print("  [SKIP] user_preferences table does not exist (run migration 007 first)")
+
     print()
     print("=" * 70)
     print("\nSummary: Run migrations in order (001 through 017)")

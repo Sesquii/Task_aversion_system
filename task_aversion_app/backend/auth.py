@@ -550,8 +550,12 @@ def migrate_user_preferences(old_string_user_id: str, new_integer_user_id: int) 
                 for key, value in prefs.items():
                     if key == 'user_id':
                         continue  # Skip user_id
-                    # Update database record with CSV values
-                    if hasattr(existing, key):
+                    if not hasattr(existing, key):
+                        continue
+                    # Boolean fields: convert string to bool
+                    if key == 'hour12':
+                        setattr(existing, key, str(value).lower() in ('true', '1', 'yes'))
+                    else:
                         setattr(existing, key, value)
                 session.commit()
                 return True
@@ -570,6 +574,7 @@ def migrate_user_preferences(old_string_user_id: str, new_integer_user_id: int) 
                 gap_handling=prefs.get('gap_handling') or None,
                 timezone=prefs.get('timezone') or None,
                 detected_tz=prefs.get('detected_tz') or None,
+                hour12=str(prefs.get('hour12', 'false')).lower() in ('true', '1', 'yes'),
             )
             
             # Handle JSON fields
