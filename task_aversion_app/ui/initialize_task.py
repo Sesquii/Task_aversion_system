@@ -476,6 +476,16 @@ def initialize_task_page(task_manager, emotion_manager):
             if not due_at_value or len(str(due_at_value).strip()) < 10:
                 due_at_value = _today_str
 
+            # Whether the instance currently has a due date (for "No due date" checkbox)
+            _raw_due = instance.get("due_at")
+            has_due_date = (
+                _raw_due is not None
+                and (
+                    isinstance(_raw_due, datetime)
+                    or (isinstance(_raw_due, str) and str(_raw_due).strip() != "")
+                )
+            )
+
             # Store due date as YYYY-MM-DD (no visible text field)
             due_at_input = ui.input(value=str(due_at_value)[:10]).props("type=hidden").classes("hidden").style("display: none;")
 
@@ -533,6 +543,11 @@ def initialize_task_page(task_manager, emotion_manager):
                     due_year_select.set_value(str(d.year))
                 except (ValueError, TypeError):
                     _sync_mdy_from_date()
+
+            no_due_date_checkbox = ui.checkbox(
+                "No due date",
+                value=not has_due_date,
+            ).classes("mt-2").tooltip("Task will have no due date; urgency will not use a deadline.")
 
             ui.label("Due date").classes("text-sm font-semibold text-gray-700 mt-2")
 
@@ -595,7 +610,9 @@ def initialize_task_page(task_manager, emotion_manager):
                         pass
                     due_calendar_dialog.open()
 
-                ui.button(icon="event", on_click=_open_due_calendar).props("dense flat round size=sm").classes("text-gray-600").tooltip("Pick a due date")
+                calendar_btn = ui.button(
+                    icon="event", on_click=_open_due_calendar
+                ).props("dense flat round size=sm").classes("text-gray-600").tooltip("Pick a due date")
 
                 due_month_select = ui.select(
                     options={str(i): f"{i:02d}" for i in range(1, 13)},
@@ -616,6 +633,20 @@ def initialize_task_page(task_manager, emotion_manager):
             due_month_select.on("update:model-value", lambda: _apply_mdy_to_date())
             due_day_select.on("update:model-value", lambda: _apply_mdy_to_date())
             due_year_select.on("update:model-value", lambda: _apply_mdy_to_date())
+
+            def _set_due_date_controls_enabled(enabled: bool) -> None:
+                """Enable or disable date picker controls based on 'No due date' checkbox."""
+                calendar_btn.set_enabled(enabled)
+                due_month_select.set_enabled(enabled)
+                due_day_select.set_enabled(enabled)
+                due_year_select.set_enabled(enabled)
+
+            no_due_date_checkbox.on(
+                "update:model-value",
+                lambda: _set_due_date_controls_enabled(not no_due_date_checkbox.value),
+            )
+            _set_due_date_controls_enabled(not no_due_date_checkbox.value)
+
             def _on_due_hidden_change():
                 _sync_mdy_from_date()
                 try:
@@ -860,11 +891,14 @@ def initialize_task_page(task_manager, emotion_manager):
                 # Parse optional due date (set at initialization for urgency)
                 # Support date-only (e.g. "2025-02-28") as end of that day
                 due_at_parsed = None
-                raw = due_at_input.value
-                if hasattr(raw, "strftime"):
-                    due_str = raw.strftime("%Y-%m-%d")
+                if not no_due_date_checkbox.value:
+                    raw = due_at_input.value
+                    if hasattr(raw, "strftime"):
+                        due_str = raw.strftime("%Y-%m-%d")
+                    else:
+                        due_str = (raw or "").strip().rstrip("T")
                 else:
-                    due_str = (raw or "").strip().rstrip("T")
+                    due_str = ""
                 if due_str:
                     # Try date+time formats first, then date-only (treat as end of day 23:59)
                     for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):

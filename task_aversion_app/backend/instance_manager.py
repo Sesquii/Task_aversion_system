@@ -2132,6 +2132,8 @@ class InstanceManager:
                 self.df.at[idx, 'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
             if due_at is not None:
                 self.df.at[idx, 'due_at'] = due_at.strftime("%Y-%m-%d %H:%M")
+            else:
+                self.df.at[idx, 'due_at'] = ''
             # Move from draft to initialized so task appears in Initialized Tasks list
             self.df.at[idx, 'status'] = 'initialized'
             # Extract predicted values to columns (only if columns are empty)
@@ -2176,6 +2178,8 @@ class InstanceManager:
 
                     if due_at is not None:
                         instance.due_at = due_at
+                    else:
+                        instance.due_at = None
 
                     # Move from draft to initialized so task appears in Initialized Tasks list
                     instance.status = 'initialized'
