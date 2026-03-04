@@ -5808,31 +5808,46 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                         with init_perf_logger.operation("render_monitored_metrics_section"):
                             render_monitored_metrics_section(left_half)
                         
-                        # Top Jobs (jobs with completions in last 30 days)
+                        # Jobs: weekly, monthly, quarterly time per job (all jobs with tasks)
                         with ui.card().classes("w-full p-2"):
-                            ui.markdown("### Top Jobs")
+                            ui.markdown("### Jobs")
                             try:
                                 from backend.analytics import Analytics
                                 _an = Analytics()
-                                top_jobs = _an.get_top_jobs(days=30, limit=10, user_id=current_user_id) if hasattr(_an, "get_top_jobs") else []
+                                jobs_with_time = _an.get_jobs_with_time_breakdown(user_id=current_user_id) if hasattr(_an, "get_jobs_with_time_breakdown") else []
                             except Exception:
-                                top_jobs = []
-                            if not top_jobs:
-                                ui.label("No job activity in the last 30 days").classes("text-xs text-gray-500")
-                                ui.label("Assign tasks to jobs to see Top Jobs here").classes("text-xs text-blue-600 mt-1")
+                                jobs_with_time = []
+                            if not jobs_with_time:
+                                ui.label("No jobs yet").classes("text-xs text-gray-500")
+                                ui.label("Create jobs and assign tasks to see time here").classes("text-xs text-blue-600 mt-1")
                             else:
-                                for j in top_jobs:
-                                    job_id = j.get("job_id", "")
-                                    name = j.get("name", "Unnamed")
-                                    count = j.get("completion_count", 0)
-                                    total_mins = j.get("total_time_minutes", 0) or 0
-                                    task_count = j.get("task_count", 0)
-                                    time_str = f"{int(total_mins)}m" if total_mins else "0m"
-                                    with ui.row().classes("justify-between items-center mb-1 w-full gap-2").style("cursor: pointer;").on("click", lambda jid=job_id: ui.navigate.to(f"/job-tasks?job_id={jid}")):
-                                        with ui.column().classes("flex-1 min-w-0"):
-                                            ui.label(name).classes("text-sm font-medium")
-                                            ui.label(f"{count} completions, {time_str}").classes("text-xs text-gray-500")
-                                        ui.icon("chevron_right", size="sm").classes("text-gray-400")
+                                def _fmt_mins(m):
+                                    if m is None or m == 0:
+                                        return "0m"
+                                    if m >= 60:
+                                        return f"{int(m // 60)}h {int(m % 60)}m"
+                                    return f"{int(m)}m"
+                                # Header row
+                                with ui.row().classes("w-full text-xs font-semibold text-gray-600 mb-1 gap-2"):
+                                    ui.label("Job").classes("flex-1 min-w-0")
+                                    ui.label("Week").classes("w-14 text-right")
+                                    ui.label("Month").classes("w-14 text-right")
+                                    ui.label("Quarter").classes("w-14 text-right")
+                                ui.separator()
+                                jobs_scroll = ui.column().classes("w-full").style("overflow-y: auto; max-height: 280px;")
+                                with jobs_scroll:
+                                    for j in jobs_with_time:
+                                        job_id = j.get("job_id", "")
+                                        name = j.get("name", "Unnamed")
+                                        w = j.get("time_weekly_minutes", 0) or 0
+                                        m = j.get("time_monthly_minutes", 0) or 0
+                                        q = j.get("time_quarterly_minutes", 0) or 0
+                                        with ui.row().classes("justify-between items-center py-1 w-full gap-2").style("cursor: pointer;").on("click", lambda jid=job_id: ui.navigate.to(f"/job-tasks?job_id={jid}")):
+                                            ui.label(escape_for_display(name)).classes("text-sm flex-1 min-w-0 truncate")
+                                            ui.label(_fmt_mins(w)).classes("text-xs text-right w-14")
+                                            ui.label(_fmt_mins(m)).classes("text-xs text-right w-14")
+                                            ui.label(_fmt_mins(q)).classes("text-xs text-right w-14")
+                                            ui.icon("chevron_right", size="xs").classes("text-gray-400 shrink-0")
                     
                     # Right half: Recently Completed (scrollable, aligned to end after quick tasks)
                     right_half = ui.column().classes("half-width-right")

@@ -409,14 +409,14 @@ def _build_settings_content(user_id):
                 )
         
         ui.button("💾 Download My Data", on_click=download_zip).classes("bg-blue-500 text-white mt-2")
-        ui.label("Download all your data as a ZIP file containing CSV files (tasks, instances, emotions, popup triggers/responses, notes, survey responses, and user preferences). Export includes all task statuses: initialized, active, and completed. Use for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")
+        ui.label("Download all your data as a ZIP file containing CSV files (tasks, instances, emotions, popup triggers/responses, notes, survey responses, jobs and job-task assignments, and user preferences). Export includes all task statuses: initialized, active, and completed. Use for backup or to transfer data to another device.").classes("text-sm text-gray-600 mt-2")
         
         # Import from ZIP (writes to current database; user_id used for data isolation)
         with ui.card().classes("p-4 mt-2 bg-gray-50 border border-gray-200"):
             ui.label("Import Data from ZIP").classes("text-base font-semibold mb-2")
             ui.label(
                 "Upload a ZIP file containing CSV exports (e.g. from Download My Data). "
-                "All data (initialized, active, and completed tasks) is imported and associated with your account."
+                "All data (tasks, instances, jobs and job-task assignments, emotions, notes, etc.) is imported and associated with your account."
             ).classes("text-sm text-gray-600 mb-3")
             ui.upload(
                 on_upload=handle_upload,

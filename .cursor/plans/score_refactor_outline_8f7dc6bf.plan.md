@@ -107,7 +107,7 @@ This plan is an **outline with embedded questions** for you to answer. After you
 **Questions for you (Utility):**
 
 1. Should "utility" be explicitly **relief-based** (expected/actual relief as the main inputs), or do you want to introduce a separate "expected utility" / "actual utility" field in the UI and DB later, with the prototype using relief as a stand-in?
-2. For the direct variant: do you prefer ratio (actual/expected), difference (actual − expected), or a "met expectation" centered scale (e.g. 50 = met, &gt;50 = exceeded, &lt;50 = below)?
+2. For the direct variant: do you prefer ratio (actual/expected), difference (actual − expected), or a "met expectation" centered scale (e.g. 50 = met, >50 = exceeded, <50 = below)?
 3. For the derived variant: which components should be included (e.g. actual_relief, completion_pct, net_wellbeing, stress_efficiency, disappointment/serendipity) and should they be equally weighted or do you have a priority order?
 
 ---

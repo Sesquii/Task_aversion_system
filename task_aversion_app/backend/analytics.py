@@ -4098,6 +4098,101 @@ class Analytics:
         results.sort(key=lambda x: x['completion_count'], reverse=True)
         return results[:limit]
 
+    def get_jobs_with_time_breakdown(
+        self,
+        user_id: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return all jobs with weekly, monthly, and quarterly time spent (completed task duration).
+
+        Each result includes job_id, name, task_count, time_weekly_minutes, time_monthly_minutes,
+        time_quarterly_minutes. Jobs with no completions show 0 for all time fields.
+        Sorted by time_monthly_minutes descending.
+
+        Args:
+            user_id: User ID for data isolation. If None, uses current user from auth.
+            limit: Optional max number of jobs to return. If None, returns all jobs.
+        """
+        user_id = self._get_user_id(user_id)
+        if user_id is None:
+            return []
+
+        try:
+            from backend.job_manager import JobManager
+        except ImportError:
+            return []
+
+        jm = JobManager(use_csv=os.getenv('USE_CSV', '').lower() in ('1', 'true', 'yes'))
+        all_jobs = jm.get_all_jobs()
+        if not all_jobs:
+            return []
+
+        completed_df = self._load_instances(completed_only=True, user_id=user_id)
+        if completed_df.empty or 'completed_at' not in completed_df.columns:
+            completed_df = pd.DataFrame()
+        else:
+            completed_df = completed_df[
+                completed_df['completed_at'].astype(str).str.strip() != ''
+            ].copy()
+            if not completed_df.empty:
+                completed_df['completed_at_dt'] = pd.to_datetime(
+                    completed_df['completed_at'], errors='coerce'
+                )
+                completed_df = completed_df.dropna(subset=['completed_at_dt'])
+
+        now = datetime.now()
+        cutoff_week = now - timedelta(days=7)
+        cutoff_month = now - timedelta(days=30)
+        cutoff_quarter = now - timedelta(days=90)
+
+        def safe_float(val: Any, default: float = 0.0) -> float:
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                return default
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return default
+
+        results = []
+        for job in all_jobs:
+            job_id = job.get('job_id')
+            name = job.get('name') or 'Unnamed'
+            tasks = jm.get_tasks_for_job(job_id, user_id=user_id)
+            task_ids = {t.get('task_id') for t in tasks if t.get('task_id')}
+
+            time_weekly = 0.0
+            time_monthly = 0.0
+            time_quarterly = 0.0
+
+            if task_ids and not completed_df.empty:
+                job_instances = completed_df[completed_df['task_id'].isin(task_ids)]
+                if not job_instances.empty:
+                    for _, row in job_instances.iterrows():
+                        completed_dt = row.get('completed_at_dt')
+                        if completed_dt is None or (isinstance(completed_dt, float) and np.isnan(completed_dt)):
+                            continue
+                        mins = safe_float(row.get('duration_minutes'), 0.0)
+                        if completed_dt >= cutoff_quarter:
+                            time_quarterly += mins
+                        if completed_dt >= cutoff_month:
+                            time_monthly += mins
+                        if completed_dt >= cutoff_week:
+                            time_weekly += mins
+
+            results.append({
+                'job_id': job_id,
+                'name': name,
+                'task_count': len(tasks),
+                'time_weekly_minutes': round(time_weekly, 1),
+                'time_monthly_minutes': round(time_monthly, 1),
+                'time_quarterly_minutes': round(time_quarterly, 1),
+            })
+
+        results.sort(key=lambda x: x['time_monthly_minutes'], reverse=True)
+        if limit is not None:
+            results = results[:limit]
+        return results
+
     def get_job_analytics(
         self,
         job_id: str,

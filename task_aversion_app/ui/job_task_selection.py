@@ -1,11 +1,13 @@
 # ui/job_task_selection.py
 """Job task selection page: list tasks for a job with Initialize and Add Task options."""
 import json
+from typing import Dict
 
 from nicegui import ui
 from fastapi import Request
 
 from backend.auth import get_current_user
+from backend.analytics import Analytics
 from backend.task_manager import TaskManager
 from backend.instance_manager import InstanceManager
 from backend.job_manager import JobManager
@@ -47,6 +49,14 @@ def register_job_task_selection_page(task_manager: TaskManager) -> None:
         ui.label(f"Type: {escape_for_display(task_type)}").classes("text-sm text-gray-500 mb-4")
 
         tasks = jm.get_tasks_for_job(job_id, user_id=user_id)
+
+        # All-time completion counts per template (days ~20 years to approximate all-time)
+        analytics = Analytics()
+        job_analytics = analytics.get_job_analytics(job_id, days=365 * 20, user_id=user_id)
+        task_performance = job_analytics.get("task_performance") or []
+        completion_by_task: Dict[str, int] = {
+            p["task_id"]: p["completion_count"] for p in task_performance
+        }
 
         def do_init(task_id: str) -> None:
             task = task_manager.get_task(task_id, user_id=user_id)
@@ -121,10 +131,13 @@ def register_job_task_selection_page(task_manager: TaskManager) -> None:
                         continue
                     if q and q not in name.lower() and q not in desc.lower():
                         continue
+                    completions = completion_by_task.get(tid, 0)
                     with ui.card().classes("w-full p-3"):
                         with ui.row().classes("justify-between items-center w-full gap-2 flex-wrap"):
                             with ui.column().classes("flex-1 min-w-0"):
                                 ui.label(escape_for_display(name)).classes("font-medium")
+                                comp_label = "1 completion" if completions == 1 else f"{completions} completions"
+                                ui.label(comp_label).classes("text-xs text-gray-500")
                                 if desc:
                                     ui.label(escape_for_display(desc[:200] + ("..." if len(desc) > 200 else ""))).classes(
                                     "text-xs text-gray-500"

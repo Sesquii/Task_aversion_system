@@ -12,8 +12,9 @@ from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 
 from backend.database import (
-    get_session, Task, TaskInstance, Emotion, 
-    PopupTrigger, PopupResponse, Note, SurveyResponse
+    get_session, Task, TaskInstance, Emotion,
+    PopupTrigger, PopupResponse, Note, SurveyResponse,
+    Job, JobTaskMapping
 )
 from backend.user_state import UserStateManager, PREFS_FILE
 
@@ -77,6 +78,42 @@ def export_all_data_to_csv(
             tasks_df.to_csv(tasks_file, index=False, encoding='utf-8')
             export_counts['tasks'] = 0
         exported_files.append(tasks_file)
+
+        # Export Jobs and JobTaskMapping (jobs that reference this user's tasks)
+        user_task_ids = {t.task_id for t in tasks}
+        if user_task_ids:
+            mappings = session.query(JobTaskMapping).filter(
+                JobTaskMapping.task_id.in_(user_task_ids)
+            ).all()
+            job_ids = {m.job_id for m in mappings}
+            jobs = session.query(Job).filter(Job.job_id.in_(job_ids)).all() if job_ids else []
+        else:
+            mappings = []
+            jobs = []
+        jobs_file = os.path.join(data_dir, 'jobs.csv')
+        if jobs:
+            jobs_data = [job.to_dict() for job in jobs]
+            jobs_df = pd.DataFrame(jobs_data)
+            jobs_df.to_csv(jobs_file, index=False, encoding='utf-8')
+            export_counts['jobs'] = len(jobs)
+        else:
+            jobs_df = pd.DataFrame(columns=[
+                'job_id', 'name', 'task_type', 'description', 'created_at', 'updated_at'
+            ])
+            jobs_df.to_csv(jobs_file, index=False, encoding='utf-8')
+            export_counts['jobs'] = 0
+        exported_files.append(jobs_file)
+        mapping_file = os.path.join(data_dir, 'job_task_mapping.csv')
+        if mappings:
+            mapping_data = [m.to_dict() for m in mappings]
+            mapping_df = pd.DataFrame(mapping_data)
+            mapping_df.to_csv(mapping_file, index=False, encoding='utf-8')
+            export_counts['job_task_mapping'] = len(mappings)
+        else:
+            mapping_df = pd.DataFrame(columns=['job_id', 'task_id', 'created_at'])
+            mapping_df.to_csv(mapping_file, index=False, encoding='utf-8')
+            export_counts['job_task_mapping'] = 0
+        exported_files.append(mapping_file)
         
         # Export TaskInstances (always create file, even if empty)
         # CRITICAL: Filter by user_id for data isolation

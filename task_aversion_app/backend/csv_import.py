@@ -33,7 +33,8 @@ from pathlib import Path
 
 from backend.database import (
     get_session, init_db, Task, TaskInstance, Emotion,
-    PopupTrigger, PopupResponse, Note, SurveyResponse, engine, DATABASE_URL
+    PopupTrigger, PopupResponse, Note, SurveyResponse, engine, DATABASE_URL,
+    Job, JobTaskMapping
 )
 from backend.user_state import UserStateManager, PREFS_FILE
 from sqlalchemy import inspect, text
@@ -1649,6 +1650,152 @@ def import_survey_responses_from_csv(csv_path: str, session, skip_existing: bool
     return imported, skipped, errors
 
 
+def import_jobs_from_csv(
+    csv_path: str,
+    session,
+    skip_existing: bool = True,
+    user_id: Optional[int] = None,
+) -> Tuple[int, int, int]:
+    """
+    Import jobs from CSV file into database.
+    Job model has no user_id; exported jobs are those that reference the user's tasks.
+    All imported jobs are inserted (or skipped if job_id exists when skip_existing).
+    """
+    imported = 0
+    skipped = 0
+    errors = 0
+    try:
+        is_valid_size, size_error = check_file_size(csv_path)
+        if not is_valid_size:
+            print(f"[Import] {size_error}")
+            return 0, 0, 1
+        df = pd.read_csv(csv_path, dtype=str).fillna('')
+        if len(df) > MAX_ROWS_PER_CSV:
+            df = df.head(MAX_ROWS_PER_CSV)
+        existing_job_ids = set()
+        if skip_existing:
+            existing = session.query(Job).all()
+            existing_job_ids = {j.job_id for j in existing}
+        for _, row in df.iterrows():
+            job_id = str(safe_get(row, 'job_id', '')).strip()
+            if not job_id:
+                errors += 1
+                continue
+            if skip_existing and job_id in existing_job_ids:
+                skipped += 1
+                continue
+            try:
+                name = str(safe_get(row, 'name', '')).strip()
+                if not name:
+                    errors += 1
+                    continue
+                task_type = str(safe_get(row, 'task_type', 'Work')).strip() or 'Work'
+                description = str(safe_get(row, 'description', '')).strip()
+                created_at = parse_datetime(safe_get(row, 'created_at', ''))
+                updated_at = parse_datetime(safe_get(row, 'updated_at', ''))
+                job = Job(
+                    job_id=job_id,
+                    name=name,
+                    task_type=task_type,
+                    description=description,
+                    created_at=created_at or datetime.utcnow(),
+                    updated_at=updated_at or datetime.utcnow(),
+                )
+                session.add(job)
+                imported += 1
+                if skip_existing:
+                    existing_job_ids.add(job_id)
+            except (ValueError, TypeError, IntegrityError) as e:
+                print(f"[Import] Error importing job {job_id}: {e}")
+                errors += 1
+        session.commit()
+    except Exception as e:
+        print(f"[Import] Error in import_jobs_from_csv: {e}")
+        import traceback
+        print(f"[Import] Traceback: {traceback.format_exc()}")
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        errors += 1
+    return imported, skipped, errors
+
+
+def import_job_task_mapping_from_csv(
+    csv_path: str,
+    session,
+    skip_existing: bool = True,
+    user_id: Optional[int] = None,
+) -> Tuple[int, int, int]:
+    """
+    Import job-task mappings from CSV. Only inserts mappings where task_id belongs to the
+    given user (so imported mappings only link to this user's tasks).
+    """
+    if user_id is None:
+        raise ValueError("user_id is REQUIRED for import. Users can only import mappings for their own tasks.")
+    imported = 0
+    skipped = 0
+    errors = 0
+    try:
+        is_valid_size, size_error = check_file_size(csv_path)
+        if not is_valid_size:
+            print(f"[Import] {size_error}")
+            return 0, 0, 1
+        user_task_ids = {
+            t[0] for t in session.query(Task.task_id).filter(Task.user_id == user_id).all()
+        }
+        if not user_task_ids:
+            return 0, 0, 0
+        df = pd.read_csv(csv_path, dtype=str).fillna('')
+        if len(df) > MAX_ROWS_PER_CSV:
+            df = df.head(MAX_ROWS_PER_CSV)
+        existing_pairs = set()
+        if skip_existing:
+            for m in session.query(JobTaskMapping.job_id, JobTaskMapping.task_id).all():
+                existing_pairs.add((m[0], m[1]))
+        existing_job_ids = {j[0] for j in session.query(Job.job_id).all()}
+        for _, row in df.iterrows():
+            job_id = str(safe_get(row, 'job_id', '')).strip()
+            task_id = str(safe_get(row, 'task_id', '')).strip()
+            if not job_id or not task_id:
+                errors += 1
+                continue
+            if task_id not in user_task_ids:
+                skipped += 1
+                continue
+            if job_id not in existing_job_ids:
+                errors += 1
+                continue
+            if skip_existing and (job_id, task_id) in existing_pairs:
+                skipped += 1
+                continue
+            try:
+                created_at = parse_datetime(safe_get(row, 'created_at', ''))
+                m = JobTaskMapping(
+                    job_id=job_id,
+                    task_id=task_id,
+                    created_at=created_at or datetime.utcnow(),
+                )
+                session.add(m)
+                imported += 1
+                if skip_existing:
+                    existing_pairs.add((job_id, task_id))
+            except (ValueError, TypeError, IntegrityError) as e:
+                print(f"[Import] Error importing job_task_mapping ({job_id}, {task_id}): {e}")
+                errors += 1
+        session.commit()
+    except Exception as e:
+        print(f"[Import] Error in import_job_task_mapping_from_csv: {e}")
+        import traceback
+        print(f"[Import] Traceback: {traceback.format_exc()}")
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        errors += 1
+    return imported, skipped, errors
+
+
 def import_user_preferences_from_csv(csv_path: str) -> Tuple[int, int]:
     """Import user preferences from CSV file. Handles missing columns gracefully."""
     imported = 0
@@ -1718,6 +1865,8 @@ def import_from_zip(zip_path: str, skip_existing: bool = True, user_id: Optional
     - popup_triggers.csv
     - popup_responses.csv
     - survey_responses.csv
+    - jobs.csv
+    - job_task_mapping.csv
     - user_preferences.csv
     
     Compatibility:
@@ -1755,6 +1904,7 @@ def import_from_zip(zip_path: str, skip_existing: bool = True, user_id: Optional
             return results
         
         # Define whitelist of allowed file names (security: prevent additional files)
+        # Order: jobs after tasks (mapping references both job_id and task_id)
         ALLOWED_FILES = {
             'tasks.csv': ('tasks', import_tasks_from_csv),
             'task_instances.csv': ('task_instances', import_task_instances_from_csv),
@@ -1763,6 +1913,8 @@ def import_from_zip(zip_path: str, skip_existing: bool = True, user_id: Optional
             'popup_triggers.csv': ('popup_triggers', import_popup_triggers_from_csv),
             'popup_responses.csv': ('popup_responses', import_popup_responses_from_csv),
             'survey_responses.csv': ('survey_responses', import_survey_responses_from_csv),
+            'jobs.csv': ('jobs', import_jobs_from_csv),
+            'job_task_mapping.csv': ('job_task_mapping', import_job_task_mapping_from_csv),
             'user_preferences.csv': ('user_preferences', None)  # Handled separately
         }
         
