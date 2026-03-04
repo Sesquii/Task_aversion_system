@@ -1,5 +1,12 @@
 # Relief-Stress Relationship Formulas
 
+## Naming: Direct vs Derived
+
+- **Direct** = user-reported (from sliders). Keys: `expected_stress` (init), `actual_stress` (completion). Use for slider defaults and stored values.
+- **Derived** = computed from a formula. Key: `stress_level` (from cognitive, emotional, physical, aversion). Use for analytics, net_wellbeing, stress_efficiency, misperception. Do not use for slider defaults.
+
+See `naming_direct_vs_derived.md` for the full convention and how to name future metrics.
+
 ## Overview
 
 This document describes the formulas for measuring relief, stress, and their relationships. These formulas ensure that relief score is inversely correlated with stress score and provide clear differentiation between relief score and net wellbeing.
@@ -30,8 +37,8 @@ This document describes the formulas for measuring relief, stress, and their rel
 - This is a **direct** measure (one slider), not a derived composite.
 - It is **one input** to the derived **stress_level** metric (see below). "Stress" in the app means the derived stress_level; emotional intensity is the emotional component of that.
 
-### 3. Stress Level (derived)
-**Definition:** Derived combined measure of cognitive, emotional, physical, and aversion load
+### 3. Stress Level (derived; key: `stress_level`)
+**Definition:** Derived (computed) combined measure of cognitive, emotional, physical, and aversion load. Not user-reported; do not use for direct stress sliders.
 
 **Calculation:**
 ```python
@@ -201,8 +208,8 @@ net_emotional = actual_emotional - expected_emotional_load
 
 **Source:** Stored in `net_emotional` column when available; otherwise computed from `emotional_load` and `expected_emotional_load` in analytics.
 
-### 12. Direct Stress (actual_stress / expected_stress)
-**Definition:** User-reported overall stress (0-100) at completion and optionally at initialization. Separate from the **derived** stress_level.
+### 12. Direct Stress (`expected_stress` / `actual_stress`)
+**Definition:** User-reported (direct) overall stress (0-100) at initialization and completion. Stored as `expected_stress` and `actual_stress`. Separate from the **derived** `stress_level`.
 
 **Source:**
 - **Expected:** `expected_stress` in `predicted_dict` (set at initialization)

@@ -24,7 +24,7 @@ NUMERIC_ATTRIBUTE_OPTIONS = [
 ]
 
 CALCULATED_METRICS = [
-    {'label': 'Stress Level', 'value': 'stress_level'},
+    {'label': 'Derived Stress', 'value': 'stress_level'},
     {'label': 'Relief Score (Actual)', 'value': 'relief_score'},
     {'label': 'Expected Relief', 'value': 'expected_relief'},
     {'label': 'Net Relief (Actual - Expected)', 'value': 'net_relief'},
@@ -1068,7 +1068,7 @@ def _build_analytics_main_content(
             ("Avg Relief", metrics['quality']['avg_relief']),
             ("Avg Mental Energy", metrics['quality'].get('avg_mental_energy_needed', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
             ("Avg Difficulty", metrics['quality'].get('avg_task_difficulty', metrics['quality'].get('avg_cognitive_load', 'N/A'))),
-            ("Avg Stress Level", metrics['quality']['avg_stress_level']),
+            ("Avg Derived Stress", metrics['quality']['avg_stress_level']),
             ("Avg Net Wellbeing", metrics['quality']['avg_net_wellbeing']),
             ("Avg Net Wellbeing (Norm)", metrics['quality']['avg_net_wellbeing_normalized']),
             ("Adjusted Wellbeing", f"{metrics['quality'].get('adjusted_wellbeing', 0.0):.1f}"),

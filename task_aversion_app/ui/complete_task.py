@@ -4,6 +4,7 @@ from nicegui import ui
 from fastapi import Request
 from backend.app_time import now as app_now
 from backend.instance_manager import InstanceManager
+from backend.metric_keys import ACTUAL_STRESS, EXPECTED_STRESS
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
 from backend.recommendation_logger import recommendation_logger
@@ -121,7 +122,24 @@ def complete_task_page(task_manager, emotion_manager):
                 except (ValueError, TypeError):
                     pass
             return default
-        
+
+        def get_direct_stress_default(default=50):
+            """Default for overall stress slider: only direct (reported) stress keys.
+            Never use STRESS_DERIVED (stress_level); that is for analytics only."""
+            if ACTUAL_STRESS in current_actual_data:
+                val = current_actual_data[ACTUAL_STRESS]
+                try:
+                    return int(round(float(val)))
+                except (ValueError, TypeError):
+                    pass
+            if EXPECTED_STRESS in predicted_data:
+                val = predicted_data[EXPECTED_STRESS]
+                try:
+                    return int(round(float(val)))
+                except (ValueError, TypeError):
+                    pass
+            return default
+
         # Map predicted keys to actual keys for baseline
         # Use 0 as default (not 50) to ensure we copy initialization values even if zero
         default_relief = get_default_value('actual_relief', 'expected_relief', 0)
@@ -130,7 +148,7 @@ def complete_task_page(task_manager, emotion_manager):
         default_difficulty = get_default_value('actual_difficulty', 'expected_difficulty', 0)
         default_emotional = get_default_value('actual_emotional', 'expected_emotional_load', 0)
         default_physical = get_default_value('actual_physical', 'expected_physical_load', 0)
-        default_stress = get_default_value('actual_stress', 'expected_stress', 50)
+        default_stress = get_direct_stress_default(50)
 
         # Get the initialization aversion value (the value set when this instance was initialized)
         # Only use initialization_expected_aversion (preserved from initialization of this specific instance)
@@ -259,11 +277,11 @@ def complete_task_page(task_manager, emotion_manager):
             except (ValueError, TypeError):
                 pass
 
-        ui.label("Actual overall stress").classes("text-lg font-semibold")
-        ui.label("How much overall stress did you feel? (Compared with calculated stress for misperception.)").classes("text-xs text-gray-500")
+        ui.label("Actual overall stress (direct)").classes("text-lg font-semibold")
+        ui.label("How much overall stress did you feel? Direct, reported value. Compare with derived stress for misperception.").classes("text-xs text-gray-500")
         actual_stress = progress_slider(0, 100, 1, default_stress)
-        if 'expected_stress' in predicted_data:
-            pred_val = predicted_data.get('expected_stress')
+        if EXPECTED_STRESS in predicted_data:
+            pred_val = predicted_data.get(EXPECTED_STRESS)
             try:
                 pred_num = float(pred_val)
                 pred_val = int(round(pred_num))
@@ -772,7 +790,7 @@ def complete_task_page(task_manager, emotion_manager):
                 'actual_difficulty': difficulty_val,
                 'actual_emotional': emotional_val,  # Keep internal name for formulas
                 'actual_physical': physical_val,
-                'actual_stress': stress_val,  # Direct overall stress (for stress misperception)
+                ACTUAL_STRESS: stress_val,  # Direct (reported) stress; derived stress_level is computed in analytics
                 'completion_percent': int(round(completion_value)),
                 'time_actual_minutes': int(actual_time.value or 0),
                 'completion_notes': combined_completion_notes,  # Instance-specific completion notes

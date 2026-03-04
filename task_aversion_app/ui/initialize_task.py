@@ -6,6 +6,7 @@ import time
 
 from fastapi import Request
 from backend.app_time import now as app_now
+from backend.metric_keys import EXPECTED_STRESS
 from backend.instance_manager import InstanceManager
 from backend.user_state import UserStateManager
 from backend.popup_dispatcher import PopupDispatcher
@@ -151,7 +152,23 @@ def initialize_task_page(task_manager, emotion_manager):
             if key in previous_averages:
                 return previous_averages[key]
             return default
-        
+
+        def get_direct_expected_stress_default(default=50):
+            """Default for expected overall stress slider: only direct (reported) key.
+            Never use STRESS_DERIVED (stress_level); that is for analytics only."""
+            val = predicted_data.get(EXPECTED_STRESS)
+            if val is not None:
+                try:
+                    num_val = float(val)
+                    if num_val <= 10 and num_val >= 0:
+                        num_val = num_val * 10
+                    return int(round(num_val))
+                except (ValueError, TypeError):
+                    pass
+            if EXPECTED_STRESS in previous_averages:
+                return previous_averages[EXPECTED_STRESS]
+            return default
+
         # Default aversion logic:
         # 1. If not first time, use previous average
         # 2. If first time and template has default_initial_aversion, use that
@@ -305,10 +322,16 @@ def initialize_task_page(task_manager, emotion_manager):
                 else:
                     ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
-            default_stress = get_default_value('expected_stress', 50)
-            ui.label("Expected overall stress").classes("text-lg font-semibold")
-            ui.label("How much overall stress do you expect? (Compare later with calculated stress for misperception.)").classes("text-xs text-gray-500")
+            default_stress = get_direct_expected_stress_default(50)
+            ui.label("Expected overall stress (direct)").classes("text-lg font-semibold")
+            ui.label("How much overall stress do you expect? Direct, reported value. Compare with derived stress for misperception.").classes("text-xs text-gray-500")
             expected_stress = progress_slider(0, 100, 1, default_stress)
+            if EXPECTED_STRESS in previous_averages:
+                prev_val = previous_averages[EXPECTED_STRESS]
+                if prev_val != default_stress:
+                    ui.label(f"Previous average: {prev_val} (current: {default_stress})").classes("text-xs text-gray-500")
+                else:
+                    ui.label(f"Previous average: {prev_val}").classes("text-xs text-gray-500")
 
             ui.label("Current Emotional State").classes("text-lg font-semibold")
 
@@ -850,7 +873,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     "expected_difficulty": task_difficulty.value,
                     "expected_physical_load": physical_load.value,
                     "expected_emotional_load": emotional_load.value,  # Keep internal name for formulas
-                    "expected_stress": expected_stress.value,  # Direct overall stress (for stress misperception)
+                    EXPECTED_STRESS: expected_stress.value,  # Direct (reported) stress; derived stress_level in analytics
                     "physical_context": physical_value,
                     "motivation": motivation.value,
                     "description": description_field.value or '',

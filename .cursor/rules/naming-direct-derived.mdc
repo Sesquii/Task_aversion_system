@@ -1,0 +1,26 @@
+---
+description: Naming convention for direct (user-reported) vs derived (computed) metrics and scores
+globs: ["**/*.py", "**/docs/*.md"]
+alwaysApply: false
+---
+
+# Direct vs Derived Metric Naming
+
+When adding or referencing user-reported vs computed metrics (e.g. stress, relief, future scores), follow this convention. See `task_aversion_app/docs/naming_direct_vs_derived.md` for full details.
+
+## Direct metrics (user-reported)
+- **Keys:** `expected_<name>` (init), `actual_<name>` (completion). Example: `expected_stress`, `actual_stress`.
+- **Usage:** Store and read these from predicted/actual payloads only. Use for slider defaults (e.g. previous direct value or template average for same direct key).
+- **Never** default a direct-metric slider from a derived metric (e.g. do not use `stress_level` for the "Actual overall stress" slider).
+
+## Derived metrics (computed/inferred)
+- **Keys:** Use a distinct key, e.g. `<name>_level`, `<name>_derived`, or `<name>_computed`. Example: `stress_level` = derived stress from components.
+- **Usage:** Compute in analytics or backend from other inputs. Use for dashboards, rankings, formulas. Do not store under the same key as the direct slider value.
+
+## Stress (current example)
+- Direct: `expected_stress` (init), `actual_stress` (completion). Use these for stress sliders and defaults.
+- Derived: `stress_level`. Use for analytics, net_wellbeing, stress_efficiency, stress misperception. Do not use for slider default.
+
+## New metrics
+- New direct score: add `expected_*` and/or `actual_*` keys; keep derived (if any) under a separate key (`*_level`, `*_derived`, etc.).
+- Document new keys in `naming_direct_vs_derived.md` and the relevant formula doc.

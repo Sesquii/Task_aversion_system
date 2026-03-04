@@ -2890,6 +2890,7 @@ class InstanceManager:
             emotional_values = []
             motivation_values = []
             aversion_values = []
+            stress_values = []  # Direct expected_stress (not derived stress_level)
             
             for idx in initialized.index:
                 predicted_str = str(initialized.at[idx, 'predicted'] or '{}').strip()
@@ -2906,7 +2907,8 @@ class InstanceManager:
                                 ('expected_physical_load', physical_values),
                                 ('expected_emotional_load', emotional_values),
                                 ('motivation', motivation_values),
-                                ('expected_aversion', aversion_values)
+                                ('expected_aversion', aversion_values),
+                                ('expected_stress', stress_values),  # Direct user-reported stress only
                             ]:
                                 val = pred_dict.get(key)
                                 if val is not None:
@@ -2952,6 +2954,8 @@ class InstanceManager:
                 result['motivation'] = round(sum(motivation_values) / len(motivation_values))
             if aversion_values:
                 result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
+            if stress_values:
+                result['expected_stress'] = round(sum(stress_values) / len(stress_values))
             
             return result
     
@@ -2996,6 +3000,7 @@ class InstanceManager:
                     emotional_values = []
                     motivation_values = []
                     aversion_values = []
+                    stress_values = []  # Direct expected_stress (not derived stress_level)
                     
                     for instance in instances:
                         predicted = instance.predicted or {}
@@ -3009,7 +3014,8 @@ class InstanceManager:
                                 ('expected_physical_load', physical_values),
                                 ('expected_emotional_load', emotional_values),
                                 ('motivation', motivation_values),
-                                ('expected_aversion', aversion_values)
+                                ('expected_aversion', aversion_values),
+                                ('expected_stress', stress_values),  # Direct user-reported stress only
                             ]:
                                 val = predicted.get(key)
                                 if val is not None:
@@ -3053,6 +3059,8 @@ class InstanceManager:
                         result['motivation'] = round(sum(motivation_values) / len(motivation_values))
                     if aversion_values:
                         result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
+                    if stress_values:
+                        result['expected_stress'] = round(sum(stress_values) / len(stress_values))
                     
                     return result
         except Exception as e:
@@ -3088,6 +3096,7 @@ class InstanceManager:
         emotional_values = []
         motivation_values = []
         aversion_values = []
+        stress_values = []  # Direct expected_stress (not derived stress_level)
         time_values = []
         for inst in instances:
             if isinstance(inst, dict):
@@ -3110,6 +3119,7 @@ class InstanceManager:
                 ('expected_emotional_load', emotional_values),
                 ('motivation', motivation_values),
                 ('expected_aversion', aversion_values),
+                ('expected_stress', stress_values),  # Direct user-reported stress only
             ]:
                 val = pred.get(key)
                 if val is not None:
@@ -3155,6 +3165,8 @@ class InstanceManager:
             result['motivation'] = round(sum(motivation_values) / len(motivation_values))
         if aversion_values:
             result['expected_aversion'] = round(sum(aversion_values) / len(aversion_values))
+        if stress_values:
+            result['expected_stress'] = round(sum(stress_values) / len(stress_values))
         avg_time = (sum(time_values) / len(time_values)) if time_values else None
         return result, avg_time
 

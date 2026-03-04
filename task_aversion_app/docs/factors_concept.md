@@ -75,8 +75,8 @@ The system supports a **misperception** concept: comparing what you predicted (e
 - Complements net_relief: one is about relief (outcome), the other about emotional activation (intensity).
 
 ### Stress misperception (direct vs derived)
-- **Direct stress:** User-reported "overall stress" at completion (`actual_stress`) and optionally at init (`expected_stress`). One slider, 0-100.
-- **Derived stress:** `stress_level` = weighted combination of cognitive, emotional_load, physical, and aversion (see relief_stress_formulas.md).
+- **Direct stress:** User-reported overall stress; keys `expected_stress` (init), `actual_stress` (completion). One slider each, 0-100. See naming_direct_vs_derived.md.
+- **Derived stress:** Key `stress_level` = weighted combination of cognitive, emotional_load, physical, and aversion (see relief_stress_formulas.md). Do not use for slider defaults.
 - **stress_misperception** = actual_stress - stress_level (when actual_stress is present).
 - Positive = you reported more stress than the model’s derived stress; negative = less. Use as a gateway towards a broader misperception factor (e.g. combining relief, emotional, and stress prediction errors).
 
