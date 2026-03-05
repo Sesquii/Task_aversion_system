@@ -2257,16 +2257,15 @@ class InstanceManager:
                 session.delete(instance)
                 session.commit()
                 print("[InstanceManager] Instance deleted.")
-                return True
+            # Invalidate caches AFTER deleting so next list_recent_tasks / list_active_instances is fresh
+            self._invalidate_instance_caches()
+            return True
         except Exception as e:
             if self.strict_mode:
                 raise RuntimeError(f"Database error in delete_instance and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in delete_instance: {e}, falling back to CSV")
             self.use_db = False
             return self._delete_instance_csv(instance_id)
-        # Invalidate caches AFTER deleting to ensure fresh data on next read
-        # Do this outside the session context to ensure it always runs
-        self._invalidate_instance_caches()
 
     def _update_attributes_from_payload(self, idx, payload: dict):
         """Persist wellbeing attributes if caller provided them (CSV version).

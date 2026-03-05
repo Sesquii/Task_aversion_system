@@ -1235,7 +1235,13 @@ def refresh_templates(search_query=None, search_mode='task'):
 
 
 def delete_instance(instance_id):
-    im.delete_instance(instance_id)
+    from backend.auth import get_current_user
+    current_user_id = get_current_user()
+    if current_user_id is None:
+        ui.notify("Not authenticated", color='negative')
+        return
+    im.delete_instance(instance_id, user_id=current_user_id)
+    im._invalidate_instance_caches()
     ui.notify("Deleted", color='negative')
     ui.navigate.reload()
 
