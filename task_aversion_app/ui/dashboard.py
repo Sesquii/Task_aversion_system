@@ -1933,6 +1933,14 @@ def edit_template(task):
     current_desc = task.get('description', '')
     current_task_type = task.get('task_type', 'Work')
     current_est = task.get('default_estimate_minutes', 0)
+    current_daily_target = task.get('daily_target', '') or ''
+    current_daily_limit = task.get('daily_limit', '') or ''
+    current_daily_time_target = task.get('daily_time_target_minutes', '') or ''
+    current_daily_time_limit = task.get('daily_time_limit_minutes', '') or ''
+    current_weekly_count_target = task.get('weekly_count_target', '') or ''
+    current_weekly_count_limit = task.get('weekly_count_limit', '') or ''
+    current_weekly_time_target = task.get('weekly_time_target_minutes', '') or ''
+    current_weekly_time_limit = task.get('weekly_time_limit_minutes', '') or ''
 
     # Get routine scheduling fields
     current_routine_frequency = task.get('routine_frequency', 'none') or 'none'
@@ -1962,6 +1970,20 @@ def edit_template(task):
             value=current_task_type
         ).classes("w-full")
         est_input = ui.number(label='Default estimate minutes', value=current_est).classes("w-full")
+
+        ui.label("Targets & limits (optional)").classes("text-lg font-semibold mt-4")
+        ui.label("Daily: count and time (min). Weekly: count and time (min).").classes("text-sm text-gray-600")
+        with ui.column().classes("w-full gap-2"):
+            with ui.row().classes("w-full gap-2 flex-wrap"):
+                daily_target_input = ui.input(label="Daily count target", value=str(current_daily_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                daily_limit_input = ui.input(label="Daily count limit", value=str(current_daily_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                daily_time_target_input = ui.input(label="Daily time target (min)", value=str(current_daily_time_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                daily_time_limit_input = ui.input(label="Daily time limit (min)", value=str(current_daily_time_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+            with ui.row().classes("w-full gap-2 flex-wrap"):
+                weekly_count_target_input = ui.input(label="Weekly count target", value=str(current_weekly_count_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                weekly_count_limit_input = ui.input(label="Weekly count limit", value=str(current_weekly_count_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                weekly_time_target_input = ui.input(label="Weekly time target (min)", value=str(current_weekly_time_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                weekly_time_limit_input = ui.input(label="Weekly time limit (min)", value=str(current_weekly_time_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
 
         # Routine scheduling section
         ui.label("Routine Scheduling (Optional)").classes("text-lg font-semibold mt-4")
@@ -2032,6 +2054,57 @@ def edit_template(task):
             # Convert selected_days to JSON string for CSV compatibility
             selected_days_json = json.dumps(selected_days)
 
+            def _parse_optional_int(s, msg="Target/limit must be a non-negative integer (or blank)."):
+                s = (s or '').strip()
+                if not s:
+                    return ''
+                try:
+                    v = int(float(s))
+                except (ValueError, TypeError):
+                    ui.notify(msg, color='negative')
+                    return None
+                if v < 0:
+                    ui.notify(msg, color='negative')
+                    return None
+                return str(v)
+
+            daily_target_str = _parse_optional_int(daily_target_input.value)
+            if daily_target_str is None:
+                return
+            daily_limit_str = _parse_optional_int(daily_limit_input.value)
+            if daily_limit_str is None:
+                return
+            if daily_target_str and daily_limit_str and int(daily_limit_str) < int(daily_target_str):
+                ui.notify("Daily count limit must be >= daily count target (or leave one blank).", color='negative')
+                return
+            daily_time_target_str = _parse_optional_int(daily_time_target_input.value)
+            if daily_time_target_str is None:
+                return
+            daily_time_limit_str = _parse_optional_int(daily_time_limit_input.value)
+            if daily_time_limit_str is None:
+                return
+            if daily_time_target_str and daily_time_limit_str and int(daily_time_limit_str) < int(daily_time_target_str):
+                ui.notify("Daily time limit must be >= daily time target (or leave one blank).", color='negative')
+                return
+            weekly_count_target_str = _parse_optional_int(weekly_count_target_input.value)
+            if weekly_count_target_str is None:
+                return
+            weekly_count_limit_str = _parse_optional_int(weekly_count_limit_input.value)
+            if weekly_count_limit_str is None:
+                return
+            if weekly_count_target_str and weekly_count_limit_str and int(weekly_count_limit_str) < int(weekly_count_target_str):
+                ui.notify("Weekly count limit must be >= weekly count target (or leave one blank).", color='negative')
+                return
+            weekly_time_target_str = _parse_optional_int(weekly_time_target_input.value)
+            if weekly_time_target_str is None:
+                return
+            weekly_time_limit_str = _parse_optional_int(weekly_time_limit_input.value)
+            if weekly_time_limit_str is None:
+                return
+            if weekly_time_target_str and weekly_time_limit_str and int(weekly_time_limit_str) < int(weekly_time_target_str):
+                ui.notify("Weekly time limit must be >= weekly time target (or leave one blank).", color='negative')
+                return
+
             success = tm.update_task(
                 task_id,
                 user_id=current_user_id,
@@ -2042,6 +2115,14 @@ def edit_template(task):
                 routine_frequency=routine_frequency.value,
                 routine_days_of_week=selected_days_json,
                 routine_time=time_str,
+                daily_target=daily_target_str,
+                daily_limit=daily_limit_str,
+                daily_time_target_minutes=daily_time_target_str,
+                daily_time_limit_minutes=daily_time_limit_str,
+                weekly_count_target=weekly_count_target_str,
+                weekly_count_limit=weekly_count_limit_str,
+                weekly_time_target_minutes=weekly_time_target_str,
+                weekly_time_limit_minutes=weekly_time_limit_str,
             )
             
             if success:
@@ -2071,7 +2152,15 @@ def copy_template(task):
     current_is_recurring = task.get('is_recurring', 'False')
     current_categories = task.get('categories', '[]')
     current_default_aversion_str = task.get('default_initial_aversion', '') or ''
-    
+    current_daily_target = task.get('daily_target', '') or ''
+    current_daily_limit = task.get('daily_limit', '') or ''
+    current_daily_time_target = task.get('daily_time_target_minutes', '') or ''
+    current_daily_time_limit = task.get('daily_time_limit_minutes', '') or ''
+    current_weekly_count_target = task.get('weekly_count_target', '') or ''
+    current_weekly_count_limit = task.get('weekly_count_limit', '') or ''
+    current_weekly_time_target = task.get('weekly_time_target_minutes', '') or ''
+    current_weekly_time_limit = task.get('weekly_time_limit_minutes', '') or ''
+
     # Get routine scheduling fields
     current_routine_frequency = task.get('routine_frequency', 'none') or 'none'
     current_routine_time = task.get('routine_time', '00:00') or '00:00'
@@ -2120,7 +2209,20 @@ def copy_template(task):
         
         # Aversion checkbox - checked if original had a default aversion value > 0
         aversion_checkbox = ui.checkbox("Check if you are averse to starting this task", value=(current_default_aversion is not None and current_default_aversion > 0))
-        
+
+        ui.label("Targets & limits (optional)").classes("text-lg font-semibold mt-4")
+        with ui.column().classes("w-full gap-2"):
+            with ui.row().classes("w-full gap-2 flex-wrap"):
+                daily_target_input = ui.input(label="Daily count target", value=str(current_daily_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                daily_limit_input = ui.input(label="Daily count limit", value=str(current_daily_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                daily_time_target_input = ui.input(label="Daily time target (min)", value=str(current_daily_time_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                daily_time_limit_input = ui.input(label="Daily time limit (min)", value=str(current_daily_time_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+            with ui.row().classes("w-full gap-2 flex-wrap"):
+                weekly_count_target_input = ui.input(label="Weekly count target", value=str(current_weekly_count_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                weekly_count_limit_input = ui.input(label="Weekly count limit", value=str(current_weekly_count_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                weekly_time_target_input = ui.input(label="Weekly time target (min)", value=str(current_weekly_time_target), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+                weekly_time_limit_input = ui.input(label="Weekly time limit (min)", value=str(current_weekly_time_limit), placeholder="(optional)").props("type=number").classes("flex-1 min-w-[90px]")
+
         # Routine scheduling section
         ui.label("Routine Scheduling (Optional)").classes("text-lg font-semibold mt-4")
         
@@ -2190,6 +2292,57 @@ def copy_template(task):
                 # For daily, if no days selected, it means every day (empty list)
                 # If days are selected, it means only on those days
 
+            def _parse_opt(s, msg="Target/limit must be a non-negative integer (or blank)."):
+                s = (s or '').strip()
+                if not s:
+                    return ''
+                try:
+                    v = int(float(s))
+                except (ValueError, TypeError):
+                    ui.notify(msg, color='negative')
+                    return None
+                if v < 0:
+                    ui.notify(msg, color='negative')
+                    return None
+                return str(v)
+
+            daily_target_str = _parse_opt(daily_target_input.value)
+            if daily_target_str is None:
+                return
+            daily_limit_str = _parse_opt(daily_limit_input.value)
+            if daily_limit_str is None:
+                return
+            if daily_target_str and daily_limit_str and int(daily_limit_str) < int(daily_target_str):
+                ui.notify("Daily count limit must be >= daily count target (or leave one blank).", color='negative')
+                return
+            daily_time_target_str = _parse_opt(daily_time_target_input.value)
+            if daily_time_target_str is None:
+                return
+            daily_time_limit_str = _parse_opt(daily_time_limit_input.value)
+            if daily_time_limit_str is None:
+                return
+            if daily_time_target_str and daily_time_limit_str and int(daily_time_limit_str) < int(daily_time_target_str):
+                ui.notify("Daily time limit must be >= daily time target (or leave one blank).", color='negative')
+                return
+            weekly_count_target_str = _parse_opt(weekly_count_target_input.value)
+            if weekly_count_target_str is None:
+                return
+            weekly_count_limit_str = _parse_opt(weekly_count_limit_input.value)
+            if weekly_count_limit_str is None:
+                return
+            if weekly_count_target_str and weekly_count_limit_str and int(weekly_count_limit_str) < int(weekly_count_target_str):
+                ui.notify("Weekly count limit must be >= weekly count target (or leave one blank).", color='negative')
+                return
+            weekly_time_target_str = _parse_opt(weekly_time_target_input.value)
+            if weekly_time_target_str is None:
+                return
+            weekly_time_limit_str = _parse_opt(weekly_time_limit_input.value)
+            if weekly_time_limit_str is None:
+                return
+            if weekly_time_target_str and weekly_time_limit_str and int(weekly_time_limit_str) < int(weekly_time_target_str):
+                ui.notify("Weekly time limit must be >= weekly time target (or leave one blank).", color='negative')
+                return
+
             # Create new task with copied data (due date is set per instance at initialization)
             tid = tm.create_task(
                 name_input.value.strip(),
@@ -2206,6 +2359,14 @@ def copy_template(task):
                 routine_time=time_str,
                 completion_window_hours=None,
                 completion_window_days=None,
+                daily_target=daily_target_str,
+                daily_limit=daily_limit_str,
+                daily_time_target_minutes=daily_time_target_str,
+                daily_time_limit_minutes=daily_time_limit_str,
+                weekly_count_target=weekly_count_target_str,
+                weekly_count_limit=weekly_count_limit_str,
+                weekly_time_target_minutes=weekly_time_target_str,
+                weekly_time_limit_minutes=weekly_time_limit_str,
             )
             
             if tid:

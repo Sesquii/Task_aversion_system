@@ -75,6 +75,24 @@ if os.getenv('ENABLE_QUERY_LOGGING', '1').lower() in ('1', 'true', 'yes'):
     except Exception as e:
         print(f"[Database] Warning: Failed to set up query logging: {e}")
 
+# Log DB connection/operational errors for incident review (see docs/database_incident_prep.md)
+try:
+    from sqlalchemy import event
+    from sqlalchemy.exc import OperationalError
+    from backend.database_diagnostics import is_enabled, log_connection_error
+    if is_enabled():
+        @event.listens_for(engine, "handle_error")
+        def _log_db_error(context):
+            exc = getattr(context, "original_exception", None)
+            if exc is None or not isinstance(exc, OperationalError):
+                return
+            log_connection_error(
+                getattr(context, "statement", None) or "unknown",
+                exc,
+            )
+except Exception as e:
+    print(f"[Database] Diagnostics error logging skipped: {e}")
+
 
 def get_session():
     """Get a database session. Use as context manager or call close() manually."""
@@ -110,6 +128,13 @@ def init_db():
     if not _db_initialized:
         print(f"[Database] Initialized database at {DATABASE_URL}")
         _db_initialized = True
+        # Log DB identity for future incident review (see docs/database_incident_prep.md)
+        try:
+            from backend.database_diagnostics import is_enabled, log_connection_identity
+            if is_enabled():
+                log_connection_identity(engine, DATABASE_URL)
+        except Exception as e:
+            print(f"[Database] Diagnostics log skipped: {e}")
 
 
 # ============================================================================
@@ -194,7 +219,19 @@ class Task(Base):
     routine_time = Column(String, default='00:00')  # Time in HH:MM format (24-hour)
     completion_window_hours = Column(Integer, default=None)  # Hours to complete task after initialization without penalty
     completion_window_days = Column(Integer, default=None)  # Days to complete task after initialization without penalty
-    
+
+    # Daily target/limit (optional; stored on task template)
+    # Count = number of completions per period; time = total minutes per period.
+    # Supports both daily and weekly for alignment/score use (e.g. time alignment).
+    daily_target = Column(Integer, default=None, nullable=True)  # desired count/day
+    daily_limit = Column(Integer, default=None, nullable=True)  # max count/day
+    daily_time_target_minutes = Column(Integer, default=None, nullable=True)  # desired min/day
+    daily_time_limit_minutes = Column(Integer, default=None, nullable=True)  # max min/day
+    weekly_count_target = Column(Integer, default=None, nullable=True)  # desired count/week
+    weekly_count_limit = Column(Integer, default=None, nullable=True)  # max count/week
+    weekly_time_target_minutes = Column(Integer, default=None, nullable=True)  # desired min/week
+    weekly_time_limit_minutes = Column(Integer, default=None, nullable=True)  # max min/week
+
     # Shared notes field - notes are shared across all instances of this task template
     notes = Column(Text, default='')  # Runtime notes (separate from description which is set at task creation)
     
@@ -220,6 +257,14 @@ class Task(Base):
             'routine_time': self.routine_time or '00:00',
             'completion_window_hours': str(self.completion_window_hours) if self.completion_window_hours is not None else '',
             'completion_window_days': str(self.completion_window_days) if self.completion_window_days is not None else '',
+            'daily_target': str(self.daily_target) if self.daily_target is not None else '',
+            'daily_limit': str(self.daily_limit) if self.daily_limit is not None else '',
+            'daily_time_target_minutes': str(self.daily_time_target_minutes) if self.daily_time_target_minutes is not None else '',
+            'daily_time_limit_minutes': str(self.daily_time_limit_minutes) if self.daily_time_limit_minutes is not None else '',
+            'weekly_count_target': str(self.weekly_count_target) if self.weekly_count_target is not None else '',
+            'weekly_count_limit': str(self.weekly_count_limit) if self.weekly_count_limit is not None else '',
+            'weekly_time_target_minutes': str(self.weekly_time_target_minutes) if self.weekly_time_target_minutes is not None else '',
+            'weekly_time_limit_minutes': str(self.weekly_time_limit_minutes) if self.weekly_time_limit_minutes is not None else '',
             'notes': self.notes or '',
             'user_id': str(self.user_id) if self.user_id is not None else ''
         }

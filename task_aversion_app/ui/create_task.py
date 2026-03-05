@@ -24,6 +24,20 @@ def create_task_page(task_manager, emotion_manager):
             task_type = ui.select(['Work', 'Play', 'Self care', 'Sleep'], label='Task Type', value='Work')
             est = ui.number(label='Default estimate minutes', value=0)
 
+            ui.label("Targets & limits (optional)").classes("text-lg font-semibold mt-4")
+            ui.label("Daily: count (times/day) and time (minutes/day). Weekly: count and time (minutes/week).").classes("text-sm text-gray-600")
+            with ui.column().classes("w-full gap-3"):
+                with ui.row().classes("w-full gap-3 flex-wrap"):
+                    daily_target = ui.input(label="Daily count target", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+                    daily_limit = ui.input(label="Daily count limit", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+                    daily_time_target = ui.input(label="Daily time target (min)", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+                    daily_time_limit = ui.input(label="Daily time limit (min)", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+                with ui.row().classes("w-full gap-3 flex-wrap"):
+                    weekly_count_target = ui.input(label="Weekly count target", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+                    weekly_count_limit = ui.input(label="Weekly count limit", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+                    weekly_time_target = ui.input(label="Weekly time target (min)", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+                    weekly_time_limit = ui.input(label="Weekly time limit (min)", placeholder="(optional)").props("type=number").classes("flex-1 min-w-[100px]")
+
             # Simple checkbox for aversion - if checked, sets default to 50
             aversion_checkbox = ui.checkbox("Check if you are averse to starting this task")
 
@@ -116,6 +130,14 @@ def create_task_page(task_manager, emotion_manager):
                         routine_time=time_str,
                         completion_window_hours=None,
                         completion_window_days=None,
+                        daily_target=daily_target.value,
+                        daily_limit=daily_limit.value,
+                        daily_time_target_minutes=daily_time_target.value,
+                        daily_time_limit_minutes=daily_time_limit.value,
+                        weekly_count_target=weekly_count_target.value,
+                        weekly_count_limit=weekly_count_limit.value,
+                        weekly_time_target_minutes=weekly_time_target.value,
+                        weekly_time_limit_minutes=weekly_time_limit.value,
                         user_id=user_id,
                     )
 

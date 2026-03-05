@@ -3,7 +3,7 @@ import os
 import json
 import pandas as pd
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from backend.performance_logger import get_perf_logger
 from backend.security_utils import (
@@ -14,6 +14,14 @@ from backend.security_utils import (
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 TASKS_FILE = 'data/tasks.csv'
 perf_logger = get_perf_logger()
+
+# Target/limit columns: daily & weekly, count & time (for alignment/scoring).
+TARGET_LIMIT_COLUMNS = [
+    'daily_target', 'daily_limit',
+    'daily_time_target_minutes', 'daily_time_limit_minutes',
+    'weekly_count_target', 'weekly_count_limit',
+    'weekly_time_target_minutes', 'weekly_time_limit_minutes',
+]
 
 class TaskManager:
     # Class-level cache for get_all shared across instances (recommendations create new
@@ -129,10 +137,15 @@ class TaskManager:
         """Initialize CSV backend."""
         os.makedirs(DATA_DIR, exist_ok=True)
         self.tasks_file = os.path.join(DATA_DIR, 'tasks.csv')
-        # task definition fields:
-        # task_id, name, description, type, version, created_at, is_recurring, categories (json), default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days, notes
+        # task definition fields (includes daily/weekly count & time targets/limits)
         if not os.path.exists(self.tasks_file):
-            pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days','notes']).to_csv(self.tasks_file, index=False)
+            base_cols = [
+                'task_id', 'name', 'description', 'type', 'version', 'created_at', 'is_recurring', 'categories',
+                'default_estimate_minutes', 'task_type', 'default_initial_aversion',
+                'routine_frequency', 'routine_days_of_week', 'routine_time',
+                'completion_window_hours', 'completion_window_days',
+            ]
+            pd.DataFrame(columns=base_cols + TARGET_LIMIT_COLUMNS + ['notes']).to_csv(self.tasks_file, index=False)
         self._reload()
     def _reload(self):
         """Reload data (CSV only)."""
@@ -169,6 +182,9 @@ class TaskManager:
             self.df['completion_window_hours'] = ''
         if 'completion_window_days' not in self.df.columns:
             self.df['completion_window_days'] = ''
+        for col in TARGET_LIMIT_COLUMNS:
+            if col not in self.df.columns:
+                self.df[col] = ''
         if 'notes' not in self.df.columns:
             self.df['notes'] = ''
     
@@ -440,7 +456,13 @@ class TaskManager:
                 tasks = query.all()
                 if not tasks:
                     # Return empty DataFrame with expected columns
-                    return pd.DataFrame(columns=['task_id','name','description','type','version','created_at','is_recurring','categories','default_estimate_minutes','task_type','default_initial_aversion','routine_frequency','routine_days_of_week','routine_time','completion_window_hours','completion_window_days','notes','user_id'])
+                    base_cols = [
+                        'task_id', 'name', 'description', 'type', 'version', 'created_at', 'is_recurring', 'categories',
+                        'default_estimate_minutes', 'task_type', 'default_initial_aversion',
+                        'routine_frequency', 'routine_days_of_week', 'routine_time',
+                        'completion_window_hours', 'completion_window_days',
+                    ]
+                    return pd.DataFrame(columns=base_cols + TARGET_LIMIT_COLUMNS + ['notes', 'user_id'])
                 # Convert to list of dicts, then to DataFrame
                 task_dicts = [task.to_dict() for task in tasks]
                 return pd.DataFrame(task_dicts)
@@ -452,56 +474,187 @@ class TaskManager:
             self._ensure_csv_initialized()
             return self._get_all_csv(user_id)
 
-    def create_task(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None, job_ids: Optional[List[str]] = None):
+    @staticmethod
+    def _parse_optional_nonnegative_int(value: Any, field_name: str) -> Optional[int]:
+        """Parse an optional non-negative int from user input (supports '', None, numbers, numeric strings)."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            iv = int(value)
+            if iv < 0:
+                raise ValidationError(f"{field_name} must be >= 0 (or blank).")
+            return iv
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return None
+            try:
+                iv = int(float(s))
+            except ValueError as e:
+                raise ValidationError(f"{field_name} must be an integer (or blank).") from e
+            if iv < 0:
+                raise ValidationError(f"{field_name} must be >= 0 (or blank).")
+            return iv
+        raise ValidationError(f"{field_name} must be an integer (or blank).")
+
+    def create_task(
+        self,
+        name: str,
+        description: str = '',
+        ttype: str = 'one-time',
+        is_recurring: bool = False,
+        categories: Any = '[]',
+        default_estimate_minutes: int = 0,
+        task_type: str = 'Work',
+        default_initial_aversion: Any = None,
+        routine_frequency: str = 'none',
+        routine_days_of_week: Any = None,
+        routine_time: str = '00:00',
+        completion_window_hours: Any = None,
+        completion_window_days: Any = None,
+        daily_target: Any = None,
+        daily_limit: Any = None,
+        daily_time_target_minutes: Any = None,
+        daily_time_limit_minutes: Any = None,
+        weekly_count_target: Any = None,
+        weekly_count_limit: Any = None,
+        weekly_time_target_minutes: Any = None,
+        weekly_time_limit_minutes: Any = None,
+        user_id: Optional[int] = None,
+        job_ids: Optional[List[str]] = None,
+    ):
         """
         Creates a new task definition and returns task_id. Works with both CSV and database.
 
         Args:
-            default_initial_aversion: Optional initial aversion value (0-100) to use as default when first initializing this task
-            routine_frequency: 'none', 'daily', or 'weekly'
-            routine_days_of_week: List of day numbers (0=Monday, 6=Sunday) for weekly frequency
-            routine_time: Time in HH:MM format (24-hour), default '00:00'
-            completion_window_hours: Hours to complete task after initialization without penalty
-            completion_window_days: Days to complete task after initialization without penalty
-            user_id: User ID to associate task with (required for database, optional for CSV during migration)
+            daily_target/daily_limit: Count per day (target/limit).
+            daily_time_target_minutes/daily_time_limit_minutes: Minutes per day.
+            weekly_count_target/weekly_count_limit: Count per week.
+            weekly_time_target_minutes/weekly_time_limit_minutes: Minutes per week.
+            user_id: User ID to associate task with (required for database).
             job_ids: Optional list of job_id to assign this task to (after creation).
 
         Raises:
-            ValidationError: If input validation fails (name too long, etc.)
+            ValidationError: If input validation fails (name too long, limit < target, etc.)
         """
         # Validate and sanitize inputs
         try:
             name = validate_task_name(name)
             description = validate_description(description)
-        except ValidationError as e:
+        except ValidationError:
             raise  # Re-raise validation errors for UI to handle
 
         if routine_days_of_week is None:
             routine_days_of_week = []
+        # Parse and validate target/limit pairs (each limit must be >= target when both set)
+        daily_target_int = self._parse_optional_nonnegative_int(daily_target, field_name='daily_target')
+        daily_limit_int = self._parse_optional_nonnegative_int(daily_limit, field_name='daily_limit')
+        if (daily_target_int is not None) and (daily_limit_int is not None) and (daily_limit_int < daily_target_int):
+            raise ValidationError("Daily count limit must be >= daily count target (or leave one blank).")
+        daily_time_target = self._parse_optional_nonnegative_int(daily_time_target_minutes, field_name='daily_time_target_minutes')
+        daily_time_limit = self._parse_optional_nonnegative_int(daily_time_limit_minutes, field_name='daily_time_limit_minutes')
+        if (daily_time_target is not None) and (daily_time_limit is not None) and (daily_time_limit < daily_time_target):
+            raise ValidationError("Daily time limit must be >= daily time target (or leave one blank).")
+        weekly_count_target_int = self._parse_optional_nonnegative_int(weekly_count_target, field_name='weekly_count_target')
+        weekly_count_limit_int = self._parse_optional_nonnegative_int(weekly_count_limit, field_name='weekly_count_limit')
+        if (weekly_count_target_int is not None) and (weekly_count_limit_int is not None) and (weekly_count_limit_int < weekly_count_target_int):
+            raise ValidationError("Weekly count limit must be >= weekly count target (or leave one blank).")
+        weekly_time_target = self._parse_optional_nonnegative_int(weekly_time_target_minutes, field_name='weekly_time_target_minutes')
+        weekly_time_limit = self._parse_optional_nonnegative_int(weekly_time_limit_minutes, field_name='weekly_time_limit_minutes')
+        if (weekly_time_target is not None) and (weekly_time_limit is not None) and (weekly_time_limit < weekly_time_target):
+            raise ValidationError("Weekly time limit must be >= weekly time target (or leave one blank).")
         # Invalidate caches before creating
         self._invalidate_task_caches()
         if self.use_db:
-            task_id = self._create_task_db(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days, user_id)
+            task_id = self._create_task_db(
+                name,
+                description,
+                ttype,
+                is_recurring,
+                categories,
+                default_estimate_minutes,
+                task_type,
+                default_initial_aversion,
+                routine_frequency,
+                routine_days_of_week,
+                routine_time,
+                completion_window_hours,
+                completion_window_days,
+                daily_target_int,
+                daily_limit_int,
+                daily_time_target,
+                daily_time_limit,
+                weekly_count_target_int,
+                weekly_count_limit_int,
+                weekly_time_target,
+                weekly_time_limit,
+                user_id,
+            )
         else:
-            task_id = self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
+            task_id = self._create_task_csv(
+                name,
+                description,
+                ttype,
+                is_recurring,
+                categories,
+                default_estimate_minutes,
+                task_type,
+                default_initial_aversion,
+                routine_frequency,
+                routine_days_of_week,
+                routine_time,
+                completion_window_hours,
+                completion_window_days,
+                daily_target_int,
+                daily_limit_int,
+                daily_time_target,
+                daily_time_limit,
+                weekly_count_target_int,
+                weekly_count_limit_int,
+                weekly_time_target,
+                weekly_time_limit,
+            )
         if task_id and job_ids:
             self.assign_to_jobs(task_id, job_ids, user_id=user_id)
         return task_id
     
-    def _create_task_csv(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None):
+    def _create_task_csv(
+        self,
+        name: str,
+        description: str = '',
+        ttype: str = 'one-time',
+        is_recurring: bool = False,
+        categories: Any = '[]',
+        default_estimate_minutes: int = 0,
+        task_type: str = 'Work',
+        default_initial_aversion: Any = None,
+        routine_frequency: str = 'none',
+        routine_days_of_week: Any = None,
+        routine_time: str = '00:00',
+        completion_window_hours: Any = None,
+        completion_window_days: Any = None,
+        daily_target: Optional[int] = None,
+        daily_limit: Optional[int] = None,
+        daily_time_target_minutes: Optional[int] = None,
+        daily_time_limit_minutes: Optional[int] = None,
+        weekly_count_target: Optional[int] = None,
+        weekly_count_limit: Optional[int] = None,
+        weekly_time_target_minutes: Optional[int] = None,
+        weekly_time_limit_minutes: Optional[int] = None,
+    ):
         """CSV-specific create_task."""
         self._reload_csv()
-        # simple unique id using timestamp + name fragment
         task_id = f"t{int(datetime.now().timestamp())}"
-        # Convert default_initial_aversion to string, or empty string if None
         aversion_str = str(int(default_initial_aversion)) if default_initial_aversion is not None else ''
-        # Convert routine_days_of_week to JSON string
         if routine_days_of_week is None:
             routine_days_of_week = []
         routine_days_str = json.dumps(routine_days_of_week) if isinstance(routine_days_of_week, list) else (routine_days_of_week or '[]')
-        # Convert completion window values to strings or empty
         completion_window_hours_str = str(int(completion_window_hours)) if completion_window_hours is not None else ''
         completion_window_days_str = str(int(completion_window_days)) if completion_window_days is not None else ''
+
+        def _str_or_empty(val: Optional[int]) -> str:
+            return str(int(val)) if val is not None else ''
+
         row = {
             'task_id': task_id,
             'name': name,
@@ -518,10 +671,17 @@ class TaskManager:
             'routine_days_of_week': routine_days_str,
             'routine_time': routine_time or '00:00',
             'completion_window_hours': completion_window_hours_str,
-            'completion_window_days': completion_window_days_str
+            'completion_window_days': completion_window_days_str,
+            'daily_target': _str_or_empty(daily_target),
+            'daily_limit': _str_or_empty(daily_limit),
+            'daily_time_target_minutes': _str_or_empty(daily_time_target_minutes),
+            'daily_time_limit_minutes': _str_or_empty(daily_time_limit_minutes),
+            'weekly_count_target': _str_or_empty(weekly_count_target),
+            'weekly_count_limit': _str_or_empty(weekly_count_limit),
+            'weekly_time_target_minutes': _str_or_empty(weekly_time_target_minutes),
+            'weekly_time_limit_minutes': _str_or_empty(weekly_time_limit_minutes),
         }
-        # Ensure all columns exist in dataframe
-        for col in ['task_type', 'default_initial_aversion', 'routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days']:
+        for col in TARGET_LIMIT_COLUMNS + ['task_type', 'default_initial_aversion', 'routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days']:
             if col not in self.df.columns:
                 self.df[col] = '' if col != 'routine_frequency' else 'none'
                 if col == 'routine_time':
@@ -530,7 +690,31 @@ class TaskManager:
         self._save_csv()
         return task_id
     
-    def _create_task_db(self, name, description='', ttype='one-time', is_recurring=False, categories='[]', default_estimate_minutes=0, task_type='Work', default_initial_aversion=None, routine_frequency='none', routine_days_of_week=None, routine_time='00:00', completion_window_hours=None, completion_window_days=None, user_id: Optional[int] = None):
+    def _create_task_db(
+        self,
+        name: str,
+        description: str = '',
+        ttype: str = 'one-time',
+        is_recurring: bool = False,
+        categories: Any = '[]',
+        default_estimate_minutes: int = 0,
+        task_type: str = 'Work',
+        default_initial_aversion: Any = None,
+        routine_frequency: str = 'none',
+        routine_days_of_week: Any = None,
+        routine_time: str = '00:00',
+        completion_window_hours: Any = None,
+        completion_window_days: Any = None,
+        daily_target: Optional[int] = None,
+        daily_limit: Optional[int] = None,
+        daily_time_target_minutes: Optional[int] = None,
+        daily_time_limit_minutes: Optional[int] = None,
+        weekly_count_target: Optional[int] = None,
+        weekly_count_limit: Optional[int] = None,
+        weekly_time_target_minutes: Optional[int] = None,
+        weekly_time_limit_minutes: Optional[int] = None,
+        user_id: Optional[int] = None,
+    ):
         """Database-specific create_task."""
         # SECURITY: Require user_id for database operations
         if user_id is None:
@@ -578,7 +762,15 @@ class TaskManager:
                     routine_days_of_week=routine_days_list,
                     routine_time=routine_time or '00:00',
                     completion_window_hours=completion_window_hours,
-                    completion_window_days=completion_window_days
+                    completion_window_days=completion_window_days,
+                    daily_target=daily_target,
+                    daily_limit=daily_limit,
+                    daily_time_target_minutes=daily_time_target_minutes,
+                    daily_time_limit_minutes=daily_time_limit_minutes,
+                    weekly_count_target=weekly_count_target,
+                    weekly_count_limit=weekly_count_limit,
+                    weekly_time_target_minutes=weekly_time_target_minutes,
+                    weekly_time_limit_minutes=weekly_time_limit_minutes,
                 )
                 session.add(task)
                 session.commit()
@@ -589,7 +781,29 @@ class TaskManager:
             print(f"[TaskManager] Database error in create_task: {e}, falling back to CSV")
             self.use_db = False
             self._ensure_csv_initialized()
-            return self._create_task_csv(name, description, ttype, is_recurring, categories, default_estimate_minutes, task_type, default_initial_aversion, routine_frequency, routine_days_of_week, routine_time, completion_window_hours, completion_window_days)
+            return self._create_task_csv(
+                name,
+                description,
+                ttype,
+                is_recurring,
+                categories,
+                default_estimate_minutes,
+                task_type,
+                default_initial_aversion,
+                routine_frequency,
+                routine_days_of_week,
+                routine_time,
+                completion_window_hours,
+                completion_window_days,
+                daily_target,
+                daily_limit,
+                daily_time_target_minutes,
+                daily_time_limit_minutes,
+                weekly_count_target,
+                weekly_count_limit,
+                weekly_time_target_minutes,
+                weekly_time_limit_minutes,
+            )
 
     def update_task(self, task_id, user_id: Optional[int] = None, **kwargs):
         """Update a task. Works with both CSV and database.
@@ -633,13 +847,12 @@ class TaskManager:
         # Ensure default_initial_aversion column exists
         if 'default_initial_aversion' not in self.df.columns:
             self.df['default_initial_aversion'] = ''
-        # Ensure routine scheduling columns exist
-        for col in ['routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days']:
+        for col in ['routine_frequency', 'routine_days_of_week', 'routine_time', 'completion_window_hours', 'completion_window_days'] + TARGET_LIMIT_COLUMNS:
             if col not in self.df.columns:
                 self.df[col] = '' if col != 'routine_frequency' else 'none'
                 if col == 'routine_time':
                     self.df[col] = '00:00'
-        for k,v in kwargs.items():
+        for k, v in kwargs.items():
             if k in self.df.columns:
                 self.df.at[idx,k] = v
         # bump version
@@ -696,6 +909,8 @@ class TaskManager:
                         elif k == 'completion_window_hours' and isinstance(v, str):
                             v = int(v) if v.strip() else None
                         elif k == 'completion_window_days' and isinstance(v, str):
+                            v = int(v) if v.strip() else None
+                        elif k in TARGET_LIMIT_COLUMNS and isinstance(v, str):
                             v = int(v) if v.strip() else None
                         setattr(task, k, v)
                 
@@ -816,9 +1031,9 @@ class TaskManager:
         # Validate and sanitize note
         try:
             note = validate_note(note)
-        except ValidationError as e:
+        except ValidationError:
             raise  # Re-raise validation errors for UI to handle
-        
+
         if self.use_db:
             return self._append_task_notes_db(task_id, note, user_id)
         else:
