@@ -7,6 +7,8 @@ isProject: false
 
 # Score Refactor Outline and Clarification Plan
 
+***COMPLETED THROUGH 3***
+
 This plan is an **outline with embedded questions** for you to answer. After you clarify, you can open new agent chats and request separate implementation plans for each score (e.g. "Plan: Productivity score refactor", "Plan: Execution score + start delay + glossary charts", "Plan: Task Quality score", "Plan: Utility score", "Plan: Challenge score").
 
 ---
@@ -59,6 +61,8 @@ This plan is an **outline with embedded questions** for you to answer. After you
 ---
 
 ## 4. Execution Score Split and Glossary Charts
+
+***START HERE***
 
 **Goal:** Split execution into sub-scores (e.g. difficulty execution, speed execution, start execution, completion) and add **data-driven** glossary charts: line (trend), pie (component share), bar (e.g. 7d averages by sub-score).
 

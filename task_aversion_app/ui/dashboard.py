@@ -17,6 +17,7 @@ from backend.performance_logger import get_perf_logger as get_init_perf_logger
 from backend.recommendation_logger import recommendation_logger
 from backend.security_utils import escape_for_display
 from backend.app_time import format_for_display
+from backend.feedback_logger import log_feedback_submitted, log_feedback_error
 from ui.error_reporting import handle_error_with_ui
 
 # Setup performance logging for monitored metrics
@@ -1243,7 +1244,7 @@ def reset_metric_score(metric_key: str):
     """Reset a metric score to 0 (temporary workaround for testing).
     
     Args:
-        metric_key: The metric key to reset (e.g., 'daily_productivity_score_idle_refresh')
+        metric_key: The metric key to reset (e.g., 'daily_completion_efficiency_score_idle_refresh')
     """
     # #region agent log
     try:
@@ -1451,13 +1452,14 @@ def edit_monitored_metrics_config():
     
     # Get current config
     config = user_state.get_monitored_metrics_config(user_id_str)
-    current_selected = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+    current_selected = config.get('selected_metrics', ['productivity_time', 'completion_efficiency_score'])
     current_baseline = config.get('coloration_baseline', 'last_3_months')
     
     # Available metrics
     available_metrics_list = [
         {'key': 'productivity_time', 'label': 'Weekly Productivity Time'},
-        {'key': 'productivity_score', 'label': 'Weekly Productivity Score'},
+        {'key': 'completion_efficiency_score', 'label': 'Weekly Completion Efficiency score'},
+        {'key': 'robust_productivity_score', 'label': 'Robust Productivity'},
     ]
     
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl p-6'):
@@ -1603,16 +1605,26 @@ def submit_feedback():
                     with open(feedback_filepath, 'w', encoding='utf-8') as f:
                         f.write(feedback_content)
                     
-                    # Verify file was created
+                    # Verify file was created and log to file
                     if os.path.exists(feedback_filepath):
+                        log_feedback_submitted(
+                            filename=feedback_filename,
+                            char_count=len(feedback_text),
+                            filepath=feedback_filepath,
+                        )
                         print(f"[Feedback] Successfully saved feedback to: {feedback_filepath}")
                         ui.notify(f"Feedback submitted successfully. Saved as {feedback_filename}. Thank you!", color='positive')
                     else:
+                        log_feedback_error(
+                            "Feedback file was not created after write",
+                            context={'feedback_filename': feedback_filename, 'feedback_length': len(feedback_text)},
+                        )
                         print(f"[Feedback] ERROR: File was not created at: {feedback_filepath}")
                         ui.notify("Feedback may not have been saved. Please try again.", color='warning')
                     
                     dialog.close()
                 except Exception as e:
+                    log_feedback_error(str(e), context={'feedback_length': len(feedback_text)})
                     print(f"[Feedback] Error saving feedback: {e}")
                     handle_error_with_ui("submit_feedback", e, user_id=current_user_id, context={'feedback_length': len(feedback_text)})
                     ui.notify("Error submitting feedback. Please try again.", color='negative')
@@ -2610,7 +2622,7 @@ def _get_value_key_from_history(history_data: dict) -> str:
         Key name for values (e.g., 'hours', 'relief_points', 'productivity_scores')
     """
     # Common value keys in history data
-    possible_keys = ['hours', 'relief_points', 'productivity_scores', 'scores', 'values']
+    possible_keys = ['hours', 'relief_points', 'productivity_scores', 'completion_efficiency_scores', 'robust_productivity_scores', 'scores', 'values']
     for key in possible_keys:
         if key in history_data and history_data[key] and isinstance(history_data[key], list):
             return key
@@ -2619,7 +2631,7 @@ def _get_value_key_from_history(history_data: dict) -> str:
 
 def _is_weekly_total_metric(metric_key: str, metric_config: dict) -> bool:
     """True if this metric's current_value is a weekly total (e.g. hours/week); else a daily average or point-in-time value."""
-    if metric_key in ('productivity_time', 'productivity_score'):
+    if metric_key in ('productivity_time', 'completion_efficiency_score', 'robust_productivity_score'):
         return True
     label = (metric_config.get('label') or '').lower()
     return 'time' in metric_key.lower() or 'hours' in label
@@ -2722,7 +2734,7 @@ def render_monitored_metrics_section(container):
     
     # Get configuration
     config = user_state.get_monitored_metrics_config(user_id_str)
-    selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+    selected_metrics = config.get('selected_metrics', ['productivity_time', 'completion_efficiency_score'])
     coloration_baseline = config.get('coloration_baseline', 'last_3_months')
     
     # #region agent log
@@ -2760,8 +2772,8 @@ def render_monitored_metrics_section(container):
                     value_label = ui.label("...").classes("text-lg font-bold")
                     baseline_label = ui.label("...").classes("text-xs text-gray-400")
                     
-                    # Create hidden button for context menu reset action (only for daily_productivity_score_idle_refresh)
-                    if metric_key == 'daily_productivity_score_idle_refresh':
+                    # Create hidden button for context menu reset action (only for daily_completion_efficiency_score_idle_refresh)
+                    if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                         reset_button_id = f'context-btn-metric-reset-{metric_key}'
                         ui.button("", on_click=lambda key=metric_key: reset_metric_score(key)).props(f'id="{reset_button_id}"').style("display: none;")
                 
@@ -2782,25 +2794,26 @@ def render_monitored_metrics_section(container):
     def get_targeted_metric_values(metrics_list, an, uid):
         """Get only the specific metric values needed, without calculating all metrics.
         
-        Loads instances once and passes to relief_summary, weekly_productivity_history,
+        Loads instances once and passes to relief_summary, weekly_completion_efficiency_history,
         and dashboard_metrics to avoid repeated _load_instances (fixes timeout / stuck graph).
         
         Returns:
-            dict with keys: 'relief_summary', 'quality_metrics', 'composite_scores', 'weekly_productivity_history'
+            dict with keys: 'relief_summary', 'quality_metrics', 'composite_scores', 'weekly_completion_efficiency_history'
         """
         result = {
             'relief_summary': {},
             'quality_metrics': {},
             'composite_scores': {},
-            'weekly_productivity_history': None,
+            'weekly_completion_efficiency_history': None,
             'weekly_hours_history': None,
             'stress_level_history': None,
             'net_relief_history': None,
         }
         
-        relief_metrics = {'productivity_time', 'productivity_score'}
+        relief_metrics = {'productivity_time', 'completion_efficiency_score', 'robust_productivity_score'}
         needs_productivity_time = 'productivity_time' in metrics_list
-        needs_productivity_score = 'productivity_score' in metrics_list
+        needs_productivity_score = 'completion_efficiency_score' in metrics_list
+        needs_robust_productivity = 'robust_productivity_score' in metrics_list
         quality_metric_keys = [
             m for m in metrics_list
             if m not in relief_metrics and m != 'execution_score'
@@ -2810,7 +2823,7 @@ def render_monitored_metrics_section(container):
                 'cognitive_load', 'emotional_load', 'physical_load'
             ])
         ]
-        needs_relief_or_quality = (needs_productivity_time or needs_productivity_score or bool(quality_metric_keys))
+        needs_relief_or_quality = (needs_productivity_time or needs_productivity_score or needs_robust_productivity or bool(quality_metric_keys))
         has_load_once = hasattr(an, 'load_instances_once')
         # #region agent log
         try:
@@ -2829,10 +2842,11 @@ def render_monitored_metrics_section(container):
                     _f.write(json.dumps({'id': 'targeted_segment', 'location': 'dashboard.get_targeted_metric_values', 'message': 'after load_instances_once', 'data': {'ms': round((_t1 - _t_gtv) * 1000, 1)}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
             except Exception:
                 pass
-            if needs_productivity_time or needs_productivity_score:
+            if needs_productivity_time or needs_productivity_score or needs_robust_productivity:
                 _t_relief = time.perf_counter()
                 relief = an.get_relief_summary(user_id=uid, instances_completed_df=df_completed)
-                result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
+                result['relief_summary']['weekly_completion_efficiency_score'] = relief.get('weekly_completion_efficiency_score', 0.0)
+                result['relief_summary']['weekly_robust_productivity_score'] = relief.get('weekly_robust_productivity_score', 0.0)
                 result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
                 _t2 = time.perf_counter()
                 try:
@@ -2841,14 +2855,14 @@ def render_monitored_metrics_section(container):
                 except Exception:
                     pass
                 if needs_productivity_score:
-                    result['weekly_productivity_history'] = an.get_weekly_productivity_history(
+                    result['weekly_completion_efficiency_history'] = an.get_weekly_completion_efficiency_history(
                         user_id=uid, instances_df=df_all
                     )
                     # #region agent log
                     try:
-                        _h = result.get('weekly_productivity_history')
+                        _h = result.get('weekly_completion_efficiency_history')
                         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
-                            _f.write(json.dumps({'hypothesisId': 'BATCH', 'location': 'dashboard.get_targeted_metric_values', 'message': 'weekly_productivity_history set', 'data': {'is_none': _h is None, 'keys': list(_h.keys()) if _h else [], 'len_dates': len(_h.get('dates', [])) if _h else 0}, 'timestamp': int(time.time() * 1000)}) + '\n')
+                            _f.write(json.dumps({'hypothesisId': 'BATCH', 'location': 'dashboard.get_targeted_metric_values', 'message': 'weekly_completion_efficiency_history set', 'data': {'is_none': _h is None, 'keys': list(_h.keys()) if _h else [], 'len_dates': len(_h.get('dates', [])) if _h else 0}, 'timestamp': int(time.time() * 1000)}) + '\n')
                     except Exception:
                         pass
                     # #endregion
@@ -2911,16 +2925,17 @@ def render_monitored_metrics_section(container):
             return result
 
         # Fallback: no batching (e.g. old analytics or no relief/quality needed)
-        if needs_productivity_time or needs_productivity_score:
+        if needs_productivity_time or needs_productivity_score or needs_robust_productivity:
             if needs_productivity_time:
                 if hasattr(an, 'get_productivity_time_minutes'):
                     result['relief_summary']['productivity_time_minutes'] = an.get_productivity_time_minutes(user_id=uid)
                 else:
                     relief = an.get_relief_summary(user_id=uid)
                     result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
-            if needs_productivity_score:
+            if needs_productivity_score or needs_robust_productivity:
                 relief = an.get_relief_summary(user_id=uid)
-                result['relief_summary']['weekly_productivity_score'] = relief.get('weekly_productivity_score', 0.0)
+                result['relief_summary']['weekly_completion_efficiency_score'] = relief.get('weekly_completion_efficiency_score', 0.0)
+                result['relief_summary']['weekly_robust_productivity_score'] = relief.get('weekly_robust_productivity_score', 0.0)
                 if needs_productivity_time and 'productivity_time_minutes' not in result['relief_summary']:
                     result['relief_summary']['productivity_time_minutes'] = relief.get('productivity_time_minutes', 0)
 
@@ -2987,7 +3002,7 @@ def render_monitored_metrics_section(container):
             dict with keys: 'needs_relief', 'needs_quality', 'needs_composite', 'needs_execution_score'
         """
         # Metrics that need relief_summary
-        relief_metrics = {'productivity_time', 'productivity_score'}
+        relief_metrics = {'productivity_time', 'completion_efficiency_score', 'robust_productivity_score'}
         needs_relief = any(m in relief_metrics for m in metrics_list)
         
         # Metrics that are known to be in composite_scores
@@ -3038,7 +3053,7 @@ def render_monitored_metrics_section(container):
             'relief_summary': None,
             'quality_metrics': None,
             'composite_scores': None,
-            'weekly_productivity_history': None,
+            'weekly_completion_efficiency_history': None,
             'weekly_hours_history': None,
             'stress_level_history': None,
             'net_relief_history': None,
@@ -3070,7 +3085,7 @@ def render_monitored_metrics_section(container):
                             load_state['relief_summary'] = targeted_data.get('relief_summary', {})
                             load_state['quality_metrics'] = targeted_data.get('quality_metrics', {})
                             load_state['composite_scores'] = targeted_data.get('composite_scores', {})
-                            load_state['weekly_productivity_history'] = targeted_data.get('weekly_productivity_history')
+                            load_state['weekly_completion_efficiency_history'] = targeted_data.get('weekly_completion_efficiency_history')
                             load_state['weekly_hours_history'] = targeted_data.get('weekly_hours_history')
                             load_state['stress_level_history'] = targeted_data.get('stress_level_history')
                             load_state['net_relief_history'] = targeted_data.get('net_relief_history')
@@ -3111,7 +3126,7 @@ def render_monitored_metrics_section(container):
                         an,
                         init_perf_logger,
                         current_user_id,
-                        weekly_productivity_history=load_state.get('weekly_productivity_history'),
+                        weekly_completion_efficiency_history=load_state.get('weekly_completion_efficiency_history'),
                         pre_fetched_histories=_pre_fetched,
                     )
                     
@@ -3162,7 +3177,7 @@ def render_monitored_metrics_section(container):
                                     an,
                                     init_perf_logger,
                                     step_user_id,
-                                    weekly_productivity_history=load_state.get('weekly_productivity_history'),
+                                    weekly_completion_efficiency_history=load_state.get('weekly_completion_efficiency_history'),
                                     pre_fetched_histories=_pre_fetched,
                                 )
                                 load_state['step'] = 2
@@ -3217,7 +3232,7 @@ def render_monitored_metrics_section(container):
                             an,
                             init_perf_logger,
                             final_user_id,
-                            weekly_productivity_history=load_state.get('weekly_productivity_history'),
+                            weekly_completion_efficiency_history=load_state.get('weekly_completion_efficiency_history'),
                             pre_fetched_histories=_pre_fetched,
                         )
                         
@@ -3257,7 +3272,7 @@ def render_monitored_metrics_section(container):
 
 
 def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_user_id=None):
-    """Set up periodic refresh for time-sensitive metrics like daily_productivity_score_idle_refresh.
+    """Set up periodic refresh for time-sensitive metrics like daily_completion_efficiency_score_idle_refresh.
     
     This function creates a timer that periodically refreshes metrics that depend on current time,
     such as the daily productivity score which resets at midnight each day.
@@ -3279,8 +3294,8 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
         except:
             pass
     
-    # Only set up periodic refresh if daily_productivity_score_idle_refresh is selected
-    if 'daily_productivity_score_idle_refresh' not in selected_metrics:
+    # Only set up periodic refresh if daily_completion_efficiency_score_idle_refresh is selected
+    if 'daily_completion_efficiency_score_idle_refresh' not in selected_metrics:
         return
     
     # #region agent log
@@ -3291,7 +3306,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
                 'runId': 'run1',
                 'hypothesisId': 'REFRESH_SETUP',
                 'location': 'dashboard.py:_setup_periodic_metric_refresh',
-                'message': 'Setting up periodic refresh for daily_productivity_score_idle_refresh',
+                'message': 'Setting up periodic refresh for daily_completion_efficiency_score_idle_refresh',
                 'data': {},
                 'timestamp': int(time.time() * 1000)
             }) + '\n')
@@ -3306,7 +3321,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
         """Periodically refresh the daily productivity score metric (resets at midnight)."""
         global _monitored_metrics_state
         
-        metric_key = 'daily_productivity_score_idle_refresh'
+        metric_key = 'daily_completion_efficiency_score_idle_refresh'
         metric_cards_ref = _monitored_metrics_state.get('metric_cards', {})
         an_ref = _monitored_metrics_state.get('analytics_instance')
         
@@ -3335,7 +3350,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
                     'runId': 'run1',
                     'hypothesisId': 'PERIODIC_REFRESH',
                     'location': 'dashboard.py:refresh_idle_metric',
-                    'message': 'Periodic refresh triggered for daily_productivity_score_idle_refresh',
+                    'message': 'Periodic refresh triggered for daily_completion_efficiency_score_idle_refresh',
                     'data': {
                         'current_date': str(current_date),
                         'last_refresh_date': str(last_refresh_date) if last_refresh_date else None,
@@ -3349,7 +3364,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
         try:
             uid = _monitored_metrics_state.get('current_user_id')
             # Recalculate the metric (resets at midnight)
-            score_data = an_ref.calculate_daily_productivity_score_with_idle_refresh(
+            score_data = an_ref.calculate_daily_completion_efficiency_score_with_idle_refresh(
                 target_date=None,  # None = current day with rolling calculation
                 idle_refresh_hours=8.0,  # Deprecated parameter, kept for compatibility
                 user_id=uid
@@ -3364,7 +3379,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
                         'runId': 'run1',
                         'hypothesisId': 'PERIODIC_REFRESH',
                         'location': 'dashboard.py:refresh_idle_metric',
-                        'message': 'Calculated new value for daily_productivity_score_idle_refresh',
+                        'message': 'Calculated new value for daily_completion_efficiency_score_idle_refresh',
                         'data': {
                             'new_value': new_value,
                             'total_tasks': score_data.get('total_tasks', 0),
@@ -3418,7 +3433,7 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
                     }) + '\n')
             except: pass
             # #endregion
-            print(f"[Dashboard] Error refreshing daily_productivity_score_idle_refresh: {e}")
+            print(f"[Dashboard] Error refreshing daily_completion_efficiency_score_idle_refresh: {e}")
     
     # Set up timer to refresh every minute (60 seconds)
     # This ensures we catch midnight crossing and keep the metric updated throughout the day
@@ -3426,10 +3441,10 @@ def _setup_periodic_metric_refresh(metric_cards, selected_metrics, an, current_u
     _monitored_metrics_state['refresh_timer'] = refresh_timer
 
 
-def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger, current_user_id=None, weekly_productivity_history=None, pre_fetched_histories=None):
+def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summary, quality_metrics, composite_scores, coloration_baseline, an, init_perf_logger, current_user_id=None, weekly_completion_efficiency_history=None, pre_fetched_histories=None):
     """Update metric cards incrementally as data becomes available.
     
-    When weekly_productivity_history or pre_fetched_histories are provided, uses them
+    When weekly_completion_efficiency_history or pre_fetched_histories are provided, uses them
     instead of calling get_history() to avoid extra _load_instances (faster load).
     """
     import json
@@ -3456,14 +3471,23 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
             'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
         },
-        'productivity_score': {
-            'label': 'Productivity Score',
-            'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
+        'completion_efficiency_score': {
+            'label': 'Completion Efficiency score',
+            'get_value': lambda: relief_summary.get('weekly_completion_efficiency_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
-            'history_key': 'productivity_scores',
-            'tooltip_id': 'monitored-productivity_score',
-            'chart_title': 'Daily Productivity Score'
+            'get_history': lambda: an.get_weekly_completion_efficiency_history(user_id=current_user_id) if hasattr(an, 'get_weekly_completion_efficiency_history') else None,
+            'history_key': 'completion_efficiency_scores',
+            'tooltip_id': 'monitored-completion_efficiency_score',
+            'chart_title': 'Daily Completion Efficiency score'
+        },
+        'robust_productivity_score': {
+            'label': 'Robust Productivity',
+            'get_value': lambda: relief_summary.get('weekly_robust_productivity_score', 0.0),
+            'format_value': lambda v: f"{v:.1f}",
+            'get_history': lambda: an.get_attribute_trends('robust_productivity_score', 'mean', 90, user_id=current_user_id),
+            'history_key': 'values',
+            'tooltip_id': 'monitored-robust_productivity_score',
+            'chart_title': 'Robust Productivity'
         },
     }
     
@@ -3481,18 +3505,18 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     # standard dictionaries (quality_metrics, relief_summary, composite_scores).
                     # This pattern can be extended for other metrics that need special logic.
                     #
-                    # Example: daily_productivity_score_idle_refresh needs to calculate
+                    # Example: daily_completion_efficiency_score_idle_refresh needs to calculate
                     # a daily score that resets at midnight each day.
                     # It's not pre-calculated in any standard metric dictionary.
                     # ====================================================================
                     
-                    # Special handling for daily_productivity_score_idle_refresh - calculate on demand
-                    # This metric calculates a daily productivity score that accumulates
+                    # Special handling for daily_completion_efficiency_score_idle_refresh - calculate on demand
+                    # This metric calculates a daily Completion Efficiency score that accumulates
                     # throughout the day and resets at midnight each day.
                     # For the current day, it accumulates scores from midnight up to the current time.
-                    if key == 'daily_productivity_score_idle_refresh':
+                    if key == 'daily_completion_efficiency_score_idle_refresh':
                         try:
-                            score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
+                            score_data = analytics_instance.calculate_daily_completion_efficiency_score_with_idle_refresh(
                                 target_date=None,  # None = current day with rolling calculation
                                 idle_refresh_hours=8.0,  # Deprecated parameter, kept for compatibility
                                 user_id=cuid
@@ -3500,7 +3524,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                             result = score_data.get('daily_score', 0.0)
                             return float(result)
                         except Exception as e:
-                            print(f"[Dashboard] Error calculating daily_productivity_score_idle_refresh: {e}")
+                            print(f"[Dashboard] Error calculating daily_completion_efficiency_score_idle_refresh: {e}")
                             return 0.0
                     
                     # Special handling for expected_relief - use pre-fetched data to avoid N+1
@@ -3560,7 +3584,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     # Daily productivity score resets at midnight; use get_attribute_trends for history.
                     # Use 21 days on dashboard (not 90) to avoid 90x expensive daily calculations
                     # which slow load and can cause timeouts/page resets on VPS.
-                    if key == 'daily_productivity_score_idle_refresh':
+                    if key == 'daily_completion_efficiency_score_idle_refresh':
                         try:
                             return an.get_attribute_trends(
                                 key, aggregation='sum', days=21, user_id=uid
@@ -3586,7 +3610,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
     # #region agent log
     try:
         with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'update function called', 'data': {'selected_metrics': selected_metrics, 'metric_cards_keys': list(metric_cards.keys()), 'available_metrics_keys': list(available_metrics.keys()), 'has_relief': bool(relief_summary), 'has_quality': bool(quality_metrics), 'has_composite': bool(composite_scores), 'has_weekly_productivity_history': weekly_productivity_history is not None, 'weekly_productivity_history_len_dates': len(weekly_productivity_history.get('dates', [])) if weekly_productivity_history else 0}, 'timestamp': int(time.time() * 1000)}) + '\n')
+            f.write(json.dumps({'sessionId': 'debug-session', 'runId': 'run1', 'hypothesisId': 'UPDATE', 'location': 'dashboard.py:_update_metric_cards_incremental', 'message': 'update function called', 'data': {'selected_metrics': selected_metrics, 'metric_cards_keys': list(metric_cards.keys()), 'available_metrics_keys': list(available_metrics.keys()), 'has_relief': bool(relief_summary), 'has_quality': bool(quality_metrics), 'has_composite': bool(composite_scores), 'has_weekly_completion_efficiency_history': weekly_completion_efficiency_history is not None, 'weekly_completion_efficiency_history_len_dates': len(weekly_completion_efficiency_history.get('dates', [])) if weekly_completion_efficiency_history else 0}, 'timestamp': int(time.time() * 1000)}) + '\n')
     except: pass
     # #endregion
     
@@ -3668,18 +3692,18 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
         # Get history for baseline (only once, when fully rendered)
         if not card_info.get('rendered', False):
             # Productivity score: use pre-fetched history when available so graph shows immediately
-            if metric_key == 'productivity_score' and hasattr(an, 'get_weekly_productivity_history'):
+            if metric_key == 'completion_efficiency_score' and hasattr(an, 'get_weekly_completion_efficiency_history'):
                 _ps_baseline_label = {
                     'last_3_months': '3mo avg', 'last_month': '1mo avg', 'last_week': '1wk avg',
                     'average': 'avg', 'all_data': 'all avg'
                 }.get(coloration_baseline, 'avg')
                 _ps_current_value = current_value
-                _h = weekly_productivity_history
+                _h = weekly_completion_efficiency_history
 
-                if _h and _h.get('dates') and _h.get('productivity_scores'):
+                if _h and _h.get('dates') and _h.get('completion_efficiency_scores'):
                     # Render graph immediately when we have pre-fetched history (batched path)
                     try:
-                        _bdaily = get_baseline_value(_h, coloration_baseline, 'productivity_scores')
+                        _bdaily = get_baseline_value(_h, coloration_baseline, 'completion_efficiency_scores')
                         _bval = _bdaily * 7.0 if _bdaily > 0 else _ps_current_value
                         card_info['baseline_label'].text = f"{_ps_baseline_label}: {_bval:.1f}"
                         card_info['baseline_value'] = _bval
@@ -3696,7 +3720,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                         _cur_line = _ps_current_value / 7.0 if _ps_current_value > 0 else 0.0
                         _wk_avg = _bval / 7.0 if _bval > 0 else 0.0
                         _fig = create_metric_tooltip_chart(
-                            _h['dates'], _h['productivity_scores'],
+                            _h['dates'], _h['completion_efficiency_scores'],
                             _cur_line, _wk_avg, _wk_avg,
                             metric_config['chart_title'], _line_color
                         )
@@ -3719,7 +3743,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                         print(f"[Dashboard] Productivity score immediate chart error: {e}")
                     card_info['rendered'] = True
                     continue
-                # No pre-fetched history: defer expensive get_weekly_productivity_history()
+                # No pre-fetched history: defer expensive get_weekly_completion_efficiency_history()
                 card_info['baseline_label'].text = f"{_ps_baseline_label}: ..."
                 card_info['baseline_value'] = _ps_current_value
                 _bg_class, _ = get_metric_bg_class(_ps_current_value, _ps_current_value)
@@ -3738,7 +3762,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 _ps_an = an
                 _ps_coloration_baseline = coloration_baseline
                 _ps_config = metric_config
-                _ps_pre_fetched = weekly_productivity_history
+                _ps_pre_fetched = weekly_completion_efficiency_history
                 # #region agent log
                 try:
                     with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
@@ -3751,14 +3775,14 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     try:
                         if not _ps_card:
                             return
-                        _h = _ps_pre_fetched if _ps_pre_fetched else (_ps_an.get_weekly_productivity_history() if hasattr(_ps_an, 'get_weekly_productivity_history') else None)
-                        if not _h or not _h.get('dates') or not _h.get('productivity_scores'):
+                        _h = _ps_pre_fetched if _ps_pre_fetched else (_ps_an.get_weekly_completion_efficiency_history() if hasattr(_ps_an, 'get_weekly_completion_efficiency_history') else None)
+                        if not _h or not _h.get('dates') or not _h.get('completion_efficiency_scores'):
                             try:
                                 _ps_card['baseline_label'].text = f"{_ps_baseline_label}: N/A"
                             except Exception:
                                 pass
                             return
-                        _bdaily = get_baseline_value(_h, _ps_coloration_baseline, 'productivity_scores')
+                        _bdaily = get_baseline_value(_h, _ps_coloration_baseline, 'completion_efficiency_scores')
                         _bval = _bdaily * 7.0 if _bdaily > 0 else _ps_current_value
                         try:
                             _ps_card['baseline_label'].text = f"{_ps_baseline_label}: {_bval:.1f}"
@@ -3774,7 +3798,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                         _cur_line = _ps_current_value / 7.0 if _ps_current_value > 0 else 0.0
                         _wk_avg = _bval / 7.0 if _bval > 0 else 0.0
                         _fig = create_metric_tooltip_chart(
-                            _h['dates'], _h['productivity_scores'],
+                            _h['dates'], _h['completion_efficiency_scores'],
                             _cur_line, _wk_avg, _wk_avg,
                             _ps_config['chart_title'], _line_color
                         )
@@ -3812,7 +3836,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 history_data = history_data if isinstance(history_data, dict) else {}
 
             # Calculate baseline (skip for daily productivity score - it resets every day)
-            if metric_key == 'daily_productivity_score_idle_refresh':
+            if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                 baseline_value = current_value  # No comparison; neutral color
             elif history_data and len(history_data.get('dates', [])) > 0:
                 value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
@@ -3840,7 +3864,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 baseline_value = current_value
             
             # Update baseline label (daily productivity score resets daily - no average)
-            if metric_key == 'daily_productivity_score_idle_refresh':
+            if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                 card_info['baseline_label'].text = "resets daily"
             else:
                 baseline_label_text = {
@@ -3904,7 +3928,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                 try:
                     dates = history_data['dates']
                     values = history_data[value_key]
-                    if metric_key == 'daily_productivity_score_idle_refresh':
+                    if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                         current_line_val = current_value  # Today's total (daily metric)
                         weekly_avg = 0.0
                         three_month_avg = 0.0
@@ -3971,7 +3995,7 @@ def _update_metric_cards_incremental(metric_cards, selected_metrics, relief_summ
                     dates = history_data['dates']
                     values = history_data[value_key]
                     if len(dates) > 0 and len(values) > 0:
-                        if metric_key == 'daily_productivity_score_idle_refresh':
+                        if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                             current_daily_avg = current_value  # Today's total (daily metric)
                             weekly_avg = 0.0
                             three_month_avg = 0.0
@@ -4042,7 +4066,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
     2. Calculated on-demand using special handling (see make_get_value function)
     
     Special handling pattern:
-    - Some metrics require on-demand calculation (e.g., daily_productivity_score_idle_refresh)
+    - Some metrics require on-demand calculation (e.g., daily_completion_efficiency_score_idle_refresh)
     - These metrics are not in standard dictionaries and need custom calculation logic
     - Special handling is added in the make_get_value() function with if statements
     - This pattern can be extended for other metrics that need custom calculation
@@ -4088,14 +4112,23 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
             'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
         },
-        'productivity_score': {
-            'label': 'Productivity Score',
-            'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
+        'completion_efficiency_score': {
+            'label': 'Completion Efficiency score',
+            'get_value': lambda: relief_summary.get('weekly_completion_efficiency_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
-            'history_key': 'productivity_scores',
-            'tooltip_id': 'monitored-productivity_score',
-            'chart_title': 'Daily Productivity Score'
+            'get_history': lambda: an.get_weekly_completion_efficiency_history(user_id=current_user_id) if hasattr(an, 'get_weekly_completion_efficiency_history') else None,
+            'history_key': 'completion_efficiency_scores',
+            'tooltip_id': 'monitored-completion_efficiency_score',
+            'chart_title': 'Daily Completion Efficiency score'
+        },
+        'robust_productivity_score': {
+            'label': 'Robust Productivity',
+            'get_value': lambda: relief_summary.get('weekly_robust_productivity_score', 0.0),
+            'format_value': lambda v: f"{v:.1f}",
+            'get_history': lambda: an.get_attribute_trends('robust_productivity_score', 'mean', 90, user_id=loaded_user_id),
+            'history_key': 'values',
+            'tooltip_id': 'monitored-robust_productivity_score',
+            'chart_title': 'Robust Productivity'
         },
     }
     
@@ -4115,7 +4148,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # standard dictionaries (quality_metrics, relief_summary, composite_scores).
                     # This pattern can be extended for other metrics that need special logic.
                     #
-                    # Example: daily_productivity_score_idle_refresh needs to calculate
+                    # Example: daily_completion_efficiency_score_idle_refresh needs to calculate
                     # a daily score that resets at midnight each day.
                     # It's not pre-calculated in any standard metric dictionary.
                     #
@@ -4145,13 +4178,13 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     except: pass
                     # #endregion
                     
-                    # Special handling for daily_productivity_score_idle_refresh - calculate on demand
+                    # Special handling for daily_completion_efficiency_score_idle_refresh - calculate on demand
                     # This metric calculates a daily productivity score that accumulates
                     # throughout the day and resets at midnight each day.
                     # For the current day, it accumulates scores from midnight up to the current time.
-                    if key == 'daily_productivity_score_idle_refresh':
+                    if key == 'daily_completion_efficiency_score_idle_refresh':
                         try:
-                            score_data = analytics_instance.calculate_daily_productivity_score_with_idle_refresh(
+                            score_data = analytics_instance.calculate_daily_completion_efficiency_score_with_idle_refresh(
                                 target_date=None,  # None = current day with rolling calculation
                                 idle_refresh_hours=8.0,  # Deprecated parameter, kept for compatibility
                                 user_id=uid
@@ -4165,7 +4198,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                                         'runId': 'run1',
                                         'hypothesisId': 'G',
                                         'location': 'dashboard.py:get_generic_value',
-                                        'message': 'calculated daily_productivity_score_idle_refresh',
+                                        'message': 'calculated daily_completion_efficiency_score_idle_refresh',
                                         'data': {'metric_key': key, 'value': result, 'total_tasks': score_data.get('total_tasks', 0)},
                                         'timestamp': int(time.time() * 1000)
                                     }) + '\n')
@@ -4181,7 +4214,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                                         'runId': 'run1',
                                         'hypothesisId': 'G',
                                         'location': 'dashboard.py:get_generic_value',
-                                        'message': 'error calculating daily_productivity_score_idle_refresh',
+                                        'message': 'error calculating daily_completion_efficiency_score_idle_refresh',
                                         'data': {'metric_key': key, 'error': str(e)},
                                         'timestamp': int(time.time() * 1000)
                                     }) + '\n')
@@ -4297,7 +4330,7 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # standard get_generic_metric_history() method. This pattern can be
                     # extended for other metrics that need special history calculation.
                     #
-                    # Example: daily_productivity_score_idle_refresh uses get_attribute_trends
+                    # Example: daily_completion_efficiency_score_idle_refresh uses get_attribute_trends
                     # to get historical daily values with the idle refresh logic applied.
                     #
                     # To add special handling for a new metric's history:
@@ -4306,10 +4339,10 @@ def render_monitored_metrics_section_loaded(container, relief_summary, selected_
                     # 3. Return the history data in the expected format
                     # ====================================================================
                     
-                    # Special handling for daily_productivity_score_idle_refresh - use get_attribute_trends.
+                    # Special handling for daily_completion_efficiency_score_idle_refresh - use get_attribute_trends.
                     # Use 21 days on dashboard (not 90) to avoid 90x expensive daily calculations
                     # which slow load and can cause timeouts/page resets on VPS.
-                    if key == 'daily_productivity_score_idle_refresh':
+                    if key == 'daily_completion_efficiency_score_idle_refresh':
                         try:
                             trends = an.get_attribute_trends(
                                 key, aggregation='sum', days=21, user_id=uid
@@ -4395,14 +4428,23 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
             'tooltip_id': 'monitored-productivity_time',
             'chart_title': 'Daily Hours'
         },
-        'productivity_score': {
-            'label': 'Productivity Score',
-            'get_value': lambda: relief_summary.get('weekly_productivity_score', 0.0),
+        'completion_efficiency_score': {
+            'label': 'Completion Efficiency score',
+            'get_value': lambda: relief_summary.get('weekly_completion_efficiency_score', 0.0),
             'format_value': lambda v: f"{v:.1f}",
-            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
-            'history_key': 'productivity_scores',
-            'tooltip_id': 'monitored-productivity_score',
-            'chart_title': 'Daily Productivity Score'
+            'get_history': lambda: an.get_weekly_completion_efficiency_history(user_id=current_user_id) if hasattr(an, 'get_weekly_completion_efficiency_history') else None,
+            'history_key': 'completion_efficiency_scores',
+            'tooltip_id': 'monitored-completion_efficiency_score',
+            'chart_title': 'Daily Completion Efficiency score'
+        },
+        'robust_productivity_score': {
+            'label': 'Robust Productivity',
+            'get_value': lambda: relief_summary.get('weekly_robust_productivity_score', 0.0),
+            'format_value': lambda v: f"{v:.1f}",
+            'get_history': None,
+            'history_key': 'robust_productivity_scores',
+            'tooltip_id': 'monitored-robust_productivity_score',
+            'chart_title': 'Robust Productivity'
         },
     }
     _ = available_metrics
@@ -4507,14 +4549,23 @@ def render_metrics_after_load(container, relief_summary, selected_metrics, color
                             'tooltip_id': 'monitored-productivity_time',
                             'chart_title': 'Daily Hours'
                         },
-                        'productivity_score': {
-                            'label': 'Productivity Score',
-                            'get_value': lambda: loaded_summary.get('weekly_productivity_score', 0.0),
+                        'completion_efficiency_score': {
+                            'label': 'Completion Efficiency score',
+                            'get_value': lambda: loaded_summary.get('weekly_completion_efficiency_score', 0.0),
                             'format_value': lambda v: f"{v:.1f}",
-                            'get_history': lambda: an.get_weekly_productivity_history(user_id=current_user_id) if hasattr(an, 'get_weekly_productivity_history') else None,
-                            'history_key': 'productivity_scores',
-                            'tooltip_id': 'monitored-productivity_score',
-                            'chart_title': 'Daily Productivity Score'
+                            'get_history': lambda: an.get_weekly_completion_efficiency_history(user_id=current_user_id) if hasattr(an, 'get_weekly_completion_efficiency_history') else None,
+                            'history_key': 'completion_efficiency_scores',
+                            'tooltip_id': 'monitored-completion_efficiency_score',
+                            'chart_title': 'Daily Completion Efficiency score'
+                        },
+                        'robust_productivity_score': {
+                            'label': 'Robust Productivity',
+                            'get_value': lambda: loaded_summary.get('weekly_robust_productivity_score', 0.0),
+                            'format_value': lambda v: f"{v:.1f}",
+                            'get_history': lambda: an.get_attribute_trends('robust_productivity_score', 'mean', 90, user_id=current_user_id),
+                            'history_key': 'values',
+                            'tooltip_id': 'monitored-robust_productivity_score',
+                            'chart_title': 'Robust Productivity'
                         },
                     }
                     
@@ -4661,7 +4712,7 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
             
             # Calculate baseline (generic for any metric)
             # Daily productivity score resets every day - no average/baseline
-            if metric_key == 'daily_productivity_score_idle_refresh':
+            if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                 baseline_value = current_value  # No comparison; neutral color
             elif history_data and len(history_data.get('dates', [])) > 0:
                 value_key = metric_config.get('history_key') or _get_value_key_from_history(history_data)
@@ -4696,7 +4747,7 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                     ui.label(formatted_value).classes("text-lg font-bold")
                     
                     # Show baseline info (daily productivity score resets daily - no average)
-                    if metric_key == 'daily_productivity_score_idle_refresh':
+                    if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                         ui.label("resets daily").classes("text-xs text-gray-400")
                     else:
                         baseline_label = {
@@ -4730,7 +4781,7 @@ def _render_metrics_cards(metrics_grid, selected_metrics, available_metrics, rel
                     dates = history_data['dates']
                     values = history_data[metric_config['history_key']]
                     if len(dates) > 0 and len(values) > 0:
-                        if metric_key == 'daily_productivity_score_idle_refresh':
+                        if metric_key == 'daily_completion_efficiency_score_idle_refresh':
                             current_daily_avg = current_value  # Today's total (daily metric)
                             weekly_avg = 0.0
                             three_month_avg = 0.0
@@ -4824,7 +4875,7 @@ def open_metrics_config_dialog():
     user_id_str = str(current_user_id) if current_user_id is not None else DEFAULT_USER_ID
     
     config = user_state.get_monitored_metrics_config(user_id_str)
-    selected_metrics = config.get('selected_metrics', ['productivity_time', 'productivity_score'])
+    selected_metrics = config.get('selected_metrics', ['productivity_time', 'completion_efficiency_score'])
     coloration_baseline = config.get('coloration_baseline', 'last_3_months')
     
     # Import metrics from analytics_page to get full list
@@ -4833,12 +4884,13 @@ def open_metrics_config_dialog():
     # Build available metrics from CALCULATED_METRICS and NUMERIC_ATTRIBUTE_OPTIONS
     available_metric_options = [
         {'key': 'productivity_time', 'label': 'Productivity Time'},
-        {'key': 'productivity_score', 'label': 'Productivity Score'},
+        {'key': 'completion_efficiency_score', 'label': 'Completion Efficiency score'},
+        {'key': 'robust_productivity_score', 'label': 'Robust Productivity'},
     ]
     
     # Add other calculated metrics that can be monitored
     for metric in CALCULATED_METRICS:
-        if metric['value'] not in ['productivity_time', 'productivity_score']:  # Already added
+        if metric['value'] not in ['productivity_time', 'completion_efficiency_score', 'robust_productivity_score']:  # Already added
             # Skip metrics that don't make sense as weekly aggregates (daily counts, etc.)
             if metric['value'] not in ['daily_self_care_tasks']:
                 available_metric_options.append({
@@ -5514,8 +5566,8 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                     { label: 'View Notes', action: 'viewnotes', class: 'edit' }
                 ];
             } else if (type === 'metric') {
-                // Metric cards: Reset Score (only for daily_productivity_score_idle_refresh)
-                if (id === 'daily_productivity_score_idle_refresh') {
+                // Metric cards: Reset Score (only for daily_completion_efficiency_score_idle_refresh)
+                if (id === 'daily_completion_efficiency_score_idle_refresh') {
                     menuItems = [
                         { label: 'Reset Score', action: 'reset', class: 'delete' }
                     ];

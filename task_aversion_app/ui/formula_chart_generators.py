@@ -351,7 +351,7 @@ def calculate_grit_score(params: Dict) -> float:
 
 
 def calculate_productivity_score(params: Dict) -> float:
-    """Calculate productivity score from parameters."""
+    """Calculate Completion Efficiency score from parameters (alias for formula charts)."""
     completion = params.get('completion_pct', 50) / 100.0
     task_type = params.get('task_type_multiplier', 3.0)
     weekly_avg = params.get('weekly_avg_multiplier', 1.0)

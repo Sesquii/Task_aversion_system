@@ -422,7 +422,7 @@ class UserStateManager:
             week_start: Week start date as ISO string (YYYY-MM-DD)
             goal_hours_per_week: Goal hours for this week
             actual_hours: Actual productive hours for this week
-            productivity_score: Total productivity score for this week
+            productivity_score: Total completion efficiency score for this week (key kept for backward compat)
             productivity_points: Total productivity points for this week
         
         Returns:

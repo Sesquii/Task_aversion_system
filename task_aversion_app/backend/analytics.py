@@ -29,8 +29,10 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 # Execution Score Formula Version
 EXECUTION_SCORE_VERSION = '1.2'
 
-# Productivity Score Formula Version
-PRODUCTIVITY_SCORE_VERSION = '1.1'
+# Completion Efficiency Score Formula Version (renamed from Productivity Score)
+COMPLETION_EFFICIENCY_SCORE_VERSION = '1.1'
+# Backward compatibility alias
+PRODUCTIVITY_SCORE_VERSION = COMPLETION_EFFICIENCY_SCORE_VERSION
 
 
 class Analytics:
@@ -514,21 +516,22 @@ class Analytics:
         else:
             return 1.0
     
-    def calculate_productivity_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0, 
-                                     work_play_time_per_day: Optional[Dict[str, Dict[str, float]]] = None,
-                                     play_penalty_threshold: float = 2.0,
-                                     productivity_settings: Optional[Dict[str, any]] = None,
-                                     weekly_work_summary: Optional[Dict[str, float]] = None,
-                                     goal_hours_per_week: Optional[float] = None,
-                                     weekly_productive_hours: Optional[float] = None) -> float:
-        """Calculate productivity score based on completion percentage vs time ratio.
+    def calculate_completion_efficiency_score(self, row: pd.Series, self_care_tasks_per_day: Dict[str, int], weekly_avg_time: float = 0.0,
+                                              work_play_time_per_day: Optional[Dict[str, Dict[str, float]]] = None,
+                                              play_penalty_threshold: float = 2.0,
+                                              productivity_settings: Optional[Dict[str, any]] = None,
+                                              weekly_work_summary: Optional[Dict[str, float]] = None,
+                                              goal_hours_per_week: Optional[float] = None,
+                                              weekly_productive_hours: Optional[float] = None) -> float:
+        """Calculate Completion Efficiency score based on completion percentage vs time ratio.
         
+        Formerly named "Productivity score". Renamed to Completion Efficiency score per plan.
         Version: 1.1 (2025-12-27)
         - Efficiency multiplier now compares to task's own estimate (not weekly average)
         - Accounts for completion percentage in efficiency calculation
         - Penalty capped at 50% reduction to prevent negative scores
         
-        See docs/productivity_score_v1.1.md for complete version history.
+        See docs/productivity_score_v1.1.md (completion efficiency) for version history.
         
         Penalty Calibration:
         - Play penalty: -0.003x per percentage (max -0.3x for 100% completion = -30 score)
@@ -551,7 +554,7 @@ class Analytics:
             weekly_productive_hours: Optional weekly productive hours total (required if goal_hours_per_week provided)
             
         Returns:
-            Productivity score (can be negative for productivity penalty from play tasks)
+            Completion Efficiency score (can be negative for play penalty)
         """
         try:
             # Check if task is cancelled and apply cancellation penalty
@@ -797,7 +800,7 @@ class Analytics:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             return 0.0
     
-    def calculate_productivity_scores_batch(
+    def calculate_completion_efficiency_scores_batch(
         self,
         df: pd.DataFrame,
         self_care_tasks_per_day: Dict[str, int],
@@ -809,10 +812,10 @@ class Analytics:
         goal_hours_per_week: Optional[float] = None,
         weekly_productive_hours: Optional[float] = None
     ) -> np.ndarray:
-        """Vectorized batch calculation of productivity scores. 5-10x faster than row-by-row.
+        """Vectorized batch calculation of Completion Efficiency scores. 5-10x faster than row-by-row.
         
         This is the optimized production version. For formula logic reference,
-        see calculate_productivity_score() which has the same calculation but is easier to read/modify.
+        see calculate_completion_efficiency_score() which has the same calculation but is easier to read/modify.
         
         Args:
             df: DataFrame with columns: actual_dict, predicted_dict, task_type, completed_at, status
@@ -826,7 +829,7 @@ class Analytics:
             weekly_productive_hours: Optional weekly productive hours
             
         Returns:
-            numpy array of productivity scores, same length as df
+            numpy array of Completion Efficiency scores, same length as df
         """
         n = len(df)
         if n == 0:
@@ -4647,7 +4650,7 @@ class Analytics:
             productivity_scores = []
             for _, row in completed.iterrows():
                 try:
-                    prod_score = self.calculate_productivity_score(
+                    prod_score = self.calculate_completion_efficiency_score(
                         row=row,
                         self_care_tasks_per_day=self_care_tasks_per_day,
                         work_play_time_per_day=work_play_time_per_day
@@ -5638,7 +5641,7 @@ class Analytics:
         may be misleading because the base productivity score doesn't account for volume.
         
         Args:
-            base_productivity_score: Base productivity score from calculate_productivity_score() (0-500+)
+            base_productivity_score: Base completion efficiency score from calculate_completion_efficiency_score() (0-500+)
             work_volume_score: Work volume score from get_daily_work_volume_metrics() (0-100)
             
         Returns:
@@ -6930,7 +6933,7 @@ class Analytics:
             user_id: Optional user_id. If None, gets from authenticated session.
         
         Returns:
-            Dict with 'productivity_score', 'execution_score', 'grit_score', 'composite_score'
+            Dict with 'completion_efficiency_score', 'execution_score', 'grit_score', 'composite_score'
         """
         user_id = self._get_user_id(user_id)
         if target_date is None:
@@ -6942,7 +6945,7 @@ class Analytics:
         df = self._load_instances(user_id=user_id)
         if df.empty or user_id is None:
             return {
-                'productivity_score': 0.0,
+                'completion_efficiency_score': 0.0,
                 'execution_score': 0.0,
                 'grit_score': 0.0,
                 'composite_score': 0.0
@@ -6952,7 +6955,7 @@ class Analytics:
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
         if completed.empty:
             return {
-                'productivity_score': 0.0,
+                'completion_efficiency_score': 0.0,
                 'execution_score': 0.0,
                 'grit_score': 0.0,
                 'composite_score': 0.0
@@ -6969,7 +6972,7 @@ class Analytics:
         
         if day_completions.empty:
             return {
-                'productivity_score': 0.0,
+                'completion_efficiency_score': 0.0,
                 'execution_score': 0.0,
                 'grit_score': 0.0,
                 'composite_score': 0.0
@@ -7026,7 +7029,7 @@ class Analytics:
         for _, row in day_completions.iterrows():
             try:
                 # Productivity score
-                prod_score = self.calculate_productivity_score(
+                prod_score = self.calculate_completion_efficiency_score(
                     row=row,
                     self_care_tasks_per_day=self_care_per_day,
                     weekly_avg_time=weekly_avg_time,
@@ -7061,21 +7064,21 @@ class Analytics:
         composite_score = (avg_productivity + avg_execution + avg_grit) / 3.0 if (productivity_scores or execution_scores or grit_scores) else 0.0
         
         return {
-            'productivity_score': round(avg_productivity, 2),
+            'completion_efficiency_score': round(avg_productivity, 2),
             'execution_score': round(avg_execution, 2),
             'grit_score': round(avg_grit, 2),
             'composite_score': round(composite_score, 2)
         }
     
-    def calculate_daily_productivity_score_with_idle_refresh(
+    def calculate_daily_completion_efficiency_score_with_idle_refresh(
         self,
         target_date: Optional[datetime] = None,
         idle_refresh_hours: float = 8.0,  # Deprecated: kept for backward compatibility, not used
         user_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Calculate daily productivity score with midnight refresh.
+        """Calculate daily Completion Efficiency score with midnight refresh.
         
-        This metric calculates a daily productivity score that resets at midnight each day.
+        This metric calculates a daily Completion Efficiency score that resets at midnight each day.
         
         For the current day: Accumulates scores from midnight of the current day up to now.
         
@@ -7087,7 +7090,7 @@ class Analytics:
             
         Returns:
             Dict with:
-            - daily_score (float): Total productivity score for the day
+            - daily_score (float): Total Completion Efficiency score for the day
             - segments (List[Dict]): List containing single segment from midnight
             - segment_count (int): Always 1 (single day segment)
             - total_tasks (int): Total tasks completed in the day
@@ -7101,7 +7104,7 @@ class Analytics:
                     'runId': 'run1',
                     'hypothesisId': 'A',
                     'location': 'analytics.py:4302',
-                    'message': 'calculate_daily_productivity_score_with_idle_refresh entry',
+                    'message': 'calculate_daily_completion_efficiency_score_with_idle_refresh entry',
                     'data': {
                         'target_date': str(target_date) if target_date else None,
                         'idle_refresh_hours': idle_refresh_hours
@@ -7431,9 +7434,9 @@ class Analytics:
         except Exception:
             pass
         
-        # Calculate productivity score for each completion
-        day_completions['productivity_score'] = day_completions.apply(
-            lambda row: self.calculate_productivity_score(
+        # Calculate Completion Efficiency score for each completion
+        day_completions['completion_efficiency_score'] = day_completions.apply(
+            lambda row: self.calculate_completion_efficiency_score(
                 row=row,
                 self_care_tasks_per_day=self_care_tasks_per_day,
                 weekly_avg_time=weekly_avg_time,
@@ -7450,7 +7453,7 @@ class Analytics:
                     'completed_at': str(row.get('completed_at_dt', '')),
                     'task_id': str(row.get('task_id', '')),
                     'task_name': str(row.get('task_name', ''))[:50],
-                    'productivity_score': float(row.get('productivity_score', 0.0) or 0.0),
+                    'completion_efficiency_score': float(row.get('completion_efficiency_score', 0.0) or 0.0),
                     'time_actual': float(row.get('time_actual', 0.0) or 0.0) if 'time_actual' in row else None
                 })
             with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
@@ -7459,10 +7462,10 @@ class Analytics:
                     'runId': 'run1',
                     'hypothesisId': 'H4',
                     'location': 'analytics.py:5973',
-                    'message': 'Productivity scores calculated for filtered tasks',
+                    'message': 'Completion efficiency scores calculated for filtered tasks',
                     'data': {
                         'task_count': len(day_completions),
-                        'total_score': float(day_completions['productivity_score'].sum()),
+                        'total_score': float(day_completions['completion_efficiency_score'].sum()),
                         'task_scores': task_scores
                     },
                     'timestamp': int(datetime.now().timestamp() * 1000)
@@ -7483,7 +7486,7 @@ class Analytics:
         # #endregion
         
         # Calculate total score for the day (single segment from midnight)
-        total_score = float(day_completions['productivity_score'].sum())
+        total_score = float(day_completions['completion_efficiency_score'].sum())
         
         # Create single segment representing the full day
         if not day_completions.empty:
@@ -7529,11 +7532,11 @@ class Analytics:
             'total_tasks': len(day_completions)
         }
     
-    def get_historical_daily_scores(self, score_type: str = 'productivity_score', top_n: int = 10, user_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_historical_daily_scores(self, score_type: str = 'completion_efficiency_score', top_n: int = 10, user_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get historical daily scores sorted by value.
         
         Args:
-            score_type: 'productivity_score', 'execution_score', 'grit_score', or 'composite_score'
+            score_type: 'completion_efficiency_score', 'execution_score', 'grit_score', or 'composite_score'
             top_n: Number of top scores to return (default: 10)
             user_id: Optional user_id. If None, gets from authenticated session.
         
@@ -7598,7 +7601,7 @@ class Analytics:
         
         # Check each score type for milestones
         milestones = []
-        score_types = ['productivity_score', 'execution_score', 'grit_score', 'composite_score']
+        score_types = ['completion_efficiency_score', 'execution_score', 'grit_score', 'composite_score']
         
         for score_type in score_types:
             yesterday_score = yesterday_scores.get(score_type, 0.0)
@@ -7725,7 +7728,7 @@ class Analytics:
         for i in range(days):
             target_date = start_date + timedelta(days=i)
             daily_scores = self.calculate_daily_scores(target_date=target_date, user_id=user_id)
-            if daily_scores.get('productivity_score', 0) > 0 or \
+            if daily_scores.get('completion_efficiency_score', 0) > 0 or \
                daily_scores.get('execution_score', 0) > 0 or \
                daily_scores.get('grit_score', 0) > 0:
                 daily_scores['date'] = target_date.date()
@@ -7735,26 +7738,26 @@ class Analytics:
             return self._empty_weekly_summary()
         
         # Calculate averages
-        productivity_scores = [d.get('productivity_score', 0) for d in daily_scores_list if d.get('productivity_score', 0) > 0]
+        completion_eff_scores = [d.get('completion_efficiency_score', 0) for d in daily_scores_list if d.get('completion_efficiency_score', 0) > 0]
         execution_scores = [d.get('execution_score', 0) for d in daily_scores_list if d.get('execution_score', 0) > 0]
         grit_scores = [d.get('grit_score', 0) for d in daily_scores_list if d.get('grit_score', 0) > 0]
         composite_scores = [d.get('composite_score', 0) for d in daily_scores_list if d.get('composite_score', 0) > 0]
         
-        avg_productivity = sum(productivity_scores) / len(productivity_scores) if productivity_scores else 0.0
+        avg_productivity = sum(completion_eff_scores) / len(completion_eff_scores) if completion_eff_scores else 0.0
         avg_execution = sum(execution_scores) / len(execution_scores) if execution_scores else 0.0
         avg_grit = sum(grit_scores) / len(grit_scores) if grit_scores else 0.0
         avg_composite = sum(composite_scores) / len(composite_scores) if composite_scores else 0.0
         
         # Find best days
-        best_day_productivity = max([d.get('productivity_score', 0) for d in daily_scores_list], default=0.0)
+        best_day_productivity = max([d.get('completion_efficiency_score', 0) for d in daily_scores_list], default=0.0)
         best_day_execution = max([d.get('execution_score', 0) for d in daily_scores_list], default=0.0)
         best_day_grit = max([d.get('grit_score', 0) for d in daily_scores_list], default=0.0)
         
         # Calculate trends (compare first half vs second half of week)
         if len(daily_scores_list) >= 4:
             mid_point = len(daily_scores_list) // 2
-            first_half_prod = [d.get('productivity_score', 0) for d in daily_scores_list[:mid_point] if d.get('productivity_score', 0) > 0]
-            second_half_prod = [d.get('productivity_score', 0) for d in daily_scores_list[mid_point:] if d.get('productivity_score', 0) > 0]
+            first_half_prod = [d.get('completion_efficiency_score', 0) for d in daily_scores_list[:mid_point] if d.get('completion_efficiency_score', 0) > 0]
+            second_half_prod = [d.get('completion_efficiency_score', 0) for d in daily_scores_list[mid_point:] if d.get('completion_efficiency_score', 0) > 0]
             
             first_half_exec = [d.get('execution_score', 0) for d in daily_scores_list[:mid_point] if d.get('execution_score', 0) > 0]
             second_half_exec = [d.get('execution_score', 0) for d in daily_scores_list[mid_point:] if d.get('execution_score', 0) > 0]
@@ -7827,33 +7830,30 @@ class Analytics:
     ) -> float:
         """Calculate execution score (0-100) for efficient execution of difficult tasks.
         
-        **Formula Version: 1.0 (matches glossary definition)**
+        **Formula Version: 1.2 (overdue-only start penalty)**
         
         Combines four component factors (as defined in glossary):
         1. Difficulty factor: High aversion + high load
         2. Speed factor: Fast execution relative to estimate
-        3. Start speed factor: Fast start after initialization (procrastination resistance)
+        3. Start speed factor: Overdue-only penalty — delay from due_at to started_at when
+           instance is overdue; no bonus/penalty when no due date or not overdue.
         4. Completion factor: Full completion (100% or close)
         
-        Formula (matches glossary): execution_score = 50 * (1.0 + difficulty_factor) * 
-                                                      (0.5 + speed_factor * 0.5) * 
-                                                      (0.5 + start_speed_factor * 0.5) * 
-                                                      completion_factor
+        Formula: execution_score = 50 * (1.0 + difficulty_factor) *
+                                  (0.5 + speed_factor * 0.5) *
+                                  (0.5 + start_speed_factor * 0.5) *
+                                  completion_factor
         
-        Note: Thoroughness factor and momentum factor were removed due to performance issues
-        (were being recalculated for each instance, causing significant slowdown).
-        The calculate_thoroughness_factor and calculate_momentum_factor methods remain in
-        the codebase for potential future use.
-        
+        Note: Thoroughness factor and momentum factor were removed due to performance issues.
         Note: Focus factor (emotion-based) is NOT included here - it belongs in grit score.
         
-        See: docs/execution_module_v1.0.md for complete formula documentation.
+        See: docs/execution_module_v1.0.md for formula documentation.
         See: ui/analytics_glossary.py for the glossary definition.
         
         Args:
             row: Task instance row (pandas Series from CSV or dict from database)
                  Must contain: predicted_dict/actual_dict (or predicted/actual),
-                 initialized_at, started_at, completed_at
+                 initialized_at, started_at, completed_at, due_at (optional)
             task_completion_counts: Optional dict for task completion counts (for difficulty)
         
         Returns:
@@ -7924,47 +7924,52 @@ class Analytics:
         else:
             speed_factor = 0.5  # Neutral if no time data
         
-        # 3. Start Speed Factor (procrastination resistance)
-        start_speed_factor = 0.5  # Default neutral
-        
-        if initialized_at and completed_at:
+        # 3. Start Speed Factor (overdue-only penalty: delay from due_at to started_at)
+        # When no due date or not overdue: no bonus, no penalty (neutral 0.5).
+        # When overdue and started after due_at: penalty based on delay (due_at -> started_at).
+        start_speed_factor = 0.5  # Default neutral (no due date or not overdue)
+        due_at = row.get('due_at')
+        if due_at is not None and (isinstance(due_at, str) and not str(due_at).strip()):
+            due_at = None
+        if due_at is not None and completed_at:
             try:
-                # Parse datetime if needed
-                if isinstance(initialized_at, str):
-                    init_time = pd.to_datetime(initialized_at)
+                if isinstance(due_at, str):
+                    due_time = pd.to_datetime(due_at)
                 else:
-                    init_time = initialized_at
-                
+                    due_time = due_at
                 if isinstance(completed_at, str):
                     complete_time = pd.to_datetime(completed_at)
                 else:
                     complete_time = completed_at
-                
+                # Overdue: completed after due_at or started after due_at (align with urgency)
+                started_after_due = False
+                start_time = None
                 if started_at:
                     if isinstance(started_at, str):
                         start_time = pd.to_datetime(started_at)
                     else:
                         start_time = started_at
-                    start_delay_minutes = (start_time - init_time).total_seconds() / 60.0
-                else:
-                    # No start time: use completion time as proxy
-                    start_delay_minutes = (complete_time - init_time).total_seconds() / 60.0
-                
-                # Normalize: fast start = high score
-                if start_delay_minutes <= 5:
+                    started_after_due = start_time > due_time
+                is_overdue = (complete_time > due_time) or started_after_due
+                if is_overdue and started_at and start_time is not None and start_time > due_time:
+                    # Penalty: delay from due_at to started_at (minutes)
+                    delay_minutes = (start_time - due_time).total_seconds() / 60.0
+                    if delay_minutes <= 0:
+                        start_speed_factor = 1.0
+                    elif delay_minutes <= 30:
+                        # 0 min -> 1.0, 30 min -> 0.7
+                        start_speed_factor = 1.0 - (delay_minutes / 30.0) * 0.3
+                    elif delay_minutes <= 120:
+                        # 30 min -> 0.7, 120 min -> 0.4
+                        start_speed_factor = 0.7 - ((delay_minutes - 30) / 90.0) * 0.3
+                    else:
+                        # Exponential decay for long delays
+                        excess = delay_minutes - 120
+                        start_speed_factor = max(0.1, 0.4 * math.exp(-excess / 240.0))
+                elif is_overdue and (not started_at or start_time is None or start_time <= due_time):
+                    # Overdue but started on time: no start penalty (full factor)
                     start_speed_factor = 1.0
-                elif start_delay_minutes <= 30:
-                    # Linear: 5 min → 1.0, 30 min → 0.8
-                    start_speed_factor = 1.0 - ((start_delay_minutes - 5) / 25.0) * 0.2
-                elif start_delay_minutes <= 120:
-                    # Linear: 30 min → 0.8, 120 min → 0.5
-                    start_speed_factor = 0.8 - ((start_delay_minutes - 30) / 90.0) * 0.3
-                else:
-                    # Exponential decay: 120 min → 0.5, 480 min → ~0.125
-                    excess = start_delay_minutes - 120
-                    start_speed_factor = 0.5 * math.exp(-excess / 240.0)
-            except (ValueError, TypeError, AttributeError) as e:
-                # Neutral on error
+            except (ValueError, TypeError, AttributeError):
                 start_speed_factor = 0.5
         
         # 4. Completion Factor (quality of completion)
@@ -8180,8 +8185,9 @@ class Analytics:
                 'weekly_productivity_points': 0.0,
                 'weekly_productivity_points_with_bonus_robust': 0.0,
                 'weekly_productivity_points_with_bonus_sensitive': 0.0,
-                'total_productivity_score': 0.0,
-                'weekly_productivity_score': 0.0,
+                'total_completion_efficiency_score': 0.0,
+                'weekly_completion_efficiency_score': 0.0,
+                'weekly_robust_productivity_score': 0.0,
                 'total_grit_score': 0.0,
                 'weekly_grit_score': 0.0,
                 'total_obstacles_score_robust': 0.0,
@@ -8219,8 +8225,9 @@ class Analytics:
                 'weekly_productivity_points': 0.0,
                 'weekly_productivity_points_with_bonus_robust': 0.0,
                 'weekly_productivity_points_with_bonus_sensitive': 0.0,
-                'total_productivity_score': 0.0,
-                'weekly_productivity_score': 0.0,
+                'total_completion_efficiency_score': 0.0,
+                'weekly_completion_efficiency_score': 0.0,
+                'weekly_robust_productivity_score': 0.0,
                 'total_grit_score': 0.0,
                 'weekly_grit_score': 0.0,
                 'total_obstacles_score_robust': 0.0,
@@ -8865,8 +8872,8 @@ class Analytics:
                 completed['predicted_dict'] = pd.Series([{}] * len(completed))
         
         # Calculate productivity score for all completed tasks (VECTORIZED for performance)
-        with profiler.section("calculate_productivity_scores_batch"):
-            completed['productivity_score'] = self.calculate_productivity_scores_batch(
+        with profiler.section("calculate_completion_efficiency_scores_batch"):
+            completed['completion_efficiency_score'] = self.calculate_completion_efficiency_scores_batch(
                 completed,
                 self_care_tasks_per_day,
                 weekly_avg_time,
@@ -8878,15 +8885,15 @@ class Analytics:
             )
         
         # Calculate totals
-        total_productivity_score = completed['productivity_score'].fillna(0).sum()
+        total_completion_efficiency_score = completed['completion_efficiency_score'].fillna(0).sum()
         
         # Ensure completed_at_dt exists for weekly calculations
         if 'completed_at_dt' not in completed.columns:
             completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
         
-        # Calculate weekly productivity score (last 7 days)
+        # Calculate weekly Completion Efficiency score (last 7 days)
         completed_last_7d_for_score = completed[completed['completed_at_dt'] >= seven_days_ago]
-        weekly_productivity_score = completed_last_7d_for_score['productivity_score'].fillna(0).sum()
+        weekly_completion_efficiency_score = completed_last_7d_for_score['completion_efficiency_score'].fillna(0).sum()
         
         # Calculate grit score: rewards persistence and taking longer
         # First, count how many times each task has been completed
@@ -8909,6 +8916,20 @@ class Analytics:
         # Recreate the filtered DataFrame after grit_score has been calculated
         completed_last_7d_for_grit = completed[completed['completed_at_dt'] >= seven_days_ago]
         weekly_grit_score = completed_last_7d_for_grit['grit_score'].fillna(0).sum()
+        
+        # Robust Productivity: 0.5 * Completion Efficiency (normalized) + 0.5 * Execution (avg 0-100)
+        # Scale 0-100. Uses last 7 days.
+        completed_last_7d = completed[completed['completed_at_dt'] >= seven_days_ago]
+        if not completed_last_7d.empty:
+            ce_sum_7d = completed_last_7d['completion_efficiency_score'].fillna(0).sum()
+            ce_component = min(100.0, ce_sum_7d / 7.0)  # daily avg, cap 100
+            completed_last_7d['execution_score'] = completed_last_7d.apply(
+                lambda r: self.calculate_execution_score(r, task_completion_counts), axis=1
+            )
+            exec_avg = completed_last_7d['execution_score'].mean()
+            weekly_robust_productivity_score = 0.5 * ce_component + 0.5 * float(exec_avg)
+        else:
+            weekly_robust_productivity_score = 0.0
         
         result = {
             'productivity_time_minutes': round(float(productivity_time), 1),
@@ -8939,9 +8960,11 @@ class Analytics:
             'weekly_productivity_points': round(float(weekly_productivity_points_base), 2),
             'weekly_productivity_points_with_bonus_robust': round(float(weekly_productivity_points_robust), 2),
             'weekly_productivity_points_with_bonus_sensitive': round(float(weekly_productivity_points_sensitive), 2),
-            # New productivity score based on completion/time ratio
-            'total_productivity_score': round(float(total_productivity_score), 2),
-            'weekly_productivity_score': round(float(weekly_productivity_score), 2),
+            # Completion Efficiency score (renamed from productivity score)
+            'total_completion_efficiency_score': round(float(total_completion_efficiency_score), 2),
+            'weekly_completion_efficiency_score': round(float(weekly_completion_efficiency_score), 2),
+            # Robust Productivity: combines Completion Efficiency + Execution score (0-100 scale)
+            'weekly_robust_productivity_score': round(float(weekly_robust_productivity_score), 2),
             # Grit score: rewards persistence and taking longer (separate from productivity)
             'total_grit_score': round(float(total_grit_score), 2),
             'weekly_grit_score': round(float(weekly_grit_score), 2),
@@ -9272,16 +9295,16 @@ class Analytics:
             'days_with_data': days_with_data,
         }
 
-    def get_weekly_productivity_history(
+    def get_weekly_completion_efficiency_history(
         self, user_id: Optional[int] = None, instances_df: Optional[pd.DataFrame] = None
     ) -> Dict[str, any]:
-        """Get historical daily productivity score data for trend analysis (last 90 days).
+        """Get historical daily Completion Efficiency score data for trend analysis (last 90 days).
 
         When instances_df is provided (e.g. from get_targeted_metric_values batching),
         skips _load_instances to avoid redundant load and timeout.
 
         Returns:
-            Dict with 'dates' (list of date strings), 'productivity_scores' (list of scores per day),
+            Dict with 'dates' (list of date strings), 'completion_efficiency_scores' (list of scores per day),
             'current_value' (float), 'weekly_average' (float), 'three_month_average' (float)
         """
         from datetime import timedelta
@@ -9296,13 +9319,13 @@ class Analytics:
         if completed.empty:
             return {
                 'dates': [],
-                'productivity_scores': [],
+                'completion_efficiency_scores': [],
                 'current_value': 0.0,
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
             }
         
-        # Calculate productivity score for each task
+        # Calculate Completion Efficiency score for each task
         from .task_manager import TaskManager
         task_manager = TaskManager()
         user_id = self._get_user_id(user_id)
@@ -9315,7 +9338,7 @@ class Analytics:
         if completed.empty:
             return {
                 'dates': [],
-                'productivity_scores': [],
+                'completion_efficiency_scores': [],
                 'current_value': 0.0,
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
@@ -9328,13 +9351,13 @@ class Analytics:
         if completed.empty:
             return {
                 'dates': [],
-                'productivity_scores': [],
+                'completion_efficiency_scores': [],
                 'current_value': 0.0,
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
             }
 
-        # Calculate productivity scores (only on 90-day subset)
+        # Calculate Completion Efficiency scores (only on 90-day subset)
         self_care_tasks_per_day = {}
         if not tasks_df.empty and 'task_type' in tasks_df.columns:
             completed_with_type = completed.merge(
@@ -9357,10 +9380,10 @@ class Analytics:
                 for date, count in daily_counts.items():
                     self_care_tasks_per_day[str(date)] = int(count)
 
-        # Calculate productivity score for each completed task (90-day set only)
+        # Calculate Completion Efficiency score for each completed task (90-day set only)
         weekly_avg_time = 0.0  # Will be calculated if needed
-        completed['productivity_score'] = completed.apply(
-            lambda row: self.calculate_productivity_score(
+        completed['completion_efficiency_score'] = completed.apply(
+            lambda row: self.calculate_completion_efficiency_score(
                 row,
                 self_care_tasks_per_day,
                 weekly_avg_time
@@ -9368,13 +9391,13 @@ class Analytics:
             axis=1
         )
 
-        completed['productivity_score'] = pd.to_numeric(completed['productivity_score'], errors='coerce')
-        completed = completed[completed['productivity_score'].notna()].copy()
+        completed['completion_efficiency_score'] = pd.to_numeric(completed['completion_efficiency_score'], errors='coerce')
+        completed = completed[completed['completion_efficiency_score'].notna()].copy()
 
         if completed.empty:
             return {
                 'dates': [],
-                'productivity_scores': [],
+                'completion_efficiency_scores': [],
                 'current_value': 0.0,
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
@@ -9385,7 +9408,7 @@ class Analytics:
         if valid.empty:
             return {
                 'dates': [],
-                'productivity_scores': [],
+                'completion_efficiency_scores': [],
                 'current_value': 0.0,
                 'weekly_average': 0.0,
                 'three_month_average': 0.0,
@@ -9393,7 +9416,7 @@ class Analytics:
         
         # Group by day
         valid['date'] = valid['completed_at_dt'].dt.date
-        daily_data = valid.groupby('date')['productivity_score'].sum().reset_index()
+        daily_data = valid.groupby('date')['completion_efficiency_score'].sum().reset_index()
         daily_data = daily_data.sort_values('date')
         
         # Filter to last 90 days
@@ -9405,11 +9428,11 @@ class Analytics:
         # Get current value (last 7 days total)
         seven_days_ago = datetime.now() - timedelta(days=7)
         current_week_data = valid[valid['completed_at_dt'] >= seven_days_ago]
-        current_value = current_week_data['productivity_score'].sum() if not current_week_data.empty else 0.0
+        current_value = current_week_data['completion_efficiency_score'].sum() if not current_week_data.empty else 0.0
         
         # Calculate weekly average (average of daily scores over last 7 days with data)
         last_7_days = daily_data.tail(7) if len(daily_data) >= 7 else daily_data
-        weekly_average = pd.to_numeric(last_7_days['productivity_score'], errors='coerce').mean() if not last_7_days.empty else 0.0
+        weekly_average = pd.to_numeric(last_7_days['completion_efficiency_score'], errors='coerce').mean() if not last_7_days.empty else 0.0
         
         # Calculate 3-month average
         if not daily_data.empty:
@@ -9422,13 +9445,13 @@ class Analytics:
             
             full_daily_data = pd.DataFrame({'date': date_range_dates})
             full_daily_data = full_daily_data.merge(
-                daily_data[['date', 'productivity_score']],
+                daily_data[['date', 'completion_efficiency_score']],
                 on='date',
                 how='left'
             )
-            full_daily_data['productivity_score'] = full_daily_data['productivity_score'].fillna(0.0)
+            full_daily_data['completion_efficiency_score'] = full_daily_data['completion_efficiency_score'].fillna(0.0)
             
-            three_month_average = pd.to_numeric(full_daily_data['productivity_score'], errors='coerce').mean() if not full_daily_data.empty else 0.0
+            three_month_average = pd.to_numeric(full_daily_data['completion_efficiency_score'], errors='coerce').mean() if not full_daily_data.empty else 0.0
         else:
             three_month_average = 0.0
         
@@ -9438,7 +9461,7 @@ class Analytics:
 
         return {
             'dates': daily_data['date_str'].tolist(),
-            'productivity_scores': daily_data['productivity_score'].tolist(),
+            'completion_efficiency_scores': daily_data['completion_efficiency_score'].tolist(),
             'current_value': round(float(current_value), 2),
             'weekly_average': round(float(weekly_average), 2),
             'three_month_average': round(float(three_month_average), 2),
@@ -13254,8 +13277,8 @@ class Analytics:
             return {'dates': [], 'values': [], 'aggregation': aggregation}
 
         # Handle calculated metrics that need to be computed
-        if attribute_key == 'productivity_score':
-            # Calculate productivity score for trend data
+        if attribute_key == 'completion_efficiency_score':
+            # Calculate Completion Efficiency score for trend data
             from .task_manager import TaskManager
             task_manager = TaskManager()
             tasks_df = task_manager.get_all(user_id=user_id)
@@ -13354,9 +13377,9 @@ class Analytics:
                 goal_hours_per_week = None
                 weekly_productive_hours = None
             
-            # Calculate productivity score
-            completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(
+            # Calculate Completion Efficiency score
+            completed['completion_efficiency_score'] = completed.apply(
+                lambda row: self.calculate_completion_efficiency_score(
                     row,
                     self_care_tasks_per_day,
                     weekly_avg_time,
@@ -13368,7 +13391,7 @@ class Analytics:
                 ),
                 axis=1
             )
-            # Invalidate relief_summary cache since productivity_score calculation may have changed
+            # Invalidate relief_summary cache since completion_efficiency_score calculation may have changed
             # This ensures monitored metrics get fresh data when viewing trends
             Analytics._invalidate_relief_summary_cache()
         elif attribute_key == 'grit_score':
@@ -13385,6 +13408,42 @@ class Analytics:
                 lambda row: self.calculate_grit_score(row, task_completion_counts, instances_df=df),
                 axis=1
             )
+        elif attribute_key == 'execution_score':
+            # Use existing daily execution score history (same format as get_attribute_trends)
+            hist = self.get_execution_score_history(days=days, user_id=user_id)
+            return {
+                'dates': hist.get('dates', []),
+                'values': hist.get('values', []),
+                'aggregation': 'mean',
+            }
+        elif attribute_key == 'robust_productivity_score':
+            # Daily robust productivity = 0.5 * daily_ce_avg + 0.5 * daily_exec_avg (matches relief summary)
+            ce_data = self.get_attribute_trends('completion_efficiency_score', aggregation, days, user_id=user_id)
+            exec_hist = self.get_execution_score_history(days=days, user_id=user_id)
+            ce_dates = ce_data.get('dates') or []
+            ce_values = ce_data.get('values') or []
+            exec_dates = exec_hist.get('dates') or []
+            exec_values = exec_hist.get('values') or []
+            by_date = {}
+            for i, d in enumerate(ce_dates):
+                by_date[d] = {'ce': ce_values[i] if i < len(ce_values) else 0.0, 'exec': None}
+            for i, d in enumerate(exec_dates):
+                if d not in by_date:
+                    by_date[d] = {'ce': None, 'exec': exec_values[i] if i < len(exec_values) else 0.0}
+                else:
+                    by_date[d]['exec'] = exec_values[i] if i < len(exec_values) else 0.0
+            out_dates = sorted(by_date.keys())
+            out_values = []
+            for d in out_dates:
+                row = by_date[d]
+                ce = row['ce'] if row['ce'] is not None else (row['exec'] if row['exec'] is not None else 0.0)
+                exec_val = row['exec'] if row['exec'] is not None else (row['ce'] if row['ce'] is not None else 0.0)
+                out_values.append(0.5 * float(ce) + 0.5 * float(exec_val))
+            return {
+                'dates': out_dates,
+                'values': out_values,
+                'aggregation': 'mean',
+            }
         elif attribute_key == 'relief_duration_score':
             # Calculate relief_duration_score if not already present
             if 'relief_duration_score' not in completed.columns:
@@ -13407,7 +13466,7 @@ class Analytics:
                     completed['duration_minutes_numeric'] * 
                     completed['relief_multiplier']
                 ) / 60.0  # Divide by 60 to normalize (convert minutes to hours scale)
-        elif attribute_key == 'daily_productivity_score_idle_refresh':
+        elif attribute_key == 'daily_completion_efficiency_score_idle_refresh':
             # #region agent log
             import json
             try:
@@ -13417,7 +13476,7 @@ class Analytics:
                         'runId': 'run1',
                         'hypothesisId': 'E',
                         'location': 'analytics.py:10050',
-                        'message': 'get_attribute_trends: daily_productivity_score_idle_refresh entry',
+                        'message': 'get_attribute_trends: daily_completion_efficiency_score_idle_refresh entry',
                         'data': {
                             'days': days,
                             'aggregation': aggregation,
@@ -13494,7 +13553,7 @@ class Analytics:
                                 'runId': 'run1',
                                 'hypothesisId': 'E',
                                 'location': 'analytics.py:10075',
-                                'message': 'Calling calculate_daily_productivity_score_with_idle_refresh',
+                                'message': 'Calling calculate_daily_completion_efficiency_score_with_idle_refresh',
                                 'data': {
                                     'date_obj': str(date_obj),
                                     'is_today': is_today,
@@ -13505,7 +13564,7 @@ class Analytics:
                     except: pass
                     # #endregion
                     
-                    score_data = self.calculate_daily_productivity_score_with_idle_refresh(
+                    score_data = self.calculate_daily_completion_efficiency_score_with_idle_refresh(
                         target_date=target_date,
                         idle_refresh_hours=8.0,
                         user_id=user_id
@@ -13856,8 +13915,42 @@ class Analytics:
         if df.empty or 'completed_at' not in df.columns:
             return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': 0}
         completed = df[df['completed_at'].astype(str).str.len() > 0].copy()
+        # For calculated metrics (e.g. execution_score, robust_productivity_score) use scatter data
         if completed.empty or attribute_x not in completed.columns or attribute_y not in completed.columns:
-            return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': 0}
+            scatter = self.get_scatter_data(attribute_x, attribute_y, user_id=user_id)
+            x_vals = scatter.get('x') or []
+            y_vals = scatter.get('y') or []
+            if len(x_vals) < 2 or len(y_vals) < 2 or len(x_vals) != len(y_vals):
+                return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': len(x_vals)}
+            x_arr = np.array(x_vals, dtype=float)
+            y_arr = np.array(y_vals, dtype=float)
+            mask = np.isfinite(x_arr) & np.isfinite(y_arr)
+            if np.sum(mask) < 2:
+                return {'correlation': None, 'p_value': None, 'r_squared': None, 'n': int(np.sum(mask))}
+            x_clean = x_arr[mask]
+            y_clean = y_arr[mask]
+            method = (method or 'pearson').lower()
+            correlation, p_value = None, None
+            try:
+                if method == 'spearman':
+                    correlation, p_value = stats.spearmanr(x_clean, y_clean)
+                else:
+                    correlation, p_value = stats.pearsonr(x_clean, y_clean)
+            except Exception:
+                pass
+            r_squared = correlation ** 2 if correlation is not None else None
+            meta = {
+                'pearson': {'name': 'Pearson Correlation', 'description': 'Measures linear relationship strength between two variables. Range -1..1.', 'statistician': 'Karl Pearson', 'search_term': 'Pearson correlation coefficient'},
+                'spearman': {'name': 'Spearman Rank Correlation', 'description': 'Non-parametric measure of monotonic relationship using ranked data. Range -1..1.', 'statistician': 'Charles Spearman', 'search_term': 'Spearman rank correlation'},
+            }
+            return {
+                'correlation': correlation,
+                'p_value': p_value,
+                'r_squared': r_squared,
+                'n': len(x_clean),
+                'method': method,
+                'meta': meta.get(method, {}),
+            }
 
         completed['x_val'] = pd.to_numeric(completed[attribute_x], errors='coerce')
         completed['y_val'] = pd.to_numeric(completed[attribute_y], errors='coerce')
@@ -14002,8 +14095,9 @@ class Analytics:
                     return {}
             completed['predicted_dict'] = completed['predicted'].apply(_safe_json) if 'predicted' in completed.columns else pd.Series([{}] * len(completed))
         
-        # Calculate productivity_score if needed
-        if attribute_x == 'productivity_score' or attribute_y == 'productivity_score':
+        # Calculate completion_efficiency_score if needed (also for robust_productivity_score)
+        if (attribute_x == 'completion_efficiency_score' or attribute_y == 'completion_efficiency_score' or
+                attribute_x == 'robust_productivity_score' or attribute_y == 'robust_productivity_score'):
             from datetime import datetime
             # Get self-care tasks per day
             self_care_tasks_per_day = {}
@@ -14095,9 +14189,9 @@ class Analytics:
                 goal_hours_per_week = None
                 weekly_productive_hours = None
             
-            # Calculate productivity score
-            completed['productivity_score'] = completed.apply(
-                lambda row: self.calculate_productivity_score(
+            # Calculate Completion Efficiency score
+            completed['completion_efficiency_score'] = completed.apply(
+                lambda row: self.calculate_completion_efficiency_score(
                     row,
                     self_care_tasks_per_day,
                     weekly_avg_time,
@@ -14109,7 +14203,7 @@ class Analytics:
                 ),
                 axis=1
             )
-        
+
         # Calculate grit_score if needed
         if attribute_x == 'grit_score' or attribute_y == 'grit_score':
             # Count how many times each task has been completed
@@ -14180,7 +14274,23 @@ class Analytics:
             
             completed['work_time'] = completed.apply(_get_work_time, axis=1)
             completed['play_time'] = completed.apply(_get_play_time, axis=1)
-        
+
+        # Calculate execution_score if needed (per-instance for scatter; also for robust_productivity_score)
+        if attribute_x == 'execution_score' or attribute_y == 'execution_score' or attribute_x == 'robust_productivity_score' or attribute_y == 'robust_productivity_score':
+            from collections import Counter
+            task_completion_counts = Counter(completed['task_id'].tolist()) if 'task_id' in completed.columns else {}
+            task_completion_counts_dict = dict(task_completion_counts)
+            completed['execution_score'] = completed.apply(
+                lambda row: self.calculate_execution_score(row, task_completion_counts_dict),
+                axis=1
+            )
+
+        # Calculate robust_productivity_score if needed (0.5*completion_efficiency + 0.5*execution)
+        if attribute_x == 'robust_productivity_score' or attribute_y == 'robust_productivity_score':
+            ce = completed['completion_efficiency_score'].fillna(0) if 'completion_efficiency_score' in completed.columns else pd.Series(0.0, index=completed.index)
+            exec_s = completed['execution_score'].fillna(0) if 'execution_score' in completed.columns else pd.Series(0.0, index=completed.index)
+            completed['robust_productivity_score'] = (0.5 * ce + 0.5 * exec_s).astype(float)
+
         # Check if attributes exist (either in columns or calculated)
         if attribute_x not in completed.columns or attribute_y not in completed.columns:
             return {'x': [], 'y': [], 'n': 0}
@@ -14191,7 +14301,7 @@ class Analytics:
         
         # Include time estimates for efficiency calculations if needed
         time_data = None
-        if ('duration_minutes' in [attribute_x, attribute_y] and 'productivity_score' in [attribute_x, attribute_y]):
+        if ('duration_minutes' in [attribute_x, attribute_y] and 'completion_efficiency_score' in [attribute_x, attribute_y]):
             # Extract time_estimate and time_actual for time efficiency calculation
             # Use the same rows that passed the dropna() filter
             time_estimates = []

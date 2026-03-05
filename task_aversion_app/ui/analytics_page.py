@@ -34,8 +34,9 @@ CALCULATED_METRICS = [
     {'label': 'Net Wellbeing (Normalized)', 'value': 'net_wellbeing_normalized'},
     {'label': 'Stress Efficiency', 'value': 'stress_efficiency'},
     {'label': 'Stress-Relief Correlation Score', 'value': 'stress_relief_correlation_score'},
-    {'label': 'Productivity Score', 'value': 'productivity_score'},
-    {'label': 'Daily Productivity Score (Midnight Refresh)', 'value': 'daily_productivity_score_idle_refresh'},
+    {'label': 'Completion Efficiency score', 'value': 'completion_efficiency_score'},
+    {'label': 'Daily Completion Efficiency score (Midnight Refresh)', 'value': 'daily_completion_efficiency_score_idle_refresh'},
+    {'label': 'Robust Productivity', 'value': 'robust_productivity_score'},
     {'label': 'Grit Score', 'value': 'grit_score'},
     {'label': "Today's self care tasks", 'value': 'daily_self_care_tasks'},
     {'label': 'Work Time (minutes)', 'value': 'work_time'},
@@ -62,6 +63,7 @@ ANALYTICS_SECTIONS = [
     ('obstacles', 'Obstacles Overcome'),
     ('aversion', 'Aversion Analytics'),
     ('charts', 'Charts & Trends'),
+    ('metric_comparison', 'Metric Comparison'),
     ('rankings', 'Rankings & Leaderboard'),
 ]
 
@@ -1083,8 +1085,9 @@ def _build_analytics_main_content(
             ("Weekly Relief (Base)", f"{relief_summary.get('weekly_relief_score', 0.0):.1f}"),
             ("Weekly Relief + Bonus (Robust)", f"{relief_summary.get('weekly_relief_score_with_bonus_robust', 0.0):.1f}"),
             ("Weekly Relief + Bonus (Sensitive)", f"{relief_summary.get('weekly_relief_score_with_bonus_sensitive', 0.0):.1f}"),
-            ("Total Productivity Score", f"{relief_summary.get('total_productivity_score', 0.0):.1f}"),
-            ("Weekly Productivity Score", f"{relief_summary.get('weekly_productivity_score', 0.0):.1f}"),
+            ("Total Completion Efficiency Score", f"{relief_summary.get('total_completion_efficiency_score', 0.0):.1f}"),
+            ("Weekly Completion Efficiency Score", f"{relief_summary.get('weekly_completion_efficiency_score', 0.0):.1f}"),
+            ("Weekly Robust Productivity", f"{relief_summary.get('weekly_robust_productivity_score', 0.0):.1f}"),
             ("Total Grit Score", f"{relief_summary.get('total_grit_score', 0.0):.1f}"),
             ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
             ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
@@ -1324,6 +1327,10 @@ def _build_analytics_main_content(
         if sections_to_build and 'charts' in sections_to_build and (section_sub_chunk is None or section_sub_chunk == 0):
             _schedule_next_chunk('charts', 1)
 
+    if _section('metric_comparison'):
+        with container:
+            render_metric_comparison(metrics, user_id=current_user_id)
+
     if _section('rankings'):
         _rank_part = (section_sub_chunk or 0) if sections_to_build and 'rankings' in sections_to_build else 0
         rankings_data = analytics_service.get_rankings_data(top_n=5, leaderboard_n=10, user_id=current_user_id)
@@ -1332,7 +1339,6 @@ def _build_analytics_main_content(
                 render_task_rankings(rankings_data, user_id=current_user_id)
                 render_stress_efficiency_leaderboard(rankings_data['stress_efficiency_leaderboard'], user_id=current_user_id)
             if _rank_part == 1:
-                render_metric_comparison(metrics, user_id=current_user_id)
                 render_correlation_explorer(user_id=current_user_id)
         if sections_to_build and 'rankings' in sections_to_build and (section_sub_chunk is None or section_sub_chunk == 0):
             _schedule_next_chunk('rankings', 1)

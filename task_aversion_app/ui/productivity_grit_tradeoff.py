@@ -102,7 +102,7 @@ def productivity_grit_tradeoff_page():
         for _, row in completed.iterrows():
             try:
                 # Productivity score
-                prod_score = analytics.calculate_productivity_score(
+                prod_score = analytics.calculate_completion_efficiency_score(
                     row=row,
                     self_care_tasks_per_day=self_care_per_day,
                     weekly_avg_time=weekly_avg_time,

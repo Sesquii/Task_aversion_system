@@ -683,8 +683,8 @@ class ProductivityTracker:
             # Calculate productivity scores for this week's instances
             # We need work_play_time_per_day and self_care_tasks_per_day for the score calculation
             # For simplicity, calculate without those parameters (they're optional)
-            week_instances['productivity_score'] = week_instances.apply(
-                lambda row: analytics.calculate_productivity_score(
+            week_instances['completion_efficiency_score'] = week_instances.apply(
+                lambda row: analytics.calculate_completion_efficiency_score(
                     row,
                     self_care_tasks_per_day={},  # Simplified - won't affect work tasks
                     weekly_avg_time=0.0,  # Simplified
@@ -698,7 +698,7 @@ class ProductivityTracker:
                 axis=1
             )
             
-            week_total_score = week_instances['productivity_score'].fillna(0).sum()
+            week_total_score = week_instances['completion_efficiency_score'].fillna(0).sum()
             
             if week_hours > 0:
                 weekly_stats.append({
@@ -790,8 +790,8 @@ class ProductivityTracker:
                 productivity_points = 0.0
             else:
                 # Calculate productivity scores (simplified - without complex parameters)
-                week_instances['productivity_score'] = week_instances.apply(
-                    lambda row: analytics.calculate_productivity_score(
+                week_instances['completion_efficiency_score'] = week_instances.apply(
+                    lambda row: analytics.calculate_completion_efficiency_score(
                         row,
                         self_care_tasks_per_day={},
                         weekly_avg_time=0.0,
@@ -805,7 +805,7 @@ class ProductivityTracker:
                     axis=1
                 )
                 
-                productivity_score = week_instances['productivity_score'].fillna(0).sum()
+                productivity_score = week_instances['completion_efficiency_score'].fillna(0).sum()
                 
                 # Productivity points = productivity score (they're the same metric)
                 productivity_points = productivity_score
