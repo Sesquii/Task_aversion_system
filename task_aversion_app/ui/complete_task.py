@@ -47,6 +47,10 @@ def complete_task_page(task_manager, emotion_manager):
         if current_user_id is None:
             ui.navigate.to('/login')
             return
+
+        # Invalidate instance caches so list_active_instances and instance data are fresh.
+        # Avoids stale cache after DB/connection issues (e.g. "complete only works after pause").
+        im._invalidate_instance_caches()
         
         if instance_id:
             instance = im.get_instance(instance_id, user_id=current_user_id)

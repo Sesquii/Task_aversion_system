@@ -50,8 +50,16 @@ def initialize_task_page(task_manager, emotion_manager):
         if current_user_id is None:
             ui.navigate.to('/login')
             return
+
+        # Ensure fresh instance data (e.g. after create_instance from template).
+        im._invalidate_instance_caches()
         
         with perf_logger.operation("get_instance", instance_id=instance_id):
+            instance = im.get_instance(instance_id, user_id=current_user_id)
+
+        # If instance not found, invalidate caches and retry once (handles stale state after create_instance).
+        if not instance:
+            im._invalidate_instance_caches()
             instance = im.get_instance(instance_id, user_id=current_user_id)
         
         if not instance:
