@@ -199,7 +199,8 @@ class UserStateManager:
         prefs = self.get_user_preferences(user_id)
         if not prefs:
             return False
-        return str(prefs.get("hour12", "false")).lower() in ("true", "1", "yes")
+        val = str(prefs.get("hour12", "false")).strip().lower()
+        return val in ("true", "1", "yes")
 
     def set_hour12_preference(self, user_id: str, value: bool) -> Dict[str, Any]:
         """Store the user's 12/24-hour clock preference (from browser Intl)."""

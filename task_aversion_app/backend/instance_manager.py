@@ -1,7 +1,7 @@
 # backend/instance_manager.py
 import os
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict
 import json
 import time
@@ -372,12 +372,14 @@ class InstanceManager:
         self._reload()
         now_ts = app_now(user_id)
         instance_id = f"i{int(now_ts.timestamp())}"
+        # Store timestamps in UTC so format_for_display(..., assume_utc=True) shows correct local time
+        utc_ts = now_ts.astimezone(timezone.utc)
         row = {
             'instance_id': instance_id,
             'task_id': task_id,
             'task_name': task_name,
             'task_version': task_version,
-            'created_at': now_ts.strftime("%Y-%m-%d %H:%M"),
+            'created_at': utc_ts.strftime("%Y-%m-%d %H:%M"),
             'initialized_at': '',  # Will be set when user saves initialization form
             'started_at': '',
             'completed_at': '',
@@ -423,7 +425,7 @@ class InstanceManager:
         try:
             now_ts = app_now(user_id)
             instance_id = f"i{int(now_ts.timestamp())}"
-            created_at = now_ts
+            created_at = now_ts.astimezone(timezone.utc)
 
             with self.db_session() as session:
                 instance = self.TaskInstance(
@@ -1173,9 +1175,9 @@ class InstanceManager:
         sys.stderr.write(f"[START DEBUG] Previous status: '{previous_status}'\n")
         sys.stderr.flush()
         
-        # For first-time start, don't store resume_started_at (that's only for resume). Use user's detected timezone.
+        # For first-time start, don't store resume_started_at (that's only for resume). Store UTC for correct display.
         now = app_now(user_id)
-        started_at_str = self._db_to_csv_datetime(now)
+        started_at_str = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
         sys.stderr.write(f"[START DEBUG] Setting started_at to: '{started_at_str}' (datetime: {now})\n")
         sys.stderr.flush()
         self.df.at[idx,'started_at'] = started_at_str
@@ -1229,17 +1231,17 @@ class InstanceManager:
         sys.stderr.write(f"[RESUME DEBUG] Full actual_data before resume: {actual_data}\n")
         sys.stderr.flush()
         
-        # Store precise resume timestamp in actual JSON (ISO format for reliability). Use user's detected timezone.
+        # Store precise resume timestamp in actual (UTC ISO so pause logic fromisoformat works; format_for_display parses it).
         now = app_now(user_id)
-        actual_data['resume_started_at'] = now.isoformat()
+        actual_data['resume_started_at'] = now.astimezone(timezone.utc).isoformat()
         # Clear paused flag since we're resuming
         if 'paused' in actual_data:
             del actual_data['paused']
         sys.stderr.write(f"[RESUME DEBUG] Stored resume_started_at in actual: {actual_data['resume_started_at']}\n")
         sys.stderr.flush()
         
-        # Also update CSV started_at for display/compatibility (but use actual_data for calculations)
-        started_at_str = self._db_to_csv_datetime(now)
+        # Also update CSV started_at for display (store UTC)
+        started_at_str = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
         sys.stderr.write(f"[RESUME DEBUG] Setting started_at to: '{started_at_str}' (datetime: {now})\n")
         sys.stderr.flush()
         self.df.at[idx,'started_at'] = started_at_str
@@ -1305,11 +1307,11 @@ class InstanceManager:
                 sys.stderr.write(f"[START DEBUG] Previous status: {previous_status}\n")
                 sys.stderr.flush()
                 
-                # For first-time start, don't store resume_started_at (that's only for resume). Use user's detected timezone.
+                # For first-time start, don't store resume_started_at (that's only for resume). Store UTC for correct display.
                 now = app_now(user_id)
                 sys.stderr.write(f"[START DEBUG] Setting started_at to: {now}\n")
                 sys.stderr.flush()
-                instance.started_at = now
+                instance.started_at = now.astimezone(timezone.utc)
                 
                 # Set status to 'active' when starting a task
                 instance.status = 'active'
@@ -1381,19 +1383,19 @@ class InstanceManager:
                 sys.stderr.write(f"[RESUME DEBUG] Full actual_data before resume: {actual_data}\n")
                 sys.stderr.flush()
                 
-                # Store precise resume timestamp in actual JSON (ISO format for reliability). Use user's detected timezone.
+                # Store precise resume timestamp in actual (UTC ISO so format_for_display and fromisoformat work).
                 now = app_now(user_id)
-                actual_data['resume_started_at'] = now.isoformat()
+                actual_data['resume_started_at'] = now.astimezone(timezone.utc).isoformat()
                 # Clear paused flag since we're resuming
                 if 'paused' in actual_data:
                     del actual_data['paused']
                 sys.stderr.write(f"[RESUME DEBUG] Stored resume_started_at in actual: {actual_data['resume_started_at']}\n")
                 sys.stderr.flush()
                 
-                # Also update started_at for display/compatibility (but use actual_data for calculations)
+                # Also update started_at for display (store UTC)
                 sys.stderr.write(f"[RESUME DEBUG] Setting started_at to: {now}\n")
                 sys.stderr.flush()
-                instance.started_at = now
+                instance.started_at = now.astimezone(timezone.utc)
                 # Assign a new dict and force SQLAlchemy to flush the JSON column
                 instance.actual = dict(actual_data)
                 from sqlalchemy.orm.attributes import flag_modified
@@ -1473,7 +1475,8 @@ class InstanceManager:
         # set actual JSON
         self.df.at[idx,'actual'] = json.dumps(actual)
         completed_at = app_now(user_id)
-        self.df.at[idx,'completed_at'] = completed_at.strftime("%Y-%m-%d %H:%M")
+        # Store in UTC so format_for_display(..., assume_utc=True) shows correct local time
+        self.df.at[idx,'completed_at'] = completed_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
         self.df.at[idx,'is_completed'] = 'True'
         self.df.at[idx,'status'] = 'completed'
         self.df.at[idx,'cancelled_at'] = ''
@@ -1602,7 +1605,7 @@ class InstanceManager:
             import json
             import math
             
-            completed_at = app_now(user_id)
+            completed_at = app_now(user_id).astimezone(timezone.utc)
 
             with self.db_session() as session:
                 # CRITICAL: Filter by both instance_id AND user_id for data isolation
@@ -1802,7 +1805,7 @@ class InstanceManager:
             raise ValueError(f"Instance {instance_id} not found")
         idx = matches[0]
         self.df.at[idx, 'actual'] = json.dumps(actual or {})
-        self.df.at[idx, 'cancelled_at'] = app_now(user_id).strftime("%Y-%m-%d %H:%M")
+        self.df.at[idx, 'cancelled_at'] = app_now(user_id).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
         self.df.at[idx, 'status'] = 'cancelled'
         self.df.at[idx, 'is_completed'] = 'True'
         self.df.at[idx, 'completed_at'] = ''
@@ -1834,7 +1837,7 @@ class InstanceManager:
                     raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
                 
                 instance.actual = actual or {}
-                instance.cancelled_at = app_now(user_id)
+                instance.cancelled_at = app_now(user_id).astimezone(timezone.utc)
                 instance.status = 'cancelled'
                 instance.is_completed = True
                 instance.completed_at = None
@@ -2132,7 +2135,7 @@ class InstanceManager:
             self.df.at[idx, 'predicted'] = json.dumps(predicted)
             # Always set initialized_at when prediction is added (initialization happens). Use user's detected timezone.
             if not self.df.at[idx, 'initialized_at'] or self.df.at[idx, 'initialized_at'] == '':
-                self.df.at[idx, 'initialized_at'] = app_now(user_id).strftime("%Y-%m-%d %H:%M")
+                self.df.at[idx, 'initialized_at'] = app_now(user_id).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
             if due_at is not None:
                 self.df.at[idx, 'due_at'] = due_at.strftime("%Y-%m-%d %H:%M")
             # Extract predicted values to columns (only if columns are empty)
@@ -2172,7 +2175,7 @@ class InstanceManager:
                     instance.predicted = predicted or {}
 
                     if not instance.initialized_at:
-                        instance.initialized_at = app_now(user_id)
+                        instance.initialized_at = app_now(user_id).astimezone(timezone.utc)
 
                     if due_at is not None:
                         instance.due_at = due_at

@@ -188,7 +188,7 @@ _STORED_FMTS = (
 
 
 def format_for_display(
-    stored: Optional[str],
+    stored: Optional[Union[str, datetime]],
     assume_utc: bool = True,
     fmt: str = "%Y-%m-%d %H:%M",
     user_id: Optional[Union[int, str]] = None,
@@ -203,7 +203,7 @@ def format_for_display(
     /api/detected-timezone). Pass fmt to override when needed.
 
     Args:
-        stored: Value from DB/CSV (e.g. "2026-02-28 23:23").
+        stored: Value from DB/CSV (string or datetime).
         assume_utc: If True, treat stored value as UTC and convert to user TZ.
         fmt: strftime format. Default "%Y-%m-%d %H:%M" (24-hour).
         user_id: User ID for per-user timezone; None = current user or env.
@@ -219,6 +219,14 @@ def format_for_display(
         "H3",
     )
     # #endregion
+    if stored is None:
+        return ""
+    # Accept datetime from DB: normalize to UTC "YYYY-MM-DD HH:MM" for consistent parsing
+    if hasattr(stored, "strftime") and stored:
+        dt_val = stored
+        if getattr(dt_val, "tzinfo", None):
+            dt_val = dt_val.astimezone(timezone.utc)
+        stored = dt_val.strftime("%Y-%m-%d %H:%M")
     if not stored or not str(stored).strip():
         return ""
     s = str(stored).strip().replace("T", " ")

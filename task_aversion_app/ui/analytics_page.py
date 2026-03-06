@@ -1909,7 +1909,8 @@ def _render_emotional_spikes(flow_data):
                         ui.label(f"Actual: {spike.get('actual', 0):.0f}").classes("text-xs text-red-600 font-bold")
                         ui.label(f"Spike: +{spike.get('spike_amount', 0):.0f}").classes("text-xs text-red-700")
                     if spike.get('completed_at'):
-                        ui.label(f"Completed: {format_for_display(spike['completed_at'])}").classes("text-xs text-gray-400")
+                        _uid = get_current_user()
+                        ui.label(f"Completed: {format_for_display(spike['completed_at'], user_id=_uid)}").classes("text-xs text-gray-400")
 
 
 def _render_emotion_correlations(flow_data):
