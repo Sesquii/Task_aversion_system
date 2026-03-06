@@ -181,6 +181,26 @@ def _build_settings_content(user_id):
         elif current_tz:
             ui.label(f"Current: {current_tz}").classes("text-xs text-gray-600 mt-1")
 
+        # 12-hour vs 24-hour clock
+        current_hour12 = user_state.get_hour12_preference(user_id_str)
+        with ui.row().classes("items-center gap-2 mt-3"):
+            ui.label("Time format").classes("text-sm font-medium")
+            hour12_switch = ui.switch(
+                value=current_hour12,
+                text="12-hour (AM/PM)",
+            ).classes("mt-1")
+
+        def on_hour12_change():
+            val = hour12_switch.value
+            if val is None:
+                return
+            user_state.set_hour12_preference(user_id_str, bool(val))
+            ui.notify("Time format saved.", color="positive")
+            ui.navigate.reload()
+
+        hour12_switch.on("change", on_hour12_change)
+        ui.label("Turn off for 24-hour format.").classes("text-xs text-gray-500 mt-0")
+
         # Manual timezone select: options dict is value -> label (NiceGUI expects keys = stored value)
         COMMON_TIMEZONES = [
             ("auto", "Use my device (auto)"),
