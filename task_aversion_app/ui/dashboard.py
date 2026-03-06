@@ -16,7 +16,7 @@ from backend.user_state import UserStateManager
 from backend.performance_logger import get_perf_logger as get_init_perf_logger
 from backend.recommendation_logger import recommendation_logger
 from backend.security_utils import escape_for_display
-from backend.app_time import format_for_display
+from backend.app_time import format_for_display, now as app_now
 from ui.error_reporting import handle_error_with_ui
 
 # Setup performance logging for monitored metrics
@@ -5751,7 +5751,13 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
         # TOP HEADER SECTION - Title and Analytics Button
         # ====================================================================
         with ui.row().classes("w-full justify-between items-center mb-4").props('id="tas-dashboard-header" data-tooltip-id="dashboard_header"'):
-            ui.label("Task Aversion Dashboard").classes("text-4xl font-bold mb-3")
+            with ui.column().classes("gap-0"):
+                ui.label("Task Aversion Dashboard").classes("text-4xl font-bold mb-0")
+                try:
+                    _local_time = app_now(current_user_id).strftime("%H:%M")
+                    ui.label(_local_time).classes("text-xs text-gray-500 mt-0")
+                except Exception:
+                    ui.label("--:--").classes("text-xs text-gray-500 mt-0")
             with ui.row().classes("gap-2"):
                 ui.button("Summary",
                           on_click=lambda: ui.navigate.to('/summary'),
@@ -6469,9 +6475,15 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
         return out
 
     with ui.column().classes('w-full max-w-lg mx-auto p-3 gap-2'):
-        # Title
+        # Title and local time (detected timezone)
         with ui.row().classes('w-full justify-between items-center'):
-            ui.label('Task Aversion System').classes('text-lg font-bold')
+            with ui.column().classes('gap-0'):
+                ui.label('Task Aversion System').classes('text-lg font-bold')
+                try:
+                    _local_time = app_now(current_user_id).strftime('%H:%M')
+                    ui.label(_local_time).classes('text-xs text-gray-500 mt-0')
+                except Exception:
+                    ui.label('--:--').classes('text-xs text-gray-500 mt-0')
             with ui.row().classes('gap-1'):
                 ui.button(icon='settings', on_click=lambda: ui.navigate.to('/settings')).props('flat dense size=sm round').classes('min-h-0')
                 ui.button(icon='logout', on_click=_mobile_logout, color='red').props('flat dense size=sm round').classes('min-h-0')
