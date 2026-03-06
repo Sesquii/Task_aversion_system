@@ -158,9 +158,28 @@ class UserStateManager:
         Uses explicit timezone if set and not 'auto'; otherwise detected_tz; otherwise None.
         """
         tz = self.get_timezone(user_id)
+        detected = self.get_detected_timezone(user_id)
+        resolved = tz if (tz and tz.lower() != "auto") else (detected if detected else None)
+        # #region agent log
+        try:
+            from backend.app_time import _tz_debug_log
+            _tz_debug_log(
+                "user_state.get_resolved_timezone",
+                "get_resolved_timezone",
+                {
+                    "user_id": user_id,
+                    "timezone_pref": tz,
+                    "detected_tz": detected,
+                    "resolved": resolved,
+                    "prefs_file": self.file,
+                },
+                "H2",
+            )
+        except Exception:
+            pass
+        # #endregion
         if tz and tz.lower() != "auto":
             return tz
-        detected = self.get_detected_timezone(user_id)
         return detected if detected else None
 
     def set_timezone(self, user_id: str, value: str) -> Dict[str, Any]:

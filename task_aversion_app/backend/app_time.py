@@ -7,12 +7,34 @@ When user has "Use my device timezone", the browser sends its timezone and we us
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Union
 
 # Lazy-loaded app-level TZ (from env)
 _app_tz: Optional[object] = None
+
+# #region agent log
+def _tz_debug_log(location: str, message: str, data: dict, hypothesis_id: str = "") -> None:
+    """Write one NDJSON line to debug-8cd4d8.log (app dir) for VPS copy."""
+    try:
+        log_path = Path(__file__).resolve().parent.parent / "debug-8cd4d8.log"
+        payload = {
+            "sessionId": "8cd4d8",
+            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            "location": location,
+            "message": message,
+            "data": data,
+        }
+        if hypothesis_id:
+            payload["hypothesisId"] = hypothesis_id
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 
 def _tz_from_name(tz_name: str):
@@ -47,6 +69,14 @@ def get_app_timezone(user_id: Optional[Union[int, str]] = None) -> Union[object,
     If user_id is None, tries to get current user from auth; then reads user prefs
     (timezone or detected_tz) or falls back to env TIMEZONE or system local.
     """
+    # #region agent log
+    _tz_debug_log(
+        "app_time.get_app_timezone",
+        "get_app_timezone entry",
+        {"user_id_in": user_id},
+        "H1",
+    )
+    # #endregion
     tz_name = None
     if user_id is not None:
         try:
@@ -55,25 +85,65 @@ def get_app_timezone(user_id: Optional[Union[int, str]] = None) -> Union[object,
             resolved = _user_state.get_resolved_timezone(str(user_id))
             if resolved:
                 tz_name = resolved
-        except Exception:
+            # #region agent log
+            _tz_debug_log(
+                "app_time.get_app_timezone",
+                "resolved from user_id path",
+                {"user_id": user_id, "resolved_tz_name": tz_name},
+                "H1",
+            )
+            # #endregion
+        except Exception as e:
+            # #region agent log
+            _tz_debug_log("app_time.get_app_timezone", "user_id path exception", {"error": str(e)}, "H1")
+            # #endregion
             pass
     if not tz_name:
         try:
             from backend.auth import get_current_user
             uid = get_current_user()
+            # #region agent log
+            _tz_debug_log(
+                "app_time.get_app_timezone",
+                "get_current_user when user_id was None or no resolved tz",
+                {"auth_uid": uid},
+                "H1",
+            )
+            # #endregion
             if uid is not None:
                 from backend.user_state import UserStateManager
                 _user_state = UserStateManager()
                 resolved = _user_state.get_resolved_timezone(str(uid))
                 if resolved:
                     tz_name = resolved
+                # #region agent log
+                _tz_debug_log(
+                    "app_time.get_app_timezone",
+                    "resolved from auth uid path",
+                    {"uid": uid, "resolved_tz_name": tz_name},
+                    "H1",
+                )
+                # #endregion
         except Exception:
             pass
+    fallback = _get_tz()
+    # #region agent log
+    _tz_debug_log(
+        "app_time.get_app_timezone",
+        "get_app_timezone result",
+        {
+            "tz_name_used": tz_name,
+            "fallback_is_false": fallback is False,
+            "env_TIMEZONE": (os.getenv("TIMEZONE") or "").strip() or None,
+        },
+        "H1",
+    )
+    # #endregion
     if tz_name:
         tz = _tz_from_name(tz_name)
         if tz is not None:
             return tz
-    return _get_tz()
+    return fallback
 
 
 def now(user_id: Optional[Union[int, str]] = None) -> datetime:
@@ -141,6 +211,14 @@ def format_for_display(
     Returns:
         Formatted string in user timezone, or the original string if unparseable.
     """
+    # #region agent log
+    _tz_debug_log(
+        "app_time.format_for_display",
+        "format_for_display entry",
+        {"stored": stored, "user_id": user_id, "assume_utc": assume_utc},
+        "H3",
+    )
+    # #endregion
     if not stored or not str(stored).strip():
         return ""
     s = str(stored).strip().replace("T", " ")
@@ -173,6 +251,21 @@ def format_for_display(
     except Exception:
         pass
     try:
-        return dt.strftime(effective_fmt)
+        result = dt.strftime(effective_fmt)
+        # #region agent log
+        _tz_debug_log(
+            "app_time.format_for_display",
+            "format_for_display result",
+            {
+                "stored": stored,
+                "user_id": user_id,
+                "tz_repr": str(tz) if tz is not False else "system_local",
+                "effective_fmt": effective_fmt,
+                "result": result,
+            },
+            "H4",
+        )
+        # #endregion
+        return result
     except (ValueError, TypeError):
         return s

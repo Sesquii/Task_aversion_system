@@ -435,8 +435,9 @@ if __name__ in {"__main__", "__mp_main__"}:
             um = UserStateManager()
             uid_str = str(user_id)
 
-            applied_defaults = False
             tz = (body.get('timezone') or '').strip()
+            current_tz_before = um.get_timezone(uid_str) if tz else None
+            applied_defaults = False
             if tz:
                 um.set_detected_timezone(uid_str, tz)
                 if body.get('use_auto') is True:
@@ -450,6 +451,30 @@ if __name__ in {"__main__", "__mp_main__"}:
 
             if 'hour12' in body:
                 um.set_hour12_preference(uid_str, bool(body.get('hour12')))
+            # #region agent log
+            try:
+                from pathlib import Path
+                import json as _json
+                _log_path = Path(__file__).resolve().parent / "debug-8cd4d8.log"
+                _payload = {
+                    "sessionId": "8cd4d8",
+                    "timestamp": __import__("time").time() * 1000,
+                    "location": "app.api_detected_timezone",
+                    "message": "detected-timezone API",
+                    "data": {
+                        "user_id": user_id,
+                        "body_timezone": tz,
+                        "body_hour12": body.get("hour12") if "hour12" in body else None,
+                        "current_tz_before": current_tz_before,
+                        "applied_defaults": applied_defaults,
+                    },
+                    "hypothesisId": "H2",
+                }
+                with open(_log_path, "a", encoding="utf-8") as _f:
+                    _f.write(_json.dumps(_payload) + "\n")
+            except Exception:
+                pass
+            # #endregion
 
             if not tz and 'hour12' not in body:
                 return Response(status_code=400)  # need at least one of timezone or hour12
