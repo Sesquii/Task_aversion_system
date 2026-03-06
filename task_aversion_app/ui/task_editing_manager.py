@@ -454,10 +454,10 @@ def task_editing_manager_page():
                                     ui.label(f"Category: {category_label}").classes("text-xs text-gray-600")
                                     
                                     if timestamp:
-                                        ui.label(f"Cancelled: {timestamp}").classes("text-xs text-gray-500 mt-1")
+                                        ui.label(f"Cancelled: {format_for_display(timestamp)}").classes("text-xs text-gray-500 mt-1")
                                 else:  # completed
                                     if timestamp:
-                                        ui.label(f"Completed: {timestamp}").classes("text-xs text-gray-500 mt-1")
+                                        ui.label(f"Completed: {format_for_display(timestamp)}").classes("text-xs text-gray-500 mt-1")
                                     
                                     # Check if edited
                                     actual_data = inst.get('actual', '{}')

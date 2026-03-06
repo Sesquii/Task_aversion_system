@@ -1,10 +1,10 @@
 # ui/notes_page.py
 from nicegui import ui
 from backend.notes_manager import NotesManager
+from backend.app_time import format_for_display
 from backend.auth import get_current_user
 from backend.security_utils import escape_for_display
 from ui.error_reporting import handle_error_with_ui
-from datetime import datetime
 
 notes_manager = NotesManager()
 
@@ -71,16 +71,8 @@ def notes_page():
                             
                             # Timestamp and delete button
                             with ui.row().classes("w-full justify-between items-center"):
-                                # Format timestamp
                                 timestamp_str = note.get("timestamp", "")
-                                formatted_time = ""
-                                if timestamp_str:
-                                    try:
-                                        dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                                        formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-                                    except (ValueError, AttributeError):
-                                        formatted_time = timestamp_str
-                                
+                                formatted_time = format_for_display(timestamp_str) if timestamp_str else ""
                                 ui.label(f"Created: {formatted_time}").classes("text-xs text-gray-500")
                                 
                                 def delete_note_handler(note_id=note.get("note_id")):

@@ -993,7 +993,7 @@ def refresh_initialized_tasks(search_query=None):
                         
                         initialized_at = inst.get('initialized_at', '')
                         if initialized_at:
-                            ui.label(f"Initialize: {initialized_at}").classes("text-xs text-gray-500")
+                            ui.label(f"Initialize: {format_for_display(initialized_at)}").classes("text-xs text-gray-500")
                         
                         # Show initialization description if available
                         init_description = predicted_data.get('description', '')
@@ -1753,7 +1753,7 @@ def view_initialized_instance(instance_id):
         
         # Initialized timestamp
         if initialized_at:
-            ui.label(f"Initialized: {initialized_at}").classes("text-sm text-gray-600 mb-4")
+            ui.label(f"Initialized: {format_for_display(initialized_at)}").classes("text-sm text-gray-600 mb-4")
         
         # Expected time
         time_estimate = predicted_data.get('time_estimate_minutes') or predicted_data.get('estimate') or 0
@@ -5754,7 +5754,9 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
             with ui.column().classes("gap-0"):
                 ui.label("Task Aversion Dashboard").classes("text-4xl font-bold mb-0")
                 try:
-                    _local_time = app_now(current_user_id).strftime("%H:%M")
+                    _now = app_now(current_user_id)
+                    _use_12h = user_state.get_hour12_preference(str(current_user_id))
+                    _local_time = _now.strftime("%I:%M %p" if _use_12h else "%H:%M")
                     ui.label(_local_time).classes("text-xs text-gray-500 mt-0")
                 except Exception:
                     ui.label("--:--").classes("text-xs text-gray-500 mt-0")
@@ -6299,7 +6301,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                         
                                         initialized_at = current_task.get('initialized_at', '')
                                         if initialized_at:
-                                            ui.label(f"Initialized: {initialized_at}").classes("text-xs text-gray-500 mb-2")
+                                            ui.label(f"Initialized: {format_for_display(initialized_at)}").classes("text-xs text-gray-500 mb-2")
                                         
                                         # Show initialization description if available
                                         init_description = predicted_data.get('description', '')
@@ -6340,7 +6342,7 @@ def build_dashboard(task_manager, user_id: Optional[int] = None):
                                 
                                 initialized_at = current_task.get('initialized_at', '')
                                 if initialized_at:
-                                    ui.label(f"Initialize: {initialized_at}").classes("text-xs text-gray-500 mb-2")
+                                    ui.label(f"Initialize: {format_for_display(initialized_at)}").classes("text-xs text-gray-500 mb-2")
                                 
                                 # Show initialization description if available
                                 init_description = predicted_data.get('description', '')
@@ -6480,7 +6482,9 @@ def build_dashboard_mobile_b(task_manager, user_id: Optional[int] = None):
             with ui.column().classes('gap-0'):
                 ui.label('Task Aversion System').classes('text-lg font-bold')
                 try:
-                    _local_time = app_now(current_user_id).strftime('%H:%M')
+                    _now = app_now(current_user_id)
+                    _use_12h = user_state.get_hour12_preference(str(current_user_id))
+                    _local_time = _now.strftime('%I:%M %p' if _use_12h else '%H:%M')
                     ui.label(_local_time).classes('text-xs text-gray-500 mt-0')
                 except Exception:
                     ui.label('--:--').classes('text-xs text-gray-500 mt-0')
