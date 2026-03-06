@@ -7,6 +7,7 @@ import json
 import time
 
 from backend.performance_logger import get_perf_logger
+from backend.app_time import now as app_now
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 perf_logger = get_perf_logger()
@@ -369,13 +370,14 @@ class InstanceManager:
             user_id: User ID (required for data isolation)
         """
         self._reload()
-        instance_id = f"i{int(datetime.now().timestamp())}"
+        now_ts = app_now(user_id)
+        instance_id = f"i{int(now_ts.timestamp())}"
         row = {
             'instance_id': instance_id,
             'task_id': task_id,
             'task_name': task_name,
             'task_version': task_version,
-            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M"),
+            'created_at': now_ts.strftime("%Y-%m-%d %H:%M"),
             'initialized_at': '',  # Will be set when user saves initialization form
             'started_at': '',
             'completed_at': '',
@@ -419,8 +421,9 @@ class InstanceManager:
             raise ValueError("user_id is required for database operations. User must be authenticated.")
         
         try:
-            instance_id = f"i{int(datetime.now().timestamp())}"
-            created_at = datetime.now()
+            now_ts = app_now(user_id)
+            instance_id = f"i{int(now_ts.timestamp())}"
+            created_at = now_ts
 
             with self.db_session() as session:
                 instance = self.TaskInstance(
@@ -476,9 +479,9 @@ class InstanceManager:
         if self.use_db:
             return self._pause_instance_db(instance_id, reason, completion_percentage, user_id)
         else:
-            return self._pause_instance_csv(instance_id, reason, completion_percentage)
-    
-    def _pause_instance_csv(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0):
+            return self._pause_instance_csv(instance_id, reason, completion_percentage, user_id)
+
+    def _pause_instance_csv(self, instance_id: str, reason: Optional[str] = None, completion_percentage: float = 0.0, user_id: Optional[int] = None):
         """CSV-specific pause_instance."""
         import json
         import sys
@@ -533,10 +536,10 @@ class InstanceManager:
                     sys.stderr.write(f"[PAUSE DEBUG] Error parsing started_at: {e}\n")
                     sys.stderr.flush()
         
-        # Calculate elapsed time if we have a start time
+        # Calculate elapsed time if we have a start time (use user's detected timezone)
         if resume_started_at:
             try:
-                now = datetime.now()
+                now = app_now(user_id)
                 sys.stderr.write(f"[PAUSE DEBUG] Current time: {now}\n")
                 sys.stderr.flush()
                 elapsed_seconds = (now - resume_started_at).total_seconds()
@@ -677,10 +680,10 @@ class InstanceManager:
                     sys.stderr.flush()
                     resume_started_at = instance.started_at
                 
-                # Calculate elapsed time if we have a start time
+                # Calculate elapsed time if we have a start time (use user's detected timezone)
                 if resume_started_at:
                     try:
-                        now = datetime.now()
+                        now = app_now(user_id)
                         sys.stderr.write(f"[PAUSE DEBUG] Current time: {now}\n")
                         sys.stderr.flush()
                         elapsed_seconds = (now - resume_started_at).total_seconds()
@@ -1136,8 +1139,8 @@ class InstanceManager:
         if self.use_db:
             return self._start_instance_db(instance_id, user_id)
         else:
-            return self._start_instance_csv(instance_id)
-    
+            return self._start_instance_csv(instance_id, user_id)
+
     def resume_instance(self, instance_id, user_id: Optional[int] = None):
         """Resume a paused task instance. Works with both CSV and database.
         
@@ -1153,8 +1156,8 @@ class InstanceManager:
         else:
             return self._resume_instance_csv(instance_id)
     
-    def _start_instance_csv(self, instance_id):
-        """CSV-specific start_instance (first time start, not resuming)."""
+    def _start_instance_csv(self, instance_id, user_id: Optional[int] = None):
+        """CSV-specific start_instance (first time start, not resuming). Uses user's detected timezone for started_at."""
         import sys
         import json
         sys.stderr.write(f"\n[START DEBUG] Starting instance {instance_id} (CSV backend) - FIRST TIME\n")
@@ -1170,8 +1173,8 @@ class InstanceManager:
         sys.stderr.write(f"[START DEBUG] Previous status: '{previous_status}'\n")
         sys.stderr.flush()
         
-        # For first-time start, don't store resume_started_at (that's only for resume)
-        now = datetime.now()
+        # For first-time start, don't store resume_started_at (that's only for resume). Use user's detected timezone.
+        now = app_now(user_id)
         started_at_str = self._db_to_csv_datetime(now)
         sys.stderr.write(f"[START DEBUG] Setting started_at to: '{started_at_str}' (datetime: {now})\n")
         sys.stderr.flush()
@@ -1196,8 +1199,8 @@ class InstanceManager:
         # Invalidate caches AFTER starting to ensure fresh data on next read
         self._invalidate_instance_caches()
     
-    def _resume_instance_csv(self, instance_id):
-        """CSV-specific resume_instance (resuming a paused task)."""
+    def _resume_instance_csv(self, instance_id, user_id: Optional[int] = None):
+        """CSV-specific resume_instance (resuming a paused task). Uses user's detected timezone for started_at."""
         import sys
         import json
         sys.stderr.write(f"\n[RESUME DEBUG] Resuming instance {instance_id} (CSV backend)\n")
@@ -1226,8 +1229,8 @@ class InstanceManager:
         sys.stderr.write(f"[RESUME DEBUG] Full actual_data before resume: {actual_data}\n")
         sys.stderr.flush()
         
-        # Store precise resume timestamp in actual JSON (ISO format for reliability)
-        now = datetime.now()
+        # Store precise resume timestamp in actual JSON (ISO format for reliability). Use user's detected timezone.
+        now = app_now(user_id)
         actual_data['resume_started_at'] = now.isoformat()
         # Clear paused flag since we're resuming
         if 'paused' in actual_data:
@@ -1302,8 +1305,8 @@ class InstanceManager:
                 sys.stderr.write(f"[START DEBUG] Previous status: {previous_status}\n")
                 sys.stderr.flush()
                 
-                # For first-time start, don't store resume_started_at (that's only for resume)
-                now = datetime.now()
+                # For first-time start, don't store resume_started_at (that's only for resume). Use user's detected timezone.
+                now = app_now(user_id)
                 sys.stderr.write(f"[START DEBUG] Setting started_at to: {now}\n")
                 sys.stderr.flush()
                 instance.started_at = now
@@ -1378,8 +1381,8 @@ class InstanceManager:
                 sys.stderr.write(f"[RESUME DEBUG] Full actual_data before resume: {actual_data}\n")
                 sys.stderr.flush()
                 
-                # Store precise resume timestamp in actual JSON (ISO format for reliability)
-                now = datetime.now()
+                # Store precise resume timestamp in actual JSON (ISO format for reliability). Use user's detected timezone.
+                now = app_now(user_id)
                 actual_data['resume_started_at'] = now.isoformat()
                 # Clear paused flag since we're resuming
                 if 'paused' in actual_data:
@@ -1422,7 +1425,7 @@ class InstanceManager:
                 raise RuntimeError(f"Database error in resume_instance and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in resume_instance: {e}, falling back to CSV")
             self.use_db = False
-            return self._resume_instance_csv(instance_id)
+            return self._resume_instance_csv(instance_id, user_id)
 
     def complete_instance(self, instance_id, actual: dict, user_id: Optional[int] = None):
         """Complete a task instance. Works with both CSV and database.
@@ -1469,7 +1472,7 @@ class InstanceManager:
                 raise ValueError(f"Instance {instance_id} does not belong to user {user_id}")
         # set actual JSON
         self.df.at[idx,'actual'] = json.dumps(actual)
-        completed_at = datetime.now()
+        completed_at = app_now(user_id)
         self.df.at[idx,'completed_at'] = completed_at.strftime("%Y-%m-%d %H:%M")
         self.df.at[idx,'is_completed'] = 'True'
         self.df.at[idx,'status'] = 'completed'
@@ -1599,8 +1602,8 @@ class InstanceManager:
             import json
             import math
             
-            completed_at = datetime.now()
-            
+            completed_at = app_now(user_id)
+
             with self.db_session() as session:
                 # CRITICAL: Filter by both instance_id AND user_id for data isolation
                 query = session.query(self.TaskInstance).filter(
@@ -1790,8 +1793,8 @@ class InstanceManager:
         else:
             return self._cancel_instance_csv(instance_id, actual, user_id=user_id)
     
-    def _cancel_instance_csv(self, instance_id, actual: dict):
-        """CSV-specific cancel_instance."""
+    def _cancel_instance_csv(self, instance_id, actual: dict, user_id: Optional[int] = None):
+        """CSV-specific cancel_instance. Uses user's detected timezone for cancelled_at."""
         import json
         self._reload()
         matches = self.df.index[self.df['instance_id'] == instance_id]
@@ -1799,7 +1802,7 @@ class InstanceManager:
             raise ValueError(f"Instance {instance_id} not found")
         idx = matches[0]
         self.df.at[idx, 'actual'] = json.dumps(actual or {})
-        self.df.at[idx, 'cancelled_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        self.df.at[idx, 'cancelled_at'] = app_now(user_id).strftime("%Y-%m-%d %H:%M")
         self.df.at[idx, 'status'] = 'cancelled'
         self.df.at[idx, 'is_completed'] = 'True'
         self.df.at[idx, 'completed_at'] = ''
@@ -1831,7 +1834,7 @@ class InstanceManager:
                     raise ValueError(f"Instance {instance_id} not found or does not belong to user {user_id}")
                 
                 instance.actual = actual or {}
-                instance.cancelled_at = datetime.now()
+                instance.cancelled_at = app_now(user_id)
                 instance.status = 'cancelled'
                 instance.is_completed = True
                 instance.completed_at = None
@@ -1869,11 +1872,11 @@ class InstanceManager:
         if self.use_db:
             self._postpone_instance_db(instance_id, actual, user_id=user_id)
         else:
-            self._postpone_instance_csv(instance_id, actual)
+            self._postpone_instance_csv(instance_id, actual, user_id=user_id)
         self._invalidate_instance_caches()
 
-    def _postpone_instance_csv(self, instance_id: str, actual: dict):
-        """CSV-specific postpone: append to postpone_history, merge actual."""
+    def _postpone_instance_csv(self, instance_id: str, actual: dict, user_id: Optional[int] = None):
+        """CSV-specific postpone: append to postpone_history, merge actual. Uses user's detected timezone for 'at'."""
         self._reload()
         matches = self.df.index[self.df['instance_id'] == instance_id]
         if len(matches) == 0:
@@ -1890,7 +1893,7 @@ class InstanceManager:
         if not isinstance(history, list):
             history = []
         reason = actual.get('postpone_reason') or actual.get('reason') or ''
-        history.append({'reason': reason, 'at': datetime.now().strftime("%Y-%m-%d %H:%M")})
+        history.append({'reason': reason, 'at': app_now(user_id).strftime("%Y-%m-%d %H:%M")})
         existing_actual['postpone_history'] = history
         existing_actual['postpone_reason'] = reason
         self.df.at[idx, 'actual'] = json.dumps(existing_actual)
@@ -1915,7 +1918,7 @@ class InstanceManager:
                 if not isinstance(history, list):
                     history = []
                 reason = actual.get('postpone_reason') or actual.get('reason') or ''
-                history.append({'reason': reason, 'at': datetime.now().strftime("%Y-%m-%d %H:%M")})
+                history.append({'reason': reason, 'at': app_now(user_id).strftime("%Y-%m-%d %H:%M")})
                 existing['postpone_history'] = history
                 existing['postpone_reason'] = reason
                 instance.actual = existing
@@ -1927,7 +1930,7 @@ class InstanceManager:
                 raise RuntimeError(f"Database error in postpone_instance: {e}") from e
             print(f"[InstanceManager] Database error in postpone_instance: {e}, falling back to CSV")
             self.use_db = False
-            self._postpone_instance_csv(instance_id, actual)
+            self._postpone_instance_csv(instance_id, actual, user_id=user_id)
 
     def update_cancelled_instance(self, instance_id, cancellation_data: dict, user_id: Optional[int] = None):
         """Update cancellation data for an already-cancelled instance. Works with both CSV and database.
@@ -2116,20 +2119,20 @@ class InstanceManager:
             return self._add_prediction_to_instance_db(
                 instance_id, predicted, user_id=user_id, due_at=due_at
             )
-        return self._add_prediction_to_instance_csv(instance_id, predicted, due_at=due_at)
+        return self._add_prediction_to_instance_csv(instance_id, predicted, user_id=user_id, due_at=due_at)
 
     def _add_prediction_to_instance_csv(
-        self, instance_id: str, predicted: dict, due_at: Optional[datetime] = None
+        self, instance_id: str, predicted: dict, user_id: Optional[int] = None, due_at: Optional[datetime] = None
     ):
-        """CSV-specific add_prediction_to_instance."""
+        """CSV-specific add_prediction_to_instance. Uses user's detected timezone for initialized_at."""
         import json
         with perf_logger.operation("_add_prediction_to_instance_csv", instance_id=instance_id):
             self._reload()
             idx = self.df.index[self.df['instance_id'] == instance_id][0]
             self.df.at[idx, 'predicted'] = json.dumps(predicted)
-            # Always set initialized_at when prediction is added (initialization happens)
+            # Always set initialized_at when prediction is added (initialization happens). Use user's detected timezone.
             if not self.df.at[idx, 'initialized_at'] or self.df.at[idx, 'initialized_at'] == '':
-                self.df.at[idx, 'initialized_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                self.df.at[idx, 'initialized_at'] = app_now(user_id).strftime("%Y-%m-%d %H:%M")
             if due_at is not None:
                 self.df.at[idx, 'due_at'] = due_at.strftime("%Y-%m-%d %H:%M")
             # Extract predicted values to columns (only if columns are empty)
@@ -2169,7 +2172,7 @@ class InstanceManager:
                     instance.predicted = predicted or {}
 
                     if not instance.initialized_at:
-                        instance.initialized_at = datetime.now()
+                        instance.initialized_at = app_now(user_id)
 
                     if due_at is not None:
                         instance.due_at = due_at
@@ -2182,7 +2185,7 @@ class InstanceManager:
                 raise RuntimeError(f"Database error in add_prediction_to_instance and CSV fallback is disabled: {e}") from e
             print(f"[InstanceManager] Database error in add_prediction_to_instance: {e}, falling back to CSV")
             self.use_db = False
-            return self._add_prediction_to_instance_csv(instance_id, predicted, due_at=due_at)
+            return self._add_prediction_to_instance_csv(instance_id, predicted, user_id=user_id, due_at=due_at)
 
     def ensure_instance_for_task(self, task_id, task_name, predicted: dict = None, user_id: Optional[int] = None):
         # create an instance and return id

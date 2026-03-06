@@ -486,12 +486,11 @@ def complete_task_page(task_manager, emotion_manager):
                     pass
             
             if started_at:
-                # Calculate duration from start time to now, plus any time from previous sessions
-                from datetime import datetime
+                # Calculate duration from start time to now (user's detected timezone), plus any time from previous sessions
                 import pandas as pd
                 try:
                     started = pd.to_datetime(started_at)
-                    now = datetime.now()
+                    now = app_now(current_user_id)
                     current_session_minutes = (now - started).total_seconds() / 60.0
                     default_duration = current_session_minutes + time_spent_before_pause
                 except Exception:

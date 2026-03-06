@@ -439,8 +439,8 @@ def initialize_task_page(task_manager, emotion_manager):
                 min=0
             )
 
-            # Due date (defaults to today); calendar popup + month/day/year dropdowns
-            _today = datetime.now()
+            # Due date (defaults to today in user's timezone); calendar popup + month/day/year dropdowns
+            _today = app_now(current_user_id)
             _today_str = _today.strftime("%Y-%m-%d")
             due_at_value = _today_str  # Default to today
             try:
@@ -468,7 +468,7 @@ def initialize_task_page(task_manager, emotion_manager):
                     except (TypeError, ValueError):
                         cw_hours = 0
                     if cw_days or cw_hours:
-                        suggested = datetime.now() + timedelta(days=cw_days, hours=cw_hours)
+                        suggested = app_now(current_user_id) + timedelta(days=cw_days, hours=cw_hours)
                         due_at_value = suggested.strftime("%Y-%m-%d")
             except (ValueError, TypeError):
                 due_at_value = _today_str
@@ -839,7 +839,7 @@ def initialize_task_page(task_manager, emotion_manager):
                 predicted_payload["init_sliders_adjusted_count"] = init_sliders_adjusted_count
 
                 entry = {
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "timestamp": app_now(current_user_id).strftime("%Y-%m-%d %H:%M"),
                     "instance_id": instance_id,
                     "task": instance.get('task_id'),
                     "emotions": ",".join(emotion_list),
