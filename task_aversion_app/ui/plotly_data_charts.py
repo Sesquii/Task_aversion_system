@@ -1128,6 +1128,254 @@ def generate_volumetric_productivity_plotly() -> Optional[go.Figure]:
         return None
 
 
+def generate_grit_overview_bars_7d_plotly() -> Optional[go.Figure]:
+    """Bar chart: 7-day averages of each factor and total grit score."""
+    try:
+        _, analytics = get_user_instances(limit=500)
+        if not analytics:
+            return None
+        from backend.auth import get_current_user
+        df = analytics.get_grit_breakdown_df(user_id=get_current_user(), days=7)
+        if df.empty or len(df) == 0:
+            return None
+        factors = ['Persistence', 'Focus', 'Passion', 'Time bonus', 'Disappointment resilience']
+        cols = ['persistence_factor_scaled', 'focus_factor_scaled', 'passion_factor', 'time_bonus', 'disappointment_resilience']
+        means = [float(df[c].mean()) for c in cols]
+        labels = factors
+        colors = ['#636efa', '#ef553b', '#00cc96', '#ab63fa', '#ffa15a']
+        fig = go.Figure(data=[go.Bar(x=labels, y=means, marker_color=colors, text=[f'{v:.2f}' for v in means], textposition='outside')])
+        fig.update_layout(
+            title='Your data: 7-day averages by factor',
+            xaxis_title='Factor',
+            yaxis_title='Average value (multipliers)',
+            yaxis=dict(range=[0, 2]),
+            height=400,
+            showlegend=False
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit overview bars: {e}")
+        return None
+
+
+def generate_grit_factors_line_30d_plotly() -> Optional[go.Figure]:
+    """Line chart: 30-day trend of each factor's influence (share of total multiplier)."""
+    try:
+        _, analytics = get_user_instances(limit=500)
+        if not analytics:
+            return None
+        from backend.auth import get_current_user
+        df = analytics.get_grit_breakdown_df(user_id=get_current_user(), days=30)
+        if df.empty or len(df) == 0:
+            return None
+        df = df.copy()
+        df['date'] = df['completed_at_dt'].dt.date
+        cols = ['persistence_factor_scaled', 'focus_factor_scaled', 'passion_factor', 'time_bonus', 'disappointment_resilience']
+        daily = df.groupby('date')[cols + ['grit_score']].mean().reset_index()
+        total_mult = daily[cols].sum(axis=1)
+        for c in cols:
+            daily[c + '_share'] = (daily[c] / total_mult.replace(0, np.nan)).fillna(0)
+        fig = go.Figure()
+        names = ['Persistence', 'Focus', 'Passion', 'Time bonus', 'Disappointment resilience']
+        colors = ['#636efa', '#ef553b', '#00cc96', '#ab63fa', '#ffa15a']
+        for i, c in enumerate(cols):
+            fig.add_trace(go.Scatter(
+                x=daily['date'], y=daily[c + '_share'],
+                mode='lines+markers', name=names[i], line=dict(color=colors[i])
+            ))
+        fig.update_layout(
+            title=None,
+            xaxis_title='Date',
+            yaxis_title='Share of total',
+            height=400,
+            margin=dict(t=50, b=50, l=50, r=20),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit factors line: {e}")
+        return None
+
+
+def generate_grit_components_pie_plotly() -> Optional[go.Figure]:
+    """Pie chart: components as share of the sum (five factors, no total slice)."""
+    try:
+        _, analytics = get_user_instances(limit=500)
+        if not analytics:
+            return None
+        from backend.auth import get_current_user
+        df = analytics.get_grit_breakdown_df(user_id=get_current_user(), days=30)
+        if df.empty or len(df) == 0:
+            return None
+        cols = ['persistence_factor_scaled', 'focus_factor_scaled', 'passion_factor', 'time_bonus', 'disappointment_resilience']
+        means = [float(df[c].mean()) for c in cols]
+        total = sum(means)
+        if total <= 0:
+            return None
+        values = [m / total for m in means]
+        labels = ['Persistence', 'Focus', 'Passion', 'Time bonus', 'Disappointment resilience']
+        colors = ['#636efa', '#ef553b', '#00cc96', '#ab63fa', '#ffa15a']
+        fig = go.Figure(data=[go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.4,
+            marker_colors=colors,
+            textinfo='label+percent',
+            textposition='outside',
+            insidetextorientation='radial'
+        )])
+        fig.update_layout(
+            title=None,
+            height=420,
+            margin=dict(t=60, b=80),
+            showlegend=True,
+            legend=dict(orientation='h', yanchor='top', y=-0.15, xanchor='center', x=0.5)
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit components pie: {e}")
+        return None
+
+
+def _get_grit_breakdown_df(days: int = 90):
+    """Get grit breakdown DataFrame for current user (for component charts)."""
+    _, analytics = get_user_instances(limit=500)
+    if not analytics:
+        return None
+    from backend.auth import get_current_user
+    return analytics.get_grit_breakdown_df(user_id=get_current_user(), days=days)
+
+
+def generate_grit_persistence_factor_plotly() -> Optional[go.Figure]:
+    """Your data: Persistence factor across completed tasks (last 90 days)."""
+    try:
+        df = _get_grit_breakdown_df(90)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        df['date'] = df['completed_at_dt'].dt.date
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['date'], y=df['persistence_factor_scaled'],
+            mode='markers', name='Persistence factor',
+            marker=dict(size=8, color=df['persistence_factor_scaled'], colorscale='Blues', showscale=True,
+                        colorbar=dict(title='Factor'))
+        ))
+        fig.update_layout(
+            title='Your data: Persistence factor by completion date',
+            xaxis_title='Date', yaxis_title='Persistence factor (0.5-1.5)',
+            height=350, showlegend=False
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit persistence factor chart: {e}")
+        return None
+
+
+def generate_grit_focus_factor_plotly() -> Optional[go.Figure]:
+    """Your data: Focus factor across completed tasks (last 90 days)."""
+    try:
+        df = _get_grit_breakdown_df(90)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        df['date'] = df['completed_at_dt'].dt.date
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['date'], y=df['focus_factor_scaled'],
+            mode='markers', name='Focus factor',
+            marker=dict(size=8, color=df['focus_factor_scaled'], colorscale='Purples', showscale=True,
+                        colorbar=dict(title='Factor'))
+        ))
+        fig.update_layout(
+            title='Your data: Focus factor by completion date',
+            xaxis_title='Date', yaxis_title='Focus factor (0.5-1.5)',
+            height=350, showlegend=False
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit focus factor chart: {e}")
+        return None
+
+
+def generate_grit_passion_factor_plotly() -> Optional[go.Figure]:
+    """Your data: Passion factor across completed tasks (last 90 days)."""
+    try:
+        df = _get_grit_breakdown_df(90)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        df['date'] = df['completed_at_dt'].dt.date
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['date'], y=df['passion_factor'],
+            mode='markers', name='Passion factor',
+            marker=dict(size=8, color=df['passion_factor'], colorscale='Greens', showscale=True,
+                        colorbar=dict(title='Factor'))
+        ))
+        fig.update_layout(
+            title='Your data: Passion factor by completion date',
+            xaxis_title='Date', yaxis_title='Passion factor (0.5-1.5)',
+            height=350, showlegend=False
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit passion factor chart: {e}")
+        return None
+
+
+def generate_grit_time_bonus_plotly() -> Optional[go.Figure]:
+    """Your data: Time bonus across completed tasks (last 90 days)."""
+    try:
+        df = _get_grit_breakdown_df(90)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        df['date'] = df['completed_at_dt'].dt.date
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['date'], y=df['time_bonus'],
+            mode='markers', name='Time bonus',
+            marker=dict(size=8, color=df['time_bonus'], colorscale='Oranges', showscale=True,
+                        colorbar=dict(title='Bonus'))
+        ))
+        fig.update_layout(
+            title='Your data: Time bonus by completion date',
+            xaxis_title='Date', yaxis_title='Time bonus (1.0-3.0)',
+            height=350, showlegend=False
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit time bonus chart: {e}")
+        return None
+
+
+def generate_grit_disappointment_resilience_plotly() -> Optional[go.Figure]:
+    """Your data: Disappointment resilience across completed tasks (last 90 days)."""
+    try:
+        df = _get_grit_breakdown_df(90)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        df['date'] = df['completed_at_dt'].dt.date
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df['date'], y=df['disappointment_resilience'],
+            mode='markers', name='Disappointment resilience',
+            marker=dict(size=8, color=df['disappointment_resilience'], colorscale='RdBu', showscale=True,
+                        colorbar=dict(title='Resilience'))
+        ))
+        fig.update_layout(
+            title='Your data: Disappointment resilience by completion date',
+            xaxis_title='Date', yaxis_title='Disappointment resilience (0.67-1.5)',
+            height=350, showlegend=False
+        )
+        return fig
+    except Exception as e:
+        print(f"[PlotlyCharts] Error generating grit disappointment resilience chart: {e}")
+        return None
+
+
 # Mapping of chart generators
 PLOTLY_DATA_CHARTS = {
     'productivity_score_baseline_completion': generate_baseline_completion_plotly,
@@ -1140,4 +1388,12 @@ PLOTLY_DATA_CHARTS = {
     'thoroughness_factor_overview': generate_thoroughness_factor_overview_plotly,
     'productivity_volume_work_volume_score': generate_work_volume_score_plotly,
     'volumetric_productivity_calculation': generate_volumetric_productivity_plotly,
+    'grit_overview_bars_7d': generate_grit_overview_bars_7d_plotly,
+    'grit_factors_line_30d': generate_grit_factors_line_30d_plotly,
+    'grit_components_pie': generate_grit_components_pie_plotly,
+    'grit_score_persistence_factor': generate_grit_persistence_factor_plotly,
+    'grit_score_focus_factor': generate_grit_focus_factor_plotly,
+    'grit_score_passion_factor': generate_grit_passion_factor_plotly,
+    'grit_score_time_bonus': generate_grit_time_bonus_plotly,
+    'grit_score_disappointment_resilience': generate_grit_disappointment_resilience_plotly,
 }

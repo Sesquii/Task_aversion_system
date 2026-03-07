@@ -59,14 +59,14 @@ ANALYTICS_MODULES = {
     },
     'grit_score': {
         'title': 'Grit Score',
-        'version': '1.2',
-        'description': 'Rewards persistence, passion, and dedication. Combines persistence factor (obstacle overcoming), focus factor (mental engagement), passion factor (relief vs emotional load), and time bonus (taking longer, especially on difficult tasks).',
+        'version': '1.6',
+        'description': 'Rewards persistence, passion, and dedication. Combines persistence factor (obstacle overcoming), focus factor (mental engagement), passion factor (relief vs emotional load), time bonus (taking longer, especially on difficult tasks), and disappointment resilience (completing despite unmet expectations).',
         'icon': 'fitness_center',
         'color': 'purple',
         'components': [
             {
                 'name': 'Persistence Factor',
-                'version': '1.2',
+                'version': '1.6',
                 'description': 'Measures continuing despite obstacles. Combines obstacle overcoming (40%), aversion resistance (30%), task repetition (20%), and consistency (10%). Scaled to 0.5-1.5 range.',
                 'formula': 'persistence_factor_scaled = 0.5 + persistence_factor * 1.0\nwhere persistence_factor combines:\n  - Obstacle overcoming (40%): Completing despite high cognitive/emotional load\n  - Aversion resistance (30%): Completing despite high aversion\n  - Task repetition (20%): Completing same task multiple times\n  - Consistency (10%): Regular completion patterns over time',
                 'range': '0.5 - 1.5',
@@ -74,7 +74,7 @@ ANALYTICS_MODULES = {
             },
             {
                 'name': 'Focus Factor',
-                'version': '1.2',
+                'version': '1.6',
                 'description': 'Measures mental engagement and ability to concentrate. 100% emotion-based (mental state, not behavioral). Focus-positive emotions (focused, concentrated, determined, engaged, flow) increase score; focus-negative emotions (distracted, scattered, overwhelmed, unfocused) decrease score. Scaled to 0.5-1.5 range.',
                 'formula': 'focus_factor_scaled = 0.5 + focus_factor * 1.0\nwhere focus_factor = 0.5 + (positive_emotions - negative_emotions) * 0.5',
                 'range': '0.5 - 1.5',
@@ -82,7 +82,7 @@ ANALYTICS_MODULES = {
             },
             {
                 'name': 'Passion Factor',
-                'version': '1.2',
+                'version': '1.6',
                 'description': 'Measures engagement and passion through relief vs emotional load balance. Positive when relief outweighs emotional load (engagement/passion), negative when emotional load outweighs relief (drain). Dampened for incomplete tasks. Scaled to 0.5-1.5 range.',
                 'formula': 'passion_delta = (relief / 100.0) - (emotional_load / 100.0)\npassion_factor = 1.0 + passion_delta * 0.5\nif completion_pct < 100: passion_factor *= 0.9',
                 'range': '0.5 - 1.5',
@@ -90,7 +90,7 @@ ANALYTICS_MODULES = {
             },
             {
                 'name': 'Time Bonus',
-                'version': '1.2',
+                'version': '1.6',
                 'description': 'Rewards taking longer than estimated, especially on difficult tasks. Uses difficulty weighting (harder tasks get more credit), diminishing returns beyond 2x longer, and fading after many repetitions (negligible after ~50 completions). Capped at 3.0x maximum.',
                 'formula': 'if time_ratio > 1.0:\n  base_bonus = 1.0 + (excess * 0.8) if excess <= 1.0 else 1.8 + ((excess - 1.0) * 0.2)\n  weighted_bonus = 1.0 + (base_bonus - 1.0) * (0.5 + 0.5 * difficulty_factor)\n  time_bonus = 1.0 + (weighted_bonus - 1.0) * fade_factor\nelse:\n  time_bonus = 1.0',
                 'range': '1.0 - 3.0',
@@ -101,17 +101,36 @@ ANALYTICS_MODULES = {
                     'diminishing_returns': 'Linear up to 2x longer (1.8x bonus), then diminishing returns beyond 2x',
                     'rationale': 'Prevents gaming by taking longer on routine tasks'
                 }
+            },
+            {
+                'name': 'Disappointment Resilience',
+                'version': '1.6',
+                'description': 'Rewards completing despite unmet expectations; penalizes giving up when disappointed. When expected relief > actual relief (disappointment_factor > 0): completing 100% gives a bonus (up to 1.5x); completing < 100% gives a penalty (down to 0.67x). No disappointment = 1.0x.',
+                'formula': 'if disappointment_factor > 0:\n  if completion_pct >= 100: disappointment_resilience = min(1.5, 1.0 + disappointment_factor/200)\n  else: disappointment_resilience = max(0.67, 1.0 - disappointment_factor/300)\nelse: disappointment_resilience = 1.0',
+                'range': '0.67 - 1.5',
+                'graphic_script': 'grit_score_disappointment_resilience.py',
+                'details': {
+                    'disappointment_factor': 'Derived from expected_relief - actual_relief (when negative)',
+                    'persistent_disappointment': 'Completion >= 100% with disappointment = resilience bonus (up to 1.5x)',
+                    'abandonment_disappointment': 'Completion < 100% with disappointment = penalty (down to 0.67x)'
+                }
             }
         ],
-        'formula': 'grit_score = base_score * (persistence_factor_scaled * focus_factor_scaled * passion_factor * time_bonus)\nwhere base_score = completion_pct (0-100)',
+        'formula': 'grit_score = base_score * (persistence_factor_scaled * focus_factor_scaled * passion_factor * time_bonus * disappointment_resilience)\nwhere base_score = completion_pct (0-100)',
         'range': '0 - 200+',
         'use_cases': [
             'Rewards persistence (obstacle overcoming, aversion resistance, repetition, consistency)',
             'Rewards passion (mental engagement, relief vs emotional load balance)',
             'Rewards dedication (taking longer, especially on difficult tasks)',
+            'Rewards completing despite disappointment; penalizes giving up when expectations are not met',
             'Complements execution score (which rewards speed)',
             'Complements productivity score (which rewards efficiency)',
             'Captures long-term commitment vs. short-term efficiency'
+        ],
+        'overview_charts': [
+            ('grit_overview_bars_7d', 'Your data: 7-day averages by factor'),
+            ('grit_factors_line_30d', 'Your data: 30-day trend of each factor\'s influence'),
+            ('grit_components_pie', 'Your data: Component share (last 30 days)'),
         ]
     },
     'difficulty_bonus': {
@@ -412,8 +431,37 @@ def build_module_page(module_id: str):
     # Description
     ui.label(module_info['description']).classes("text-lg text-gray-700 mb-6")
     
-    # Overview chart (if available)
-    if module_info.get('overview_chart'):
+    # Overview chart(s) (if available) - data-driven from actual completed task instances
+    if module_info.get('overview_charts'):
+        ui.label("Overview (your data)").classes("text-2xl font-semibold mb-2")
+        ui.label("Charts below use your actual completed task instances and grit factor breakdown.").classes("text-sm text-gray-600 mb-4")
+        for chart_key, chart_title in module_info['overview_charts']:
+            if chart_key in PLOTLY_DATA_CHARTS:
+                with ui.card().classes("p-4 mb-4 bg-blue-50 border-2 border-blue-200"):
+                    ui.label(chart_title).classes("text-xl font-semibold mb-2")
+                    try:
+                        chart_func = PLOTLY_DATA_CHARTS[chart_key]
+                        fig = chart_func()
+                        if fig:
+                            ui.plotly(fig).classes("w-full")
+                            ui.label("Based on your completed task instances (data-driven).").classes(
+                                "text-xs text-gray-500 mt-2"
+                            )
+                        else:
+                            ui.label("Insufficient data to generate this chart. Complete more tasks to see your grit breakdown.").classes(
+                                "text-sm text-gray-500 italic"
+                            )
+                    except Exception as e:
+                        handle_error_with_ui(
+                            'generate_overview_chart',
+                            e,
+                            user_id=get_current_user(),
+                            context={'chart_key': chart_key}
+                        )
+                        ui.label("Error generating chart. Please try again later.").classes(
+                            "text-sm text-red-500"
+                        )
+    elif module_info.get('overview_chart'):
         chart_key = module_info['overview_chart']
         if chart_key in PLOTLY_DATA_CHARTS:
             with ui.card().classes("p-4 mb-4 bg-blue-50 border-2 border-blue-200"):
@@ -594,6 +642,11 @@ def _get_plotly_chart_key(component_name: str, script_name: str) -> Optional[str
         'Popup Penalty': 'thoroughness_popup_penalty',
         'Work Volume Score': 'productivity_volume_work_volume_score',
         'Volumetric Score Calculation': 'volumetric_productivity_calculation',
+        'Persistence Factor': 'grit_score_persistence_factor',
+        'Focus Factor': 'grit_score_focus_factor',
+        'Passion Factor': 'grit_score_passion_factor',
+        'Time Bonus': 'grit_score_time_bonus',
+        'Disappointment Resilience': 'grit_score_disappointment_resilience',
     }
     
     # Try direct name match first
@@ -615,6 +668,16 @@ def _get_plotly_chart_key(component_name: str, script_name: str) -> Optional[str
         return 'thoroughness_note_length'
     elif 'popup_penalty' in script_name.lower():
         return 'thoroughness_popup_penalty'
+    elif 'grit_score_persistence_factor' in script_name.lower():
+        return 'grit_score_persistence_factor'
+    elif 'grit_score_focus_factor' in script_name.lower():
+        return 'grit_score_focus_factor'
+    elif 'grit_score_passion_factor' in script_name.lower():
+        return 'grit_score_passion_factor'
+    elif 'grit_score_time_bonus' in script_name.lower():
+        return 'grit_score_time_bonus'
+    elif 'grit_score_disappointment_resilience' in script_name.lower():
+        return 'grit_score_disappointment_resilience'
     
     return None
 

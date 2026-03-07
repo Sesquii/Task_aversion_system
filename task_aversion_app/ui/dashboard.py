@@ -65,6 +65,17 @@ def safe_log(level, message):
         # Fallback to print if logging fails
         print(f"[Dashboard Perf Log Error] {e}: {message}")
 
+
+def debug_log(location: str, message: str, data: dict, tag: str) -> None:
+    """Log dashboard debug events (location, message, optional data dict, tag)."""
+    try:
+        if perf_logger:
+            payload = json.dumps(data) if data else "{}"
+            perf_logger.debug(f"[{tag}] {location} | {message} | {payload}")
+    except Exception:
+        pass
+
+
 tm = TaskManager()
 im = InstanceManager()
 
@@ -77,23 +88,6 @@ initialized_search_input_ref = None
 initialized_paused_checkbox_ref = None
 initialized_postponed_checkbox_ref = None
 
-# #region agent log
-import json
-def debug_log(location, message, data=None, hypothesis_id=None):
-    try:
-        with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as f:
-            log_entry = {
-                'location': location,
-                'message': message,
-                'data': data or {},
-                'timestamp': int(time.time() * 1000),
-                'sessionId': 'debug-session',
-                'runId': 'run1',
-                'hypothesisId': hypothesis_id
-            }
-            f.write(json.dumps(log_entry) + '\n')
-    except: pass
-# #endregion
 em = EmotionManager()
 an = Analytics()
 user_state = UserStateManager()
@@ -2909,7 +2903,7 @@ def render_monitored_metrics_section(container):
                         result['quality_metrics'][key] = quality['avg_relief']
             known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score',
                                        'work_volume_score', 'work_consistency_score', 'life_balance_score',
-                                       'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
+                                       'sleep_score', 'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
             composite_metric_keys = [m for m in metrics_list if m in known_composite_metrics and m != 'execution_score']
             if composite_metric_keys and hasattr(an, 'get_all_scores_for_composite'):
                 all_composite = an.get_all_scores_for_composite(days=7, metrics=list(composite_metric_keys), user_id=uid)
@@ -2923,6 +2917,8 @@ def render_monitored_metrics_section(container):
                 result['stress_level_history'] = an.get_generic_metric_history('stress_level', days=90, user_id=uid, instances_completed_df=df_completed)
             if 'net_relief' in metrics_list and hasattr(an, 'get_generic_metric_history'):
                 result['net_relief_history'] = an.get_generic_metric_history('net_relief', days=90, user_id=uid, instances_completed_df=df_completed)
+            if 'sleep_score' in metrics_list and hasattr(an, 'get_generic_metric_history'):
+                result['sleep_score_history'] = an.get_generic_metric_history('sleep_score', days=90, user_id=uid, instances_completed_df=df_completed)
             try:
                 with open(r'c:\Users\rudol\OneDrive\Documents\PIF\Task_aversion_system\.cursor\debug.log', 'a', encoding='utf-8') as _f:
                     _f.write(json.dumps({'id': 'targeted_total', 'location': 'dashboard.get_targeted_metric_values', 'message': 'get_targeted_metric_values done', 'data': {'total_ms': round((time.perf_counter() - _t_gtv) * 1000, 1)}, 'hypothesisId': 'WARM', 'timestamp': int(time.time() * 1000)}) + '\n')
@@ -2984,9 +2980,9 @@ def render_monitored_metrics_section(container):
                     result['quality_metrics'][key] = quality['avg_relief']
         
         # Metrics that come from composite_scores
-        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score', 
+        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score',
                                    'work_volume_score', 'work_consistency_score', 'life_balance_score',
-                                   'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
+                                   'sleep_score', 'completion_rate', 'self_care_frequency', 'weekly_relief_score'}
         composite_metric_keys = [m for m in metrics_list if m in known_composite_metrics and m != 'execution_score']
         
         if composite_metric_keys:
@@ -3012,9 +3008,9 @@ def render_monitored_metrics_section(container):
         needs_relief = any(m in relief_metrics for m in metrics_list)
         
         # Metrics that are known to be in composite_scores
-        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score', 
+        known_composite_metrics = {'execution_score', 'grit_score', 'tracking_consistency_score',
                                    'work_volume_score', 'work_consistency_score', 'life_balance_score',
-                                   'completion_rate', 'self_care_frequency'}
+                                   'sleep_score', 'completion_rate', 'self_care_frequency'}
         needs_quality = False
         needs_composite = False
         needs_execution_score = False
@@ -3063,6 +3059,7 @@ def render_monitored_metrics_section(container):
             'weekly_hours_history': None,
             'stress_level_history': None,
             'net_relief_history': None,
+            'sleep_score_history': None,
             'timer': None,
             'current_user_id': current_user_id,
             'user_id_str': user_id_str,
@@ -3095,6 +3092,7 @@ def render_monitored_metrics_section(container):
                             load_state['weekly_hours_history'] = targeted_data.get('weekly_hours_history')
                             load_state['stress_level_history'] = targeted_data.get('stress_level_history')
                             load_state['net_relief_history'] = targeted_data.get('net_relief_history')
+                            load_state['sleep_score_history'] = targeted_data.get('sleep_score_history')
                     except Exception as e:
                         print(f"[Dashboard] Error getting targeted metric values: {e}")
                         import traceback
@@ -3122,6 +3120,8 @@ def render_monitored_metrics_section(container):
                         _pre_fetched['stress_level'] = load_state['stress_level_history']
                     if load_state.get('net_relief_history'):
                         _pre_fetched['net_relief'] = load_state['net_relief_history']
+                    if load_state.get('sleep_score_history'):
+                        _pre_fetched['sleep_score'] = load_state['sleep_score_history']
                     _update_metric_cards_incremental(
                         metric_cards,
                         selected_metrics,
@@ -3135,7 +3135,7 @@ def render_monitored_metrics_section(container):
                         weekly_completion_efficiency_history=load_state.get('weekly_completion_efficiency_history'),
                         pre_fetched_histories=_pre_fetched,
                     )
-                    
+
                     # Schedule next step
                     load_state['timer'] = ui.timer(0.1, process_next_step, once=True)
                     
@@ -3173,6 +3173,8 @@ def render_monitored_metrics_section(container):
                                     _pre_fetched['stress_level'] = load_state['stress_level_history']
                                 if load_state.get('net_relief_history'):
                                     _pre_fetched['net_relief'] = load_state['net_relief_history']
+                                if load_state.get('sleep_score_history'):
+                                    _pre_fetched['sleep_score'] = load_state['sleep_score_history']
                                 _update_metric_cards_incremental(
                                     metric_cards,
                                     selected_metrics,
@@ -3228,6 +3230,8 @@ def render_monitored_metrics_section(container):
                             _pre_fetched['stress_level'] = load_state['stress_level_history']
                         if load_state.get('net_relief_history'):
                             _pre_fetched['net_relief'] = load_state['net_relief_history']
+                        if load_state.get('sleep_score_history'):
+                            _pre_fetched['sleep_score'] = load_state['sleep_score_history']
                         _update_metric_cards_incremental(
                             metric_cards,
                             selected_metrics,

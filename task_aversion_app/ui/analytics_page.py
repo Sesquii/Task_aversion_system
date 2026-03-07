@@ -24,6 +24,7 @@ NUMERIC_ATTRIBUTE_OPTIONS = [
 ]
 
 CALCULATED_METRICS = [
+    {'label': 'Sleep Score (7d avg)', 'value': 'sleep_score'},
     {'label': 'Derived Stress', 'value': 'stress_level'},
     {'label': 'Relief Score (Actual)', 'value': 'relief_score'},
     {'label': 'Expected Relief', 'value': 'expected_relief'},
@@ -1234,6 +1235,64 @@ def _build_analytics_main_content(
                         ui.label("Self Care Tasks").classes("text-xs text-gray-500")
                         ui.label(f"{self_care_count} tasks").classes("text-lg font-semibold")
                         ui.label(f"{self_care_time:.1f} min").classes("text-sm text-gray-600")
+                    sleep_score_7d = life_balance.get('sleep_score_7d_avg')
+                    if sleep_score_7d is not None:
+                        with ui.card().classes("p-3 min-w-[200px] border-2 border-indigo-200"):
+                            ui.label("Sleep Score (7d avg)").classes("text-xs text-gray-500 font-semibold")
+                            ui.label(f"{sleep_score_7d:.1f}").classes("text-2xl font-bold text-indigo-600")
+                            ui.label("(0-100, from sleep tasks)").classes("text-xs text-gray-400")
+
+            # Sleep card: score, duration vs target, variation, fragmentation, relief-per-hour
+            sleep_metrics = metrics.get('sleep_metrics', {})
+            if sleep_metrics:
+                with ui.card().classes("p-4 mb-4 bg-indigo-50 border border-indigo-200"):
+                    ui.label("Sleep").classes("text-xl font-bold mb-2")
+                    ui.label("Sleep score and components from completed sleep tasks (0-100 scale).").classes("text-sm text-gray-600 mb-3")
+                    with ui.row().classes("gap-4 flex-wrap"):
+                        with ui.card().classes("p-3 min-w-[180px]"):
+                            ui.label("Sleep Score (7d)").classes("text-xs text-gray-500")
+                            ui.label(f"{sleep_metrics.get('sleep_score_7d_avg', 50):.1f}").classes("text-2xl font-bold text-indigo-600")
+                            ui.label("/ 100").classes("text-xs text-gray-500")
+                        with ui.card().classes("p-3 min-w-[180px]"):
+                            ui.label("Target").classes("text-xs text-gray-500")
+                            ui.label(f"{sleep_metrics.get('target_sleep_hours', 8):.1f} hrs").classes("text-lg font-semibold")
+                        with ui.card().classes("p-3 min-w-[180px]"):
+                            ui.label("Duration vs target").classes("text-xs text-gray-500")
+                            ui.label(f"{sleep_metrics.get('duration_vs_target_avg', 0):.1f}").classes("text-lg font-semibold")
+                            ui.label("(0-100 component)").classes("text-xs text-gray-400")
+                        with ui.card().classes("p-3 min-w-[180px]"):
+                            ui.label("Variation (max hrs)").classes("text-xs text-gray-500")
+                            ui.label(f"{sleep_metrics.get('variation_max_hrs', 0):.2f}").classes("text-lg font-semibold")
+                            ui.label("day-to-day change").classes("text-xs text-gray-400")
+                        with ui.card().classes("p-3 min-w-[180px]"):
+                            ui.label("Fragmentation").classes("text-xs text-gray-500")
+                            ui.label(f"{sleep_metrics.get('fragmentation_avg', 0):.2f}").classes("text-lg font-semibold")
+                            ui.label("(1 = consolidated)").classes("text-xs text-gray-400")
+                        with ui.card().classes("p-3 min-w-[180px]"):
+                            ui.label("Relief per hour").classes("text-xs text-gray-500")
+                            ui.label(f"{sleep_metrics.get('relief_per_hour_avg', 0):.1f}").classes("text-lg font-semibold")
+                        with ui.card().classes("p-3 min-w-[180px]"):
+                            ui.label("Sleep tasks (7d)").classes("text-xs text-gray-500")
+                            ui.label(f"{sleep_metrics.get('sleep_count', 0)}").classes("text-lg font-semibold")
+                            total_min = sleep_metrics.get('sleep_time_minutes_total', 0)
+                            ui.label(f"{total_min:.0f} min total").classes("text-xs text-gray-400")
+                    if sleep_metrics.get('daily_scores'):
+                        ui.label("Daily scores (last 7d):").classes("text-xs text-gray-500 mt-2")
+                        with ui.row().classes("gap-2 flex-wrap mt-1"):
+                            for day in sleep_metrics['daily_scores'][-7:]:
+                                ui.label(f"{day['date']}: {day['score']}").classes("text-xs bg-white px-2 py-1 rounded")
+
+            # Experimental: Emotion trends for sleep tasks only
+            with ui.card().classes("p-4 mb-4 bg-amber-50 border border-amber-200"):
+                ui.label("Emotion trends for sleep tasks (experimental)").classes("text-lg font-bold mb-1")
+                ui.label("Emotion values over time for tasks with type Sleep. A full Emotion trends section may be added later.").classes("text-sm text-gray-600 mb-2")
+                sleep_emotion_counts = metrics.get('sleep_metrics', {}).get('sleep_emotion_counts') or {}
+                if sleep_emotion_counts:
+                    with ui.row().classes("gap-2 flex-wrap"):
+                        for emotion, count in sorted(sleep_emotion_counts.items(), key=lambda x: -x[1])[:10]:
+                            ui.label(f"{emotion}: {count}").classes("text-xs bg-white px-2 py-1 rounded border")
+                else:
+                    ui.label("No emotion data for sleep tasks yet. Complete sleep tasks with emotion logged to see trends here.").classes("text-xs text-gray-500 italic")
 
     if _section('obstacles'):
         with container:

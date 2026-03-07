@@ -541,6 +541,76 @@ def generate_volumetric_calculation_image(output_path=None):
     return module.generate_calculation_image(output_path)
 
 
+def generate_grit_persistence_factor_image(output_path=None):
+    """Generate grit persistence factor theoretical image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'grit_score_persistence_factor.png')
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'grit_score_persistence_factor.py')
+    spec = importlib.util.spec_from_file_location("grit_score_persistence_factor", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_persistence_factor_image(output_path)
+
+
+def generate_grit_focus_factor_image(output_path=None):
+    """Generate grit focus factor theoretical image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'grit_score_focus_factor.png')
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'grit_score_focus_factor.py')
+    spec = importlib.util.spec_from_file_location("grit_score_focus_factor", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_focus_factor_image(output_path)
+
+
+def generate_grit_passion_factor_image(output_path=None):
+    """Generate grit passion factor theoretical image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'grit_score_passion_factor.png')
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'grit_score_passion_factor.py')
+    spec = importlib.util.spec_from_file_location("grit_score_passion_factor", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_passion_factor_image(output_path)
+
+
+def generate_grit_time_bonus_image(output_path=None):
+    """Generate grit time bonus theoretical image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'grit_score_time_bonus.png')
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'grit_score_time_bonus.py')
+    spec = importlib.util.spec_from_file_location("grit_score_time_bonus", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_time_bonus_image(output_path)
+
+
+def generate_grit_disappointment_resilience_image(output_path=None):
+    """Generate grit disappointment resilience theoretical image."""
+    if output_path is None:
+        output_path = os.path.join(_images_dir, 'grit_score_disappointment_resilience.png')
+    import importlib.util
+    script_path = os.path.join(_script_dir, 'grit_score_disappointment_resilience.py')
+    spec = importlib.util.spec_from_file_location("grit_score_disappointment_resilience", script_path)
+    if not spec or not spec.loader:
+        raise ImportError(f"Could not load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.generate_disappointment_resilience_image(output_path)
+
+
 # Mapping of script names to generator functions
 GRAPHIC_AID_GENERATORS = {
     'execution_score_difficulty_factor.py': generate_difficulty_factor_image,
@@ -561,6 +631,11 @@ GRAPHIC_AID_GENERATORS = {
     'volumetric_productivity_base.py': generate_volumetric_base_image,
     'volumetric_productivity_volume_factor.py': generate_volumetric_volume_factor_image,
     'volumetric_productivity_calculation.py': generate_volumetric_calculation_image,
+    'grit_score_persistence_factor.py': generate_grit_persistence_factor_image,
+    'grit_score_focus_factor.py': generate_grit_focus_factor_image,
+    'grit_score_passion_factor.py': generate_grit_passion_factor_image,
+    'grit_score_time_bonus.py': generate_grit_time_bonus_image,
+    'grit_score_disappointment_resilience.py': generate_grit_disappointment_resilience_image,
 }
 
 
