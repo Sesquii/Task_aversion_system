@@ -60,6 +60,7 @@ ANALYTICS_MODULES = {
     'grit_score': {
         'title': 'Grit Score',
         'version': '1.6',
+        'glossary_version': '1.0',  # Glossary V1.0 (layout/example); formula is v1.6
         'description': 'Rewards persistence, passion, and dedication. Combines persistence factor (obstacle overcoming), focus factor (mental engagement), passion factor (relief vs emotional load), time bonus (taking longer, especially on difficult tasks), and disappointment resilience (completing despite unmet expectations).',
         'icon': 'fitness_center',
         'color': 'purple',
@@ -390,9 +391,11 @@ def build_analytics_glossary():
                 with ui.row().classes("items-center gap-2 mb-2"):
                     ui.icon(module_info['icon']).classes(f"text-{module_info['color']}-500 text-2xl")
                     ui.label(module_info['title']).classes("text-lg font-semibold")
-                
+                if module_info.get('glossary_version'):
+                    ui.label(
+                        f"Glossary V{module_info['glossary_version']} (formula v{module_info.get('version', '')})"
+                    ).classes("text-xs text-gray-500 mb-2")
                 ui.label(module_info['description']).classes("text-sm text-gray-600 mb-2")
-                
                 if module_info.get('components'):
                     ui.label(f"{len(module_info['components'])} components").classes(
                         "text-xs text-gray-500"
@@ -425,7 +428,11 @@ def build_module_page(module_id: str):
         )
         ui.icon(module_info['icon']).classes(f"text-{module_info['color']}-500 text-3xl")
         ui.label(module_info['title']).classes("text-3xl font-bold")
-        if module_info.get('version'):
+        if module_info.get('glossary_version'):
+            ui.badge(
+                f"Glossary V{module_info['glossary_version']} (formula v{module_info.get('version', '')})"
+            ).classes("bg-blue-500 text-white")
+        elif module_info.get('version'):
             ui.badge(f"v{module_info['version']}").classes("bg-blue-500 text-white")
     
     # Description
@@ -491,7 +498,11 @@ def build_module_page(module_id: str):
     with ui.card().classes("p-4 mb-4 bg-gray-50"):
         with ui.row().classes("items-center gap-2 mb-2"):
             ui.label("Formula").classes("text-lg font-semibold")
-            if module_info.get('version'):
+            if module_info.get('glossary_version'):
+                ui.badge(
+                    f"Glossary V{module_info['glossary_version']} (formula v{module_info.get('version', '')})"
+                ).classes("bg-gray-600 text-white text-xs")
+            elif module_info.get('version'):
                 ui.badge(f"v{module_info['version']}").classes("bg-gray-600 text-white text-xs")
         ui.code(module_info['formula']).classes("text-sm")
         ui.label(f"Range: {module_info['range']}").classes("text-sm text-gray-600 mt-2")
