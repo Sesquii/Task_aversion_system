@@ -1517,20 +1517,25 @@ def build_analytics_page():
                 prefs = {sid: section_checkboxes[sid].value for sid, _ in ANALYTICS_SECTIONS}
                 user_state.set_analytics_section_prefs(user_id_str, prefs)
                 content_container.clear()
-                selected = [sid for sid, _ in ANALYTICS_SECTIONS if prefs.get(sid, True)]
-                for i, sid in enumerate(selected):
-                    ui.timer(
-                        0,
-                        (lambda s: lambda: _build_analytics_main_content(
-                            content_container, page_data, user_id_str, user_state, current_user_id,
-                            render_time_chart=_render_time_chart, render_attribute_box=_render_attribute_box,
-                            render_trends_section=_render_trends_section, render_stress_metrics_section=_render_stress_metrics_section,
-                            render_task_rankings=_render_task_rankings, render_stress_efficiency_leaderboard=_render_stress_efficiency_leaderboard,
-                            render_metric_comparison=_render_metric_comparison, render_correlation_explorer=_render_correlation_explorer,
-                            sections_to_build={s},
-                        ))(sid),
-                        once=True,
-                    )
+                selected = {sid for sid, _ in ANALYTICS_SECTIONS if prefs.get(sid, True)}
+                # Build all selected sections in one pass so content renders reliably
+                # (multiple ui.timer(0, ...) callbacks can fail to display in NiceGUI)
+                _build_analytics_main_content(
+                    content_container,
+                    page_data,
+                    user_id_str,
+                    user_state,
+                    current_user_id,
+                    render_time_chart=_render_time_chart,
+                    render_attribute_box=_render_attribute_box,
+                    render_trends_section=_render_trends_section,
+                    render_stress_metrics_section=_render_stress_metrics_section,
+                    render_task_rankings=_render_task_rankings,
+                    render_stress_efficiency_leaderboard=_render_stress_efficiency_leaderboard,
+                    render_metric_comparison=_render_metric_comparison,
+                    render_correlation_explorer=_render_correlation_explorer,
+                    sections_to_build=selected,
+                )
             ui.button("Load selected", on_click=do_load).classes("bg-blue-500 text-white")
     loading_analytics_label = ui.label("Loading analytics...").classes("text-sm text-gray-500 mb-4")
     error_row = ui.row().classes("items-center gap-2 mb-4").style("display: none;")
