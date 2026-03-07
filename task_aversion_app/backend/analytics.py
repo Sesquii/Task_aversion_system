@@ -13807,6 +13807,17 @@ class Analytics:
                 'values': hist.get('values', []),
                 'aggregation': 'mean',
             }
+        elif attribute_key == 'sleep_score':
+            # Daily sleep score from get_sleep_metrics (7d avg series from daily_scores)
+            hist = self.get_generic_metric_history(
+                'sleep_score', days=days, user_id=user_id,
+                instances_completed_df=completed if not completed.empty else None,
+            )
+            return {
+                'dates': hist.get('dates', []),
+                'values': hist.get('values', []),
+                'aggregation': 'mean',
+            }
         elif attribute_key == 'robust_productivity_score':
             # Daily robust productivity = 0.5 * daily_ce_avg + 0.5 * daily_exec_avg (matches relief summary)
             ce_data = self.get_attribute_trends('completion_efficiency_score', aggregation, days, user_id=user_id)
@@ -14681,6 +14692,21 @@ class Analytics:
             ce = completed['completion_efficiency_score'].fillna(0) if 'completion_efficiency_score' in completed.columns else pd.Series(0.0, index=completed.index)
             exec_s = completed['execution_score'].fillna(0) if 'execution_score' in completed.columns else pd.Series(0.0, index=completed.index)
             completed['robust_productivity_score'] = (0.5 * ce + 0.5 * exec_s).astype(float)
+
+        # Calculate sleep_score if needed (daily score mapped to each instance by completed_at date)
+        if attribute_x == 'sleep_score' or attribute_y == 'sleep_score':
+            sleep_metrics = self.get_sleep_metrics(days=365, user_id=user_id, instances_df=df)
+            daily_scores = sleep_metrics.get('daily_scores', [])
+            sleep_by_date = {str(d['date']): float(d['score']) for d in daily_scores} if daily_scores else {}
+            if 'completed_at_dt' not in completed.columns:
+                completed['completed_at_dt'] = pd.to_datetime(completed['completed_at'], errors='coerce')
+            def _sleep_for_row(row):
+                dt = row.get('completed_at_dt')
+                if pd.isna(dt):
+                    return np.nan
+                date_str = dt.date().isoformat()
+                return sleep_by_date.get(date_str, np.nan)
+            completed['sleep_score'] = completed.apply(_sleep_for_row, axis=1)
 
         # Check if attributes exist (either in columns or calculated)
         if attribute_x not in completed.columns or attribute_y not in completed.columns:

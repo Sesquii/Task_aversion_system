@@ -1093,6 +1093,7 @@ def _build_analytics_main_content(
             ("Weekly Grit Score", f"{relief_summary.get('weekly_grit_score', 0.0):.1f}"),
             ("Thoroughness Score", f"{metrics['quality'].get('thoroughness_score', 50.0):.1f}"),
             ("Thoroughness Factor", f"{metrics['quality'].get('thoroughness_factor', 1.0):.3f}x"),
+            ("Sleep Score (7d avg)", f"{life_balance.get('sleep_score_7d_avg', 50.0):.1f}"),
             ("Avg Init Form Time", f"{(form_stats.get('avg_init_form_seconds', 0) or 0):.1f}s"),
             ("Avg Completion Form Time", f"{(form_stats.get('avg_completion_form_seconds', 0) or 0):.1f}s"),
             ("Avg Sliders Adjusted (Init)", f"{(form_stats.get('avg_init_sliders_adjusted', 0) or 0):.1f}"),
