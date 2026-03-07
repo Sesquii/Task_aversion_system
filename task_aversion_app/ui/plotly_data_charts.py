@@ -1141,14 +1141,14 @@ def generate_grit_overview_bars_7d_plotly() -> Optional[go.Figure]:
         factors = ['Persistence', 'Focus', 'Passion', 'Time bonus', 'Disappointment resilience']
         cols = ['persistence_factor_scaled', 'focus_factor_scaled', 'passion_factor', 'time_bonus', 'disappointment_resilience']
         means = [float(df[c].mean()) for c in cols]
-        means.append(float(df['grit_score'].mean()))
-        labels = factors + ['Total']
-        colors = ['#636efa', '#ef553b', '#00cc96', '#ab63fa', '#ffa15a', '#2ca02c']
+        labels = factors
+        colors = ['#636efa', '#ef553b', '#00cc96', '#ab63fa', '#ffa15a']
         fig = go.Figure(data=[go.Bar(x=labels, y=means, marker_color=colors, text=[f'{v:.2f}' for v in means], textposition='outside')])
         fig.update_layout(
-            title='Your data: Grit score 7-day averages by factor and total',
+            title='Your data: 7-day averages by factor',
             xaxis_title='Factor',
-            yaxis_title='Average value (multipliers; Total = grit score)',
+            yaxis_title='Average value (multipliers)',
+            yaxis=dict(range=[0, 2]),
             height=400,
             showlegend=False
         )
@@ -1184,10 +1184,11 @@ def generate_grit_factors_line_30d_plotly() -> Optional[go.Figure]:
                 mode='lines+markers', name=names[i], line=dict(color=colors[i])
             ))
         fig.update_layout(
-            title="Your data: Grit factors' influence over last 30 days (share of total multiplier)",
+            title=None,
             xaxis_title='Date',
             yaxis_title='Share of total',
             height=400,
+            margin=dict(t=50, b=50, l=50, r=20),
             legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
         )
         return fig
@@ -1214,12 +1215,21 @@ def generate_grit_components_pie_plotly() -> Optional[go.Figure]:
         values = [m / total for m in means]
         labels = ['Persistence', 'Focus', 'Passion', 'Time bonus', 'Disappointment resilience']
         colors = ['#636efa', '#ef553b', '#00cc96', '#ab63fa', '#ffa15a']
-        fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4, marker_colors=colors, textinfo='label+percent')])
+        fig = go.Figure(data=[go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.4,
+            marker_colors=colors,
+            textinfo='label+percent',
+            textposition='outside',
+            insidetextorientation='radial'
+        )])
         fig.update_layout(
-            title='Your data: Grit component share of total (last 30 days)',
-            height=400,
+            title=None,
+            height=420,
+            margin=dict(t=60, b=80),
             showlegend=True,
-            legend=dict(orientation='h', yanchor='bottom', y=-0.2)
+            legend=dict(orientation='h', yanchor='top', y=-0.15, xanchor='center', x=0.5)
         )
         return fig
     except Exception as e:

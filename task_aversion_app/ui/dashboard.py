@@ -64,6 +64,17 @@ def safe_log(level, message):
         # Fallback to print if logging fails
         print(f"[Dashboard Perf Log Error] {e}: {message}")
 
+
+def debug_log(location: str, message: str, data: dict, tag: str) -> None:
+    """Log dashboard debug events (location, message, optional data dict, tag)."""
+    try:
+        if perf_logger:
+            payload = json.dumps(data) if data else "{}"
+            perf_logger.debug(f"[{tag}] {location} | {message} | {payload}")
+    except Exception:
+        pass
+
+
 tm = TaskManager()
 im = InstanceManager()
 

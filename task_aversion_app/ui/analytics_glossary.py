@@ -128,9 +128,9 @@ ANALYTICS_MODULES = {
             'Captures long-term commitment vs. short-term efficiency'
         ],
         'overview_charts': [
-            ('grit_overview_bars_7d', 'Your data: 7-day averages by factor and total'),
+            ('grit_overview_bars_7d', 'Your data: 7-day averages by factor'),
             ('grit_factors_line_30d', 'Your data: 30-day trend of each factor\'s influence'),
-            ('grit_components_pie', 'Your data: Component share of total'),
+            ('grit_components_pie', 'Your data: Component share (last 30 days)'),
         ]
     },
     'difficulty_bonus': {

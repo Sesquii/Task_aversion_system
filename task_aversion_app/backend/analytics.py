@@ -1469,7 +1469,12 @@ class Analytics:
         consistency_score = np.full(n, 0.5)
         persistence_factor = obstacle_score * 0.4 + aversion_score * 0.3 + repetition_score * 0.2 + consistency_score * 0.1
         persistence_factor_scaled = 0.5 + persistence_factor * 1.0
-        focus_factor_scaled = np.full(n, 1.0)
+        # Per-row focus from emotion_values (positive/negative focus-related emotions)
+        focus_factor_scaled = np.zeros(n)
+        for i in range(n):
+            row = completed.iloc[i]
+            focus_factor = self.calculate_focus_factor(row)
+            focus_factor_scaled[i] = 0.5 + focus_factor * 1.0
         disappointment_resilience = np.where(
             disappointment_factor > 0,
             np.where(
@@ -1478,6 +1483,14 @@ class Analytics:
                 np.maximum(0.67, 1.0 - disappointment_factor / 300.0)
             ),
             1.0
+        )
+        # Recompute grit_score with per-row focus so breakdown matches formula
+        grit_scores = completion_pct * (
+            persistence_factor_scaled *
+            focus_factor_scaled *
+            passion_factor *
+            time_bonus *
+            disappointment_resilience
         )
 
         return pd.DataFrame({
